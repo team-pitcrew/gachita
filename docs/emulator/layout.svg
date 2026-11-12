@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2560 1640" font-family="-apple-system, 'Apple SD Gothic Neo', 'Noto Sans KR', 'Malgun Gothic', sans-serif">
+  <title>Pleos Connect Emulator 2.1.0 화면 배치 (2560×1440, 160dpi)</title>
+  <desc>왼쪽에 Driving view, 오른쪽 위에 상태 바, 그 아래 앱 창, 맨 아래에 GNB. 좌표는 화면 왼쪽 위가 (0,0)인 픽셀 값이다.</desc>
+
+  <!-- 화면 전체 -->
+  <rect x="0" y="0" width="2560" height="1440" fill="#f3f3f6"/>
+
+  <!-- Driving view -->
+  <rect x="0" y="0" width="853" height="1300" fill="#dfe4ec"/>
+  <text x="426" y="560" font-size="64" font-weight="700" text-anchor="middle" fill="#1d2330">Driving view</text>
+  <text x="426" y="640" font-size="44" text-anchor="middle" fill="#3a4354">운전 정보 · 늘 보임</text>
+  <text x="426" y="704" font-size="44" text-anchor="middle" fill="#3a4354">853 × 1300</text>
+  <text x="426" y="768" font-size="38" text-anchor="middle" fill="#5a6475">앱이 가리거나 닫을 수 없음</text>
+  <line x1="0" y1="1121" x2="853" y2="1121" stroke="#aab2c0" stroke-width="3" stroke-dasharray="14 12"/>
+  <text x="426" y="1226" font-size="38" text-anchor="middle" fill="#5a6475">재생 중인 미디어 (화면에서 읽은 어림 위치)</text>
+
+  <!-- 상태 바 -->
+  <rect x="853" y="0" width="1707" height="90" fill="#c8cfdb"/>
+  <text x="1706" y="60" font-size="44" font-weight="700" text-anchor="middle" fill="#1d2330">상태 바 · 1707 × 90</text>
+
+  <!-- 앱 창 -->
+  <rect x="853" y="90" width="1682" height="1210" fill="#ece8fb" stroke="#5b47b0" stroke-width="8"/>
+  <text x="1694" y="250" font-size="72" font-weight="700" text-anchor="middle" fill="#3b2c85">앱 창 · 1682 × 1210</text>
+  <text x="1694" y="330" font-size="46" text-anchor="middle" fill="#3b2c85">(853, 90) – (2535, 1300) · 앱 창 안 여백(inset) 0</text>
+  <text x="1694" y="398" font-size="40" text-anchor="middle" fill="#5a4aa0">에뮬레이터에서 잰 값. 앱이 하나일 때 이 자리를 모두 씀</text>
+
+  <!-- 창 둘로 나뉠 때 -->
+  <line x1="1694" y1="470" x2="1694" y2="930" stroke="#5b47b0" stroke-width="5" stroke-dasharray="22 16"/>
+  <text x="1273" y="780" font-size="52" font-weight="700" text-anchor="middle" fill="#3b2c85">창 1 (주 창)</text>
+  <text x="1273" y="850" font-size="42" text-anchor="middle" fill="#5a4aa0">약 841 × 1210 · 세로형</text>
+  <text x="2114" y="780" font-size="52" font-weight="700" text-anchor="middle" fill="#3b2c85">창 2 (보조 창)</text>
+  <text x="2114" y="850" font-size="42" text-anchor="middle" fill="#5a4aa0">약 841 × 1210 · 세로형</text>
+  <text x="1694" y="1010" font-size="40" text-anchor="middle" fill="#5a4aa0">앱이 둘이면 1:1로 나뉨(공식 문서). 에뮬레이터에서는 나뉜 것을 보지 못함.</text>
+  <text x="1694" y="1066" font-size="40" text-anchor="middle" fill="#5a4aa0">841은 1682를 반으로 나눈 값이고, 창 사이 간격은 모름</text>
+
+  <!-- 오른쪽 띠 -->
+  <rect x="2535" y="90" width="25" height="1210" fill="#c8cfdb"/>
+
+  <!-- GNB -->
+  <rect x="0" y="1300" width="2560" height="140" fill="#22232b"/>
+  <text x="1280" y="1388" font-size="48" font-weight="700" text-anchor="middle" fill="#ffffff">GNB · 공조, 앱 서랍, 즐겨 찾는 앱 · 2560 × 140</text>
+
+  <!-- 좌표 눈금 -->
+  <g font-size="36" fill="#1d2330">
+    <text x="12" y="44">(0, 0)</text>
+    <text x="865" y="136" fill="#3b2c85">(853, 90)</text>
+    <text x="2523" y="1284" text-anchor="end" fill="#3b2c85">(2535, 1300)</text>
+    <text x="2548" y="1424" text-anchor="end" fill="#ffffff">(2560, 1440)</text>
+  </g>
+
+  <!-- 범례 -->
+  <rect x="0" y="1440" width="2560" height="200" fill="#ffffff"/>
+  <text x="40" y="1520" font-size="40" fill="#1d2330">Pleos Connect Emulator 2.1.0 · 화면 2560 × 1440 px · 160 dpi (1 dp = 1 px) · 가로 고정</text>
+  <text x="40" y="1584" font-size="36" fill="#5a6475">앱 창의 좌표만 직접 잰 값이다. 나머지 영역은 앱 창의 좌표에서 계산했다. 오른쪽 띠는 폭 25 px. 실차 값이 아니다.</text>
+</svg>
