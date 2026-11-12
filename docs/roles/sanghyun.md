@@ -46,18 +46,17 @@ gh pr checks --watch                     # 검사 일곱 개가 모두 통과하
 
 ## 지금 맡은 티켓 (2026-11-13)
 
-기준 문서가 참가신청서 문구정리본(11/13)으로 바뀌었습니다. 달라진 것은 [작업 목록](../tasks.md)의 머리말에 있습니다. P0은 11/15 접수(23:59 마감)에 꼭 필요한 것입니다. 위에서부터 하기를 권합니다. 새 티켓(T38, T39, T42, T43)의 이슈는 작업 목록이 병합된 뒤에 만들어집니다.
+기준 문서가 참가신청서 문구정리본(11/13)으로 바뀌었습니다. 달라진 것은 [작업 목록](../tasks.md)의 머리말에 있습니다. P0은 11/15 접수(23:59 마감)에 꼭 필요한 것입니다. 위에서부터 하기를 권합니다. T38, T39, T42, T43은 11/13에 새로 생긴 티켓입니다.
 
 | 순서 | 티켓 | 파트 | 우선순위 | 끝난 것으로 보는 기준 |
 |---|---|---|---|---|
-| 1 | T42 화면 문서: 문구정리본에 맞춰 고치기 | frontend-spec | P0 | 동의, 말하는 사람 강조, 말로 하는 수락, 도착 브리핑, 기록 잠시 멈춤, 프로필 피드가 화면 문서에 들어감 |
+| 1 | [T42 화면 문서: 문구정리본에 맞춰 고치기](https://github.com/team-pitcrew/gachita/issues/60) | frontend-spec | P0 | 동의, 말하는 사람 강조, 말로 하는 수락, 도착 브리핑, 기록 잠시 멈춤, 프로필 피드가 화면 문서에 들어감 |
 | 2 | [T12 음성 처리 흐름 설계](https://github.com/team-pitcrew/gachita/issues/13) | backend-api | P1 | 결정 기록 한 건과 API 명세 초안. 전제는 차량 직접 수음과 [ADR-0008](../adr/0008-in-car-capture-and-sdk-stt.md) |
-| 3 | [T21 OAuth로 사용자 프로필 만들기](https://github.com/team-pitcrew/gachita/issues/26) | backend-api | P1 | OAuth로 만든 프로필로 여행에 참가됨 |
-| 4 | T39 기록본 저장과 프로필 피드 API | backend-api | P1 | 두 프로필의 발화를 저장한 뒤 각 피드에 자기 발화만 나옴 |
-| 5 | T38 화자 대조: 모델 고르기와 API | backend-api | P1 | 결정 기록과 명세. 등록한 두 목소리가 맞는 프로필로 돌아옴 |
-| 6 | T43 장면 추천과 숏폼 생성 | backend-api | P2 | 결정 기록과 시험 영상 한 편 |
+| 3 | [T39 기록본 저장과 프로필 피드 API](https://github.com/team-pitcrew/gachita/issues/62) | backend-api | P1 | 두 프로필의 발화를 저장한 뒤 각 피드에 자기 발화만 나옴 |
+| 4 | [T38 화자 대조: 모델 고르기와 API](https://github.com/team-pitcrew/gachita/issues/61) | backend-api | P1 | 결정 기록과 명세. 등록한 두 목소리가 맞는 프로필로 돌아옴 |
+| 5 | [T43 장면 추천과 숏폼 생성](https://github.com/team-pitcrew/gachita/issues/63) | backend-api | P2 | 결정 기록과 시험 영상 한 편 |
 
-끝낸 것: T17, T18, T19, T22, T23.
+끝낸 것: T17, T18, T19, T21, T22, T23.
 
 할 일의 원문은 각 이슈에 있습니다. 순서나 범위가 맞지 않으면 이슈에 댓글을 남기거나 [작업 목록](../tasks.md)을 고치는 PR을 올립니다.
 
