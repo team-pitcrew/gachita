@@ -3,10 +3,12 @@
 
     python3 .github/scripts/tasks.py            # 무엇을 할지만 보여 준다
     python3 .github/scripts/tasks.py --apply    # 없는 이슈를 만들고, 파트 라벨과 담당을 맞춘다
+    python3 .github/scripts/tasks.py --apply --refresh   # 작업 목록을 고친 뒤: 체크한 것이 없는 열린 이슈의 본문도 다시 쓴다
 
 - 없는 T번호는 이슈 양식(.github/ISSUE_TEMPLATE/ticket.yml)과 같은 본문으로 만든다.
 - 이미 있는 이슈는 파트 라벨과 환경 라벨을 맞추고, 열린 이슈에 담당이 없으면 담당을 넣는다.
 - 본문은 옛 양식(칸이 모자란 것)이고 체크한 항목이 없는 열린 이슈만 새 양식으로 다시 쓴다. 그 밖의 본문과 체크는 건드리지 않는다.
+- --refresh를 주면 체크한 항목이 없는 열린 이슈의 본문을 작업 목록과 같게 다시 쓴다. 이슈에 손으로 덧붙인 글은 사라진다.
 - 파트와 담당의 원본은 .github/parts.json이다. 에뮬레이터가 필요한 작업은 파트와 관계없이 emulator_owner가 맡는다.
 """
 import json
@@ -71,7 +73,7 @@ def body(task, parts):
     return "\n\n".join(f"### {name}\n\n{value}" for name, value in sections)
 
 
-def plan(tasks, issues, config):
+def plan(tasks, issues, config, refresh=False):
     """할 일을 (동작, 인자) 목록으로 돌려준다. 네트워크를 쓰지 않아 테스트할 수 있다."""
     parts = config["parts"]
     have = {m[1]: i for i in issues if (m := re.match(r"^\[(T\d+)\] ", i["title"]))}
@@ -92,9 +94,10 @@ def plan(tasks, issues, config):
             continue
         if not issue["assignees"]:
             actions.append(("assign", {"number": issue["number"], "assignee": owner(t, config)}))
-        old = issue.get("body") or ""
-        if "### 필요한 환경" not in old and "- [x]" not in old.lower():
-            actions.append(("body", {"number": issue["number"], "body": body(t, parts)}))
+        old, new = issue.get("body") or "", body(t, parts)
+        stale = "### 필요한 환경" not in old or (refresh and old.strip() != new.strip())
+        if stale and "- [x]" not in old.lower():
+            actions.append(("body", {"number": issue["number"], "body": new}))
     return actions
 
 
@@ -107,7 +110,7 @@ def main():
     tasks = parse((ROOT / "docs/tasks.md").read_text(), config["parts"])
     issues = json.loads(gh("issue", "list", "--state", "all", "--limit", "300", "--json", "number,title,state,labels,assignees,body"))
     apply = "--apply" in sys.argv
-    for kind, a in plan(tasks, issues, config):
+    for kind, a in plan(tasks, issues, config, refresh="--refresh" in sys.argv):
         if kind == "create":
             print(("만듦: " if apply else "만들 예정: ") + f"{a['title']} → {a['assignee']}")
             if apply:
@@ -119,7 +122,7 @@ def main():
                 gh("issue", "edit", str(a["number"]), *[x for label in a["add"] for x in ("--add-label", label)],
                    *[x for label in a["remove"] for x in ("--remove-label", label)])
         elif kind == "body":
-            print(("본문: " if apply else "본문 예정: ") + f"#{a['number']} 새 양식으로")
+            print(("본문: " if apply else "본문 예정: ") + f"#{a['number']} 작업 목록대로")
             if apply:
                 gh("issue", "edit", str(a["number"]), "--body", a["body"])
         elif kind == "assign":

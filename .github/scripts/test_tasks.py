@@ -77,6 +77,16 @@ class TasksTest(unittest.TestCase):
         self.assertEqual(tasks.plan(parsed, [issue | {"body": "- [x] 일\n\n완료 기준: 끝"}], CONFIG), [], "체크한 것이 있으면 그대로 둔다")
         self.assertEqual(tasks.plan(parsed, [issue | {"body": FORM}], CONFIG), [], "새 양식이면 그대로 둔다")
 
+    def test_refresh_rewrites_changed_bodies_but_keeps_checked_ones(self):
+        parsed = tasks.parse(ONE, PARTS)
+        same = tasks.body(parsed[0], PARTS)
+        issue = {"number": 1, "title": "[T1] 가", "state": "OPEN", "labels": [{"name": "part:backend-api"}], "assignees": [{"login": "x"}]}
+        self.assertEqual(tasks.plan(parsed, [issue | {"body": same}], CONFIG, refresh=True), [], "같으면 쓰지 않는다")
+        ((kind, action),) = tasks.plan(parsed, [issue | {"body": same.replace("끝", "옛 기준")}], CONFIG, refresh=True)
+        self.assertEqual((kind, action["body"]), ("body", same))
+        self.assertEqual(tasks.plan(parsed, [issue | {"body": same.replace("- [ ] 일", "- [x] 일").replace("끝", "옛 기준")}], CONFIG, refresh=True), [], "체크한 것이 있으면 그대로 둔다")
+        self.assertEqual(tasks.plan(parsed, [issue | {"body": same.replace("끝", "옛 기준"), "state": "CLOSED"}], CONFIG, refresh=True), [], "닫힌 이슈는 그대로 둔다")
+
 
 if __name__ == "__main__":
     unittest.main()
