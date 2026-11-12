@@ -2,7 +2,9 @@
 *
 !backend/api/package.json
 !backend/api/package-lock.json
-!backend/api/server.js
-!backend/api/schema.sql
+# 백엔드 소스는 종류로 넣는다. 파일을 더할 때마다 이 목록을 고치지 않게 한다
+!backend/api/*.js
+!backend/api/*.sql
+backend/api/*.test.js
 !frontend/web
 frontend/web/*.test.mjs
