@@ -3,11 +3,22 @@
 #   SSM 값 /gachita/<env>/tf/*(Terraform이 씀), /gachita/<env>/app/*·bootstrap/*(사람이 넣은 비밀 값, 워크플로가 씀)
 locals {
   boundary_arn = "arn:aws:iam::${local.account}:policy/gachita-workload-boundary"
-  # 사람이 넣은 비밀 값. 계획 역할과 적용 역할 모두 읽지 못한다(적용 역할은 쓰기만).
+  # 사람이 넣은 비밀 값. 계획·적용 역할 모두 직접 읽지 못한다(적용 역할은 쓰기만).
+  # 다만 적용 역할은 경계 안의 역할(서버·파드)을 만들 수 있고 그 역할은 읽을 수 있으므로, 이 값들의 신뢰 범위는
+  # 'develop에 병합할 수 있는 사람'과 같다(ADR-0011).
   human_secrets = [
     "arn:aws:ssm:${var.region}:${local.account}:parameter/gachita/*/app/*",
     "arn:aws:ssm:${var.region}:${local.account}:parameter/gachita/*/bootstrap/*",
   ]
+  # 이 계정은 다른 프로젝트(railshot 등)와 같이 쓴다. EC2는 우리 태그(Project=gachita, provider의 default_tags)가
+  # 붙은 자원만 고친다. 다른 프로젝트 자원에는 Project 태그가 없는 것도 많아 '남의 태그면 거부'로는 막을 수 없다.
+  ec2_arn  = "arn:aws:ec2:${var.region}:${local.account}"
+  project  = "gachita" # provider default_tags의 Project 값
+  ec2_made = ["vpc", "subnet", "internet-gateway", "route-table", "security-group", "security-group-rule", "vpc-endpoint", "instance"]
+  ec2_create = ["CreateVpc", "CreateSubnet", "CreateInternetGateway", "CreateRouteTable", "CreateSecurityGroup",
+  "CreateVpcEndpoint", "RunInstances", "AuthorizeSecurityGroupEgress", "AuthorizeSecurityGroupIngress"]
+  # 우리 발급자 하나(본 설정의 storage.tf: gachita-<env>-oidc-<계정> 버킷 주소)
+  cluster_oidc_arn = "arn:aws:iam::${local.account}:oidc-provider/gachita-*-oidc-${local.account}.s3.${var.region}.amazonaws.com"
 }
 
 # ---- 계획(PR): 읽기만. 계정 전체 읽기에서 데이터와 비밀 값 읽기를 뺀다 ----
@@ -28,9 +39,21 @@ data "aws_iam_policy_document" "plan_deny" {
     actions   = ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath", "ssm:GetParameterHistory"]
     resources = local.human_secrets
   }
+  # 복호화는 사람이 넣은 값의 경로만 막는다. Terraform이 쓴 SecureString(/tf/)은 계획의 refresh가 읽어야 한다
+  # (같은 값이 상태 파일에도 있어 막아도 지키는 것이 없다).
   statement {
     effect    = "Deny"
-    actions   = ["secretsmanager:GetSecretValue", "kms:Decrypt"]
+    actions   = ["kms:Decrypt"]
+    resources = ["*"]
+    condition {
+      test     = "StringLike"
+      variable = "kms:EncryptionContext:PARAMETER_ARN"
+      values   = local.human_secrets
+    }
+  }
+  statement {
+    effect    = "Deny"
+    actions   = ["secretsmanager:GetSecretValue"]
     resources = ["*"]
   }
 }
@@ -43,15 +66,60 @@ resource "aws_iam_role_policy" "plan_deny" {
 
 # ---- 적용(develop, 수동 실행): 본 설정이 만드는 자원의 서비스만 ----
 data "aws_iam_policy_document" "apply" {
-  # 네트워크, 서버, 보안 그룹, VPC 엔드포인트. 이 리전에서만
+  # ---- EC2(네트워크, 서버, 보안 그룹, VPC 엔드포인트) ----
+  # 읽기: 자원 단위로 좁힐 수 없다. 이 리전만
   statement {
-    actions   = ["ec2:*"]
+    actions   = ["ec2:Describe*", "ec2:Get*"]
     resources = ["*"]
     condition {
       test     = "StringEquals"
       variable = "aws:RequestedRegion"
       values   = [var.region]
     }
+  }
+  # 만들기: 새 자원에 우리 태그가 있어야 한다
+  statement {
+    actions   = [for a in local.ec2_create : "ec2:${a}"]
+    resources = [for t in local.ec2_made : "${local.ec2_arn}:${t}/*"]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestTag/Project"
+      values   = [local.project]
+    }
+  }
+  # 만드는 순간에 태그 달기(TagSpecifications)
+  statement {
+    actions   = ["ec2:CreateTags"]
+    resources = ["${local.ec2_arn}:*/*"]
+    condition {
+      test     = "StringEquals"
+      variable = "ec2:CreateAction"
+      values   = local.ec2_create
+    }
+  }
+  # 고치기·지우기·붙이기: 우리 태그가 있는 자원만(새 서브넷의 VPC처럼 만들 때 가리키는 부모도 여기서 허용)
+  statement {
+    actions = concat([for a in local.ec2_create : "ec2:${a}"], ["ec2:Delete*", "ec2:Modify*", "ec2:Associate*",
+      "ec2:Disassociate*", "ec2:Attach*", "ec2:Detach*", "ec2:Replace*", "ec2:Revoke*", "ec2:CreateRoute",
+      "ec2:CreateTags", "ec2:DeleteTags", "ec2:StartInstances", "ec2:StopInstances", "ec2:RebootInstances",
+    "ec2:TerminateInstances"])
+    resources = ["${local.ec2_arn}:*/*"]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:ResourceTag/Project"
+      values   = [local.project]
+    }
+  }
+  # 부모 없이는 쓸 수 없는 것: 서버와 함께 생기는 디스크·네트워크 카드, 보안 그룹의 기본 규칙(AWS가 태그 없이 만듦).
+  # 부모(우리 서버, 우리 보안 그룹)가 위의 태그 조건을 통과해야 해서 남의 자원에는 닿지 않는다.
+  statement {
+    actions   = ["ec2:RunInstances"]
+    resources = ["${local.ec2_arn}:volume/*", "${local.ec2_arn}:network-interface/*", "arn:aws:ec2:${var.region}::image/*"]
+  }
+  statement {
+    actions = ["ec2:RevokeSecurityGroupEgress", "ec2:RevokeSecurityGroupIngress", "ec2:ModifySecurityGroupRules",
+    "ec2:AuthorizeSecurityGroupEgress", "ec2:AuthorizeSecurityGroupIngress"]
+    resources = ["${local.ec2_arn}:security-group-rule/*"]
   }
   # 상태, 데이터, 발급자 버킷
   statement {
@@ -107,7 +175,7 @@ data "aws_iam_policy_document" "apply" {
     actions = ["iam:CreateOpenIDConnectProvider", "iam:DeleteOpenIDConnectProvider", "iam:GetOpenIDConnectProvider",
       "iam:TagOpenIDConnectProvider", "iam:UntagOpenIDConnectProvider", "iam:UpdateOpenIDConnectProviderThumbprint",
     "iam:AddClientIDToOpenIDConnectProvider", "iam:RemoveClientIDFromOpenIDConnectProvider"]
-    resources = ["arn:aws:iam::${local.account}:oidc-provider/*"]
+    resources = [local.cluster_oidc_arn]
   }
   # 자기 자신과 이 폴더가 만든 것은 고치지 못한다. 고치려면 사람이 로컬 자격으로 이 폴더를 적용한다
   statement {
@@ -116,7 +184,7 @@ data "aws_iam_policy_document" "apply" {
     resources = [
       "arn:aws:iam::${local.account}:role/gachita-github-*",
       local.boundary_arn,
-      aws_iam_openid_connect_provider.github.arn,
+      data.aws_iam_openid_connect_provider.github.arn, # 다른 프로젝트와 같이 쓰는 GitHub 제공자
     ]
   }
   statement {
@@ -128,6 +196,16 @@ data "aws_iam_policy_document" "apply" {
     effect    = "Deny"
     actions   = ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath", "ssm:GetParameterHistory"]
     resources = local.human_secrets
+  }
+  statement {
+    effect    = "Deny"
+    actions   = ["kms:Decrypt"]
+    resources = ["*"]
+    condition {
+      test     = "StringLike"
+      variable = "kms:EncryptionContext:PARAMETER_ARN"
+      values   = local.human_secrets
+    }
   }
 }
 
@@ -154,6 +232,16 @@ data "aws_iam_policy_document" "boundary" {
       "arn:aws:ssm:${var.region}:${local.account}:parameter/gachita/*",
       "arn:aws:ssm:${var.region}::parameter/aws/*",
     ]
+  }
+  # SecureString 복호화(AWS 관리 키 aws/ssm). SSM을 거친 요청만
+  statement {
+    actions   = ["kms:Decrypt"]
+    resources = ["*"]
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values   = ["ssm.${var.region}.amazonaws.com"]
+    }
   }
   statement {
     actions   = ["s3:*"]

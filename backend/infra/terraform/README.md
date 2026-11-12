@@ -40,7 +40,7 @@ aws s3api create-bucket --bucket gachita-tfstate-$ACCOUNT --region ap-northeast-
 aws s3api put-bucket-versioning --bucket gachita-tfstate-$ACCOUNT --versioning-configuration Status=Enabled
 sed "s/<계정 ID>/$ACCOUNT/" backend.hcl.example > backend.hcl     # 커밋하지 않는다(.gitignore)
 
-# 2. GitHub OIDC 역할(account/). 자원 7개, 모두 IAM이라 비용 없음
+# 2. GitHub OIDC 역할(account/). 자원 6개, 모두 IAM이라 비용 없음. GitHub OIDC 제공자는 이 계정에 이미 있어(다른 프로젝트 관리) 읽기만 한다
 (cd account && terraform init -backend-config=../backend.hcl -backend-config=key=account/terraform.tfstate \
   && terraform plan && terraform apply)                          # 승인 뒤에만
 
@@ -57,8 +57,8 @@ GitHub Actions의 역할 둘:
 
 | 역할 | 받을 수 있는 곳 | 할 수 있는 것 |
 |---|---|---|
-| `gachita-github-plan` | 이 저장소의 PR(`repo:team-pitcrew/gachita:pull_request`) | 계정 읽기. 상태 파일 밖의 S3 객체, 사람이 넣은 비밀 값(`/gachita/*/app/*`·`bootstrap/*`)은 못 읽음 |
-| `gachita-github-apply` | develop(`repo:team-pitcrew/gachita:ref:refs/heads/develop`) | 본 설정이 만드는 서비스만. 만드는 IAM 역할에는 권한 경계 `gachita-workload-boundary`가 붙어야 함. `account/`가 만든 것은 못 고침 |
+| `gachita-github-plan` | 이 저장소의 PR(`repo:team-pitcrew@351326633/gachita@1455271774:pull_request`, GitHub 불변 sub) | 계정 읽기. 상태 파일 밖의 S3 객체, 사람이 넣은 비밀 값(`/gachita/*/app/*`·`bootstrap/*`)은 읽기·복호화 못 함 |
+| `gachita-github-apply` | develop(`repo:team-pitcrew@351326633/gachita@1455271774:ref:refs/heads/develop`) | 본 설정이 만드는 서비스만. **같이 쓰는 계정이라 EC2는 `Project=gachita` 태그가 붙은 자원만** 만들고 고침. 만드는 IAM 역할에는 권한 경계 `gachita-workload-boundary`가 붙어야 함. `account/`가 만든 것과 GitHub OIDC 제공자는 못 고침. 사람이 넣은 비밀 값은 직접 읽지 못하지만 경계 안의 역할을 만들 수 있어, 신뢰 범위는 develop 병합 권한과 같음 |
 
 ## 처음 한 번 (비밀 값)
 
@@ -85,6 +85,6 @@ sudo tail -f /var/log/gachita-bootstrap.log
 
 ## 확인한 것
 
-- `account/`: `terraform validate` 통과(2026-11-13). 계정에 만들지 않았고, 역할을 받아 계획을 돌린 적이 없습니다. 워크플로는 지금 저장소 변수가 없어 "역할이 없어 건너뜀"으로 끝납니다.
+- `account/`: `terraform validate` 통과, 상태 없이 계획만 6개, 정책 문서를 IAM 정책 시뮬레이터로 35가지 호출에 돌려 기대와 맞음(2026-11-13, ADR-0011). 계정에 만들지 않았고, 역할을 받아 계획을 돌린 적이 없습니다. 워크플로는 지금 저장소 변수가 없어 "역할이 없어 건너뜀"으로 끝납니다.
 - `terraform validate` 통과, `terraform plan`이 21개 생성 계획을 오류 없이 보여 줌(2026-11-12, 로컬 상태로 계획만).
 - 실제로 만들어 보지 않았습니다. 첫 부팅 스크립트(`user_data.sh.tftpl`)는 실행해 본 적이 없습니다.
