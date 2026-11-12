@@ -111,6 +111,11 @@ step("동의와 기록 상태", async () => {
   status(await call("PATCH", t, { body: { recording: true } }), 409);
   status(await call("PATCH", `${t}/participants/${driver.id}`, { body: { consent: true } }), 200);
   same("모두 동의한 뒤 기록", status(await call("PATCH", t, { body: { recording: true } }), 200).recording, true);
+  // 명세: 동의를 끄면 기록이 멈춘다
+  status(await call("PATCH", `${t}/participants/${rider.id}`, { body: { consent: false } }), 200);
+  same("한 명이 동의를 끈 뒤 기록", status(await call("GET", t), 200).recording, false);
+  status(await call("PATCH", `${t}/participants/${rider.id}`, { body: { consent: true } }), 200);
+  same("다시 동의하고 켠 기록", status(await call("PATCH", t, { body: { recording: true } }), 200).recording, true);
 });
 
 step("부탁을 남기고 상태를 끝까지 바꾸기", async () => {

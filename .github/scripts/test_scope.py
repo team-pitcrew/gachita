@@ -85,6 +85,11 @@ class ScopeTest(unittest.TestCase):
             for paths in part.get("steps", {}).values():
                 self.assertTrue(all(scope.under(p, part["paths"]) for p in paths), name)
 
+    def test_E2E_스크립트나_이미지_등록이_바뀌면_package(self):
+        """E2E의 기대를 바꾼 PR은 그 E2E를 실제로 돌려야 한다. 등록 워크플로를 바꾸면 병합 때 한 번 올려 본다."""
+        self.assertEqual(on([".github/scripts/e2e.mjs"]), ([], True))
+        self.assertEqual(on([".github/workflows/publish-api-image.yml"]), ([], True))
+
     def test_인프라는_이미지를_다시_만들지_않는다(self):
         self.assertFalse(on(["backend/infra/gitops/apps/api/base/deployment.yaml"])[1])
 
