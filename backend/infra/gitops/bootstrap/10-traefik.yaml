@@ -1,0 +1,85 @@
+# 물결 1. Traefik v3.7.17(차트 42.3.2). 클러스터 안의 리버스 프록시. Gateway API로 경로를 받는다.
+# 서비스는 ClusterIP만: 밖에서는 cloudflared(같은 edge 네임스페이스)만 닿는다. Gateway와 경로는 물결 5의 edge 앱.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: traefik
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://traefik.github.io/charts
+    chart: traefik
+    targetRevision: 42.3.2
+    helm:
+      releaseName: traefik
+      valuesObject:
+        deployment:
+          replicas: 2
+        podDisruptionBudget:
+          enabled: true
+          minAvailable: 1
+        priorityClassName: gachita-platform
+        nodeSelector:
+          node-role.kubernetes.io/control-plane: "true"
+        tolerations:
+          - key: node-role.kubernetes.io/control-plane
+            operator: Exists
+            effect: NoSchedule
+          - key: CriticalAddonsOnly
+            operator: Exists
+        resources:
+          requests:
+            cpu: 25m
+            memory: 64Mi
+          limits:
+            memory: 256Mi
+        service:
+          spec:
+            type: ClusterIP
+        ports:
+          web:
+            port: 8000
+            exposedPort: 80
+          websecure:
+            expose:
+              default: false
+        providers:
+          kubernetesCRD:
+            enabled: true
+          kubernetesIngress:
+            enabled: false
+          kubernetesGateway:
+            enabled: true
+            statusAddress:
+              hostname: traefik.edge.svc.cluster.local
+              service:
+                enabled: false
+        gateway:
+          enabled: false
+        gatewayClass:
+          enabled: true
+          name: traefik
+        ingressRoute:
+          dashboard:
+            enabled: false
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: edge
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m

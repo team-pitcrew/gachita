@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: gachita-profiles
+  labels:
+    gachita.io/data-plane: "true" # 포트 규칙(platform/cluster-base)이 걸린다
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/warn: restricted

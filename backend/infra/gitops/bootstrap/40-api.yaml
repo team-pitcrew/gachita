@@ -1,0 +1,31 @@
+# 물결 4. 같이타 API(웹앱 포함). DB 둘이 건강해진 뒤에 뜬다.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: api
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "4"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: git@github.com:team-pitcrew/gachita.git
+    targetRevision: develop
+    path: backend/infra/gitops/apps/api/overlays/dev
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: gachita
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - SkipDryRunOnMissingResource=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m

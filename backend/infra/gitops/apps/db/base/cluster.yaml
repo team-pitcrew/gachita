@@ -1,0 +1,35 @@
+# Postgres 한 대(CloudNativePG). 여행과 프로필이 같은 선언을 쓰고 네임스페이스로 나뉜다(T26).
+# 이름이 둘 다 db라 주소는 db-rw.gachita-trips, db-rw.gachita-profiles 이고, 접속 정보는 각 네임스페이스의 Secret db-app.
+# ponytail: 인스턴스가 하나라 서버가 죽으면 DB도 멈춘다. 노드를 늘리면 instances를 올린다.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: db
+  annotations:
+    # Git에서 빠지거나 앱을 지워도 DB는 지우지 않는다(데이터 보호). 지울 때는 사람이 직접.
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
+spec:
+  instances: 1
+  imageName: ghcr.io/cloudnative-pg/postgresql:17
+  priorityClassName: gachita-data
+  bootstrap:
+    initdb:
+      database: app
+      owner: app
+  storage:
+    size: 5Gi
+  # 메모리 요청=한도: 노드가 모자라도 축출 순위에서 뒤로 간다(ADR-0012의 노드 사양 표)
+  resources:
+    requests: { cpu: 100m, memory: 512Mi }
+    limits: { memory: 512Mi }
+  # 이 서비스 계정만 자기 백업 접두사에 쓰는 AWS 역할을 받는다(ADR-0011). 역할 이름은 overlay에서.
+  serviceAccountTemplate:
+    metadata:
+      annotations:
+        eks.amazonaws.com/role-arn: arn:aws:iam::000000000000:role/OVERLAY
+  # 백업과 WAL 보관은 Barman Cloud 플러그인(물결 2)이 ObjectStore backup으로
+  plugins:
+    - name: barman-cloud.cloudnative-pg.io
+      isWALArchiver: true
+      parameters:
+        barmanObjectName: backup

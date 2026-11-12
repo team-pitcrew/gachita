@@ -1,0 +1,30 @@
+# SSM Parameter Store를 읽는 저장소 하나(ADR-0012의 '비밀 값이 가는 길').
+# 서비스 계정 ssm-reader가 AWS 역할 gachita-dev-ssm-reader를 받는다(웹 신원, ADR-0011). 그 역할은
+# /gachita/dev/app/*(사람이 넣은 값)와 /gachita/dev/tf/*(Terraform이 쓴 값)만 읽는다.
+# 계정 번호 000000000000은 자리 표시다. terraform output account_id 로 바꾼다(backend/infra/terraform/README.md).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ssm-reader
+  namespace: external-secrets
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::000000000000:role/gachita-dev-ssm-reader
+automountServiceAccountToken: false
+---
+apiVersion: external-secrets.io/v1
+kind: ClusterSecretStore
+metadata:
+  name: ssm
+spec:
+  # 이 저장소를 쓸 수 있는 네임스페이스. DB 네임스페이스는 앱 비밀 값을 읽지 못한다.
+  conditions:
+    - namespaces: [gachita, edge]
+  provider:
+    aws:
+      service: ParameterStore
+      region: ap-northeast-2
+      auth:
+        jwt:
+          serviceAccountRef:
+            name: ssm-reader
+            namespace: external-secrets
