@@ -1,8 +1,8 @@
 # 이미지에 필요한 것만 보낸다
 *
-!services/api/package.json
-!services/api/package-lock.json
-!services/api/server.js
-!services/api/schema.sql
-!apps/web
-apps/web/*.test.mjs
+!backend/api/package.json
+!backend/api/package-lock.json
+!backend/api/server.js
+!backend/api/schema.sql
+!frontend/web
+frontend/web/*.test.mjs

@@ -4,7 +4,7 @@ info:
   version: 0.2.0
   summary: 여행 세션, 기기 프로필, 부탁, 장면
   description: |
-    웹앱(apps/web)과 차량 앱(apps/car)이 부르는 API입니다. 구현은 services/api/server.js입니다.
+    웹앱(frontend/web)과 차량 앱(frontend/car)이 부르는 API입니다. 구현은 backend/api/server.js입니다.
 
     - 모든 본문은 JSON이고 10 KB를 넘으면 413입니다.
     - 오류는 `{ "error": "이유" }`로 옵니다.

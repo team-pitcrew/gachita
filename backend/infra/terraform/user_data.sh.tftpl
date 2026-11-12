@@ -1,5 +1,5 @@
 #!/bin/bash
-# 첫 부팅에서 한 번 실행된다: K3s → Argo CD → 뿌리 앱. 그 뒤는 Argo CD가 infra/gitops를 읽어 맞춘다.
+# 첫 부팅에서 한 번 실행된다: K3s → Argo CD → 뿌리 앱. 그 뒤는 Argo CD가 backend/infra/gitops를 읽어 맞춘다.
 set -euo pipefail
 exec > >(tee /var/log/gachita-bootstrap.log) 2>&1
 
@@ -58,7 +58,7 @@ spec:
   source:
     repoURL: ${gitops_repo}
     targetRevision: ${gitops_revision}
-    path: infra/gitops/bootstrap
+    path: backend/infra/gitops/bootstrap
   destination:
     server: https://kubernetes.default.svc
     namespace: argocd

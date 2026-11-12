@@ -10,7 +10,7 @@ spec:
   source:
     repoURL: git@github.com:team-pitcrew/gachita.git
     targetRevision: develop
-    path: infra/gitops/apps/api/overlays/dev
+    path: backend/infra/gitops/apps/api/overlays/dev
   destination:
     server: https://kubernetes.default.svc
     namespace: gachita

@@ -30,9 +30,9 @@ jobs:
           BRANCH: ${{ github.head_ref }}
           BASE: ${{ github.base_ref }}
         run: |
-          scripts/policy.sh title "$TITLE"
-          scripts/policy.sh branch "$BRANCH"
-          scripts/policy.sh target "$BRANCH" "$BASE"
+          .github/scripts/policy.sh title "$TITLE"
+          .github/scripts/policy.sh branch "$BRANCH"
+          .github/scripts/policy.sh target "$BRANCH" "$BASE"
       - name: 커밋 제목
         if: github.event_name == 'pull_request'
         env:
@@ -40,7 +40,7 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           git log --format=%s "$BASE_SHA..$HEAD_SHA" > "$RUNNER_TEMP/titles.txt"
-          while IFS= read -r title; do scripts/policy.sh title "$title"; done < "$RUNNER_TEMP/titles.txt"
+          while IFS= read -r title; do .github/scripts/policy.sh title "$title"; done < "$RUNNER_TEMP/titles.txt"
       - name: 비밀 값 검사 (전체 이력)
         run: docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:v8.30.1 git /repo --no-banner --redact --config /repo/.gitleaks.toml
 
@@ -80,5 +80,5 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: services/api/package-lock.json
+          cache-dependency-path: backend/api/package-lock.json
       - run: make api

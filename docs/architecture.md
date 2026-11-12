@@ -4,21 +4,22 @@
 
 ## 폴더
 
+루트에 보이는 폴더는 `docs`, `frontend`, `backend` 셋입니다. 공모전에 낼 APK가 생기면 규정대로 루트에 `apk/`가 하나 더 생깁니다.
+
 ```
 gachita/
-├── apps/
+├── docs/               규칙, 구조, API 명세, 결정 기록, 작업 목록
+├── frontend/
 │   ├── web/            웹앱. 폰에서 쓰는 화면
 │   └── car/            차량 앱. Pleos 에뮬레이터와 실차에서 도는 Android 앱
-├── services/
-│   └── api/            API 서버
-├── infra/
-│   ├── terraform/      AWS 자원
-│   └── gitops/         클러스터에 올릴 것의 선언. Argo CD가 읽는다
-├── docs/               규칙, 구조, API 명세, 결정 기록, 작업 목록
-├── scripts/            규칙 검사, 보드 설정
+├── backend/
+│   ├── api/            API 서버
+│   └── infra/
+│       ├── terraform/  AWS 자원
+│       └── gitops/     클러스터에 올릴 것의 선언. Argo CD가 읽는다
+├── .github/            CI, PR·이슈 양식, 규칙 검사와 보드 스크립트(scripts/)
 ├── .githooks/          커밋 훅
-├── .github/            CI, PR·이슈 양식
-└── apk/                공모전 제출용 APK
+└── Makefile · README.md · AGENTS.md
 ```
 
 ## 한눈에
@@ -26,12 +27,12 @@ gachita/
 ```mermaid
 flowchart LR
   subgraph 차 안
-    Car["차량 앱 (apps/car)\nAndroid · Compose · Pleos SDK"]
-    Phone["웹앱 (apps/web)\n폰 브라우저 · 홈 화면 설치"]
+    Car["차량 앱 (frontend/car)\nAndroid · Compose · Pleos SDK"]
+    Phone["웹앱 (frontend/web)\n폰 브라우저 · 홈 화면 설치"]
   end
   subgraph AWS
     Edge["Traefik 인그레스 · Let's Encrypt"]
-    API["API 서버 (services/api)\nNode 22"]
+    API["API 서버 (backend/api)\nNode 22"]
     PG[("Postgres\nCloudNativePG")]
     S3[("S3\n백업 · 클립")]
   end
@@ -46,11 +47,11 @@ flowchart LR
 
 | 묶음 | 스택 | 고른 이유 | 상태 |
 |---|---|---|---|
-| 웹앱 `apps/web` | HTML · CSS · ES 모듈, 빌드 없음. 설치형 웹앱(PWA: 매니페스트와 서비스 워커). 글꼴 Pretendard | 화면 수가 적고, 차량 웹뷰와 폰 브라우저가 같은 파일을 그대로 읽음. 의존성이 없어 CI가 1초 안에 끝남. 화면이 열 개를 넘거나 상태가 얽히면 Vite + React로 옮김([ADR-0002](adr/0002-stack-split.md)) | 참가 4단계와 여행 화면 있음. 설치와 프로필 화면은 T6 |
-| 차량 앱 `apps/car` | Kotlin 2.0 · Jetpack Compose · AGP 8.6 · minSdk 28. Pleos Vehicle 2.3.2, NaviHelper 3.0.5, TextToSpeech 3.3.1 | 내비·공조·좌석·TTS는 Pleos SDK로만 부를 수 있음. 에뮬레이터에서 웹뷰 방식은 메모리 약 253 MB, 네이티브는 약 96 MB였음(Pleos 기준 400 MB) | 없음. T7에서 차박지도 앱의 연동 코드를 옮김 |
-| API 서버 `services/api` | Node 22 표준 `http`. Postgres 드라이버 `pg` 하나 | 경로가 열 개 안팎이라 프레임워크 없이 읽힘. 타입이 필요해지면 TypeScript로 옮김 | 있음. Postgres 저장과 기기 프로필 포함 |
+| 웹앱 `frontend/web` | HTML · CSS · ES 모듈, 빌드 없음. 설치형 웹앱(PWA: 매니페스트와 서비스 워커). 글꼴 Pretendard | 화면 수가 적고, 차량 웹뷰와 폰 브라우저가 같은 파일을 그대로 읽음. 의존성이 없어 CI가 1초 안에 끝남. 화면이 열 개를 넘거나 상태가 얽히면 Vite + React로 옮김([ADR-0002](adr/0002-stack-split.md)) | 참가 4단계와 여행 화면 있음. 설치와 프로필 화면은 T6 |
+| 차량 앱 `frontend/car` | Kotlin 2.0 · Jetpack Compose · AGP 8.6 · minSdk 28. Pleos Vehicle 2.3.2, NaviHelper 3.0.5, TextToSpeech 3.3.1 | 내비·공조·좌석·TTS는 Pleos SDK로만 부를 수 있음. 에뮬레이터에서 웹뷰 방식은 메모리 약 253 MB, 네이티브는 약 96 MB였음(Pleos 기준 400 MB) | 없음. T7에서 차박지도 앱의 연동 코드를 옮김 |
+| API 서버 `backend/api` | Node 22 표준 `http`. Postgres 드라이버 `pg` 하나 | 경로가 열 개 안팎이라 프레임워크 없이 읽힘. 타입이 필요해지면 TypeScript로 옮김 | 있음. Postgres 저장과 기기 프로필 포함 |
 | 데이터 | Postgres 17, CloudNativePG로 클러스터 안에서 운영 | 관리형 DB 없이 직접 운영하는 조건. 백업과 복구를 선언으로 다룸 | 선언 있음. 로컬과 CI는 Postgres 17 컨테이너 |
-| 클라우드 | AWS. EC2 한 대에 K3s 직접 설치. Terraform으로 자원을 만들고 Argo CD가 `infra/gitops`를 읽어 맞춤 | 한 대로 시작해 비용을 낮추고, 클러스터 상태를 저장소에서 읽을 수 있게 함 | Terraform과 클러스터 선언 있음([infra/terraform](../infra/terraform/README.md), [infra/gitops](../infra/gitops/README.md)). **아직 아무 자원도 만들지 않음** |
+| 클라우드 | AWS. EC2 한 대에 K3s 직접 설치. Terraform으로 자원을 만들고 Argo CD가 `backend/infra/gitops`를 읽어 맞춤 | 한 대로 시작해 비용을 낮추고, 클러스터 상태를 저장소에서 읽을 수 있게 함 | Terraform과 클러스터 선언 있음([backend/infra/terraform](../backend/infra/terraform/README.md), [backend/infra/gitops](../backend/infra/gitops/README.md)). **아직 아무 자원도 만들지 않음** |
 | CI | GitHub Actions. `policy`, `web`, `api`, `infra`(추가 예정 `car`). 이미지 게시 `publish-api-image` | SOVA와 같은 필수 검사 구성 | 있음 |
 
 ## 사용자 프로필 (OAuth 없음)

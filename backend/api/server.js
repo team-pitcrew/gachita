@@ -1,5 +1,5 @@
 // 같이타 API 서버. Node 22 표준 http와 Postgres 드라이버(pg) 하나만 쓴다.
-// 한 프로세스가 API(/api)와 웹앱(apps/web)을 같이 내보낸다. 경로와 형식은 docs/api/openapi.yaml에 있다.
+// 한 프로세스가 API(/api)와 웹앱(frontend/web)을 같이 내보낸다. 경로와 형식은 docs/api/openapi.yaml에 있다.
 //
 // ponytail: 여행 하나를 JSONB 문서 한 줄로 저장한다. 바꿀 때는 그 줄을 잠그고 통째로 다시 쓴다.
 //           여행을 가로질러 조회할 일이 생기면 참가자·부탁을 표로 나눈다.
@@ -12,7 +12,7 @@ import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
 
-const WEB = fileURLToPath(new URL("../../apps/web/", import.meta.url));
+const WEB = fileURLToPath(new URL("../../frontend/web/", import.meta.url));
 const SCHEMA = fileURLToPath(new URL("schema.sql", import.meta.url));
 const TTL_MS = 48 * 60 * 60 * 1000; // 기획서 v4가 초기 제안으로 적은 보관 기간
 const MAX_BODY = 10_000;

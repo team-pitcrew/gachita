@@ -10,7 +10,7 @@ spec:
   source:
     repoURL: git@github.com:team-pitcrew/gachita.git
     targetRevision: develop
-    path: infra/gitops/platform
+    path: backend/infra/gitops/platform
   destination:
     server: https://kubernetes.default.svc
   syncPolicy:

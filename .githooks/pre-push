@@ -9,7 +9,7 @@ while read -r _local_ref _local_sha remote_ref _remote_sha; do
       echo "${remote_ref#refs/heads/} 에는 직접 올리지 않습니다. PR을 열어 CI가 통과한 뒤 GitHub에서 병합합니다." >&2
       exit 1
       ;;
-    refs/heads/*) "$root/scripts/policy.sh" branch "${remote_ref#refs/heads/}" ;;
+    refs/heads/*) "$root/.github/scripts/policy.sh" branch "${remote_ref#refs/heads/}" ;;
   esac
 done
 make -C "$root" --no-print-directory check-fast

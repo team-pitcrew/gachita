@@ -18,7 +18,7 @@
 ## 결정
 
 - SOVA의 브랜치·제목·병합 규칙을 그대로 따릅니다. 승인은 SOVA의 나중 상태처럼 필수가 아닙니다.
-- 규칙은 `scripts/policy.sh` 한곳에 두고, 훅(`commit-msg`, `pre-commit`, `pre-push`)과 CI `policy`가 같이 씁니다.
+- 규칙은 `.github/scripts/policy.sh` 한곳에 두고, 훅(`commit-msg`, `pre-commit`, `pre-push`)과 CI `policy`가 같이 씁니다.
 - `pre-push` 훅이 `main`·`develop`으로 직접 올리는 것을 막습니다.
 
 ## 결과

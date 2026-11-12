@@ -1,8 +1,8 @@
 #!/bin/sh
 # 저장소 규칙을 한곳에서 검사한다. 커밋 훅과 CI가 같은 스크립트를 쓴다.
-#   scripts/policy.sh title  "<커밋 또는 PR 제목>"
-#   scripts/policy.sh branch "<브랜치 이름>"
-#   scripts/policy.sh target "<브랜치 이름>" "<PR 대상 브랜치>"
+#   .github/scripts/policy.sh title  "<커밋 또는 PR 제목>"
+#   .github/scripts/policy.sh branch "<브랜치 이름>"
+#   .github/scripts/policy.sh target "<브랜치 이름>" "<PR 대상 브랜치>"
 # 규칙은 docs/development.md에 있다.
 set -eu
 
