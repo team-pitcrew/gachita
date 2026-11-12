@@ -108,13 +108,13 @@ async function profiles(req, [who], b) {
     return [201, { ...p, token }]; // 토큰은 이때 한 번만 준다. 서버에는 해시만 남는다.
   }
   if (who !== "me") fail(404, "없는 경로");
+  if (m !== "GET" && m !== "PATCH" && m !== "DELETE") fail(405, "GET, PATCH, DELETE만 됨");
   const me = (await profileOf(req)) ?? fail(401, "프로필 토큰이 필요함");
   if (m === "GET") return [200, me];
   if (m === "DELETE") {
     await pool.query("DELETE FROM profiles WHERE id = $1", [me.id]);
     return [204];
   }
-  if (m !== "PATCH") fail(405, "GET, PATCH, DELETE만 됨");
   const next = {
     id: me.id,
     name: b.name === undefined ? me.name : text(b.name, 20, "name"),
@@ -289,6 +289,7 @@ export const server = createServer(async (req, res) => {
     const url = new URL(req.url, "http://localhost");
     const seg = url.pathname.split("/").filter(Boolean);
     if (url.pathname === "/healthz") {
+      if (req.method !== "GET") fail(405, "GET만 됨");
       await pool.query("SELECT 1"); // DB까지 닿는지 본다
       return send(200, { ok: true });
     }

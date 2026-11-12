@@ -34,7 +34,7 @@ make check     # CI와 같은 검사
 
 ## API
 
-모든 경로는 `/api/trips` 아래에 있고 JSON을 주고받습니다. 오류는 `{ "error": "이유" }`로 옵니다.
+정식 명세는 [docs/api/openapi.yaml](docs/api/openapi.yaml)입니다. 아래는 요약입니다. JSON을 주고받고, 오류는 `{ "error": "이유" }`로 옵니다.
 
 | 요청 | 본문 | 하는 일 |
 |---|---|---|
