@@ -1,6 +1,9 @@
 name: ci
 
-# 병합 전에 꼭 통과해야 하는 검사다. 검사를 건너뛰는 조건을 두지 않는다.
+# 병합 전에 꼭 통과해야 하는 검사다. 일곱 잡은 언제나 결과를 낸다.
+# 무엇을 검사할지는 scope 잡이 바뀐 파일을 보고 정한다. 범위 밖인 잡은 할 일이 없다고 적고 성공으로 끝난다.
+# 파트와 경로의 원본은 .github/parts.json이다. PR과 develop 병합은 바뀐 파트만, main에 올라온 뒤와 수동 실행은 전부 검사한다.
+# 문서(.md)와 협업 설정(양식, 티켓 자동화, 훅)만 바뀌면 scope와 policy만 실제로 돈다.
 # 무료 조직의 비공개 저장소라 GitHub 브랜치 보호를 걸 수 없다. PR 화면의 이 결과를 보고 병합한다.
 on:
   pull_request:
@@ -16,6 +19,36 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  scope:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      frontend_spec: ${{ steps.plan.outputs.frontend_spec }}
+      frontend_app: ${{ steps.plan.outputs.frontend_app }}
+      backend_api: ${{ steps.plan.outputs.backend_api }}
+      backend_infra: ${{ steps.plan.outputs.backend_infra }}
+      package: ${{ steps.plan.outputs.package }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: 저장소 스크립트 테스트
+        run: python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v
+      - name: 검사 범위 정하기
+        id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          # PR은 base부터, develop에 병합된 뒤에는 바로 앞 커밋부터 바뀐 파일을 본다
+          BASE: ${{ github.event.pull_request.base.sha || (github.ref == 'refs/heads/develop' && github.event.before) || '' }}
+        run: |
+          if [ -n "$BASE" ]; then
+            python3 .github/scripts/scope.py --base "$BASE" > "$RUNNER_TEMP/scope.json"
+          else
+            python3 .github/scripts/scope.py --full > "$RUNNER_TEMP/scope.json"
+          fi
+          cat "$RUNNER_TEMP/scope.json"
+          { echo '검사 범위'; echo '```json'; cat "$RUNNER_TEMP/scope.json"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
   policy:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -44,17 +77,71 @@ jobs:
       - name: 비밀 값 검사 (전체 이력)
         run: docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:v8.30.1 git /repo --no-banner --redact --config /repo/.gitleaks.toml
 
-  web:
+  # 아래 다섯 잡은 scope가 실패해도 돌아서 실패를 직접 알린다(건너뜀으로 남지 않게).
+  # 범위 조건은 잡이 아니라 스텝에 건다. 그래야 잡이 언제나 결과를 낸다.
+
+  frontend-spec:
+    needs: scope
+    if: always()
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
+    env:
+      IN_SCOPE: ${{ needs.scope.outputs.frontend_spec }}
     steps:
+      - name: 범위 확인
+        env:
+          SCOPE_RESULT: ${{ needs.scope.result }}
+        run: |
+          if [ "$SCOPE_RESULT" != success ]; then echo "::error::scope 잡이 실패해 검사 범위를 알 수 없습니다"; exit 1; fi
+          if [ "$IN_SCOPE" != true ]; then echo "이 PR은 프론트 설계(frontend-spec)를 바꾸지 않아 검사할 것이 없습니다"; fi
       - uses: actions/checkout@v7
+        if: env.IN_SCOPE == 'true'
+      - name: 화면 문서의 틀과 링크
+        if: env.IN_SCOPE == 'true'
+        run: python3 .github/scripts/spec_check.py
+
+  frontend-app:
+    needs: scope
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      IN_SCOPE: ${{ needs.scope.outputs.frontend_app }}
+    steps:
+      - name: 범위 확인
+        env:
+          SCOPE_RESULT: ${{ needs.scope.result }}
+        run: |
+          if [ "$SCOPE_RESULT" != success ]; then echo "::error::scope 잡이 실패해 검사 범위를 알 수 없습니다"; exit 1; fi
+          if [ "$IN_SCOPE" != true ]; then echo "이 PR은 프론트 구현(frontend-app)을 바꾸지 않아 검사할 것이 없습니다"; fi
+      - uses: actions/checkout@v7
+        if: env.IN_SCOPE == 'true'
       - uses: actions/setup-node@v7
+        if: env.IN_SCOPE == 'true'
         with:
           node-version: 22
-      - run: make check-fast
+      - name: 웹앱 검사
+        if: env.IN_SCOPE == 'true'
+        run: make check-fast
+      # 차량 앱(frontend/car)이 들어오면 아래 세 스텝이 저절로 돈다
+      - name: 차량 앱이 있는지
+        id: car
+        if: env.IN_SCOPE == 'true'
+        run: |
+          if [ -f frontend/car/gradlew ]; then echo "present=true" >> "$GITHUB_OUTPUT"; else echo "차량 앱 폴더가 아직 없습니다"; fi
+      - uses: actions/setup-java@v5
+        if: env.IN_SCOPE == 'true' && steps.car.outputs.present == 'true'
+        with:
+          distribution: temurin
+          java-version: 21
+      - name: 차량 앱 빌드와 단위 테스트
+        if: env.IN_SCOPE == 'true' && steps.car.outputs.present == 'true'
+        working-directory: frontend/car
+        run: ./gradlew assembleDebug testDebugUnitTest
 
-  api:
+  backend-api:
+    needs: scope
+    if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 10
     services:
@@ -72,13 +159,119 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
+      IN_SCOPE: ${{ needs.scope.outputs.backend_api }}
       # 이 검사에서만 쓰는 일회용 DB의 주소다
       DATABASE_URL: postgres://gachita:gachita@localhost:5432/gachita
     steps:
+      - name: 범위 확인
+        env:
+          SCOPE_RESULT: ${{ needs.scope.result }}
+        run: |
+          if [ "$SCOPE_RESULT" != success ]; then echo "::error::scope 잡이 실패해 검사 범위를 알 수 없습니다"; exit 1; fi
+          if [ "$IN_SCOPE" != true ]; then echo "이 PR은 백엔드 로직(backend-api)을 바꾸지 않아 검사할 것이 없습니다"; fi
       - uses: actions/checkout@v7
+        if: env.IN_SCOPE == 'true'
       - uses: actions/setup-node@v7
+        if: env.IN_SCOPE == 'true'
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: backend/api/package-lock.json
-      - run: make api
+      - name: API 테스트 (명세와 경로 대조 포함)
+        if: env.IN_SCOPE == 'true'
+        run: make api
+
+  backend-infra:
+    needs: scope
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      IN_SCOPE: ${{ needs.scope.outputs.backend_infra }}
+    steps:
+      - name: 범위 확인
+        env:
+          SCOPE_RESULT: ${{ needs.scope.result }}
+        run: |
+          if [ "$SCOPE_RESULT" != success ]; then echo "::error::scope 잡이 실패해 검사 범위를 알 수 없습니다"; exit 1; fi
+          if [ "$IN_SCOPE" != true ]; then echo "이 PR은 인프라(backend-infra)를 바꾸지 않아 검사할 것이 없습니다"; fi
+      - uses: actions/checkout@v7
+        if: env.IN_SCOPE == 'true'
+      - uses: hashicorp/setup-terraform@v4
+        if: env.IN_SCOPE == 'true'
+        with:
+          terraform_version: "1.17.1"
+      - name: Terraform 형식
+        if: env.IN_SCOPE == 'true'
+        run: terraform -chdir=backend/infra/terraform fmt -check -recursive -diff
+      - name: Terraform 정합성 (계정에 접속하지 않음)
+        if: env.IN_SCOPE == 'true'
+        run: |
+          terraform -chdir=backend/infra/terraform init -backend=false -input=false
+          terraform -chdir=backend/infra/terraform validate
+      - name: 클러스터 선언 조립과 스키마 검사
+        if: env.IN_SCOPE == 'true'
+        run: |
+          catalog='https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+          for dir in backend/infra/gitops/bootstrap backend/infra/gitops/platform backend/infra/gitops/apps/api/overlays/dev; do
+            echo "== $dir"
+            kubectl kustomize "$dir" > "$RUNNER_TEMP/manifests.yaml"
+            docker run --rm -i ghcr.io/yannh/kubeconform:v0.8.0 \
+              -strict -summary -schema-location default -schema-location "$catalog" - < "$RUNNER_TEMP/manifests.yaml"
+          done
+
+  # 웹앱과 API를 한 이미지로 묶어 실제로 뜨는지 본다. 올리지는 않는다(올리기는 로컬에서 make push).
+  # 실행기는 x86이라 여기서 만든 이미지는 x86용이다. 서버용 ARM 이미지는 올릴 때 따로 만든다.
+  package:
+    needs: scope
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: gachita
+          POSTGRES_PASSWORD: gachita
+          POSTGRES_DB: gachita
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U gachita"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      IN_SCOPE: ${{ needs.scope.outputs.package }}
+      # 이 검사에서만 쓰는 일회용 DB의 주소다
+      DATABASE_URL: postgres://gachita:gachita@localhost:5432/gachita
+    steps:
+      - name: 범위 확인
+        env:
+          SCOPE_RESULT: ${{ needs.scope.result }}
+        run: |
+          if [ "$SCOPE_RESULT" != success ]; then echo "::error::scope 잡이 실패해 검사 범위를 알 수 없습니다"; exit 1; fi
+          if [ "$IN_SCOPE" != true ]; then echo "이 PR은 이미지에 들어가는 파일을 바꾸지 않아 검사할 것이 없습니다"; fi
+      - uses: actions/checkout@v7
+        if: env.IN_SCOPE == 'true'
+      - name: 이미지 빌드
+        if: env.IN_SCOPE == 'true'
+        run: docker build -f backend/api/Dockerfile -t gachita-api:ci .
+      - name: 띄워서 확인 (읽기 전용 파일 시스템, 일반 사용자)
+        if: env.IN_SCOPE == 'true'
+        run: |
+          docker run -d --name gachita-api-ci --network host --read-only --user 1000 \
+            -e DATABASE_URL="$DATABASE_URL" -e PORT=8787 gachita-api:ci
+          code() { curl -s -o /dev/null -m 3 -w '%{http_code}' "http://localhost:8787$1" || true; }
+          health=000
+          for _ in $(seq 1 20); do
+            health=$(code /healthz)
+            if [ "$health" = 200 ]; then break; fi
+            sleep 1
+          done
+          web=$(code /)
+          echo "healthz=$health web=$web"
+          if [ "$health" != 200 ] || [ "$web" != 200 ]; then
+            docker logs gachita-api-ci
+            exit 1
+          fi

@@ -1,0 +1,6 @@
+# 빈 이슈를 막아 모든 이슈가 양식을 거치게 한다. 티켓 자동화가 양식의 '파트'를 읽는다.
+blank_issues_enabled: false
+contact_links:
+  - name: 개발 규칙
+    url: https://github.com/team-pitcrew/gachita/blob/develop/docs/development.md
+    about: 브랜치와 제목 규칙, 티켓 상태가 어떻게 움직이는지 먼저 읽어 주세요.

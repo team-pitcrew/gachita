@@ -16,7 +16,7 @@
 ## 실행 방법
 
 ```bash
-make hooks     # 복제한 뒤 한 번: 커밋 훅 걸기
+make hooks     # 복제한 뒤 한 번: 커밋 훅과 커밋 양식 걸기
 make run       # http://localhost:8787 (로컬 Postgres 컨테이너를 같이 띄움)
 make check     # CI와 같은 검사
 ```

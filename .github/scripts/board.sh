@@ -1,5 +1,5 @@
 #!/bin/sh
-# 작업 상태를 적는다. 보드가 생기기 전에는 이슈 라벨 status:* 로 적는다(docs/project-board.md).
+# 비상용. 평소에는 tickets.yml이 상태를 옮긴다(docs/project-board.md).
 #   .github/scripts/board.sh status T2 in-progress     # backlog | ready | in-progress | in-review | done
 #   .github/scripts/board.sh setup                     # 프로젝트 보드를 만들고 T번호 이슈를 올린다(토큰에 project 권한 필요)
 set -eu
@@ -29,6 +29,7 @@ case "${1:-}" in
     gh project link "$num" --owner team-pitcrew --repo "$REPO"
     gh issue list -R "$REPO" --state all --limit 200 --json url,title --jq '.[] | select(.title | test("^\\[T[0-9]+\\] ")) | .url' |
       while IFS= read -r issue; do gh project item-add "$num" --owner team-pitcrew --url "$issue" >/dev/null; done
+    gh variable set PROJECT_NUMBER -R "$REPO" --body "$num"
     echo "보드: $url"
     echo "상태 열(Backlog · Ready · In progress · In review · Done)은 보드 설정의 Status 필드에서 맞춥니다."
     ;;

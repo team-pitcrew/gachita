@@ -33,9 +33,9 @@ backend/infra/gitops/
 
 ## 새 판 내보내기
 
-1. `develop`에 병합되면 `publish-api-image` 워크플로가 `ghcr.io/team-pitcrew/gachita-api:<커밋 SHA>`를 올립니다.
-2. `overlays/dev/kustomization.yaml`의 `newTag`를 그 SHA로 바꾸는 PR을 올립니다.
-3. 병합되면 Argo CD가 새 이미지로 바꿉니다.
+1. 로컬에서 `make push`로 이미지를 올립니다. 올리기 전에 이미지를 띄워 `/healthz`와 웹앱을 봅니다. 태그는 커밋 SHA 앞 12자입니다.
+2. `make deploy-tag TAG=<올린 태그>`로 `overlays/dev/kustomization.yaml`의 `newTag`를 바꾸고 PR로 올립니다.
+3. 병합되면 Argo CD가 새 이미지로 바꿉니다. 되돌릴 때는 이전 태그로 같은 일을 합니다.
 
 ## 확인한 것
 
@@ -47,4 +47,4 @@ backend/infra/gitops/
 
 - Postgres와 API가 한 대씩입니다. 서버가 죽으면 멈춥니다.
 - 백업은 CloudNativePG의 내장 방식(`barmanObjectStore`)입니다. 1.30.1에는 있지만 폐기 예정이라 운영자를 올릴 때 Barman Cloud 플러그인으로 옮겨야 합니다.
-- 이미지 태그를 사람이 PR로 올립니다. 잦아지면 자동으로 PR을 여는 봇을 둡니다.
+- 이미지를 사람이 로컬에서 올리고 태그도 사람이 PR로 올립니다. 잦아지면 자동으로 PR을 여는 봇을 둡니다.
