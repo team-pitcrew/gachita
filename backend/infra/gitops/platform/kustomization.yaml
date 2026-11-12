@@ -1,4 +1,8 @@
+# 플랫폼 설정 셋. Argo CD는 하위 폴더마다 앱 하나로 올린다(bootstrap/의 00-cluster-base, 20-pod-identity-webhook, 20-secret-stores).
+# 이 파일은 셋을 한 번에 조립해 CI(backend-infra)가 스키마를 보게 하려고 둔다.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
-  - cluster-issuer.yaml
+  - cluster-base
+  - pod-identity-webhook
+  - secret-stores

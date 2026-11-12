@@ -30,16 +30,21 @@ flowchart LR
     Car["차량 앱 (frontend/car)\nAndroid · Compose · Pleos SDK"]
     Phone["웹앱 (frontend/web)\n폰 브라우저 · 홈 화면 설치"]
   end
-  subgraph AWS
-    Edge["Traefik 인그레스 · Let's Encrypt"]
-    API["API 서버 (backend/api)\nNode 22"]
-    PG[("Postgres\nCloudNativePG")]
+  CF["Cloudflare 엣지\ngachita.mangowhois.ai · TLS · 캐시"]
+  subgraph AWS["AWS · EC2 한 대 · K3s"]
+    Edge["edge: cloudflared · Traefik(Gateway API)"]
+    API["gachita: API 서버 (backend/api)\nNode 22"]
+    PGT[("gachita-trips\nPostgres")]
+    PGP[("gachita-profiles\nPostgres")]
     S3[("S3\n백업 · 클립")]
   end
-  Car -->|HTTPS| Edge
-  Phone -->|HTTPS| Edge
-  Edge --> API --> PG
-  PG -.->|백업| S3
+  Car -->|HTTPS| CF
+  Phone -->|HTTPS| CF
+  CF -->|Tunnel| Edge --> API
+  API --> PGT
+  API --> PGP
+  PGT -.->|백업| S3
+  PGP -.->|백업| S3
   Car -->|같은 기기 안| Pleos["순정 내비 · 공조 · 좌석 · TTS"]
 ```
 
@@ -60,7 +65,7 @@ flowchart LR
 - **담는 것:** 이름, 자리별 선호(운전석·조수석·뒷자리의 온도·열선·통풍), 기록 동의의 기본값. 자리별 선호는 기획서 v4의 기능이고 지금 기준 문서에는 없습니다(T8). 가족을 한 묶음으로 두는 구조와 사람별 기록본(T39)은 아직 없습니다.
 - **다른 기기로 옮기기:** 한 번만 쓰는 6자 코드로 옮깁니다(T6 이후).
 - **따로 둘 것:** OAuth 로그인으로 만드는 프로필과 현대차 개인 프로필 연동은 기기 프로필과도, 서로와도 다른 기능으로 둡니다. 구글 계정 연결은 들어갔습니다(T21, [ADR-0006](adr/0006-oauth-provider-google.md)). 한 프로필에 계정 하나, 기기 토큰 하나라서 다른 기기에서 계정으로 들어오면 앞 기기의 토큰은 못 쓰게 됩니다. 현대 계정 연동은 조건만 조사했습니다(T22, [ADR-0004](adr/0004-hyundai-profile-link.md)).
-- **격리:** 프로필과 여행 데이터를 서로 다른 Postgres 파드에 두고 네트워크로 막을 계획입니다(T23, T26). 지금은 한 DB에 표만 다릅니다.
+- **격리:** 프로필과 여행 데이터를 서로 다른 네임스페이스의 Postgres에 두고 기본 차단 네트워크 정책으로 막습니다. API 파드만 두 DB에 닿습니다([ADR-0013](adr/0013-network-edge-and-isolation.md), T26. 선언만 있고 실제 클러스터에서 확인 전).
 
 ## 연산을 두는 곳
 
@@ -80,8 +85,7 @@ Pleos는 주행 중 내비가 아닌 앱의 CPU를 5% 미만, RAM을 400 MB 이�
 | Pleos SpeechToText | 차량 앱 | 대화 받아쓰기(앱이 받은 원음을 `sendAudio()`로 넣음) | 에뮬레이터에서 확인(11/13, [E2E 실측](emulator/e2e-flow.md)). ADR-0008 제안 |
 | 화자 대조 | API 서버 | 같은 좌석 구역 안의 사람 구분 | 정하지 않음(T38). 원음을 어디까지 보낼지는 T12 |
 | LLM(Claude API) | API 서버 | 장면 고르기 | 정하지 않음 |
-| Let's Encrypt | 클러스터 | 인증서 | 선언 있음. 발급은 미확인. Cloudflare로 옮기면 걷어냄(T27) |
-| Cloudflare | 가장자리 | 주소 `gachita.mangowhois.ai`, 서버로 가는 길, 요청 수 제한 | 정함(지환, 11/13). 아직 만들지 않음([ADR-0010](adr/0010-domain-and-cloudflare-edge.md) 제안, T27). 위 그림의 가장자리는 지금 선언(Traefik) 기준 |
+| Cloudflare | 가장자리 | 주소 `gachita.mangowhois.ai`, 서버로 가는 길, 요청 수 제한 | 정함(지환, 11/13). 아직 만들지 않음([ADR-0010](adr/0010-domain-and-cloudflare-edge.md) 제안, T27). 길·격리·포트 설계는 [ADR-0013](adr/0013-network-edge-and-isolation.md)(제안, T24 PR) |
 
 ## 아직 없는 것
 

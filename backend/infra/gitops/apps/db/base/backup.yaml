@@ -1,0 +1,34 @@
+# 백업 대상(S3 데이터 버킷의 postgres/<db>/). 경로는 overlay에서. 자격은 서비스 계정 역할(웹 신원)에서 온다.
+apiVersion: barmancloud.cnpg.io/v1
+kind: ObjectStore
+metadata:
+  name: backup
+spec:
+  retentionPolicy: 7d
+  configuration:
+    destinationPath: s3://OVERLAY
+    s3Credentials:
+      inheritFromIAMRole: true
+    wal:
+      compression: gzip
+    data:
+      compression: gzip
+  instanceSidecarConfiguration:
+    resources:
+      requests: { cpu: 10m, memory: 128Mi }
+      limits: { memory: 128Mi }
+---
+# 매일 03:00(KST) 전체 백업. 처음 한 번은 만들자마자 뜬다.
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: daily
+spec:
+  schedule: "0 0 18 * * *" # 초 분 시(UTC) 일 월 요일
+  immediate: true
+  backupOwnerReference: self
+  cluster:
+    name: db
+  method: plugin
+  pluginConfiguration:
+    name: barman-cloud.cloudnative-pg.io

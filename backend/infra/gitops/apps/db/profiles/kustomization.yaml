@@ -1,0 +1,19 @@
+# 프로필 Postgres(gachita-profiles). 계정 번호 000000000000은 자리 표시(terraform output account_id).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: gachita-profiles
+resources:
+  - namespace.yaml
+  - ../base
+patches:
+  - target: { kind: Cluster, name: db }
+    patch: |-
+      - op: replace
+        path: /spec/serviceAccountTemplate/metadata/annotations/eks.amazonaws.com~1role-arn
+        value: arn:aws:iam::000000000000:role/gachita-dev-pg-profiles
+      - { op: replace, path: /spec/storage/size, value: 2Gi }
+      - { op: replace, path: /spec/resources/requests/memory, value: 384Mi }
+      - { op: replace, path: /spec/resources/limits/memory, value: 384Mi }
+  - target: { kind: ObjectStore, name: backup }
+    patch: |-
+      - { op: replace, path: /spec/configuration/destinationPath, value: "s3://gachita-dev-000000000000/postgres/profiles" }

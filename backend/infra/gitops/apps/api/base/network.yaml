@@ -1,0 +1,60 @@
+# gachita 네임스페이스의 허용 목록. 나머지는 기본 차단(components/data-plane).
+# 들어오는 길: Traefik(edge)만. 나가는 길: 두 DB, 구글 OAuth.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: api-from-traefik
+spec:
+  podSelector:
+    matchLabels: { app: gachita-api }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: edge }
+          podSelector:
+            matchLabels: { app.kubernetes.io/name: traefik }
+      ports:
+        - { protocol: TCP, port: http }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: api-to-dbs
+spec:
+  podSelector:
+    matchLabels: { app: gachita-api }
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: gachita-trips }
+          podSelector:
+            matchLabels: { cnpg.io/cluster: db }
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: gachita-profiles }
+          podSelector:
+            matchLabels: { cnpg.io/cluster: db }
+      ports:
+        - { protocol: TCP, port: postgresql }
+---
+# 구글 OAuth의 토큰 교환과 사용자 정보(backend/api/providers/google.js). 이름으로만 연다.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: api-egress
+spec:
+  endpointSelector:
+    matchLabels: { app: gachita-api }
+  egress:
+    - toEndpoints:
+        - matchLabels: { io.kubernetes.pod.namespace: kube-system, k8s-app: kube-dns }
+      toPorts:
+        - ports: [{ port: "53", protocol: ANY }]
+          rules:
+            dns: [{ matchPattern: "*" }]
+    - toFQDNs:
+        - matchName: oauth2.googleapis.com
+        - matchName: openidconnect.googleapis.com
+      toPorts:
+        - ports: [{ port: "443", protocol: TCP }]
