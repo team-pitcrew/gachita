@@ -21,6 +21,6 @@
       "paths": ["backend/infra/"]
     }
   },
-  "shared": [".github/", ".githooks/", "Makefile", ".dockerignore", ".gitleaks.toml"],
+  "shared": [".github/workflows/ci.yml", ".github/scripts/scope.py", ".github/scripts/spec_check.py", ".github/parts.json", "Makefile"],
   "package": ["backend/api/", "frontend/web/", ".dockerignore"]
 }

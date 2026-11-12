@@ -2,7 +2,8 @@ name: ci
 
 # 병합 전에 꼭 통과해야 하는 검사다. 일곱 잡은 언제나 결과를 낸다.
 # 무엇을 검사할지는 scope 잡이 바뀐 파일을 보고 정한다. 범위 밖인 잡은 할 일이 없다고 적고 성공으로 끝난다.
-# 파트와 경로의 원본은 .github/parts.json이다. PR은 바뀐 파트만, develop·main에 올라온 뒤와 수동 실행은 전부 검사한다.
+# 파트와 경로의 원본은 .github/parts.json이다. PR과 develop 병합은 바뀐 파트만, main에 올라온 뒤와 수동 실행은 전부 검사한다.
+# 문서(.md)와 협업 설정(양식, 티켓 자동화, 훅)만 바뀌면 scope와 policy만 실제로 돈다.
 # 무료 조직의 비공개 저장소라 GitHub 브랜치 보호를 걸 수 없다. PR 화면의 이 결과를 보고 병합한다.
 on:
   pull_request:
@@ -37,9 +38,10 @@ jobs:
         id: plan
         env:
           EVENT: ${{ github.event_name }}
-          BASE: ${{ github.event.pull_request.base.sha }}
+          # PR은 base부터, develop에 병합된 뒤에는 바로 앞 커밋부터 바뀐 파일을 본다
+          BASE: ${{ github.event.pull_request.base.sha || (github.ref == 'refs/heads/develop' && github.event.before) || '' }}
         run: |
-          if [ "$EVENT" = pull_request ]; then
+          if [ -n "$BASE" ]; then
             python3 .github/scripts/scope.py --base "$BASE" > "$RUNNER_TEMP/scope.json"
           else
             python3 .github/scripts/scope.py --full > "$RUNNER_TEMP/scope.json"

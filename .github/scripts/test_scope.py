@@ -30,14 +30,22 @@ class ScopeTest(unittest.TestCase):
         self.assertEqual(on(["backend/infra/terraform/compute.tf"]), (["backend-infra"], False))
 
     def test_두_파트가_바뀌면_둘_다(self):
-        self.assertEqual(on(["backend/api/server.js", "backend/infra/gitops/README.md"]), (["backend-api", "backend-infra"], True))
+        self.assertEqual(on(["backend/api/server.js", "backend/infra/gitops/bootstrap/api.yaml"]), (["backend-api", "backend-infra"], True))
 
-    def test_공통_파일이_바뀌면_전부(self):
-        for file in [".github/workflows/ci.yml", ".github/parts.json", ".githooks/pre-push", "Makefile", ".dockerignore", ".gitleaks.toml"]:
+    def test_검사를_정하는_파일이_바뀌면_전부(self):
+        for file in [".github/workflows/ci.yml", ".github/scripts/scope.py", ".github/scripts/spec_check.py", ".github/parts.json", "Makefile"]:
             self.assertEqual(on([file]), (sorted(PARTS), True), file)
 
     def test_문서만_바뀌면_아무_파트도_아니다(self):
         self.assertEqual(on(["docs/tasks.md", "docs/adr/0001-gitflow-and-hooks.md", "README.md", "AGENTS.md"]), ([], False))
+        self.assertEqual(on(["backend/infra/gitops/README.md", "backend/api/README.md", "frontend/web/README.md"]), ([], False), "파트 폴더 안의 문서")
+
+    def test_협업_설정만_바뀌면_아무_파트도_아니다(self):
+        """양식, 티켓 자동화, 훅, 비밀 값 규칙은 scope와 policy 잡이 언제나 본다."""
+        files = [".github/ISSUE_TEMPLATE/ticket.yml", ".github/pull_request_template.md", ".github/CODEOWNERS",
+                 ".github/workflows/tickets.yml", ".github/scripts/tickets.py", ".githooks/pre-push", ".gitleaks.toml", ".gitmessage"]
+        self.assertEqual(on(files), ([], False))
+        self.assertEqual(on([".dockerignore"]), ([], True), "이미지에 들어갈 파일을 정하므로 package만")
 
     def test_API_명세는_백엔드_로직이다(self):
         self.assertEqual(on(["docs/api/openapi.yaml"]), (["backend-api"], False))

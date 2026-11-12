@@ -29,11 +29,14 @@ def under(path, prefixes):
 def plan(files, config, full=False):
     """바뀐 파일 목록으로 파트별 검사 여부와 이미지 빌드 여부를 정한다."""
     files = [f for f in files if f]
-    shared = full or any(under(f, config["shared"]) for f in files)
+    # 문서(.md)는 화면 문서(frontend/spec)만 검사 대상이다. 다른 문서는 어느 파트의 검사도 깨뜨리지 못한다.
+    spec = config["parts"]["frontend-spec"]["paths"]
+    code = [f for f in files if not f.endswith(".md") or under(f, spec)]
+    shared = full or any(under(f, config["shared"]) for f in code)
     return {
         "full": full,
-        "parts": {name: shared or any(under(f, part["paths"]) for f in files) for name, part in config["parts"].items()},
-        "package": shared or any(under(f, config["package"]) for f in files),
+        "parts": {name: shared or any(under(f, part["paths"]) for f in code) for name, part in config["parts"].items()},
+        "package": shared or any(under(f, config["package"]) for f in code),
         "files": len(files),
     }
 
