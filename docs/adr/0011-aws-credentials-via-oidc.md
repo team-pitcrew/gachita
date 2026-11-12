@@ -35,10 +35,14 @@
 
 **GitHub Actions**
 
-- GitHub OIDC 제공자 하나와 역할 둘을 `backend/infra/terraform/account/`에 둔다. 신뢰 조건은 `aud = sts.amazonaws.com`이고 `sub`를 정확히 맞춘다(와일드카드 없음).
-  - `gachita-github-plan`: `repo:team-pitcrew/gachita:pull_request`. AWS 관리 정책 `ReadOnlyAccess`에서 상태 파일 밖의 S3 객체 읽기, 사람이 넣은 비밀 값(`/gachita/*/app/*`, `/gachita/*/bootstrap/*`) 읽기, 복호화를 명시적으로 막는다. 상태는 잠그지 않고 읽기만 한다(`-lock=false`).
-  - `gachita-github-apply`: `repo:team-pitcrew/gachita:ref:refs/heads/develop`. 본 설정이 만드는 서비스(EC2·VPC, S3 `gachita-*`, SSM `/gachita/*`, IAM `gachita-*`)만 허용하고, 사람이 넣은 비밀 값은 쓰기만 된다. CloudFront와 ALB는 만들지 않으므로(ADR-0010) 권한도 주지 않는다.
-- 적용 역할이 만드는 IAM 역할에는 권한 경계 `gachita-workload-boundary`를 반드시 붙여야 한다(`iam:PermissionsBoundary` 조건). 그래서 적용 역할이 자기보다 넓은 역할을 만들어 우회할 수 없다. 적용 역할은 `gachita-github-*` 역할, 경계 정책, GitHub OIDC 제공자를 고치지 못한다. 이것들은 사람이 로컬 자격으로만 적용한다.
+- 역할 둘을 `backend/infra/terraform/account/`에 둔다. 신뢰 조건은 `aud = sts.amazonaws.com`이고 `sub`를 정확히 맞춘다(와일드카드 없음).
+- `sub`는 GitHub의 **불변 형식**(`repo:OWNER@OWNER-ID/REPO@REPO-ID:…`)이다. 이 저장소는 그 형식이 기본으로 켜져 있다(`gh api repos/team-pitcrew/gachita/actions/oidc/customization/sub` → `use_immutable_subject: true`, 접두사 `repo:team-pitcrew@351326633/gachita@1455271774`, 11/13 확인). 이름만 쓰는 옛 형식으로는 역할을 받지 못한다.
+- GitHub OIDC 제공자(`token.actions.githubusercontent.com`)는 이 계정에 **이미 있다**. 다른 프로젝트(railshot)의 Terraform이 관리하고 그 역할들이 믿는다. 그래서 만들지 않고 `data`로 읽기만 하며, 우리 쪽 destroy가 그것을 지우지 않는다. 적용 역할은 그 제공자를 고치지 못한다.
+  - `gachita-github-plan`: `repo:team-pitcrew@351326633/gachita@1455271774:pull_request`. AWS 관리 정책 `ReadOnlyAccess`에서 상태 파일 밖의 S3 객체 읽기, 사람이 넣은 비밀 값(`/gachita/*/app/*`, `/gachita/*/bootstrap/*`)의 읽기와 복호화를 명시적으로 막는다. 복호화 거부는 그 경로(KMS 암호화 문맥 `PARAMETER_ARN`)로만 건다. Terraform이 쓴 SecureString(`/tf/`)은 계획의 refresh가 읽어야 하고, 같은 값이 상태 파일에도 있어 막아도 지키는 것이 없다. 상태는 잠그지 않고 읽기만 한다(`-lock=false`).
+  - `gachita-github-apply`: `repo:team-pitcrew@351326633/gachita@1455271774:ref:refs/heads/develop`. 본 설정이 만드는 서비스(EC2·VPC, S3 `gachita-*`, SSM `/gachita/*`, IAM `gachita-*`, 우리 서비스 계정 발급자 하나)만 허용한다. CloudFront와 ALB는 만들지 않으므로(ADR-0010) 권한도 주지 않는다.
+  - **이 계정은 다른 프로젝트(railshot, bravo 등)와 같이 쓴다.** 그쪽 EC2·VPC·EKS와 EKS의 OIDC 제공자가 있다. 그래서 EC2는 **우리 태그(`Project=gachita`, provider의 `default_tags`)가 붙은 자원만** 만들고 고치고 지운다: 만들 때는 `aws:RequestTag/Project`, 그 뒤에는 `aws:ResourceTag/Project`가 `gachita`여야 한다. 읽기(`Describe*`)만 자원 단위로 좁힐 수 없어 리전으로 좁힌다. 다른 프로젝트 자원에는 `Project` 태그가 없는 것도 많아(11/13 확인: VPC 5, 인스턴스 9, 보안 그룹 18) '남의 태그면 거부'로는 막을 수 없어 허용 쪽을 좁혔다. OIDC 제공자 권한도 우리 발급자 주소 하나(`gachita-*-oidc-<계정>.s3.<리전>.amazonaws.com`)로 좁혔다. 계정을 따로 쓸지는 지환님께 묻는 중이다.
+  - 사람이 넣은 비밀 값은 적용 역할이 **직접** 읽지 못한다(읽기·복호화 명시적 거부, 쓰기만 됨). 다만 적용 역할은 경계 안의 역할(서버·파드)을 만들 수 있고 그 역할은 비밀 값을 읽을 수 있다. 그래서 비밀 값의 신뢰 범위는 '적용 역할을 받는 코드', 곧 develop에 병합할 수 있는 사람과 같다.
+- 적용 역할이 만드는 IAM 역할에는 권한 경계 `gachita-workload-boundary`를 반드시 붙여야 한다(`iam:PermissionsBoundary` 조건). 그래서 적용 역할이 자기보다 넓은 역할을 만들어 우회할 수 없다. 적용 역할은 `gachita-github-*` 역할, 경계 정책, GitHub OIDC 제공자를 고치지 못한다. 경계에는 SSM을 거친 복호화(`kms:Decrypt`, `kms:ViaService = ssm.<리전>.amazonaws.com`)를 넣어, 서버의 배포 키 읽기와 External Secrets가 경계에 막히지 않게 한다. 이것들은 사람이 로컬 자격으로만 적용한다.
 - 적용은 develop의 수동 실행(`workflow_dispatch`)으로만 한다. 병합으로 저절로 적용하지 않는다. 비용이 생기는 명령은 지환님이 승인한 때에만 실행한다는 방침 때문이다. 무료 조직의 비공개 저장소라 GitHub 환경의 승인자 기능을 쓸 수 없어 이렇게 막는다.
 - 역할 ARN과 상태 버킷 이름은 비밀 값이 아니므로 저장소 변수(`AWS_PLAN_ROLE_ARN`, `AWS_APPLY_ROLE_ARN`, `TF_STATE_BUCKET`)에 둔다. 변수가 비어 있으면 워크플로는 "역할이 없어 건너뜀"으로 성공한다.
 
@@ -75,4 +79,4 @@ AWS 열쇠는 없다. 아래는 AWS가 아닌 곳의 자격이라 OIDC로 바꿀
 - 적용 순서가 생긴다: 상태 버킷(CLI) → `account/`(로컬 자격) → 저장소 변수 → 이후 계획·적용은 GitHub Actions. 순서는 `backend/infra/terraform/README.md`의 '처음 한 번'.
 - 로컬 IAM 사용자(`mango_sesacthon`)의 열쇠는 처음 한 번과 `account/` 변경에만 쓴다. 이 열쇠는 저장소와 서버에 두지 않는다.
 - 계획 역할은 상태 파일을 읽는다. 상태에는 Terraform이 만든 값(Cloudflare 터널 토큰)이 들어 있으므로, PR을 열 수 있는 사람은 그 값을 볼 수 있다. 팀 4명이 저장소 쓰기 권한을 가진 지금은 같은 신뢰 범위로 본다. 외부 기여자를 받게 되면 계획을 PR 라벨로 승인한 뒤에만 돌린다.
-- 확인한 것: `terraform validate`(account). 실제 계정에 만들지 않았고, 역할을 받아 계획을 돌린 적도 없다.
+- 확인한 것(11/13): `terraform validate`(account), 로컬 자격으로 상태 없이 계획만(6개: 역할 둘, 정책 셋, 관리 정책 붙이기 하나. 제공자는 읽기만). 계획에서 나온 정책 문서 셋을 IAM 정책 시뮬레이터(`simulate-custom-policy`, 읽기 전용)로 35가지 호출에 돌려 기대와 맞음: 우리 태그 자원의 만들기·지우기 허용, 남의·태그 없는 인스턴스와 VPC, EKS·GitHub 제공자, 다른 버킷은 거부, 경계 없는 역할 만들기 거부, 사람이 넣은 비밀 값 직접 읽기·복호화 거부, `/tf/` 복호화는 계획 역할이 막지 않음, 경계는 SSM을 거친 복호화만 허용. 시뮬레이터는 정책 논리만 본다. 실제 계정에 만들지 않았고, 역할을 받아 계획을 돌린 적도 없다(EC2 API가 실제로 어떤 자원을 함께 판정하는지는 첫 적용에서 확인).
