@@ -3,6 +3,8 @@
 !backend/api/package.json
 !backend/api/package-lock.json
 !backend/api/server.js
-!backend/api/schema.sql
+!backend/api/db.js
+!backend/api/trips.sql
+!backend/api/profiles.sql
 !frontend/web
 frontend/web/*.test.mjs
