@@ -1,0 +1,53 @@
+name: tickets
+
+# 이슈를 티켓으로 쓴다. 사람이 라벨이나 보드를 손으로 옮기지 않는다.
+#   이슈가 열림·고쳐짐   → 번호([T숫자]), 파트·우선순위·상태 라벨, 담당
+#   feature/T7-… 브랜치   → 그 티켓을 작업 중으로
+#   PR이 열림·병합·닫힘   → 연결된 티켓을 리뷰 중·완료·작업 중으로, PR에 파트 라벨
+# PROJECT_TOKEN(비밀 값)과 PROJECT_NUMBER(변수)가 있으면 프로젝트 보드에도 같은 상태를 적는다.
+on:
+  issues:
+    types: [opened, edited, reopened]
+  pull_request:
+    types: [opened, reopened, ready_for_review, closed]
+  create:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+# 이슈 이벤트는 한 줄로 세워 번호가 겹치지 않게 한다. 기다리던 실행이 새 실행에 밀려 취소돼도
+# 스크립트가 열린 이슈를 모두 훑으므로 빠지는 이슈가 없다. PR과 브랜치는 서로 막지 않는다.
+concurrency:
+  group: tickets-${{ github.event_name == 'issues' && 'issues' || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # 포크에서 온 PR은 토큰이 읽기 전용이라 건너뛴다
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      # PR의 코드가 아니라 기본 브랜치의 스크립트를 쓴다
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      - name: 티켓 맞추기
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROJECT_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+          PROJECT_NUMBER: ${{ vars.PROJECT_NUMBER }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          # 이 워크플로를 처음 넣는 PR에서는 기본 브랜치에 스크립트가 아직 없다
+          if [ ! -f .github/scripts/tickets.py ]; then
+            echo "::notice::기본 브랜치에 tickets.py가 아직 없어 건너뜁니다"
+            exit 0
+          fi
+          case "$EVENT" in
+            issues) python3 .github/scripts/tickets.py issue ;;
+            pull_request) python3 .github/scripts/tickets.py pr ;;
+            create) python3 .github/scripts/tickets.py branch ;;
+          esac

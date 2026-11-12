@@ -1,0 +1,57 @@
+name: 결함
+description: 기대와 다르게 동작하는 것. 번호와 라벨, 담당은 자동으로 붙습니다.
+title: "[T] "
+labels: ["type:bug"]
+body:
+  - type: dropdown
+    id: part
+    attributes:
+      label: 파트
+      description: 어느 파트의 코드에서 생긴 문제인지 고릅니다. 모르면 가장 가까운 것을 고릅니다.
+      options:
+        - 프론트 · 피그마 전 단계
+        - 프론트 · 피그마 이후 단계
+        - 백엔드 · 비즈니스 로직
+        - 백엔드 · 인프라
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 재현 순서
+      description: 다른 사람이 그대로 따라 할 수 있게 번호로 적습니다.
+      value: "1. "
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 기대한 동작
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 실제 동작
+      description: 오류 문구나 화면 캡처가 있으면 붙입니다. 비밀 값과 개인정보는 가립니다.
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: 영향 범위
+      description: 누가, 어떤 화면이나 기능에서, 얼마나 자주 겪는지 적습니다.
+    validations:
+      required: true
+  - type: dropdown
+    id: env
+    attributes:
+      label: 확인한 환경
+      description: 어디서 본 것인지 구분합니다.
+      options:
+        - 로컬 실행(브라우저 · 서버)
+        - 에뮬레이터에서 확인
+        - 실차에서 확인
+        - 문서에서만 확인(실행하지 않음)
+    validations:
+      required: true

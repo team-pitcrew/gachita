@@ -1,0 +1,26 @@
+{
+  "parts": {
+    "frontend-spec": {
+      "name": "프론트 · 피그마 전 단계",
+      "owner": "acrafti2020-lab",
+      "paths": ["frontend/spec/"]
+    },
+    "frontend-app": {
+      "name": "프론트 · 피그마 이후 단계",
+      "owner": "mangowhoiscloud",
+      "paths": ["frontend/web/", "frontend/car/"]
+    },
+    "backend-api": {
+      "name": "백엔드 · 비즈니스 로직",
+      "owner": "acrafti2020-lab",
+      "paths": ["backend/api/", "docs/api/"]
+    },
+    "backend-infra": {
+      "name": "백엔드 · 인프라",
+      "owner": "mangowhoiscloud",
+      "paths": ["backend/infra/"]
+    }
+  },
+  "shared": [".github/", ".githooks/", "Makefile", ".dockerignore", ".gitleaks.toml"],
+  "package": ["backend/api/", "frontend/web/", ".dockerignore"]
+}

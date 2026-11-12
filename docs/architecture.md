@@ -52,14 +52,15 @@ flowchart LR
 | API 서버 `backend/api` | Node 22 표준 `http`. Postgres 드라이버 `pg` 하나 | 경로가 열 개 안팎이라 프레임워크 없이 읽힘. 타입이 필요해지면 TypeScript로 옮김 | 있음. Postgres 저장과 기기 프로필 포함 |
 | 데이터 | Postgres 17, CloudNativePG로 클러스터 안에서 운영 | 관리형 DB 없이 직접 운영하는 조건. 백업과 복구를 선언으로 다룸 | 선언 있음. 로컬과 CI는 Postgres 17 컨테이너 |
 | 클라우드 | AWS. EC2 한 대에 K3s 직접 설치. Terraform으로 자원을 만들고 Argo CD가 `backend/infra/gitops`를 읽어 맞춤 | 한 대로 시작해 비용을 낮추고, 클러스터 상태를 저장소에서 읽을 수 있게 함 | Terraform과 클러스터 선언 있음([backend/infra/terraform](../backend/infra/terraform/README.md), [backend/infra/gitops](../backend/infra/gitops/README.md)). **아직 아무 자원도 만들지 않음** |
-| CI | GitHub Actions. `policy`, `web`, `api`, `infra`(추가 예정 `car`). 이미지 게시 `publish-api-image` | SOVA와 같은 필수 검사 구성 | 있음 |
+| CI | GitHub Actions. 네 파트 중 바뀐 것만 검사: `scope`, `policy`, `frontend-spec`, `frontend-app`, `backend-api`, `backend-infra`, `package` | SOVA처럼 필수 검사가 항상 결과를 내고 범위는 그 안에서 고름 | 있음 |
 
-## 사용자 프로필 (OAuth 없음)
+## 사용자 프로필
 
 - **기기 프로필:** 처음 열면 서버가 프로필 ID와 긴 무작위 토큰을 발급하고, 기기에 저장합니다. 이후 요청은 이 토큰으로 본인임을 보입니다. 서버에는 토큰의 해시만 둡니다.
 - **담는 것:** 이름, 자리별 선호(운전석·조수석·뒷자리의 온도·열선·통풍), 기록 동의의 기본값. 기획서 v4 5쪽의 '개인 계정'에 해당합니다.
 - **다른 기기로 옮기기:** 한 번만 쓰는 6자 코드로 옮깁니다(T6 이후).
-- **하지 않는 것:** 소셜 로그인, 비밀번호, 이메일·전화번호 수집.
+- **따로 둘 것:** OAuth 로그인으로 만드는 프로필(T21)과 현대차 개인 프로필 연동(T22)은 기기 프로필과도, 서로와도 다른 기능으로 둡니다. 아직 없습니다.
+- **격리:** 프로필과 여행 데이터를 서로 다른 Postgres 파드에 두고 네트워크로 막을 계획입니다(T23, T26). 지금은 한 DB에 표만 다릅니다.
 
 ## 연산을 두는 곳
 

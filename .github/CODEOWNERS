@@ -1,2 +1,17 @@
-# 리뷰 알림을 받을 사람. 승인은 필수가 아니다(docs/development.md).
-* @mangowhoiscloud
+# 파트별 리뷰 알림. 원본은 .github/parts.json이고, 둘이 다르면 CI의 scope 검사가 실패한다.
+# 승인은 필수가 아니다(docs/development.md).
+*                 @mangowhoiscloud
+
+# 프론트 · 피그마 전 단계
+/frontend/spec/   @acrafti2020-lab
+
+# 프론트 · 피그마 이후 단계
+/frontend/web/    @mangowhoiscloud
+/frontend/car/    @mangowhoiscloud
+
+# 백엔드 · 비즈니스 로직
+/backend/api/     @acrafti2020-lab
+/docs/api/        @acrafti2020-lab
+
+# 백엔드 · 인프라
+/backend/infra/   @mangowhoiscloud

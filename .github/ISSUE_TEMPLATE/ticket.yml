@@ -1,0 +1,60 @@
+name: 작업 티켓
+description: 할 일 하나. 번호([T숫자])와 라벨, 담당은 자동으로 붙습니다.
+title: "[T] "
+labels: ["type:task"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        제목의 `[T] ` 뒤에 무엇을 하는지 한 줄로 적어 주세요. 번호는 저장하면 자동으로 붙습니다.
+        브랜치(`feature/T번호-설명`)를 만들면 '작업 중', PR을 열면 '리뷰 중', 병합되면 '완료'로 자동으로 옮겨집니다.
+  - type: dropdown
+    id: part
+    attributes:
+      label: 파트
+      description: 파트에 따라 담당자와 CI 검사가 정해집니다.
+      options:
+        - 프론트 · 피그마 전 단계
+        - 프론트 · 피그마 이후 단계
+        - 백엔드 · 비즈니스 로직
+        - 백엔드 · 인프라
+    validations:
+      required: true
+  - type: dropdown
+    id: priority
+    attributes:
+      label: 우선순위
+      options:
+        - P0 · 제출에 꼭 필요
+        - P1 · 제출 점수에 도움
+        - P2 · 2차 발표 전까지
+      default: 1
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: 왜 하는가
+      description: 이 일을 하지 않으면 무엇이 안 되는지 적습니다.
+    validations:
+      required: true
+  - type: textarea
+    id: todo
+    attributes:
+      label: 할 일
+      description: 체크 상자로 적습니다. 끝낸 항목은 PR이 병합되고 확인한 뒤에 체크합니다.
+      value: "- [ ] "
+    validations:
+      required: true
+  - type: textarea
+    id: done
+    attributes:
+      label: 완료 기준
+      description: 무엇을 보면 끝났다고 할 수 있는지 적습니다.
+    validations:
+      required: true
+  - type: input
+    id: after
+    attributes:
+      label: 선행 작업
+      description: 먼저 끝나야 하는 티켓 번호(예 T2, T7). 없으면 비웁니다.

@@ -1,16 +1,60 @@
-# 개발 규칙: Gitflow와 작업 번호
+# 개발 규칙
 
-SOVA 저장소(`Softbank-Hackathon-Finals/platform`)의 규칙을 이 저장소 크기에 맞게 옮겼습니다. 결정 이유는 [ADR-0001](adr/0001-gitflow-and-hooks.md)에 있습니다.
+SOVA 저장소(`Softbank-Hackathon-Finals/platform`)의 Gitflow와 작업 추적을 옮기고, 변경을 설명하고 내보내는 방식은 Google의 공개 기준을 따랐습니다. 결정 이유는 [ADR-0001](adr/0001-gitflow-and-hooks.md)과 [ADR-0003](adr/0003-collaboration.md)에 있습니다.
 
 ## 처음 한 번
 
 ```sh
 git clone https://github.com/team-pitcrew/gachita.git && cd gachita
-make hooks        # 커밋 훅을 건다
-make check        # CI와 같은 검사
+make hooks        # 커밋 훅과 커밋 양식을 건다
+make check        # 테스트(로컬 Postgres 컨테이너를 띄운다)
 ```
 
-`make hooks`를 하지 않으면 아래 규칙이 내 컴퓨터에서 검사되지 않습니다. CI는 같은 규칙을 다시 검사합니다.
+## 파트와 담당
+
+작업과 리뷰, CI는 네 파트로 나눕니다. 원본은 [`.github/parts.json`](../.github/parts.json)이고 CODEOWNERS, 이슈 양식, CI 범위, 티켓 담당이 모두 이 파일을 따릅니다.
+
+| 파트 | 다루는 것 | 경로 | 담당 |
+|---|---|---|---|
+| `frontend-spec` | 프론트 · 피그마 전 단계 | `frontend/spec/` | 상현 |
+| `frontend-app` | 프론트 · 피그마 이후 단계 | `frontend/web/`, `frontend/car/` | 지환 |
+| `backend-api` | 백엔드 · 비즈니스 로직 | `backend/api/`, `docs/api/` | 상현 |
+| `backend-infra` | 백엔드 · 인프라 | `backend/infra/` | 지환 |
+
+- 한 PR은 한 파트만 바꾸는 것을 기본으로 합니다.
+- 다른 파트의 코드를 바꿀 때는 먼저 그 파트 담당과 범위를 맞춥니다.
+- `.github/`, `.githooks/`, `Makefile`처럼 모두가 쓰는 파일은 지환이 맡고, 바뀌면 CI가 네 파트를 모두 검사합니다.
+
+## 티켓
+
+GitHub 이슈가 티켓입니다. 제목은 `[T번호] 제목`이고, 라벨 셋(`part:*`, `P0`~`P2`, `status:*`)이 붙습니다.
+
+| 일어난 일 | 자동으로 되는 것 |
+|---|---|
+| 이슈 양식으로 티켓을 만듦 | 번호(`[T숫자]`), 파트·우선순위 라벨, `status:backlog`, 파트 담당 지정 |
+| `feature/T번호-설명` 브랜치를 올림 | 티켓이 `status:in-progress` |
+| PR을 엶 | 티켓이 `status:in-review`, PR에 바뀐 파트의 `part:*` 라벨 |
+| PR이 병합됨 | 본문에 `Closes #번호`로 이은 티켓은 닫히고 `status:done`. `Refs #번호`로만 이은 티켓은 `status:in-progress`로 남음 |
+| PR이 병합 없이 닫힘 | 티켓이 `status:in-progress` |
+
+- 자동화는 [`tickets.yml`](../.github/workflows/tickets.yml)과 [`tickets.py`](../.github/scripts/tickets.py)가 합니다. 라벨과 상태를 손으로 고치지 않습니다.
+- 프로젝트 보드도 같은 워크플로가 맞춥니다. 저장소에 비밀 값 `PROJECT_TOKEN`과 변수 `PROJECT_NUMBER`가 있어야 하고, 없으면 라벨까지만 합니다([프로젝트 보드](project-board.md)).
+- 계획에 있는 작업은 [`docs/tasks.md`](tasks.md)에 적고 `python3 .github/scripts/tasks.py --apply`로 티켓을 만듭니다.
+- 끝낸 할 일의 체크는 병합과 확인 뒤에 사람이 합니다. 체크는 자동으로 하지 않습니다.
+
+## 한 작업의 순서
+
+```sh
+make ticket-start T=T7 NAME=car-shell     # develop에서 feature/T7-car-shell을 만들어 올린다
+# 구현하고
+make check
+git commit                                # 양식이 뜬다. 제목은 [T7] 무엇을 하는지
+make ticket-pr                            # 티켓 제목과 PR 양식으로 PR을 연다
+gh pr checks --watch
+gh pr merge --merge --match-head-commit <확인한 HEAD>
+```
+
+에이전트는 `.claude/skills/ticket`의 순서를 따릅니다.
 
 ## 브랜치
 
@@ -19,63 +63,86 @@ make check        # CI와 같은 검사
 | `feature/T번호-설명` | `develop` | `develop` | 작업 하나 |
 | `release/vX.Y.Z` | `develop` | `main`, 그다음 `develop` | 확인한 범위를 내보낼 준비 |
 | `hotfix/T번호-설명` | `main` | `main`, 그다음 `develop` | 내보낸 판의 급한 수정 |
-| `bot/sync-tasks` | `develop` | `develop` | 작업 목록 동기화(아직 쓰지 않음) |
 
 - `develop`이 기본 브랜치이고 통합 기준입니다. `main`은 내보낸 판입니다. 공모전에 내는 APK와 영상은 `main`의 태그에서 만듭니다.
-- 설명은 영문 소문자와 숫자, 하이픈으로 씁니다. 예: `feature/T2-device-profile`.
 - 작업은 병합 커밋으로 합쳐 묶음을 남깁니다(스쿼시하지 않음).
 
-## 커밋과 PR 제목
+## 커밋과 PR 쓰는 법
 
-제목은 `[T번호] 설명`으로 시작합니다. 작업 번호가 없는 저장소 설정은 `[setup]`, 자동 동기화는 `[sync]`를 씁니다.
+Google의 [변경 설명 쓰는 법](https://google.github.io/eng-practices/review/developer/cl-descriptions.html)과 [작은 변경](https://google.github.io/eng-practices/review/developer/small-cls.html)을 따릅니다.
 
-```
-[T2] 프로필 발급 API 추가
-[setup] CI에 차량 앱 빌드 추가
-```
+- **제목 한 줄:** `[T번호] 무엇을 하는지`. 명령하듯 쓰고, 그 줄만 읽어도 무엇이 바뀌는지 알 수 있어야 합니다. 번호 없는 저장소 설정은 `[setup]`, 자동 동기화는 `[sync]`.
+- **본문:** 무엇을 왜 바꿨는지. 코드를 다시 설명하지 않고 내린 판단과 배경을 적습니다.
+- **작게:** 한 PR은 한 가지 일만 합니다. 100줄 안팎이 읽기 좋고 1000줄이면 대개 너무 큽니다.
+- `git commit`을 치면 [커밋 양식](../.gitmessage)이, PR을 열면 [PR 양식](../.github/pull_request_template.md)이 뜹니다.
 
-PR 본문에는 `Refs #이슈번호`를, 그 작업의 마지막 PR이면 `Closes #이슈번호`를 적습니다. 본문은 문제, 바뀐 동작, 확인한 것, 남은 범위 순서로 씁니다.
+PR 양식의 다섯 칸은 Google SRE의 변경 관리에서 가져왔습니다([Release Engineering](https://sre.google/sre-book/release-engineering/), [Launch Checklist](https://sre.google/sre-book/launch-checklist/)).
+
+| 칸 | 묻는 것 |
+|---|---|
+| 무엇을, 왜 | 바꾼 것과 이유 |
+| 확인한 것 | 돌린 명령과 결과. 문서·에뮬레이터·실차를 구분. 확인하지 않은 것 |
+| 위험과 영향 범위 | 잘못되면 무엇이 깨지고 누가 영향을 받나 |
+| 내보내기와 되돌리기 | 병합 뒤 할 일과, 문제가 생겼을 때 되돌리는 방법 |
+| 남은 범위 | 하지 않은 것과 다음 티켓 |
+
+장애나 큰 실수는 이슈 양식 '사후 검토'로 남깁니다. [비난하지 않는 사후 검토](https://sre.google/sre-book/postmortem-culture/) 형식입니다.
+
+## CI 게이트
+
+워크플로는 [`ci.yml`](../.github/workflows/ci.yml) 하나이고 검사는 일곱 개입니다. **일곱 개 모두 항상 결과를 냅니다.** PR에서는 바뀐 파트의 검사만 실제로 돌고, 나머지는 "검사할 것이 없습니다"로 통과합니다. `main`·`develop`에 병합된 뒤에는 전부 돕니다.
+
+| 검사 | 언제 실제로 도나 | 하는 일 |
+|---|---|---|
+| `scope` | 항상 | 스크립트 테스트, 바뀐 파트 계산 |
+| `policy` | 항상 | PR 제목·브랜치 이름·대상 브랜치·커밋 제목, 비밀 값 검사(gitleaks) |
+| `frontend-spec` | `frontend/spec/`이 바뀜 | 화면 문서에 다섯 제목이 있는지, 링크가 깨졌는지 |
+| `frontend-app` | `frontend/web/`·`frontend/car/`가 바뀜 | 웹앱 검사. 차량 앱이 생기면 빌드와 단위 테스트 |
+| `backend-api` | `backend/api/`·`docs/api/`가 바뀜 | Postgres에 붙인 API 테스트(명세 대조 포함) |
+| `backend-infra` | `backend/infra/`가 바뀜 | Terraform 형식·정합성, 클러스터 선언 스키마 |
+| `package` | `backend/api/`·`frontend/web/`가 바뀜 | 이미지를 만들어 띄우고 `/healthz`와 웹앱이 200인지 |
+
+- 모두가 쓰는 파일(`.github/` 등)이 바뀌면 전부 돕니다.
+- 무료 조직의 비공개 저장소라 GitHub가 이 검사를 강제하지 못합니다. PR 화면에서 일곱 개가 모두 초록색인 것을 보고 병합합니다.
+- 실패한 검사를 약하게 고쳐 통과시키지 않습니다.
 
 ## 병합 조건
 
 | 대상 | PR | 필수 검사 | 승인 |
 |---|---|---|---|
-| `develop` | 필요 | `policy`, `web`, `api`. `backend/infra/`가 바뀌면 `infra`도(차량 앱이 생기면 `car` 추가) | 필수 아님 |
-| `main` | 필요 | 위와 같음 | 필수 아님 |
+| `develop` | 필요 | 위의 일곱 개 | 필수 아님 |
+| `main` | 필요 | 위의 일곱 개 | 필수 아님 |
 
-- 검사가 모두 통과한 뒤 병합합니다. 실패한 검사를 약하게 고쳐 통과시키지 않습니다.
-- 승인은 필수가 아니지만, 리뷰에서 확인된 결함과 변경 요청은 해결한 뒤 병합합니다.
-- 다른 사람이 맡은 작업의 코드를 바꿀 때는 먼저 그 사람과 범위를 맞춥니다.
+승인은 필수가 아니지만, 리뷰에서 확인된 결함과 변경 요청은 해결한 뒤 병합합니다. CODEOWNERS에 따라 파트 담당에게 리뷰 알림이 갑니다.
 
-**이 조건은 GitHub가 강제하지 않습니다.** 무료 조직의 비공개 저장소에는 브랜치 보호와 규칙 세트를 걸 수 없습니다(2026-11-12 API로 확인, 403). 그래서 커밋 훅과 CI로 지킵니다. 저장소를 공개로 바꾸거나 요금제를 올리면 같은 조건을 규칙 세트로 옮깁니다.
+## 백엔드를 내보내는 법
+
+API와 웹앱은 이미지 하나(`ghcr.io/team-pitcrew/gachita-api`)로 묶습니다. 이미지는 로컬에서 만들어 올리고, 태그를 바꾸는 PR로 내보냅니다.
+
+```sh
+make image-smoke                  # 이미지를 만들어 띄워 본다(/healthz, 웹앱)
+make push                         # 띄워 본 뒤 GHCR에 올린다. 태그는 커밋 SHA 앞 12자
+make deploy-tag TAG=<올린 태그>   # dev 환경의 태그를 바꾼다
+# 이 변경을 backend-infra 티켓의 PR로 올린다. 병합되면 Argo CD가 내보낸다
+```
+
+- 되돌릴 때는 `make deploy-tag`로 이전 태그를 다시 적어 PR로 올립니다.
+- 깨끗한 환경에서 다시 만들어야 할 때만 `publish-api-image` 워크플로를 손으로 돌립니다.
+- 클러스터가 아직 없어 '병합되면 내보낸다'는 실제로 본 적이 없습니다(T24).
 
 ## 커밋 훅
 
 | 훅 | 하는 일 |
 |---|---|
 | `commit-msg` | 제목이 `[T번호]`, `[setup]`, `[sync]`로 시작하는지 |
-| `pre-commit` | 브랜치 이름, `main`·`develop` 직접 커밋 금지, 올리려는 변경의 비밀 값 검사(gitleaks) |
+| `pre-commit` | 브랜치 이름, `main`·`develop` 직접 커밋 금지, 올리려는 변경의 비밀 값 검사 |
 | `pre-push` | `main`·`develop`으로 직접 올리기 금지, 빠른 검사(`make check-fast`) |
 
 규칙 문장은 `.github/scripts/policy.sh` 한곳에 있고 훅과 CI가 같이 씁니다. `--no-verify`로 훅을 건너뛰지 않습니다.
 
-## 한 작업의 순서
-
-```sh
-git fetch origin
-git switch -c feature/T2-device-profile origin/develop
-# 구현하고 make check
-git push -u origin feature/T2-device-profile
-gh pr create --base develop --title '[T2] 프로필 발급 API 추가' --body-file pr.md
-gh pr checks --watch
-gh pr merge --merge --match-head-commit <확인한 HEAD>
-```
-
-끝낸 할 일은 PR이 병합되고 확인한 뒤 이슈에서 체크합니다. 칸반 쓰는 법은 [프로젝트 보드](project-board.md)에 있습니다.
-
 ## 확인 수준을 구분해 적기
 
-문서에 가능하다고 적힌 것, 에뮬레이터에서 본 것, 실차에서 본 것을 섞어 쓰지 않습니다. PR의 '확인한 것'과 문서에 어느 수준인지 적습니다.
+문서에 가능하다고 적힌 것, 에뮬레이터에서 본 것, 실차에서 본 것을 섞어 쓰지 않습니다.
 
 ## 넣지 않는 것
 

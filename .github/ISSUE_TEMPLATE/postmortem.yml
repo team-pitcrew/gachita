@@ -1,0 +1,60 @@
+name: 사후 검토
+description: 장애나 큰 실수 뒤에 쓰는 기록. 사람을 탓하지 않고 원인과 고칠 것을 적습니다.
+title: "[사후 검토] "
+labels: ["type:postmortem"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Google SRE의 비난 없는 사후 검토 형식을 따릅니다. 누가 잘못했는지가 아니라, 무엇이 그 일을 가능하게 했는지를 적습니다.
+        이름 대신 역할로 적습니다(예: 배포한 사람). 후속 조치는 각각 작업 티켓으로 만듭니다.
+  - type: textarea
+    id: summary
+    attributes:
+      label: 요약
+      description: 무슨 일이 있었고 지금은 어떤 상태인지 두세 문장으로 적습니다.
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: 영향
+      description: 누가, 무엇을, 얼마나 오래 못 했는지 적습니다. 잃은 데이터가 있으면 적습니다.
+    validations:
+      required: true
+  - type: textarea
+    id: timeline
+    attributes:
+      label: 시간순 기록
+      description: 시각(KST)과 일어난 일. 알아챈 때, 조치한 때, 끝난 때를 넣습니다.
+      value: "- HH:MM "
+    validations:
+      required: true
+  - type: textarea
+    id: cause
+    attributes:
+      label: 원인
+      description: 직접 원인과, 그것이 사고로 이어지게 둔 조건(검사 없음, 문서 없음 등)을 나눠 적습니다.
+    validations:
+      required: true
+  - type: textarea
+    id: went-well
+    attributes:
+      label: 잘된 것
+  - type: textarea
+    id: went-wrong
+    attributes:
+      label: 잘못된 것
+  - type: textarea
+    id: lucky
+    attributes:
+      label: 운이 좋았던 것
+      description: 이번에는 넘어갔지만 다음에는 문제가 될 수 있는 것.
+  - type: textarea
+    id: actions
+    attributes:
+      label: 후속 조치
+      description: 체크 상자로 적고, 각각의 티켓 번호를 붙입니다.
+      value: "- [ ] "
+    validations:
+      required: true
