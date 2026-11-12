@@ -104,6 +104,19 @@ def start_server():
     note("server.start", up=server_up())
 
 
+def phone_consent(code, pid, on):
+    """폰 참가자가 웹앱에서 자기 동의를 바꾸는 것과 같은 요청."""
+    req = urllib.request.Request(f"http://localhost:8787/api/trips/{code}/participants/{pid}", data=json.dumps({"consent": on}).encode(),
+                                 headers={"Content-Type": "application/json"}, method="PATCH")
+    urllib.request.urlopen(req, timeout=5).read(); note("phone.consent", id=pid, on=on)
+
+
+def activity_state():
+    out = adb("shell", "dumpsys", "activity", "activities")
+    m = re.search(rf"{PKG}/\.MainActivity[^\n]*\n(?:.*\n){{0,40}}?.*?state=(\w+)", out)
+    note("activity", state=m.group(1) if m else None)
+
+
 def main(apk):
     threading.Thread(target=heartbeat, daemon=True).start(); time.sleep(2)
     note("apk", sha256=hashlib.sha256(open(apk, "rb").read()).hexdigest(), size=pathlib.Path(apk).stat().st_size)
@@ -127,27 +140,40 @@ def main(apk):
     gear("Park"); tap_switch(); time.sleep(3)
     shot("04-recording"); ui = texts(); note("ui", texts=ui); t = server(code)
     check("기어 P에서 켜면 기록 중, 서버 동의 모두 켜짐", "● 기록 중" in ui and all(p["consent"] for p in t["participants"]))
-    gear("Drive")
+    # 주행 중 재동의: 폰 참가자가 동의를 껐다 다시 켠다. 주차할 때까지 '기록 대기'
+    gear("Drive"); activity_state()
     shot("05-recording-drive-blocked"); ui = texts(); note("ui", texts=ui)
     check("기어 D 동안 앱 상태는 기록 중 유지(화면은 차단)", "● 기록 중" in ui)
+    phone = t["participants"][1]["id"]
+    phone_consent(code, phone, False); time.sleep(12)
+    ui = texts(); note("ui", texts=ui); activity_state()
+    check("주행 중 폰에서 동의를 끄면 멈춤", "● 기록 중" not in ui and "기록 꺼짐" in ui)
+    phone_consent(code, phone, True); time.sleep(12)
+    shot("06-drive-reconsent"); ui = texts(); note("ui", texts=ui)
+    check("주행 중 동의가 다시 채워지면 기록 대기(기록 중 아님)", "기록 대기" in ui and "● 기록 중" not in ui)
     gear("Park")
-    shot("06-back-to-park"); ui = texts(); note("ui", texts=ui)
-    check("P로 돌아오면 기록 중 화면", "● 기록 중" in ui)
+    shot("07-park-starts"); ui = texts(); note("ui", texts=ui)
+    check("주차하면 기록 중", "● 기록 중" in ui)
     # 통신 끊김: 서버를 내리고 다음 조회(10초)를 기다린다
     stop_server(); time.sleep(12)
-    shot("07-offline-last-state"); ui = texts(); note("ui", texts=ui)
+    shot("08-offline-last-state"); ui = texts(); note("ui", texts=ui)
     check("끊겨도 마지막 여행과 기록 중을 보여 줌", "연결이 끊겼어요 · 마지막으로 확인한 정보예요" in ui and "● 기록 중" in ui and "일행 4명" in ui)
     tap_switch(); time.sleep(0.5)
-    shot("08-off-while-offline"); ui = texts(); note("ui", texts=ui)
+    shot("09-off-while-offline"); ui = texts(); note("ui", texts=ui)
     check("끊긴 채로 끄면 바로 멈춤", "기록 꺼짐" in ui and "● 기록 중" not in ui)
+    # 끊긴 채로 앱 프로세스를 다시 켠다. 저장한 마지막 여행은 모두 동의지만 끄기 대기가 이어져야 한다
+    adb("shell", "am", "force-stop", "--user", "10", PKG)
+    adb("shell", "am", "start", "--user", "10", "-n", f"{PKG}/.MainActivity"); time.sleep(5)
+    shot("10-restart-offline-still-off"); ui = texts(); note("ui", texts=ui)
+    check("앱을 다시 켜도 멈춘 채", "기록 꺼짐" in ui and "● 기록 중" not in ui and "연결이 끊겼어요 · 마지막으로 확인한 정보예요" in ui)
     start_server(); time.sleep(12)
     t = server(code)
     check("서버가 돌아오면 끄기가 서버에 반영됨", not any(p["consent"] for p in t["participants"]))
-    shot("09-synced"); ui = texts(); note("ui", texts=ui)
+    shot("11-synced"); ui = texts(); note("ui", texts=ui)
     check("다시 연결됨", "서버에 연결됐어요" in ui and "기록 꺼짐" in ui)
-    # 반쪽 창(약 841): 에뮬레이터가 창을 나누지 않아 앱 안에서 폭을 줄여 그린다
+    # 반쪽 창(약 841): 에뮬레이터가 창을 나누지 않아 앱 안에서 폭을 줄여 그린다(디버그 빌드)
     adb("shell", "am", "start", "--user", "10", "-S", "-n", f"{PKG}/.MainActivity", "--ei", "widthDp", "841")
-    time.sleep(4); shot("10-half-width-841"); ui = texts(); note("ui", texts=ui)
+    time.sleep(4); shot("12-half-width-841"); ui = texts(); note("ui", texts=ui)
     check("반쪽 폭에서도 기록 상태·일행·부탁·동의가 보임", all(any(x in u for u in ui) for x in ("기록 꺼짐", "일행 4명", "보관한 부탁", "대화 기록 동의")))
     (OUT / "results.json").write_text(json.dumps({"code": code, "log": log}, ensure_ascii=False, indent=1))
     fails = [e["name"] for e in log if e["step"] == "check" and not e["ok"]]
