@@ -13,7 +13,7 @@ Terraform(AWS·Cloudflare) → 첫 부팅(user_data: 도구, 배포 키, ansible
 | 3 | `cilium` | Cilium 1.20.4(K3s `HelmChart`, `bootstrap: true`), kube-proxy 대체 | DaemonSet, 노드 Ready, `cilium-dbg status` |
 | 4 | `oidc` | 발급자 문서와 공개 키를 S3에 | 공개 주소의 키 = 클러스터의 키 |
 | 5 | `argocd` | 우선순위 클래스, Argo CD v3.6.1([`argocd/`](argocd/kustomization.yaml)), 저장소 자격 | 구성 요소 다섯 준비 |
-| 6 | `root` | 뿌리 앱(`backend/infra/gitops/clusters/dev`) | 앱 있음 |
+| 6 | `root` | 뿌리 앱(`backend/infra/gitops/bootstrap`) | 앱 있음 |
 | 7 | `verify` | 물결이 끝까지(최대 30분), 밖에서 `/healthz` | 모든 앱 Synced·Healthy, 200 |
 
 - 판은 `site.yml`의 `vars`와 `argocd/kustomization.yaml`의 주소 두 곳에만 있습니다.

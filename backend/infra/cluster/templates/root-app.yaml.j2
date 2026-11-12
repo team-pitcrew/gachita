@@ -10,7 +10,7 @@ spec:
   source:
     repoURL: {{ gitops_repo }}
     targetRevision: {{ gitops_revision }}
-    path: backend/infra/gitops/clusters/{{ env }}
+    path: backend/infra/gitops/bootstrap
   destination:
     server: https://kubernetes.default.svc
     namespace: argocd

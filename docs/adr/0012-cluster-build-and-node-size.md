@@ -62,7 +62,7 @@
 | 3 cilium | Cilium 1.20.4(K3s `HelmChart`, `bootstrap: true`), kube-proxy 대체 | DaemonSet 준비, 노드 Ready, `cilium-dbg status` |
 | 4 oidc | 발급자 문서와 공개 키를 S3에 올림(서버를 새로 만들면 키가 바뀜) | 공개 주소의 키 = 클러스터의 키 |
 | 5 argocd | 우선순위 클래스, Argo CD v3.6.1(+Application 건강 판정, 요청·한도, dex·알림 끔), 저장소 자격 | 구성 요소 다섯이 준비됨 |
-| 6 root | 뿌리 앱(`backend/infra/gitops/clusters/dev`) | 앱이 있음 |
+| 6 root | 뿌리 앱(`backend/infra/gitops/bootstrap`) | 앱이 있음 |
 | 7 verify | 물결이 끝까지 올라오길 기다림(최대 30분) | 모든 앱 Synced·Healthy, 밖에서 `https://gachita.mangowhois.ai/healthz` 200. 남은 앱 이름이 멈춘 물결 |
 
 판 고르기: Cilium 1.20의 쿠버네티스 지원은 1.33~1.36이고(Cilium 문서 `compatibility`), Argo CD 3.6은 1.34~1.37이다. 그래서 K3s는 stable 채널의 1.37이 아니라 1.36의 최신(v1.36.6+k3s1, 11/3)으로 고정한다.
@@ -123,5 +123,5 @@ Terraform이 만든 값(터널 토큰) → SSM /gachita/dev/tf/* → 같은 길
 - 서버를 갈아도 Terraform → 첫 부팅 → 7단계로 같은 클러스터가 다시 선다. 데이터는 S3 백업에서 되살린다.
 - 구축 단계를 고치면 서버를 새로 만들지 않고 `gachita-converge`로 맞춘다. 단, 첫 부팅 스크립트(`user_data`)를 고치면 Terraform이 서버를 바꾼다(`user_data_replace_on_change`).
 - 노드를 t4g.large로 올려 비용이 월 $30.4에서 $60.7로 는다. 지금 선언(t4g.medium)으로는 요청 합계가 넘쳐 애초에 올라오지 않는다.
-- 확인한 것(11/13): `terraform validate`, 로컬 자격으로 상태 없이 계획만(AWS 28개, Cloudflare 번호를 넣으면 32개), `ansible-playbook --syntax-check`, 템플릿 세 개를 표본 값으로 그려 YAML 확인, Argo CD 설치 묶음 `kubeconform`(61개, 스키마 없는 3개 건너뜀). 로컬 E2E는 ADR-0013과 PR에 적는다.
+- 확인한 것(11/13): `terraform validate`, 로컬 자격으로 상태 없이 계획만(AWS 28개, Cloudflare 번호를 넣으면 32개), `ansible-playbook --syntax-check`, 템플릿 세 개를 표본 값으로 그려 YAML 확인, Argo CD 설치 묶음 `kubeconform`(61개, 스키마 없는 3개 건너뜀). 로컬 E2E(Docker 위 K3s v1.36.6 한 노드)에서 구축 5·6단계와 같은 일을 했다: 우선순위 클래스, 이 PR의 `argocd/` kustomization으로 Argo CD v3.6.1(다섯 구성 요소 1분 안에 준비, 우선순위·요청값 들어감), 뿌리 앱. `argocd-cm`의 Application 건강 판정 덕에 다음 물결이 앞 물결의 마지막 앱이 Healthy가 된 그 초에 만들어졌고, 뿌리 앱부터 API `/healthz`까지 2분 38초(T24 GitOps PR). 유휴 메모리는 파드 합계 1,121 MiB(Argo CD 552), 요청 합계 2,516 MiB(Cilium·cloudflared·백업 사이드카 없이)였다. 여기에 Cilium(요청 384)과 나머지를 더하면 위 표의 요청 3,252 MiB가 되고, OS·K3s 몫을 빼면 t4g.medium에는 들어가지 않는다는 판단이 그대로다.
 - 확인하지 못한 것: 실제 서버에서 7단계가 끝까지 도는지, Cilium이 K3s 1.36에서 bootstrap으로 뜨는지, 발급자 공개 키로 STS가 역할을 내주는지. 모두 승인 뒤 T24에서 본다.

@@ -1,4 +1,4 @@
-# Argo CD 다섯 구성 요소의 요청·한도(MiB). 차트·매니페스트에 기본값이 없어 이 구성의 어림이다(ADR-0012).
+# Argo CD 다섯 구성 요소의 요청·한도(MiB)와 자리(컨트롤 플레인 노드, ADR-0013의 '컨트롤러'). 차트·매니페스트에 기본값이 없어 이 구성의 어림이다(ADR-0012).
 # repo-server와 controller는 동기화 때 차트를 그리며 잠깐 커지므로 한도를 넉넉히 둔다. CPU 한도는 두지 않는다(스로틀링 방지).
 apiVersion: apps/v1
 kind: StatefulSet
@@ -8,6 +8,10 @@ spec:
   template:
     spec:
       priorityClassName: gachita-platform
+      nodeSelector: { node-role.kubernetes.io/control-plane: "true" }
+      tolerations:
+        - { key: node-role.kubernetes.io/control-plane, operator: Exists, effect: NoSchedule }
+        - { key: CriticalAddonsOnly, operator: Exists }
       containers:
         - name: argocd-application-controller
           resources:
@@ -22,6 +26,10 @@ spec:
   template:
     spec:
       priorityClassName: gachita-platform
+      nodeSelector: { node-role.kubernetes.io/control-plane: "true" }
+      tolerations:
+        - { key: node-role.kubernetes.io/control-plane, operator: Exists, effect: NoSchedule }
+        - { key: CriticalAddonsOnly, operator: Exists }
       containers:
         - name: argocd-repo-server
           resources:
@@ -36,6 +44,10 @@ spec:
   template:
     spec:
       priorityClassName: gachita-platform
+      nodeSelector: { node-role.kubernetes.io/control-plane: "true" }
+      tolerations:
+        - { key: node-role.kubernetes.io/control-plane, operator: Exists, effect: NoSchedule }
+        - { key: CriticalAddonsOnly, operator: Exists }
       containers:
         - name: argocd-server
           resources:
@@ -50,6 +62,10 @@ spec:
   template:
     spec:
       priorityClassName: gachita-platform
+      nodeSelector: { node-role.kubernetes.io/control-plane: "true" }
+      tolerations:
+        - { key: node-role.kubernetes.io/control-plane, operator: Exists, effect: NoSchedule }
+        - { key: CriticalAddonsOnly, operator: Exists }
       containers:
         - name: redis
           resources:
@@ -64,6 +80,10 @@ spec:
   template:
     spec:
       priorityClassName: gachita-platform
+      nodeSelector: { node-role.kubernetes.io/control-plane: "true" }
+      tolerations:
+        - { key: node-role.kubernetes.io/control-plane, operator: Exists, effect: NoSchedule }
+        - { key: CriticalAddonsOnly, operator: Exists }
       containers:
         - name: argocd-applicationset-controller
           resources:
