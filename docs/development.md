@@ -138,6 +138,16 @@ make deploy-tag TAG=<올린 태그>   # dev 환경의 태그를 바꾼다
 ```
 
 - 되돌릴 때는 `make deploy-tag`로 이전 태그를 다시 적어 PR로 올립니다.
+- 이미지 저장소는 GHCR입니다. `gachita-api`는 조직의 비공개 패키지이고 이 저장소에 이어져 있습니다. 2026-11-13에 로컬에서 `make push`로 ARM64 이미지를 올려 확인했습니다.
+
+토큰과 권한은 이렇게 씁니다. 따로 만든 토큰은 `gh secret set`으로 저장소 비밀 값에 둡니다.
+
+| 어디서 | 무엇이 필요한가 | 상태 |
+|---|---|---|
+| 로컬 `make push` | 자기 `gh` 토큰의 `write:packages` | 지환의 토큰에 있음 |
+| `publish-api-image` 워크플로 | Actions 기본 토큰(`packages: write`). 비밀 값 없음 | 됨 |
+| 클러스터가 이미지를 받을 때 | `read:packages`만 있는 토큰 | 클러스터를 만들 때 필요(T24). 아직 없음 |
+| 워크플로가 프로젝트 보드에 쓸 때 | 비밀 값 `PROJECT_TOKEN`([프로젝트 보드](project-board.md)) | 아직 없음 |
 - 깨끗한 환경에서 다시 만들어야 할 때만 `publish-api-image` 워크플로를 손으로 돌립니다.
 - 클러스터가 아직 없어 '병합되면 내보낸다'는 실제로 본 적이 없습니다(T24).
 
