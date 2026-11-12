@@ -4,7 +4,7 @@ output "public_ip" {
 }
 
 output "api_host" {
-  description = "API의 주소 이름. infra/gitops의 인그레스에 이 값을 적는다"
+  description = "API의 주소 이름. backend/infra/gitops의 인그레스에 이 값을 적는다"
   value       = local.api_host
 }
 

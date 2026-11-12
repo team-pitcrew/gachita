@@ -10,17 +10,25 @@
 
 ### T1 저장소 규칙 · 훅 · CI · 폴더 구조 (P0)
 
-- [ ] 폴더를 `apps/`, `services/`, `infra/`, `docs/` 구조로 옮김
+- [ ] 폴더를 `apps/`, `services/`, `backend/infra/`, `docs/` 구조로 옮김
 - [ ] Gitflow와 제목 규칙 문서, 커밋 훅 3종, 규칙 검사 스크립트
 - [ ] CI 필수 검사 `policy`, `web`, `api`
 - [ ] PR·이슈 양식, 구조와 스택 문서, 결정 기록
 
 완료 기준: `develop`에 병합되고 CI 세 검사가 초록색.
 
+### T15 루트 구조를 docs · frontend · backend로 (P0) · 선행 T5
+
+- [ ] `frontend/web` → `frontend/web`, `backend/api` → `backend/api`, `infra` → `backend/infra`, `scripts` → `.github/scripts`
+- [ ] 훅, CI, Makefile, Dockerfile, 클러스터 선언, 문서의 경로를 맞춤
+- [ ] 테스트, Terraform 검사, 선언 스키마 검사, 이미지 빌드를 다시 확인
+
+완료 기준: 루트에 보이는 폴더가 `docs`, `frontend`, `backend` 셋이고 CI가 모두 통과.
+
 ### T14 프로젝트 칸반 연결 (P1) · 선행 T1
 
 - [ ] `gh` 토큰에 `project` 권한 추가(지환님이 직접)
-- [ ] `scripts/board.sh`로 보드와 상태 열을 만들고 이슈를 올림
+- [ ] `.github/scripts/board.sh`로 보드와 상태 열을 만들고 이슈를 올림
 - [ ] 작업을 시작할 때와 PR을 열 때 카드 상태를 옮김
 
 완료 기준: 보드에서 T번호 카드의 상태가 실제 진행과 같음.
@@ -74,7 +82,7 @@
 
 ### T7 차량 앱 틀 (P0) · 선행 T1
 
-- [ ] `apps/car`에 빌드되는 Android 앱(차박지도 앱의 내비·TTS·공조 연동 코드를 옮김)
+- [ ] `frontend/car`에 빌드되는 Android 앱(차박지도 앱의 내비·TTS·공조 연동 코드를 옮김)
 - [ ] 여행 코드로 서버에 붙어 '기록 중' 화면(일행, 보관한 부탁 수)을 보여 줌
 - [ ] CI `car`: 빌드와 단위 테스트
 - [ ] Pleos 에뮬레이터에 설치해 실행

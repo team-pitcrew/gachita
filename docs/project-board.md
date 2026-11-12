@@ -24,7 +24,7 @@ SOVA 저장소의 운영 방식을 따릅니다. T번호 이슈가 카드입니�
 
 ```sh
 gh auth refresh -s project,read:project
-scripts/board.sh        # 보드와 상태 열을 만들고 T번호 이슈를 올린다
+.github/scripts/board.sh        # 보드와 상태 열을 만들고 T번호 이슈를 올린다
 ```
 
 보드가 생기기 전까지는 이슈의 라벨 `status:*`로 같은 다섯 상태를 적습니다. 보드가 생기면 라벨은 지웁니다.
@@ -33,5 +33,5 @@ scripts/board.sh        # 보드와 상태 열을 만들고 T번호 이슈를 �
 
 ```sh
 gh issue list --label "status:in-progress"            # 지금 하고 있는 것
-scripts/board.sh status T2 in-progress                # 상태 옮기기(보드가 있으면 보드, 없으면 라벨)
+.github/scripts/board.sh status T2 in-progress                # 상태 옮기기(보드가 있으면 보드, 없으면 라벨)
 ```

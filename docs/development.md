@@ -40,7 +40,7 @@ PR 본문에는 `Refs #이슈번호`를, 그 작업의 마지막 PR이면 `Close
 
 | 대상 | PR | 필수 검사 | 승인 |
 |---|---|---|---|
-| `develop` | 필요 | `policy`, `web`, `api`. `infra/`가 바뀌면 `infra`도(차량 앱이 생기면 `car` 추가) | 필수 아님 |
+| `develop` | 필요 | `policy`, `web`, `api`. `backend/infra/`가 바뀌면 `infra`도(차량 앱이 생기면 `car` 추가) | 필수 아님 |
 | `main` | 필요 | 위와 같음 | 필수 아님 |
 
 - 검사가 모두 통과한 뒤 병합합니다. 실패한 검사를 약하게 고쳐 통과시키지 않습니다.
@@ -57,7 +57,7 @@ PR 본문에는 `Refs #이슈번호`를, 그 작업의 마지막 PR이면 `Close
 | `pre-commit` | 브랜치 이름, `main`·`develop` 직접 커밋 금지, 올리려는 변경의 비밀 값 검사(gitleaks) |
 | `pre-push` | `main`·`develop`으로 직접 올리기 금지, 빠른 검사(`make check-fast`) |
 
-규칙 문장은 `scripts/policy.sh` 한곳에 있고 훅과 CI가 같이 씁니다. `--no-verify`로 훅을 건너뛰지 않습니다.
+규칙 문장은 `.github/scripts/policy.sh` 한곳에 있고 훅과 CI가 같이 씁니다. `--no-verify`로 훅을 건너뛰지 않습니다.
 
 ## 한 작업의 순서
 

@@ -1,7 +1,7 @@
 #!/bin/sh
 # 작업 상태를 적는다. 보드가 생기기 전에는 이슈 라벨 status:* 로 적는다(docs/project-board.md).
-#   scripts/board.sh status T2 in-progress     # backlog | ready | in-progress | in-review | done
-#   scripts/board.sh setup                     # 프로젝트 보드를 만들고 T번호 이슈를 올린다(토큰에 project 권한 필요)
+#   .github/scripts/board.sh status T2 in-progress     # backlog | ready | in-progress | in-review | done
+#   .github/scripts/board.sh setup                     # 프로젝트 보드를 만들고 T번호 이슈를 올린다(토큰에 project 권한 필요)
 set -eu
 REPO=team-pitcrew/gachita
 STATES="backlog ready in-progress in-review done"
@@ -11,7 +11,8 @@ case "${1:-}" in
     task=${2:?T번호}
     state=${3:?상태}
     echo " $STATES " | grep -q " $state " || { echo "상태는 다음 중 하나: $STATES" >&2; exit 1; }
-    number=$(gh issue list -R "$REPO" --state all --search "in:title \"[$task]\"" --json number,title \
+    # 검색(--search)은 방금 만든 이슈를 늦게 보여 준다. 목록을 받아 제목으로 고른다.
+    number=$(gh issue list -R "$REPO" --state all --limit 200 --json number,title \
       --jq "map(select(.title | startswith(\"[$task] \"))) | .[0].number // empty")
     [ -n "$number" ] || { echo "[$task] 로 시작하는 이슈가 없습니다" >&2; exit 1; }
     for s in $STATES; do
@@ -26,7 +27,7 @@ case "${1:-}" in
     url=$(gh project create --owner team-pitcrew --title "같이타" --format json --jq .url)
     num=${url##*/}
     gh project link "$num" --owner team-pitcrew --repo "$REPO"
-    gh issue list -R "$REPO" --state all --limit 100 --json url,title --jq '.[] | select(.title | test("^\\[T[0-9]+\\] ")) | .url' |
+    gh issue list -R "$REPO" --state all --limit 200 --json url,title --jq '.[] | select(.title | test("^\\[T[0-9]+\\] ")) | .url' |
       while IFS= read -r issue; do gh project item-add "$num" --owner team-pitcrew --url "$issue" >/dev/null; done
     echo "보드: $url"
     echo "상태 열(Backlog · Ready · In progress · In review · Done)은 보드 설정의 Status 필드에서 맞춥니다."

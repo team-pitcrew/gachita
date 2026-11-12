@@ -1,11 +1,11 @@
 name: publish-api-image
 
 # develop에 API나 웹앱 변경이 병합되면 이미지를 만들어 GHCR에 올린다.
-# 클러스터에 반영하려면 infra/gitops/apps/api/overlays/dev 의 newTag를 이 커밋 SHA로 바꾸는 PR을 올린다.
+# 클러스터에 반영하려면 backend/infra/gitops/apps/api/overlays/dev 의 newTag를 이 커밋 SHA로 바꾸는 PR을 올린다.
 on:
   push:
     branches: [develop]
-    paths: ["services/api/**", "apps/web/**", ".dockerignore", ".github/workflows/publish-api-image.yml"]
+    paths: ["backend/api/**", "frontend/web/**", ".dockerignore", ".github/workflows/publish-api-image.yml"]
   workflow_dispatch:
 
 permissions:
@@ -35,6 +35,6 @@ jobs:
       - name: 빌드해서 올리기
         run: |
           docker buildx build --platform linux/arm64 --push \
-            -f services/api/Dockerfile \
+            -f backend/api/Dockerfile \
             -t "$IMAGE:$GITHUB_SHA" -t "$IMAGE:develop" .
           echo "올린 이미지: \`$IMAGE:$GITHUB_SHA\`" >> "$GITHUB_STEP_SUMMARY"

@@ -3,7 +3,7 @@
 Argo CD가 이 폴더를 읽어 클러스터를 맞춥니다. 사람이 `kubectl apply`로 직접 고치지 않고, 이 폴더를 고쳐 PR로 올립니다. **2026-11-12 기준으로 실제 클러스터에 올려 본 적이 없습니다.**
 
 ```
-infra/gitops/
+backend/infra/gitops/
 ├── bootstrap/        뿌리 앱이 읽는 곳. 아래 넷을 올린다
 │   ├── cert-manager  인증서 발급기 v1.21.3
 │   ├── cnpg          CloudNativePG 운영자 1.30.1(차트 0.29.1)
@@ -17,10 +17,10 @@ infra/gitops/
 
 ## 올라오는 순서
 
-1. 서버의 첫 부팅 스크립트가 Argo CD와 뿌리 앱 `root`를 넣습니다(`infra/terraform/user_data.sh.tftpl`).
+1. 서버의 첫 부팅 스크립트가 Argo CD와 뿌리 앱 `root`를 넣습니다(`backend/infra/terraform/user_data.sh.tftpl`).
 2. `root`가 `bootstrap/`을 읽어 앱 넷을 만듭니다. cert-manager와 CloudNativePG가 먼저, 그다음 발급 규칙, 마지막에 API입니다.
 3. CloudNativePG가 Postgres를 띄우고 접속 주소를 비밀 값 `gachita-pg-app`에 넣습니다. API는 그 값을 `DATABASE_URL`로 받습니다.
-4. API가 시작하면서 표를 맞춥니다(`services/api/schema.sql`).
+4. API가 시작하면서 표를 맞춥니다(`backend/api/schema.sql`).
 
 ## 자원을 만든 뒤 바꿀 곳
 

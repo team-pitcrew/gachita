@@ -5,7 +5,7 @@ root=$(git rev-parse --show-toplevel)
 branch=$(git symbolic-ref --quiet --short HEAD || echo "")
 
 if [ -n "$branch" ]; then
-  "$root/scripts/policy.sh" branch "$branch"
+  "$root/.github/scripts/policy.sh" branch "$branch"
   # main과 develop에는 PR로만 넣는다. 병합 중인 커밋은 예외다.
   if { [ "$branch" = main ] || [ "$branch" = develop ]; } && ! git rev-parse -q --verify MERGE_HEAD >/dev/null; then
     echo "$branch 에는 직접 커밋하지 않습니다. feature/T번호-설명 브랜치에서 PR로 올립니다." >&2

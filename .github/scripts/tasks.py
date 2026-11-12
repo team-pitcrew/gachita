@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """docs/tasks.md의 작업을 GitHub 이슈로 만든다. 이미 있는 T번호는 건드리지 않는다.
 
-    python3 scripts/tasks.py            # 무엇을 만들지만 보여 준다
-    python3 scripts/tasks.py --apply    # 없는 이슈를 만든다
+    python3 .github/scripts/tasks.py            # 무엇을 만들지만 보여 준다
+    python3 .github/scripts/tasks.py --apply    # 없는 이슈를 만든다
 
 이슈가 생긴 뒤의 체크와 상태는 이슈가 기준이다. 이 스크립트는 이슈 본문을 덮어쓰지 않는다.
 """
@@ -38,7 +38,7 @@ def body(t):
 
 
 def main():
-    tasks = parse(Path(__file__).resolve().parent.parent.joinpath("docs/tasks.md").read_text())
+    tasks = parse(Path(__file__).resolve().parents[2].joinpath("docs/tasks.md").read_text())
     assert tasks and all(t["todo"] and t["done"] for t in tasks), "할 일이나 완료 기준이 빈 작업이 있음"
     assert len({t["id"] for t in tasks}) == len(tasks), "T번호가 겹침"
     out = subprocess.run(["gh", "issue", "list", "-R", REPO, "--state", "all", "--limit", "200", "--json", "title"],
