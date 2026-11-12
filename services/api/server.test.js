@@ -1,6 +1,8 @@
 // 실행: 저장소 루트에서 make check
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { after, before, test } from "node:test";
+import { fileURLToPath } from "node:url";
 import { migrate, pool, server } from "./server.js";
 
 let base;
@@ -120,4 +122,24 @@ test("잘못된 요청은 서버를 죽이지 않고 거절한다", async () => 
   const page = await fetch(base + "/");
   assert.equal(page.status, 200);
   assert.match(await page.text(), /같이타/);
+});
+
+test("명세(docs/api/openapi.yaml)와 서버의 경로가 같다", async () => {
+  // 표준 라이브러리에 YAML 읽기가 없어 ruby로 JSON으로 바꾼다(macOS와 CI 실행기에 기본으로 있음)
+  const file = fileURLToPath(new URL("../../docs/api/openapi.yaml", import.meta.url));
+  const spec = JSON.parse(execFileSync("ruby", ["-ryaml", "-rjson", "-e", "puts JSON.generate(YAML.load_file(ARGV[0]))", file], { encoding: "utf8" }));
+
+  const [, trip] = await call("POST", "/api/trips", {});
+  const [, p] = await call("POST", `/api/trips/${trip.code}/participants`, { name: "민준", seat: "ROW_1_LEFT", consent: true });
+  const [, r] = await call("POST", `/api/trips/${trip.code}/requests`, { by: p.id, text: "커피" });
+  const METHODS = ["get", "post", "patch", "delete"];
+  for (const [path, ops] of Object.entries(spec.paths)) {
+    const url = path.replace("{code}", trip.code).replace("{id}", path.includes("/requests/") ? r.id : p.id);
+    for (const method of METHODS) {
+      // 빈 요청을 보내 본다. 명세에 있는 경로는 명세에 적힌 상태 중 하나로, 없는 경로는 404나 405로 답해야 한다.
+      const res = await fetch(base + url, { method: method.toUpperCase(), body: method === "post" || method === "patch" ? "{}" : undefined });
+      const documented = ops[method] ? Object.keys(ops[method].responses).map(Number) : [404, 405];
+      assert.ok(documented.includes(res.status), `${method.toUpperCase()} ${path} → ${res.status}, 명세에는 ${documented.join("·")}`);
+    }
+  }
 });
