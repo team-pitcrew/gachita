@@ -1,0 +1,6 @@
+# 상태를 둘 S3 버킷. 이 파일을 backend.hcl로 복사해 값을 채운다(backend.hcl은 커밋하지 않는다).
+bucket       = "gachita-tfstate-<계정 ID>"
+key          = "dev/terraform.tfstate"
+region       = "ap-northeast-2"
+use_lockfile = true
+encrypt      = true
