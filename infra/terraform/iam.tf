@@ -30,7 +30,7 @@ data "aws_iam_policy_document" "k3s" {
     actions   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
     resources = ["${aws_s3_bucket.data.arn}/*"]
   }
-  # 첫 부팅 때 Argo CD가 저장소를 읽을 토큰을 가져온다(README의 '처음 한 번'에서 사람이 넣는다)
+  # 첫 부팅 때 저장소 배포 키와 이미지 받기 토큰을 가져온다(README의 '처음 한 번'에서 사람이 넣는다)
   statement {
     actions   = ["ssm:GetParameter"]
     resources = ["arn:aws:ssm:${var.region}:${data.aws_caller_identity.current.account_id}:parameter/gachita/${var.env}/*"]

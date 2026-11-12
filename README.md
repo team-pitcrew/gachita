@@ -9,7 +9,7 @@
 | `apps/web/` | 웹앱. 한 화면에 한 가지씩 네 단계로 참가하고(이름, 자리, 온도·시트, 기록 동의), 부탁을 남기고 상태를 봅니다 | 동작. 서버가 같이 내보냅니다 |
 | `apps/car/` | Pleos 차량 앱(Android · Kotlin · Compose) | 아직 없음(T7) |
 | `services/api/` | API 서버. 기기 프로필(OAuth 없음), 여행 코드, 참가자와 자리, 좌석·공조 선호, 기록 동의, 부탁의 상태, 장면의 시각과 위치 | 동작. Postgres에 저장 |
-| `infra/` | AWS 자원(Terraform)과 클러스터 선언(Argo CD) | 아직 없음(T4, T5) |
+| `infra/` | AWS 자원([Terraform](infra/terraform/README.md))과 클러스터 선언([Argo CD](infra/gitops/README.md)) | 코드 있음. 실제 자원은 만들지 않음 |
 | `docs/` | [개발 규칙](docs/development.md), [구조와 스택](docs/architecture.md), [작업 목록](docs/tasks.md), [프로젝트 보드](docs/project-board.md), [결정 기록](docs/adr) | |
 | `apk/` | 제출용 APK(`팀명_앱이름_release.apk`) | 아직 없음(T13) |
 

@@ -1,0 +1,40 @@
+name: publish-api-image
+
+# develop에 API나 웹앱 변경이 병합되면 이미지를 만들어 GHCR에 올린다.
+# 클러스터에 반영하려면 infra/gitops/apps/api/overlays/dev 의 newTag를 이 커밋 SHA로 바꾸는 PR을 올린다.
+on:
+  push:
+    branches: [develop]
+    paths: ["services/api/**", "apps/web/**", ".dockerignore", ".github/workflows/publish-api-image.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-api-image
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      IMAGE: ghcr.io/team-pitcrew/gachita-api
+    steps:
+      - uses: actions/checkout@v7
+      - name: GHCR 로그인
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - name: ARM 빌드 준비 (서버가 Graviton이다)
+        run: |
+          docker run --privileged --rm tonistiigi/binfmt --install arm64
+          docker buildx create --use
+      - name: 빌드해서 올리기
+        run: |
+          docker buildx build --platform linux/arm64 --push \
+            -f services/api/Dockerfile \
+            -t "$IMAGE:$GITHUB_SHA" -t "$IMAGE:develop" .
+          echo "올린 이미지: \`$IMAGE:$GITHUB_SHA\`" >> "$GITHUB_STEP_SUMMARY"

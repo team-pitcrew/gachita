@@ -1,0 +1,34 @@
+# dev 환경에서 다른 것: 이미지 태그, 주소 이름, 백업 버킷.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: gachita
+resources:
+  - ../../base
+images:
+  - name: ghcr.io/team-pitcrew/gachita-api
+    newTag: unreleased # publish-api-image 워크플로가 만든 커밋 SHA로 바꾼다
+patches:
+  # 자원을 만든 뒤 `terraform output api_host` 값으로 두 곳을 바꾼다
+  - target: { kind: Ingress, name: gachita-api }
+    patch: |
+      - op: replace
+        path: /spec/tls/0/hosts/0
+        value: api.0-0-0-0.sslip.io
+      - op: replace
+        path: /spec/rules/0/host
+        value: api.0-0-0-0.sslip.io
+  # 백업은 서버의 인스턴스 역할로 S3에 쓴다. 버킷 이름은 `terraform output data_bucket`.
+  # ponytail: CloudNativePG의 내장 barmanObjectStore를 쓴다(1.30.1에 아직 있음, 폐기 예정).
+  #           운영자를 올릴 때 Barman Cloud 플러그인으로 옮긴다.
+  - target: { kind: Cluster, name: gachita-pg }
+    patch: |
+      - op: add
+        path: /spec/backup
+        value:
+          retentionPolicy: 7d
+          barmanObjectStore:
+            destinationPath: s3://gachita-dev-000000000000/postgres
+            s3Credentials:
+              inheritFromIAMRole: true
+            wal:
+              compression: gzip

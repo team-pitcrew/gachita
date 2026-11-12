@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gachita-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: gachita-api }
+  template:
+    metadata:
+      labels: { app: gachita-api }
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: api
+          image: ghcr.io/team-pitcrew/gachita-api # 태그는 overlays에서 정한다
+          ports:
+            - { name: http, containerPort: 8787 }
+          env:
+            - { name: PORT, value: "8787" }
+            # CloudNativePG가 만든 접속 주소(사용자·비밀번호 포함)
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: { name: gachita-pg-app, key: uri }
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 20m, memory: 64Mi }
+            limits: { memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }

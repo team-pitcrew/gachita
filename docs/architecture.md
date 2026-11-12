@@ -49,9 +49,9 @@ flowchart LR
 | 웹앱 `apps/web` | HTML · CSS · ES 모듈, 빌드 없음. 설치형 웹앱(PWA: 매니페스트와 서비스 워커). 글꼴 Pretendard | 화면 수가 적고, 차량 웹뷰와 폰 브라우저가 같은 파일을 그대로 읽음. 의존성이 없어 CI가 1초 안에 끝남. 화면이 열 개를 넘거나 상태가 얽히면 Vite + React로 옮김([ADR-0002](adr/0002-stack-split.md)) | 참가 4단계와 여행 화면 있음. 설치와 프로필 화면은 T6 |
 | 차량 앱 `apps/car` | Kotlin 2.0 · Jetpack Compose · AGP 8.6 · minSdk 28. Pleos Vehicle 2.3.2, NaviHelper 3.0.5, TextToSpeech 3.3.1 | 내비·공조·좌석·TTS는 Pleos SDK로만 부를 수 있음. 에뮬레이터에서 웹뷰 방식은 메모리 약 253 MB, 네이티브는 약 96 MB였음(Pleos 기준 400 MB) | 없음. T7에서 차박지도 앱의 연동 코드를 옮김 |
 | API 서버 `services/api` | Node 22 표준 `http`. Postgres 드라이버 `pg` 하나 | 경로가 열 개 안팎이라 프레임워크 없이 읽힘. 타입이 필요해지면 TypeScript로 옮김 | 있음. Postgres 저장과 기기 프로필 포함 |
-| 데이터 | Postgres 17, CloudNativePG로 클러스터 안에서 운영 | 관리형 DB 없이 직접 운영하는 조건. 백업과 복구를 선언으로 다룸 | 선언은 T5 |
-| 클라우드 | AWS. EC2 한 대에 K3s 직접 설치. Terraform으로 자원을 만들고 Argo CD가 `infra/gitops`를 읽어 맞춤 | 한 대로 시작해 비용을 낮추고, 클러스터 상태를 저장소에서 읽을 수 있게 함 | Terraform 있음([infra/terraform](../infra/terraform/README.md)), 클러스터 선언은 T5. **아직 아무 자원도 만들지 않음** |
-| CI | GitHub Actions. `policy`, `web`, `api` (추가 예정 `car`, `infra`) | SOVA와 같은 필수 검사 구성 | 있음 |
+| 데이터 | Postgres 17, CloudNativePG로 클러스터 안에서 운영 | 관리형 DB 없이 직접 운영하는 조건. 백업과 복구를 선언으로 다룸 | 선언 있음. 로컬과 CI는 Postgres 17 컨테이너 |
+| 클라우드 | AWS. EC2 한 대에 K3s 직접 설치. Terraform으로 자원을 만들고 Argo CD가 `infra/gitops`를 읽어 맞춤 | 한 대로 시작해 비용을 낮추고, 클러스터 상태를 저장소에서 읽을 수 있게 함 | Terraform과 클러스터 선언 있음([infra/terraform](../infra/terraform/README.md), [infra/gitops](../infra/gitops/README.md)). **아직 아무 자원도 만들지 않음** |
+| CI | GitHub Actions. `policy`, `web`, `api`, `infra`(추가 예정 `car`). 이미지 게시 `publish-api-image` | SOVA와 같은 필수 검사 구성 | 있음 |
 
 ## 사용자 프로필 (OAuth 없음)
 
@@ -77,7 +77,7 @@ Pleos는 주행 중 내비가 아닌 앱의 CPU를 5% 미만, RAM을 400 MB 이�
 | 지도 표시(카카오 또는 네이버 지도 SDK) | 웹앱, 차량 앱 | 주행 기억 지도 | 정하지 않음 |
 | 음성 받아쓰기·화자 구분 | API 서버 | 대화 기록 | 정하지 않음. 원음을 차 밖으로 보낼지부터 정해야 함 |
 | LLM(Claude API) | API 서버 | 장면 고르기 | 정하지 않음 |
-| Let's Encrypt | 클러스터 | 인증서 | 선언은 T5 |
+| Let's Encrypt | 클러스터 | 인증서 | 선언 있음. 발급은 미확인 |
 
 ## 아직 없는 것
 
