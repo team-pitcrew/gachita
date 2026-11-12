@@ -1,7 +1,7 @@
-# ADR-0010: AWS 자격 증명은 OIDC로 받는다
+# ADR-0011: AWS 자격 증명은 OIDC로 받는다
 
 * **상태:** 제안, 2026-11-13
-* **관련:** T25, #31, T24(#30), T26(#32)
+* **관련:** T25, #31, T24(#30), T26(#32), T27, ADR-0010
 
 ## 배경
 
@@ -10,7 +10,7 @@
 | 주체 | 하는 일 |
 |---|---|
 | GitHub Actions | PR에서 `terraform plan`, develop에서 `terraform apply`, GitHub 비밀 값을 SSM에 넣기 |
-| 서버(EC2) | SSM 세션 받기, 첫 부팅 때 배포 키 읽기 |
+| 서버(EC2) | SSM 세션 받기, 첫 부팅 때 배포 키 읽기, 서비스 계정 발급자의 공개 키 올리기 |
 | 파드 | 외부 비밀 값 읽기(External Secrets), Postgres 백업을 S3에 쓰기(CloudNativePG) |
 
 ## 검토한 선택
@@ -37,14 +37,14 @@
 
 - GitHub OIDC 제공자 하나와 역할 둘을 `backend/infra/terraform/account/`에 둔다. 신뢰 조건은 `aud = sts.amazonaws.com`이고 `sub`를 정확히 맞춘다(와일드카드 없음).
   - `gachita-github-plan`: `repo:team-pitcrew/gachita:pull_request`. AWS 관리 정책 `ReadOnlyAccess`에서 상태 파일 밖의 S3 객체 읽기, 사람이 넣은 비밀 값(`/gachita/*/app/*`, `/gachita/*/bootstrap/*`) 읽기, 복호화를 명시적으로 막는다. 상태는 잠그지 않고 읽기만 한다(`-lock=false`).
-  - `gachita-github-apply`: `repo:team-pitcrew/gachita:ref:refs/heads/develop`. 본 설정이 만드는 서비스(EC2·VPC, S3 `gachita-*`, CloudFront, SSM `/gachita/*`, IAM `gachita-*`)만 허용하고, 사람이 넣은 비밀 값은 쓰기만 된다.
+  - `gachita-github-apply`: `repo:team-pitcrew/gachita:ref:refs/heads/develop`. 본 설정이 만드는 서비스(EC2·VPC, S3 `gachita-*`, SSM `/gachita/*`, IAM `gachita-*`)만 허용하고, 사람이 넣은 비밀 값은 쓰기만 된다. CloudFront와 ALB는 만들지 않으므로(ADR-0010) 권한도 주지 않는다.
 - 적용 역할이 만드는 IAM 역할에는 권한 경계 `gachita-workload-boundary`를 반드시 붙여야 한다(`iam:PermissionsBoundary` 조건). 그래서 적용 역할이 자기보다 넓은 역할을 만들어 우회할 수 없다. 적용 역할은 `gachita-github-*` 역할, 경계 정책, GitHub OIDC 제공자를 고치지 못한다. 이것들은 사람이 로컬 자격으로만 적용한다.
 - 적용은 develop의 수동 실행(`workflow_dispatch`)으로만 한다. 병합으로 저절로 적용하지 않는다. 비용이 생기는 명령은 지환님이 승인한 때에만 실행한다는 방침 때문이다. 무료 조직의 비공개 저장소라 GitHub 환경의 승인자 기능을 쓸 수 없어 이렇게 막는다.
 - 역할 ARN과 상태 버킷 이름은 비밀 값이 아니므로 저장소 변수(`AWS_PLAN_ROLE_ARN`, `AWS_APPLY_ROLE_ARN`, `TF_STATE_BUCKET`)에 둔다. 변수가 비어 있으면 워크플로는 "역할이 없어 건너뜀"으로 성공한다.
 
 **파드**
 
-- K3s API 서버의 서비스 계정 발급자(`service-account-issuer`)를 CloudFront 주소(`https://<배포>.cloudfront.net/k8s`)로 바꾸고, 발견 문서와 공개 키(JWKS)를 S3에 올린다. 버킷은 공개하지 않고 CloudFront 원본 접근 제어(OAC)로만 읽힌다. 이 경로는 캐시하지 않는다(서버를 새로 만들면 키가 바뀜).
+- K3s API 서버의 서비스 계정 발급자(`service-account-issuer`)를 발급자 전용 S3 버킷 주소(`https://gachita-dev-oidc-<계정>.s3.ap-northeast-2.amazonaws.com`)로 바꾸고, 발견 문서(`/.well-known/openid-configuration`)와 공개 키(`/openid/v1/jwks`) 두 파일만 그 버킷에 올린다. 두 파일은 공개 키라 공개해도 되는 값이고, 버킷에는 이 둘 말고 아무것도 두지 않는다. 이름이 계정 번호로 정해지므로 서버를 만들기 전에 주소를 알 수 있다. 서버를 새로 만들면 키가 바뀌므로 첫 부팅 때마다 다시 올린다(캐시 없음).
 - IAM에 이 발급자를 OIDC 제공자로 등록하고, 서비스 계정마다 역할을 둔다. 신뢰 조건은 `sub = system:serviceaccount:<네임스페이스>:<이름>`.
 
   | 서비스 계정 | 역할 | 권한 |
@@ -55,7 +55,8 @@
 
 - 토큰은 AWS의 공개 웹훅([amazon-eks-pod-identity-webhook](https://github.com/aws/amazon-eks-pod-identity-webhook))이 서비스 계정 주석(`eks.amazonaws.com/role-arn`)을 보고 파드에 넣는다. EKS가 아니어도 쓰도록 만든 것이고, cert-manager가 웹훅 인증서를 만든다. External Secrets는 웹훅 없이 같은 주석을 읽어 스스로 토큰을 받는다.
 - 서버의 IMDS 홉 제한을 1로 내린다. 파드는 인스턴스 역할에 닿지 못한다. 인스턴스 역할은 SSM 세션, 배포 키 읽기, 발급자 공개 키 올리기만 한다.
-- 구현은 클러스터 쪽 자원과 함께 T24에서 한다(발급자 주소가 CloudFront를 만든 뒤에 정해짐).
+- 구현은 클러스터 쪽 자원과 함께 T24에서 한다.
+- 발급자를 Cloudflare 이름(`gachita.mangowhois.ai`) 아래에 두는 길도 봤다. 그러면 IAM 인증이 터널과 서비스 주소에 묶여, 터널이 끊기면 백업까지 멈춘다. S3 버킷은 AWS 안에서 끝나 그 고리가 없다.
 
 **남는 고정 비밀 값(예외)**
 
@@ -66,7 +67,8 @@ AWS 열쇠는 없다. 아래는 AWS가 아닌 곳의 자격이라 OIDC로 바꿀
 | 이미지 받기 토큰(`read:packages`) | GHCR 비공개 패키지는 개인 접근 토큰으로만 받는다 |
 | Argo CD 배포 키(읽기 전용 SSH) | 비공개 저장소를 읽는 자격. Argo CD가 올라오기 전에 필요 |
 | 구글 OAuth 클라이언트 비밀 값 | 구글이 발급하는 값 |
-| Cloudflare API 토큰 | Terraform이 터널과 DNS를 만들 때 |
+| Cloudflare API 토큰 | Terraform이 터널과 `gachita` 레코드를 만들 때(ADR-0010). 권한은 계정의 Cloudflare Tunnel 편집과 `mangowhois.ai` 영역의 DNS 편집. Cloudflare 토큰은 레코드 하나로 좁힐 수 없어 영역의 다른 레코드(메일 전달)도 고칠 수 있다. 그래서 Terraform은 `gachita` 레코드 하나만 선언하고 다른 레코드를 가져오지 않는다 |
+| Cloudflare 터널 토큰 | cloudflared가 터널에 붙는 값. Terraform이 만들어 SSM `/gachita/dev/tf/`에 둔다 |
 
 ## 결과
 

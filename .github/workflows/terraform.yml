@@ -1,6 +1,6 @@
 name: terraform
 
-# Terraform 계획과 적용을 OIDC로 받은 AWS 역할로 돌린다. 저장소와 서버에 AWS 열쇠를 두지 않는다(ADR-0010).
+# Terraform 계획과 적용을 OIDC로 받은 AWS 역할로 돌린다. 저장소와 서버에 AWS 열쇠를 두지 않는다(ADR-0011).
 # 필수 검사(ci.yml)와 따로 돈다. 형식·정합성 검사는 ci.yml의 backend-infra가 그대로 맡는다.
 #   PR: backend/infra/terraform/ 이 바뀌면 계획 역할로 plan을 돌려 PR 댓글로 남긴다.
 #   수동 실행(develop에서만): 적용 역할로 plan을 돌리고, apply를 고르면 그 계획을 적용한다. 비용이 생기므로 지환님이 승인한 때에만 고른다.

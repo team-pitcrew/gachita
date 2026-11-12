@@ -23,7 +23,7 @@ K3s 서버 한 대와 그 주변 자원을 만듭니다. **2026-11-12 기준으�
 
 ## 처음 한 번 (사람이 로컬 자격으로)
 
-AWS 열쇠는 저장소와 서버에 두지 않습니다. GitHub Actions는 OIDC로 역할을 받습니다([ADR-0010](../../../docs/adr/0010-aws-credentials-via-oidc.md)). 그 역할을 만드는 일만은 사람이 로컬 자격으로 한 번 합니다. **순서대로** 합니다.
+AWS 열쇠는 저장소와 서버에 두지 않습니다. GitHub Actions는 OIDC로 역할을 받습니다([ADR-0011](../../../docs/adr/0011-aws-credentials-via-oidc.md)). 그 역할을 만드는 일만은 사람이 로컬 자격으로 한 번 합니다. **순서대로** 합니다.
 
 | 순서 | 무엇 | 누가 | 상태 |
 |---|---|---|---|
@@ -62,7 +62,7 @@ GitHub Actions의 역할 둘:
 
 ## 처음 한 번 (비밀 값)
 
-서버가 첫 부팅 때 읽을 값 두 개를 SSM에 넣습니다. 사람이 만든 값이라 OIDC로 바꿀 수 없는 예외입니다(ADR-0010). 이 경로는 T24에서 `gh secret set` → 워크플로 → SSM으로 바꿉니다.
+서버가 첫 부팅 때 읽을 값 두 개를 SSM에 넣습니다. 사람이 만든 값이라 OIDC로 바꿀 수 없는 예외입니다(ADR-0011). 이 경로는 T24에서 `gh secret set` → 워크플로 → SSM으로 바꿉니다.
 
 ```sh
 #    - 배포 키: ssh-keygen -t ed25519 -f gachita-deploy -N '' 로 만들고, 공개 키를 저장소 Settings → Deploy keys에 읽기 전용으로 등록

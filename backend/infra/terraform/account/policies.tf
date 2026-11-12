@@ -1,5 +1,5 @@
 # 역할의 권한. 이름 규칙(gachita-*)으로 범위를 좁힌다.
-#   상태 버킷 gachita-tfstate-<계정>, 데이터 버킷 gachita-<env>-<계정>, CDN 버킷 gachita-<env>-assets-<계정>
+#   상태 버킷 gachita-tfstate-<계정>, 데이터 버킷 gachita-<env>-<계정>, 발급자 버킷 gachita-<env>-oidc-<계정>
 #   SSM 값 /gachita/<env>/tf/*(Terraform이 씀), /gachita/<env>/app/*·bootstrap/*(사람이 넣은 비밀 값, 워크플로가 씀)
 locals {
   boundary_arn = "arn:aws:iam::${local.account}:policy/gachita-workload-boundary"
@@ -53,15 +53,10 @@ data "aws_iam_policy_document" "apply" {
       values   = [var.region]
     }
   }
-  # 상태, 데이터, CDN 버킷
+  # 상태, 데이터, 발급자 버킷
   statement {
     actions   = ["s3:*"]
     resources = ["arn:aws:s3:::gachita-*", "arn:aws:s3:::gachita-*/*"]
-  }
-  # CDN(배포, 원본 접근 제어). 배포 ARN은 만들 때 정해져 미리 좁힐 수 없다
-  statement {
-    actions   = ["cloudfront:*"]
-    resources = ["*"]
   }
   # SSM 값: Terraform이 쓰는 값, 비밀 값 넣기(쓰기만), 공개 AMI 번호 읽기
   statement {
@@ -107,7 +102,7 @@ data "aws_iam_policy_document" "apply" {
     "iam:UntagInstanceProfile"]
     resources = ["arn:aws:iam::${local.account}:instance-profile/gachita-*"]
   }
-  # 클러스터의 서비스 계정 OIDC 발급자(파드가 받는 역할, ADR-0010)
+  # 클러스터의 서비스 계정 OIDC 발급자(파드가 받는 역할, ADR-0011)
   statement {
     actions = ["iam:CreateOpenIDConnectProvider", "iam:DeleteOpenIDConnectProvider", "iam:GetOpenIDConnectProvider",
       "iam:TagOpenIDConnectProvider", "iam:UntagOpenIDConnectProvider", "iam:UpdateOpenIDConnectProviderThumbprint",
