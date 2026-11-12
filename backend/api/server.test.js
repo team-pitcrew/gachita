@@ -3,18 +3,31 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { migrate, pool, server } from "./server.js";
+import pg from "pg";
+import { migrate, server } from "./server.js";
+import { endStores, profilesDb, tripsDb } from "./db.js";
 
 let base;
 before(async () => {
+  // 프로필 저장소를 여행 저장소와 다른 DB에 둔다(T23). 주소를 정하기 전에 그 DB을 만든다.
+  const admin = new pg.Client({ connectionString: process.env.DATABASE_URL });
+  await admin.connect();
+  const name = `${admin.database}_profiles`;
+  await admin.query(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
+  await admin.query(`CREATE DATABASE "${name}"`);
+  await admin.end();
+  process.env.PROFILES_DATABASE_URL = process.env.DATABASE_URL.replace(/\/[^/?]*(\?.*)?$/, `/${name}`);
   await migrate();
   await migrate(); // 여러 번 실행해도 같아야 한다
-  await pool.query("TRUNCATE trips, profiles");
+  // 예전에 한 DB에 같이 두던 표가 남았으면 치운다.
+  await tripsDb().query("DROP TABLE IF EXISTS profiles");
+  await tripsDb().query("TRUNCATE trips");
+  await profilesDb().query("TRUNCATE profiles");
   await new Promise((ok) => server.listen(0, () => ok((base = `http://localhost:${server.address().port}`))));
 });
 after(async () => {
   server.close();
-  await pool.end();
+  await endStores();
 });
 
 const call = async (method, path, body, token) => {
@@ -79,7 +92,7 @@ test("프로필: 발급, 토큰으로 본인 확인, 프로필로 참가하면 �
   assert.deepEqual(me.prefs.driver, { tempC: 22, heat: 0, vent: 0 }, "안 적은 자리는 기본값");
 
   // 서버에는 토큰이 아니라 해시만 남는다
-  const { rows } = await pool.query("SELECT token_hash FROM profiles WHERE id = $1", [me.id]);
+  const { rows } = await profilesDb().query("SELECT token_hash FROM profiles WHERE id = $1", [me.id]);
   assert.equal(rows[0].token_hash.length, 32);
   assert.ok(!rows[0].token_hash.toString("latin1").includes(me.token));
 
@@ -102,7 +115,7 @@ test("프로필: 발급, 토큰으로 본인 확인, 프로필로 참가하면 �
   assert.deepEqual(moved.prefs, { tempC: 21, heat: 0, vent: 2 });
 
   // 저장은 Postgres에 한다: 서버가 돌려준 것과 표의 문서가 같다
-  const stored = (await pool.query("SELECT doc FROM trips WHERE code = $1", [trip.code])).rows[0].doc;
+  const stored = (await tripsDb().query("SELECT doc FROM trips WHERE code = $1", [trip.code])).rows[0].doc;
   assert.deepEqual(stored, (await call("GET", t))[1]);
 
   // 고치기와 지우기
@@ -122,6 +135,11 @@ test("잘못된 요청은 서버를 죽이지 않고 거절한다", async () => 
   const page = await fetch(base + "/");
   assert.equal(page.status, 200);
   assert.match(await page.text(), /같이타/);
+});
+
+test("여행 저장소와 프로필 저장소가 서로 다른 DB에 있다(T23)", async () => {
+  assert.equal((await tripsDb().query("SELECT to_regclass('profiles')")).rows[0].to_regclass, null, "여행 DB에 프로필 표가 없다");
+  assert.equal((await profilesDb().query("SELECT to_regclass('trips')")).rows[0].to_regclass, null, "프로필 DB에 여행 표가 없다");
 });
 
 test("명세(docs/api/openapi.yaml)와 서버의 경로가 같다", async () => {
