@@ -8,8 +8,16 @@ import java.net.URL
 class Server(base: String) {
     private val base = base.trim().trimEnd('/')
 
-    /** 여행 JSON(openapi.yaml의 Trip)을 그대로 돌려준다. 앱은 마지막 응답을 저장해 두었다 끊겼을 때 보여 준다. */
-    fun createTrip(title: String): String = call("POST", "/api/trips", JSONObject().put("title", title))!!
+    /** 받은 여행 원문과 해석한 값. 앱은 원문을 저장해 두었다 끊겼을 때 보여 준다. */
+    data class Got(val json: String, val trip: Trip)
+
+    /**
+     * 해석도 여기서 한다(통신 스레드). 200인데 여행 JSON이 아니면(공용 와이파이의 로그인 화면 등) JSONException이 나고,
+     * 부르는 쪽은 ApiError가 아니므로 '연결 문제'로 다룬다.
+     */
+    private fun got(json: String) = Got(json, parseTrip(json))
+
+    fun createTrip(title: String): Got = got(call("POST", "/api/trips", JSONObject().put("title", title))!!)
 
     /** 손님으로 참가. 이름과 자리를 보내고 동의는 꺼짐으로 시작한다. */
     fun join(code: String, m: Member) {
@@ -21,7 +29,7 @@ class Server(base: String) {
     }
 
     /** 최신 여행. 보낸 version에서 바뀐 것이 없으면(304) null. */
-    fun trip(code: String, version: Int? = null): String? = call("GET", "/api/trips/$code" + (version?.let { "?v=$it" } ?: ""), null)
+    fun trip(code: String, version: Int? = null): Got? = call("GET", "/api/trips/$code" + (version?.let { "?v=$it" } ?: ""), null)?.let(::got)
 
     private fun call(method: String, path: String, body: JSONObject?): String? {
         val c = URL(base + path).openConnection() as HttpURLConnection

@@ -1,6 +1,7 @@
 package io.github.teampitcrew.gachita
 
 import android.content.SharedPreferences
+import android.content.pm.ApplicationInfo
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -75,7 +76,16 @@ class MainActivity : ComponentActivity() {
     private lateinit var prefs: SharedPreferences
     private lateinit var car: Car
 
-    private var s by mutableStateOf(Session())
+    private var state by mutableStateOf(Session())
+
+    /** 화면 상태. 끄기 대기와 주차 중 시작 표시는 앱이 다시 켜져도 이어지게 바뀔 때마다 저장한다. */
+    private var s: Session
+        get() = state
+        set(v) {
+            if (v.offPending != state.offPending || v.started != state.started)
+                prefs.edit().putBoolean("offPending", v.offPending).putBoolean("started", v.started).apply()
+            state = v
+        }
     private var carStatus by mutableStateOf(CarStatus())
     private var server by mutableStateOf(DEFAULT_SERVER)
     private val picked = mutableStateListOf<String>().apply { addAll(FAMILY.map { it.name }) }
@@ -88,18 +98,19 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = getSharedPreferences("car", MODE_PRIVATE)
-        // 서버 주소: adb의 --es server <주소>로 주거나 첫 화면에서 고친다
-        intent.getStringExtra("server")?.let { prefs.edit().putString("server", it).apply() }
+        // 실행 인자(--es server, --ei widthDp)는 디버그 빌드에서만 받는다. 밖에서 연 화면이 서버 주소를 바꾸지 못하게
+        val debug = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+        if (debug) intent.getStringExtra("server")?.let { prefs.edit().putString("server", it).apply() }
         server = prefs.getString("server", null) ?: DEFAULT_SERVER
-        // 앱을 다시 켜도, 서버에 닿지 않아도 마지막으로 받은 여행을 보여 준다
-        prefs.getString("trip", null)?.let { json -> runCatching { s = Session(trip = parseTrip(json), online = false) } }
-        car = Car(this) { carStatus = it; s = s.copy(gear = it.gear) }
+        // 앱을 다시 켜도, 서버에 닿지 않아도 마지막으로 받은 여행과 끄기 대기를 이어 보여 준다
+        s = Session.restore(prefs.getString("trip", null), prefs.getBoolean("offPending", false), prefs.getBoolean("started", false))
+        car = Car(this) { carStatus = it; s = s.withGear(it.gear) }
         car.start()
         setContent {
             MaterialTheme(colorScheme = if (isSystemInDarkTheme()) DarkColors else LightColors, typography = CarType) {
                 ProvideTextStyle(TextStyle(fontSize = 24.sp)) {
                     // ponytail: 에뮬레이터는 창을 나누지 않아 반쪽 창을 --ei widthDp 841로 흉내 낸다. 실제 분할 창 확인은 실차에서
-                    val w = intent.getIntExtra("widthDp", 0)
+                    val w = if (debug) intent.getIntExtra("widthDp", 0) else 0
                     Surface(if (w > 0) Modifier.fillMaxHeight().width(w.dp) else Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                         val t = s.trip
                         if (t == null) Setup() else TripScreen(t)
@@ -116,7 +127,7 @@ class MainActivity : ComponentActivity() {
     /** 통신은 한 줄로 차례대로 돌리고 결과만 메인 스레드로 돌려받는다. */
     private fun <T> bg(work: () -> T, done: (Result<T>) -> Unit) = io.execute { val r = runCatching(work); main.post { done(r) } }
 
-    private fun keep(json: String): Trip { prefs.edit().putString("trip", json).apply(); return parseTrip(json) }
+    private fun keep(got: Server.Got): Trip { prefs.edit().putString("trip", got.json).apply(); return got.trip }
 
     private fun reason(e: Throwable) = if (e is ApiError) "서버가 거절했어요(${e.message})" else "서버에 닿지 않아요"
 
@@ -127,7 +138,7 @@ class MainActivity : ComponentActivity() {
         s = s.copy(busy = true); error = ""
         bg({
             val api = Server(url)
-            val code = parseTrip(api.createTrip(TITLE)).code
+            val code = api.createTrip(TITLE).trip.code
             members.forEach { api.join(code, it) }
             api.trip(code)!!
         }) { r ->
@@ -139,14 +150,15 @@ class MainActivity : ComponentActivity() {
     /** 최신 여행을 묻는다. 끄기를 서버에 아직 못 알렸으면 먼저 다시 보낸다. */
     private fun refresh() {
         val t = s.trip ?: return
-        val off = s.offPending
+        val off = s.offTargets
+        val v = s.pollVersion
         val url = server
         bg({
             val api = Server(url)
-            if (off) t.people.forEach { api.consent(t.code, it.id, false) }
-            api.trip(t.code, if (off) null else t.version)
+            off.forEach { api.consent(t.code, it, false) }
+            api.trip(t.code, v)
         }) { r ->
-            r.onSuccess { json -> s = if (json == null) s.copy(online = true) else s.withTrip(keep(json)) }
+            r.onSuccess { got -> s = if (got == null) s.copy(online = true) else s.withTrip(keep(got)) }
                 .onFailure { s = s.copy(online = it is ApiError, note = if (it is ApiError) reason(it) else s.note) }
         }
     }
@@ -154,7 +166,7 @@ class MainActivity : ComponentActivity() {
     /** 켜기 직전에 기어를 다시 읽고, 서버가 모두의 동의를 저장한 뒤에만 '기록 중'으로 바꾼다. */
     private fun turnOn() {
         car.readGear { g ->
-            s = s.copy(gear = g)
+            s = s.withGear(g)
             s.blockOn()?.let { s = s.copy(note = it); return@readGear }
             val t = s.trip!!
             val url = server
@@ -229,6 +241,9 @@ class MainActivity : ComponentActivity() {
             if (s.recording) {
                 Text("● 기록 중", fontSize = 48.sp, fontWeight = FontWeight.Bold, color = c.error)
                 Text("동의를 끄면 바로 멈춰요", color = c.onSurfaceVariant)
+            } else if (s.waiting) {
+                Text("기록 대기", fontSize = 48.sp, fontWeight = FontWeight.Bold)
+                Text("주차(P)하면 기록을 시작해요", color = c.onSurfaceVariant)
             } else {
                 Text("기록 꺼짐", fontSize = 48.sp, fontWeight = FontWeight.Bold)
                 Text(
@@ -262,7 +277,7 @@ class MainActivity : ComponentActivity() {
                     Text("대화 기록 동의", fontSize = 30.sp, fontWeight = FontWeight.Bold)
                     Text("기본값은 꺼짐 · 주차 중에만 켤 수 있어요", color = c.onSurfaceVariant, fontSize = 20.sp)
                 }
-                Switch(s.recording, { if (it) turnOn() else turnOff() }, enabled = !s.busy)
+                Switch(s.agreed, { if (it) turnOn() else turnOff() }, enabled = !s.busy)
             }
             if (s.note.isNotEmpty()) Text(s.note, color = c.error)
         }
@@ -272,7 +287,7 @@ class MainActivity : ComponentActivity() {
             Text("기어 ${s.gear ?: "모름"} · 내비 ${if (carStatus.navi) "연결됨" else "연결 안 됨"} · 음성 ${if (carStatus.voice) "준비됨" else "준비 안 됨"}", color = c.onSurfaceVariant, fontSize = 20.sp)
             Text("여행 코드 ${t.code}", color = c.onSurfaceVariant, fontSize = 20.sp)
         }
-        OutlinedButton(::newTrip, Modifier.heightIn(min = 64.dp), enabled = !s.recording && !s.busy) { Text("새 여행 만들기") }
+        OutlinedButton(::newTrip, Modifier.heightIn(min = 64.dp), enabled = !s.agreed && !s.busy) { Text("새 여행 만들기") }
     }
 
     @Composable
