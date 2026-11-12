@@ -20,7 +20,7 @@ backend/infra/gitops/
 1. 서버의 첫 부팅 스크립트가 Argo CD와 뿌리 앱 `root`를 넣습니다(`backend/infra/terraform/user_data.sh.tftpl`).
 2. `root`가 `bootstrap/`을 읽어 앱 넷을 만듭니다. cert-manager와 CloudNativePG가 먼저, 그다음 발급 규칙, 마지막에 API입니다.
 3. CloudNativePG가 Postgres를 띄우고 접속 주소를 비밀 값 `gachita-pg-app`에 넣습니다. API는 그 값을 `DATABASE_URL`로 받습니다.
-4. API가 시작하면서 표를 맞춥니다(`backend/api/schema.sql`).
+4. API가 시작하면서 표를 맞춥니다(`backend/api/trips.sql`, `backend/api/profiles.sql`).
 
 ## 자원을 만든 뒤 바꿀 곳
 
