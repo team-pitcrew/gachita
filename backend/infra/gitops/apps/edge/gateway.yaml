@@ -1,0 +1,54 @@
+# 밖에서 들어오는 길(ADR-0013). Cloudflare 엣지 → Tunnel → cloudflared → 이 Gateway(Traefik) → HTTPRoute → API.
+# 경로를 붙일 수 있는 네임스페이스는 gachita.io/expose: "true" 라벨이 있는 곳뿐이다.
+# 리스너 포트 8000은 Traefik의 web 진입점(파드 안 포트)이다. 서비스로는 traefik.edge:80, 밖으로는 열지 않는다.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: public
+  namespace: edge
+spec:
+  gatewayClassName: traefik
+  listeners:
+    - name: web
+      protocol: HTTP
+      port: 8000
+      hostname: gachita.mangowhois.ai
+      allowedRoutes:
+        namespaces:
+          from: Selector
+          selector:
+            matchLabels: { gachita.io/expose: "true" }
+---
+# 웹앱과 API는 같은 이름에서 나간다(API는 /api/, ADR-0010). 경로와 요청 수 제한은 API 네임스페이스에 둔다.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: gachita
+  namespace: gachita
+spec:
+  parentRefs:
+    - { name: public, namespace: edge, sectionName: web }
+  hostnames: [gachita.mangowhois.ai]
+  rules:
+    - matches:
+        - path: { type: PathPrefix, value: / }
+      filters:
+        - type: ExtensionRef
+          extensionRef: { group: traefik.io, kind: Middleware, name: ratelimit }
+      backendRefs:
+        - { name: gachita-api, port: 80 }
+---
+# 한 사용자 주소에서 오는 요청 수 제한. 클러스터 안에서 보이는 출발지는 cloudflared라, Cloudflare가 넣는
+# CF-Connecting-IP(실제 사용자 주소)로 센다. Traefik에는 cloudflared만 닿으므로(network.yaml) 이 머리글은 믿을 수 있다.
+# 통신사 NAT 뒤의 차와 폰이 같은 주소를 쓸 수 있어 넉넉히 둔다.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: ratelimit
+  namespace: gachita
+spec:
+  rateLimit:
+    average: 20
+    burst: 40
+    sourceCriterion:
+      requestHeaderName: CF-Connecting-IP

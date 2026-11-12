@@ -1,0 +1,6 @@
+# 데이터 경로 네임스페이스(edge, gachita, gachita-trips, gachita-profiles)에 공통으로 넣는 것: 기본 전부 차단과 DNS 허용.
+# 나머지 허용은 각 앱의 network.yaml에 목록으로 둔다(ADR-0013).
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - network-baseline.yaml

@@ -1,0 +1,32 @@
+# 물결 5. 밖으로 여는 것: Gateway, HTTPRoute(gachita 네임스페이스), 요청 수 제한, cloudflared.
+# API가 건강해진 뒤에야 밖에서 닿는다. HTTPRoute를 API 앱에 두면 Gateway가 없어 물결 4가 끝나지 않는다.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: edge
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "5"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: git@github.com:team-pitcrew/gachita.git
+    targetRevision: develop
+    path: backend/infra/gitops/apps/edge
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: edge
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - SkipDryRunOnMissingResource=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m

@@ -1,0 +1,37 @@
+# 포트 규칙(ADR-0013의 '포트 관리'). 쿠버네티스에 든 ValidatingAdmissionPolicy라 컨트롤러가 따로 없다.
+# gachita.io/data-plane: "true" 라벨이 붙은 네임스페이스(edge, gachita, gachita-trips, gachita-profiles)에서
+#   - Service는 ClusterIP만(NodePort·LoadBalancer 금지: 밖으로 여는 길은 Cloudflare Tunnel 하나)
+#   - 파드는 hostNetwork·hostPort 금지(노드의 포트를 쓰지 않음)
+#   - 컨테이너 포트는 이름이 있어야 함(Service·NetworkPolicy는 숫자 대신 이름으로 가리킨다)
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: gachita-port-rules
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        gachita.io/data-plane: "true"
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [services, pods]
+  validations:
+    - expression: "object.kind != 'Service' || !has(object.spec.type) || object.spec.type == 'ClusterIP'"
+      message: "Service는 ClusterIP만 됩니다. 밖으로 여는 길은 Cloudflare Tunnel 하나입니다(ADR-0013)"
+    - expression: "object.kind != 'Pod' || !has(object.spec.hostNetwork) || !object.spec.hostNetwork"
+      message: "hostNetwork는 쓰지 않습니다(ADR-0013)"
+    - expression: >-
+        object.kind != 'Pod' ||
+        object.spec.containers.all(c, !has(c.ports) || c.ports.all(p, has(p.name) && p.name != '' && !has(p.hostPort)))
+      message: "컨테이너 포트에는 이름을 붙이고 hostPort는 쓰지 않습니다(ADR-0013)"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: gachita-port-rules
+spec:
+  policyName: gachita-port-rules
+  validationActions: [Deny]
