@@ -83,6 +83,11 @@ def next_number(titles):
     return max((t_number(t) or 0 for t in titles), default=0) + 1
 
 
+def planned_numbers(text):
+    """작업 목록(docs/tasks.md)에 미리 적은 T번호. 양식으로 만든 티켓이 이 번호를 가져가지 않게 한다."""
+    return [int(n) for n in re.findall(r"^### T(\d+) ", text or "", re.M)]
+
+
 def numbered_title(title, n):
     """번호가 없으면 붙인다. 양식의 자리 표시 '[T] '는 지운다."""
     if t_number(title) is not None:
@@ -230,7 +235,11 @@ def move(issue, state):
 def on_issue(event):
     """열려 있는 이슈를 모두 훑는다. 이벤트가 몰려 일부 실행이 취소돼도 마지막 실행이 빠진 것을 채운다."""
     issues = list_issues()
-    top = next_number(i["title"] for i in issues) - 1
+    # 기본 브랜치의 작업 목록에 이미 적힌 번호도 쓴 것으로 본다(tickets.yml이 기본 브랜치를 체크아웃한다).
+    # ponytail: 아직 병합되지 않은 PR이 작업 목록에 더하는 번호는 못 본다. 그 겹침은 tasks.py가 제목을 보고 막는다.
+    tasks_md = Path(__file__).resolve().parents[2] / "docs" / "tasks.md"
+    planned = planned_numbers(tasks_md.read_text()) if tasks_md.exists() else []
+    top = max([next_number(i["title"] for i in issues) - 1, *planned])
     changed_here = (event.get("issue") or {}).get("number")
     for i in sorted(issues, key=lambda i: i["number"]):
         if i["state"] != "OPEN":

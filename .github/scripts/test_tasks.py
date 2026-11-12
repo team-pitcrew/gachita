@@ -54,6 +54,13 @@ class TasksTest(unittest.TestCase):
         self.assertEqual((label["add"], label["remove"]), (["part:frontend-app"], ["part:backend-api"]))
         self.assertEqual(assign["assignee"], PARTS["frontend-app"]["owner"])
 
+    def test_same_number_with_another_title_is_left_alone(self):
+        """양식으로 만든 티켓이 작업 목록의 번호를 먼저 받았으면 본문·라벨을 덮어쓰지 않는다(#70 사고)."""
+        parsed = tasks.parse(ONE, PARTS)
+        other = {"number": 70, "title": "[T1] CI 범위를 나눈다", "state": "OPEN", "labels": [{"name": "part:backend-infra"}], "assignees": [], "body": "- [ ] 다른 일"}
+        self.assertEqual(tasks.plan(parsed, [other], CONFIG, refresh=True),
+                         [("conflict", {"number": 70, "title": "[T1] CI 범위를 나눈다", "want": "[T1] 가"})])
+
     def test_emulator_task_goes_to_the_emulator_owner(self):
         parsed = tasks.parse(ONE.replace("- [ ] 일", "환경: 에뮬레이터\n\n- [ ] 일"), PARTS)
         ((kind, create),) = tasks.plan(parsed, [], CONFIG)

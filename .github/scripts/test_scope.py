@@ -21,6 +21,12 @@ def on(files, full=False):
     return sorted(name for name, yes in result["parts"].items() if yes), result["package"]
 
 
+def steps(files, full=False):
+    """frontend-app 안에서 도는 스텝(web, car) 가운데 참인 것."""
+    result = scope.plan(files, CONFIG, full)
+    return sorted(name.removeprefix("frontend-app-") for name, yes in result["steps"].items() if yes)
+
+
 class ScopeTest(unittest.TestCase):
     def test_파트_정의가_네_개다(self):
         self.assertEqual(sorted(CONFIG["parts"]), sorted(PARTS))
@@ -55,6 +61,30 @@ class ScopeTest(unittest.TestCase):
         self.assertEqual(on(["backend/api/Dockerfile"]), (["backend-api"], True))
         self.assertEqual(on(["frontend/car/app/build.gradle"]), (["frontend-app"], False), "차량 앱은 이미지에 안 들어간다")
 
+    def test_웹만_바뀌면_차량_스텝은_건너뛴다(self):
+        self.assertEqual(steps(["frontend/web/app.js", "frontend/web/style.css"]), ["web"])
+
+    def test_차량_앱만_바뀌면_웹_스텝은_건너뛴다(self):
+        self.assertEqual(steps(["frontend/car/app/build.gradle", "frontend/car/app/src/main/java/x/Main.kt"]), ["car"])
+
+    def test_웹과_차량이_같이_바뀌면_둘_다(self):
+        self.assertEqual(steps(["frontend/web/app.js", "frontend/car/settings.gradle"]), ["car", "web"])
+
+    def test_공통_파일과_전체_검사는_두_스텝_모두(self):
+        for file in CONFIG["shared"]:
+            self.assertEqual(steps([file]), ["car", "web"], file)
+        self.assertEqual(steps([], full=True), ["car", "web"])
+
+    def test_다른_파트나_문서만_바뀌면_두_스텝_모두_건너뛴다(self):
+        self.assertEqual(steps(["backend/api/server.js", "docs/tasks.md", "frontend/web/README.md", "frontend/car/README.md"]), [])
+        self.assertEqual(steps(["frontend/webview/x.js", "frontend/carousel/y.kt"]), [], "이름이 비슷한 다른 폴더")
+
+    def test_스텝은_파트_경로_안에_있다(self):
+        """스텝이 참이면 그 파트도 참이어야 잡이 체크아웃한다."""
+        for name, part in CONFIG["parts"].items():
+            for paths in part.get("steps", {}).values():
+                self.assertTrue(all(scope.under(p, part["paths"]) for p in paths), name)
+
     def test_인프라는_이미지를_다시_만들지_않는다(self):
         self.assertFalse(on(["backend/infra/gitops/apps/api/base/deployment.yaml"])[1])
 
@@ -79,7 +109,8 @@ class ScopeTest(unittest.TestCase):
             self.assertEqual((result["files"], result["parts"]["frontend-app"], result["package"]), (2, True, True))
             self.assertEqual(
                 out_file.read_text().split(),
-                ["full=false", "package=true", "frontend_spec=false", "frontend_app=true", "backend_api=false", "backend_infra=false"],
+                ["full=false", "package=true", "frontend_spec=false", "frontend_app=true", "backend_api=false", "backend_infra=false",
+                 "frontend_app_web=true", "frontend_app_car=false"],
             )
 
     def test_git에서_바뀐_파일을_구한다(self):

@@ -8,7 +8,8 @@
     "frontend-app": {
       "name": "프론트 · 피그마 이후 단계",
       "owner": "mangowhoiscloud",
-      "paths": ["frontend/web/", "frontend/car/"]
+      "paths": ["frontend/web/", "frontend/car/"],
+      "steps": {"web": ["frontend/web/"], "car": ["frontend/car/"]}
     },
     "backend-api": {
       "name": "백엔드 · 비즈니스 로직",
