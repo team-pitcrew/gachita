@@ -1,0 +1,15 @@
+#!/bin/sh
+# 올리기 전에: 장기 브랜치로 직접 올리지 않게 막고, 빠른 검사를 돌린다.
+# 이 저장소는 무료 조직의 비공개 저장소라 GitHub 브랜치 보호를 쓸 수 없다. 이 훅이 그 자리를 대신한다.
+set -eu
+root=$(git rev-parse --show-toplevel)
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
+  case "$remote_ref" in
+    refs/heads/main | refs/heads/develop)
+      echo "${remote_ref#refs/heads/} 에는 직접 올리지 않습니다. PR을 열어 CI가 통과한 뒤 GitHub에서 병합합니다." >&2
+      exit 1
+      ;;
+    refs/heads/*) "$root/scripts/policy.sh" branch "${remote_ref#refs/heads/}" ;;
+  esac
+done
+make -C "$root" --no-print-directory check-fast

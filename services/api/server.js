@@ -1,5 +1,5 @@
 // 같이타 여행 세션 서버. 의존성 없이 Node 22 표준 라이브러리만 쓴다.
-// 한 프로세스가 API(/api)와 모바일 화면(../frontend)을 같이 내보낸다.
+// 한 프로세스가 API(/api)와 웹앱(apps/web)을 같이 내보낸다.
 //
 // ponytail: 메모리에만 저장한다. 서버를 다시 켜면 여행이 사라지고, 인스턴스는 1개여야 한다.
 //           여행을 오래 보관하거나 인스턴스를 늘려야 하면 node:sqlite나 Postgres로 옮긴다.
@@ -11,7 +11,7 @@ import { createServer } from "node:http";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const FRONT = fileURLToPath(new URL("../frontend/", import.meta.url));
+const WEB = fileURLToPath(new URL("../../apps/web/", import.meta.url));
 const TTL_MS = 48 * 60 * 60 * 1000; // 기획서 v4가 초기 제안으로 적은 보관 기간
 const MAX_TRIPS = 1000;
 const MAX_BODY = 10_000;
@@ -214,8 +214,8 @@ async function api(req, seg, query) {
 }
 
 async function serveFile(path, res) {
-  const file = normalize(join(FRONT, path === "/" ? "index.html" : path));
-  if (!file.startsWith(FRONT)) fail(404, "없는 파일");
+  const file = normalize(join(WEB, path === "/" ? "index.html" : path));
+  if (!file.startsWith(WEB)) fail(404, "없는 파일");
   const data = await readFile(file).catch(() => fail(404, "없는 파일"));
   res.writeHead(200, { "content-type": `${MIME[extname(file)] ?? "application/octet-stream"}; charset=utf-8` });
   res.end(data);
