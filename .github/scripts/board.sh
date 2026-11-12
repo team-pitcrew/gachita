@@ -1,7 +1,8 @@
 #!/bin/sh
 # 비상용. 평소에는 tickets.yml이 상태를 옮긴다(docs/project-board.md).
 #   .github/scripts/board.sh status T2 in-progress     # backlog | ready | in-progress | in-review | done
-#   .github/scripts/board.sh setup                     # 프로젝트 보드를 만들고 T번호 이슈를 올린다(토큰에 project 권한 필요)
+#   .github/scripts/board.sh sync                      # 모든 티켓을 보드에 올리고 Status를 라벨에 맞춘다(토큰에 project 권한 필요)
+#   .github/scripts/board.sh setup                     # 프로젝트 보드를 만들고 T번호 이슈를 올린다(한 번만. 2026-11-13에 실행함)
 set -eu
 REPO=team-pitcrew/gachita
 STATES="backlog ready in-progress in-review done"
@@ -22,7 +23,6 @@ case "${1:-}" in
     echo "#$number [$task] → $state"
     ;;
   setup)
-    # ponytail: 토큰 권한이 없어 2026-11-12에는 실행해 보지 못했다. 권한을 받은 뒤 처음 돌릴 때 결과를 확인한다.
     gh project list --owner team-pitcrew >/dev/null || { echo "먼저: gh auth refresh -s project,read:project" >&2; exit 1; }
     url=$(gh project create --owner team-pitcrew --title "같이타" --format json --jq .url)
     num=${url##*/}
@@ -33,8 +33,22 @@ case "${1:-}" in
     echo "보드: $url"
     echo "상태 열(Backlog · Ready · In progress · In review · Done)은 보드 설정의 Status 필드에서 맞춥니다."
     ;;
+  sync)
+    # 워크플로에 PROJECT_TOKEN이 없거나 보드가 라벨과 어긋났을 때 쓴다. 여러 번 돌려도 결과가 같다.
+    PROJECT_TOKEN=$(gh auth token) PROJECT_NUMBER=$(gh variable get PROJECT_NUMBER -R "$REPO") \
+      python3 - "$(dirname "$0")" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+import tickets
+
+cards = [i for i in tickets.list_issues() if tickets.t_number(i["title"])]
+for i in cards:
+    tickets.sync_project(i["id"], "done" if i["state"] != "OPEN" else tickets.status_of(i["labels"]) or "backlog")
+print(f"보드에 맞춘 티켓: {len(cards)}개")
+PY
+    ;;
   *)
-    sed -n '2,4p' "$0" >&2
+    sed -n '2,5p' "$0" >&2
     exit 2
     ;;
 esac

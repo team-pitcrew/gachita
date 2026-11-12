@@ -197,7 +197,7 @@ SET_STATUS = """mutation($project: ID!, $item: ID!, $field: ID!, $option: String
 def sync_project(content_id, state):
     """이슈나 PR을 조직 프로젝트에 넣고 Status를 맞춘다. 토큰이나 번호가 없으면 건너뛴다.
 
-    ponytail: 2026-11-12에는 프로젝트 권한이 없어 실행해 보지 못했다. 처음 돌 때 결과를 확인한다.
+    2026-11-13에 로컬 토큰으로 실제 보드에 돌려 확인했다. 워크플로 안에서(PROJECT_TOKEN으로) 도는 것은 아직 보지 못했다.
     보드가 없거나 열 이름이 달라도 티켓 라벨은 이미 맞춰졌으므로 경고만 남긴다.
     """
     token, number = os.environ.get("PROJECT_TOKEN"), os.environ.get("PROJECT_NUMBER")
