@@ -1,15 +1,25 @@
 // 실행: 저장소 루트에서 make check
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { after, before, test } from "node:test";
-import { server } from "./server.js";
+import { fileURLToPath } from "node:url";
+import { migrate, pool, server } from "./server.js";
 
 let base;
-before(() => new Promise((ok) => server.listen(0, () => ok((base = `http://localhost:${server.address().port}`)))));
-after(() => server.close());
+before(async () => {
+  await migrate();
+  await migrate(); // 여러 번 실행해도 같아야 한다
+  await pool.query("TRUNCATE trips, profiles");
+  await new Promise((ok) => server.listen(0, () => ok((base = `http://localhost:${server.address().port}`))));
+});
+after(async () => {
+  server.close();
+  await pool.end();
+});
 
-const call = async (method, path, body) => {
-  const res = await fetch(base + path, { method, body: body && JSON.stringify(body) });
-  return [res.status, res.status === 304 ? null : await res.json()];
+const call = async (method, path, body, token) => {
+  const res = await fetch(base + path, { method, body: body && JSON.stringify(body), headers: token ? { authorization: `Bearer ${token}` } : {} });
+  return [res.status, res.status === 304 || res.status === 204 ? null : await res.json()];
 };
 const join = (code, name, seat, consent = true, prefs) =>
   call("POST", `/api/trips/${code}/participants`, { name, seat, consent, prefs });
@@ -62,12 +72,74 @@ test("여행 하나의 흐름: 참가, 자리, 동의와 기록, 부탁, 장면"
   assert.equal((await call("GET", `/api/trips/${trip.code.toLowerCase()}`))[0], 200, "코드는 대소문자를 가리지 않음");
 });
 
+test("프로필: 발급, 토큰으로 본인 확인, 프로필로 참가하면 자리별 선호를 가져온다", async () => {
+  const [created, me] = await call("POST", "/api/profiles", { name: "지우", prefs: { passenger: { tempC: 23, heat: 1 }, rear: { tempC: 21, vent: 2 } }, consentDefault: true });
+  assert.equal(created, 201);
+  assert.match(me.token, /^[A-Za-z0-9_-]{43}$/);
+  assert.deepEqual(me.prefs.driver, { tempC: 22, heat: 0, vent: 0 }, "안 적은 자리는 기본값");
+
+  // 서버에는 토큰이 아니라 해시만 남는다
+  const { rows } = await pool.query("SELECT token_hash FROM profiles WHERE id = $1", [me.id]);
+  assert.equal(rows[0].token_hash.length, 32);
+  assert.ok(!rows[0].token_hash.toString("latin1").includes(me.token));
+
+  assert.equal((await call("GET", "/api/profiles/me"))[0], 401, "토큰이 없으면 거절");
+  assert.equal((await call("GET", "/api/profiles/me", null, "x".repeat(43)))[0], 401, "모르는 토큰은 거절");
+  const [, seen] = await call("GET", "/api/profiles/me", null, me.token);
+  assert.deepEqual([seen.name, seen.token], ["지우", undefined], "토큰은 발급할 때만 준다");
+
+  // 프로필로 참가: 이름·선호·동의를 프로필에서 가져온다
+  const [, trip] = await call("POST", "/api/trips", {});
+  const t = `/api/trips/${trip.code}`;
+  const [joined, p] = await call("POST", `${t}/participants`, { seat: "ROW_1_RIGHT" }, me.token);
+  assert.deepEqual([joined, p.name, p.prefs, p.consent], [201, "지우", { tempC: 23, heat: 1, vent: 0 }, true]);
+  const [again, same] = await call("POST", `${t}/participants`, { seat: "ROW_2_LEFT" }, me.token);
+  assert.deepEqual([again, same.id, same.seat], [200, p.id, "ROW_1_RIGHT"], "같은 프로필이 다시 참가하면 있던 참가자를 돌려준다");
+  assert.equal((await call("POST", `${t}/participants`, { seat: "ROW_2_LEFT" }, "y".repeat(43)))[0], 401);
+
+  // 자리를 옮기면 그 자리의 선호를 프로필에서 다시 불러온다
+  const [, moved] = await call("PATCH", `${t}/participants/${p.id}`, { seat: "ROW_2_CENTER" });
+  assert.deepEqual(moved.prefs, { tempC: 21, heat: 0, vent: 2 });
+
+  // 저장은 Postgres에 한다: 서버가 돌려준 것과 표의 문서가 같다
+  const stored = (await pool.query("SELECT doc FROM trips WHERE code = $1", [trip.code])).rows[0].doc;
+  assert.deepEqual(stored, (await call("GET", t))[1]);
+
+  // 고치기와 지우기
+  const [, patched] = await call("PATCH", "/api/profiles/me", { prefs: { passenger: { heat: 3 } } }, me.token);
+  assert.deepEqual(patched.prefs.passenger, { tempC: 23, heat: 3, vent: 0 }, "적은 값만 바뀐다");
+  assert.equal((await call("PATCH", "/api/profiles/me", { prefs: { rear: { vent: 7 } } }, me.token))[0], 400);
+  assert.equal((await call("DELETE", "/api/profiles/me", null, me.token))[0], 204);
+  assert.equal((await call("GET", "/api/profiles/me", null, me.token))[0], 401, "지운 프로필의 토큰은 못 쓴다");
+});
+
 test("잘못된 요청은 서버를 죽이지 않고 거절한다", async () => {
   assert.equal((await call("GET", "/api/trips/ZZZZZZ"))[0], 404);
   assert.equal((await fetch(`${base}/api/trips`, { method: "POST", body: "{" })).status, 400);
   assert.equal((await fetch(`${base}/api/trips`, { method: "POST", body: "x".repeat(20_000) })).status, 413);
   assert.equal((await fetch(`${base}/..%2F..%2Fservices%2Fapi%2Fserver.js`)).status, 404, "웹앱 폴더 밖은 내보내지 않음");
+  assert.equal((await call("GET", "/healthz"))[0], 200);
   const page = await fetch(base + "/");
   assert.equal(page.status, 200);
   assert.match(await page.text(), /같이타/);
+});
+
+test("명세(docs/api/openapi.yaml)와 서버의 경로가 같다", async () => {
+  // 표준 라이브러리에 YAML 읽기가 없어 ruby로 JSON으로 바꾼다(macOS와 CI 실행기에 기본으로 있음)
+  const file = fileURLToPath(new URL("../../docs/api/openapi.yaml", import.meta.url));
+  const spec = JSON.parse(execFileSync("ruby", ["-ryaml", "-rjson", "-e", "puts JSON.generate(YAML.load_file(ARGV[0]))", file], { encoding: "utf8" }));
+
+  const [, trip] = await call("POST", "/api/trips", {});
+  const [, p] = await call("POST", `/api/trips/${trip.code}/participants`, { name: "민준", seat: "ROW_1_LEFT", consent: true });
+  const [, r] = await call("POST", `/api/trips/${trip.code}/requests`, { by: p.id, text: "커피" });
+  const METHODS = ["get", "post", "patch", "delete"];
+  for (const [path, ops] of Object.entries(spec.paths)) {
+    const url = path.replace("{code}", trip.code).replace("{id}", path.includes("/requests/") ? r.id : p.id);
+    for (const method of METHODS) {
+      // 빈 요청을 보내 본다. 명세에 있는 경로는 명세에 적힌 상태 중 하나로, 없는 경로는 404나 405로 답해야 한다.
+      const res = await fetch(base + url, { method: method.toUpperCase(), body: method === "post" || method === "patch" ? "{}" : undefined });
+      const documented = ops[method] ? Object.keys(ops[method].responses).map(Number) : [404, 405];
+      assert.ok(documented.includes(res.status), `${method.toUpperCase()} ${path} → ${res.status}, 명세에는 ${documented.join("·")}`);
+    }
+  }
 });

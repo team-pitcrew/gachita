@@ -1,0 +1,330 @@
+openapi: 3.1.0
+info:
+  title: 같이타 API
+  version: 0.2.0
+  summary: 여행 세션, 기기 프로필, 부탁, 장면
+  description: |
+    웹앱(apps/web)과 차량 앱(apps/car)이 부르는 API입니다. 구현은 services/api/server.js입니다.
+
+    - 모든 본문은 JSON이고 10 KB를 넘으면 413입니다.
+    - 오류는 `{ "error": "이유" }`로 옵니다.
+    - 로그인은 없습니다. 기기 프로필 토큰이 있으면 `Authorization: Bearer <토큰>`으로 보냅니다.
+    - 여행은 만든 뒤 48시간까지 읽을 수 있습니다.
+
+    이 서버가 부르는 외부 API는 아직 없습니다. 예정과 결정 상태는 docs/api/external.md에 있습니다.
+servers:
+  - url: http://localhost:8787
+    description: 로컬(make run)
+security: []
+tags:
+  - name: 프로필
+  - name: 여행
+  - name: 참가자
+  - name: 부탁
+  - name: 장면
+  - name: 상태 확인
+paths:
+  /healthz:
+    get:
+      tags: [상태 확인]
+      summary: 서버와 DB가 살아 있는지
+      responses:
+        "200":
+          description: 정상
+          content:
+            application/json:
+              schema: { type: object, required: [ok], properties: { ok: { const: true } } }
+  /api/profiles:
+    post:
+      tags: [프로필]
+      summary: 기기 프로필 만들기
+      description: 토큰은 이 응답에서 한 번만 줍니다. 서버에는 해시만 남으므로 잃어버리면 새로 만듭니다.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProfileInput", required: [name] }
+      responses:
+        "201":
+          description: 만들어짐
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Profile"
+                  - type: object
+                    required: [token]
+                    properties: { token: { type: string, description: 43자 base64url } }
+        "400": { $ref: "#/components/responses/Error" }
+  /api/profiles/me:
+    get:
+      tags: [프로필]
+      summary: 내 프로필 읽기
+      security: [{ profileToken: [] }]
+      responses:
+        "200": { description: 내 프로필, content: { application/json: { schema: { $ref: "#/components/schemas/Profile" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+    patch:
+      tags: [프로필]
+      summary: 내 프로필 고치기
+      description: 적은 값만 바뀝니다. 선호는 자리 종류 안에서도 적은 항목만 바뀝니다.
+      security: [{ profileToken: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ProfileInput" } } }
+      responses:
+        "200": { description: 고친 프로필, content: { application/json: { schema: { $ref: "#/components/schemas/Profile" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [프로필]
+      summary: 내 프로필 지우기
+      description: 지우면 토큰도 못 씁니다. 이미 참가한 여행의 이름과 선호는 그 여행이 지워질 때까지 남습니다.
+      security: [{ profileToken: [] }]
+      responses:
+        "204": { description: 지워짐 }
+        "401": { $ref: "#/components/responses/Error" }
+  /api/trips:
+    post:
+      tags: [여행]
+      summary: 여행 만들기
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, properties: { title: { type: string, minLength: 1, maxLength: 40 } } }
+      responses:
+        "201": { description: 만들어짐, content: { application/json: { schema: { $ref: "#/components/schemas/Trip" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+  /api/trips/{code}:
+    parameters: [{ $ref: "#/components/parameters/code" }]
+    get:
+      tags: [여행]
+      summary: 여행 전체 상태
+      description: 클라이언트는 받은 `version`을 `v`로 보내 바뀐 것이 없으면 304를 받습니다.
+      parameters:
+        - { name: v, in: query, schema: { type: integer }, description: 마지막으로 받은 version }
+      responses:
+        "200": { description: 여행, content: { application/json: { schema: { $ref: "#/components/schemas/Trip" } } } }
+        "304": { description: 바뀐 것 없음 }
+        "404": { $ref: "#/components/responses/Error" }
+    patch:
+      tags: [여행]
+      summary: 여행 상태나 기록 여부 바꾸기
+      description: |
+        `status`를 `driving`으로 바꾸면 참가자 모두가 동의했을 때 기록을 켭니다. `parked`와 `ended`에서는 기록을 끕니다.
+        `recording: true`는 주행 중이고 모두 동의했을 때만 됩니다(아니면 409).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status: { $ref: "#/components/schemas/TripStatus" }
+                recording: { type: boolean }
+      responses:
+        "200": { description: 바뀐 여행, content: { application/json: { schema: { $ref: "#/components/schemas/Trip" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/trips/{code}/participants:
+    parameters: [{ $ref: "#/components/parameters/code" }]
+    post:
+      tags: [참가자]
+      summary: 여행에 참가
+      description: |
+        프로필 토큰을 보내면 이름과 그 자리 종류의 선호를 프로필에서 가져옵니다. `consent`를 안 보내면 프로필의 기본값을 씁니다.
+        같은 프로필이 다시 참가하면 있던 참가자를 200으로 돌려줍니다. 토큰이 없으면 손님으로 `name`과 `consent`가 필요합니다.
+      security: [{}, { profileToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [seat]
+              properties:
+                seat: { $ref: "#/components/schemas/Seat" }
+                name: { type: string, minLength: 1, maxLength: 20, description: 손님일 때 필요 }
+                consent: { type: boolean, description: 손님일 때 필요 }
+                prefs: { $ref: "#/components/schemas/Prefs" }
+      responses:
+        "200": { description: 이미 참가한 프로필, content: { application/json: { schema: { $ref: "#/components/schemas/Participant" } } } }
+        "201": { description: 참가함, content: { application/json: { schema: { $ref: "#/components/schemas/Participant" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/trips/{code}/participants/{id}:
+    parameters: [{ $ref: "#/components/parameters/code" }, { $ref: "#/components/parameters/id" }]
+    patch:
+      tags: [참가자]
+      summary: 자리 옮기기, 선호와 동의 바꾸기
+      description: 프로필로 참가한 사람이 자리를 옮기면 옮긴 자리의 선호를 프로필에서 다시 불러옵니다. 동의를 끄면 기록이 멈춥니다.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                seat: { $ref: "#/components/schemas/Seat" }
+                prefs: { $ref: "#/components/schemas/Prefs" }
+                consent: { type: boolean }
+      responses:
+        "200": { description: 바뀐 참가자, content: { application/json: { schema: { $ref: "#/components/schemas/Participant" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/trips/{code}/requests:
+    parameters: [{ $ref: "#/components/parameters/code" }]
+    post:
+      tags: [부탁]
+      summary: 부탁 남기기
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [by, text]
+              properties:
+                by: { type: string, description: 이 여행의 참가자 id }
+                text: { type: string, minLength: 1, maxLength: 200 }
+                when: { $ref: "#/components/schemas/When" }
+      responses:
+        "201": { description: 남김, content: { application/json: { schema: { $ref: "#/components/schemas/Request" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/trips/{code}/requests/{id}:
+    parameters: [{ $ref: "#/components/parameters/code" }, { $ref: "#/components/parameters/id" }]
+    patch:
+      tags: [부탁]
+      summary: 부탁 상태 바꾸기
+      description: |
+        갈 수 있는 길만 됩니다(아니면 409).
+        `held → proposed → accepted → reflected → done`. 끝나기 전에는 `cancelled`로 갈 수 있습니다.
+        `proposed`와 `accepted`는 `held`로 되돌릴 수 있습니다. 차량 앱은 내비가 경유지를 받았다는 알림을 본 뒤에 `reflected`로 바꾸고, 실패하면 `held`로 되돌립니다.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [status], properties: { status: { $ref: "#/components/schemas/RequestStatus" } } }
+      responses:
+        "200": { description: 바뀐 부탁, content: { application/json: { schema: { $ref: "#/components/schemas/Request" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/trips/{code}/moments:
+    parameters: [{ $ref: "#/components/parameters/code" }]
+    post:
+      tags: [장면]
+      summary: 장면의 시각과 위치 남기기
+      description: 차량 앱이 대화가 재미있던 순간을 표시할 때 부릅니다. `at`을 안 보내면 서버 시각을 씁니다.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [lat, lng]
+              properties:
+                lat: { type: number, minimum: -90, maximum: 90 }
+                lng: { type: number, minimum: -180, maximum: 180 }
+                label: { type: string, minLength: 1, maxLength: 60 }
+                at: { type: integer, description: "epoch 밀리초. 여행을 만든 뒤부터 지금까지" }
+      responses:
+        "201": { description: 남김, content: { application/json: { schema: { $ref: "#/components/schemas/Moment" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+components:
+  securitySchemes:
+    profileToken:
+      type: http
+      scheme: bearer
+      description: POST /api/profiles가 돌려준 토큰
+  parameters:
+    code: { name: code, in: path, required: true, schema: { type: string, pattern: "^[A-Za-z2-9]{6}$" }, description: 여행 코드. 대소문자를 가리지 않음 }
+    id: { name: id, in: path, required: true, schema: { type: string } }
+  responses:
+    Error:
+      description: 거절한 이유
+      content:
+        application/json:
+          schema: { type: object, required: [error], properties: { error: { type: string } } }
+  schemas:
+    Seat:
+      type: string
+      enum: [ROW_1_LEFT, ROW_1_RIGHT, ROW_2_LEFT, ROW_2_CENTER, ROW_2_RIGHT]
+      description: Pleos Vehicle SDK의 SeatArea 이름. ROW_1_LEFT가 운전석
+    TripStatus: { type: string, enum: [boarding, driving, parked, ended] }
+    When: { type: string, enum: [now, return, before_arrival, after_parking], default: now }
+    RequestStatus: { type: string, enum: [held, proposed, accepted, reflected, done, cancelled] }
+    Prefs:
+      type: object
+      description: 차량 앱이 그 차의 지원 범위에 맞춰 적용합니다
+      properties:
+        tempC: { type: number, minimum: 16, maximum: 30, default: 22 }
+        heat: { type: integer, minimum: 0, maximum: 3, default: 0, description: 시트 열선 단계 }
+        vent: { type: integer, minimum: 0, maximum: 3, default: 0, description: 시트 통풍 단계 }
+    ProfileInput:
+      type: object
+      properties:
+        name: { type: string, minLength: 1, maxLength: 20 }
+        prefs:
+          type: object
+          description: 자리 종류별 선호
+          properties:
+            driver: { $ref: "#/components/schemas/Prefs" }
+            passenger: { $ref: "#/components/schemas/Prefs" }
+            rear: { $ref: "#/components/schemas/Prefs" }
+        consentDefault: { type: boolean, default: false, description: 참가할 때 기록 동의의 기본값 }
+    Profile:
+      allOf:
+        - $ref: "#/components/schemas/ProfileInput"
+        - type: object
+          required: [id, name, prefs, consentDefault]
+          properties: { id: { type: string, format: uuid } }
+    Participant:
+      type: object
+      required: [id, name, seat, prefs, consent]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        seat: { $ref: "#/components/schemas/Seat" }
+        prefs: { $ref: "#/components/schemas/Prefs" }
+        consent: { type: boolean }
+        profileId: { type: string, format: uuid, description: 프로필로 참가했을 때만 }
+    Request:
+      type: object
+      required: [id, by, text, when, status, createdAt]
+      properties:
+        id: { type: string }
+        by: { type: string }
+        text: { type: string }
+        when: { $ref: "#/components/schemas/When" }
+        status: { $ref: "#/components/schemas/RequestStatus" }
+        createdAt: { type: integer }
+    Moment:
+      type: object
+      required: [id, at, lat, lng, label]
+      properties:
+        id: { type: string }
+        at: { type: integer }
+        lat: { type: number }
+        lng: { type: number }
+        label: { type: string }
+    Trip:
+      type: object
+      required: [code, title, status, recording, participants, requests, moments, version, createdAt]
+      properties:
+        code: { type: string }
+        title: { type: string }
+        status: { $ref: "#/components/schemas/TripStatus" }
+        recording: { type: boolean }
+        participants: { type: array, items: { $ref: "#/components/schemas/Participant" } }
+        requests: { type: array, items: { $ref: "#/components/schemas/Request" } }
+        moments: { type: array, items: { $ref: "#/components/schemas/Moment" } }
+        version: { type: integer, description: 바뀔 때마다 1씩 늘어남 }
+        createdAt: { type: integer }
