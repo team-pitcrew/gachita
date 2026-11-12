@@ -1,5 +1,5 @@
 // style.css의 색 토큰이 글자 대비 기준(WCAG AA, 4.5:1)을 지키는지 검사한다.
-// 실행: 저장소 루트에서 node --test
+// 실행: 저장소 루트에서 make check
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";

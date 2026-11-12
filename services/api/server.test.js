@@ -1,4 +1,4 @@
-// 실행: node --test (backend 폴더에서)
+// 실행: 저장소 루트에서 make check
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import { server } from "./server.js";
@@ -66,7 +66,7 @@ test("잘못된 요청은 서버를 죽이지 않고 거절한다", async () => 
   assert.equal((await call("GET", "/api/trips/ZZZZZZ"))[0], 404);
   assert.equal((await fetch(`${base}/api/trips`, { method: "POST", body: "{" })).status, 400);
   assert.equal((await fetch(`${base}/api/trips`, { method: "POST", body: "x".repeat(20_000) })).status, 413);
-  assert.equal((await fetch(`${base}/..%2Fbackend%2Fserver.js`)).status, 404, "frontend 폴더 밖은 내보내지 않음");
+  assert.equal((await fetch(`${base}/..%2F..%2Fservices%2Fapi%2Fserver.js`)).status, 404, "웹앱 폴더 밖은 내보내지 않음");
   const page = await fetch(base + "/");
   assert.equal(page.status, 200);
   assert.match(await page.text(), /같이타/);

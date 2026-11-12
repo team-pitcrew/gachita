@@ -6,19 +6,19 @@
 
 | 폴더 | 내용 | 상태 |
 |---|---|---|
-| `backend/` | 여행 세션 서버. 여행 코드, 참가자와 자리, 좌석·공조 선호, 기록 동의, 부탁의 상태, 장면의 시각과 위치를 보관합니다 | 동작. 테스트 2개 통과 |
-| `frontend/` | 모바일 화면. 한 화면에 한 가지씩 네 단계로 참가하고(이름, 자리, 온도·시트, 기록 동의), 부탁을 남기고 상태를 봅니다 | 동작. 서버가 같이 내보냅니다. 색 대비 검사 2개 통과 |
-| `car/` | Pleos 차량 앱 | 아직 없음 |
-| `apk/` | 제출용 APK(`팀명_앱이름_release.apk`) | 아직 없음 |
+| `apps/web/` | 웹앱. 한 화면에 한 가지씩 네 단계로 참가하고(이름, 자리, 온도·시트, 기록 동의), 부탁을 남기고 상태를 봅니다 | 동작. 서버가 같이 내보냅니다 |
+| `apps/car/` | Pleos 차량 앱(Android · Kotlin · Compose) | 아직 없음(T7) |
+| `services/api/` | API 서버. 여행 코드, 참가자와 자리, 좌석·공조 선호, 기록 동의, 부탁의 상태, 장면의 시각과 위치 | 동작. 메모리 저장(Postgres는 T2) |
+| `infra/` | AWS 자원(Terraform)과 클러스터 선언(Argo CD) | 아직 없음(T4, T5) |
+| `docs/` | [개발 규칙](docs/development.md), [구조와 스택](docs/architecture.md), [작업 목록](docs/tasks.md), [프로젝트 보드](docs/project-board.md), [결정 기록](docs/adr) | |
+| `apk/` | 제출용 APK(`팀명_앱이름_release.apk`) | 아직 없음(T13) |
 
 ## 실행 방법
 
 ```bash
-cd backend && npm start   # http://localhost:8787
-```
-
-```bash
-node --test               # 저장소 루트에서. 서버 테스트와 화면 색 대비 검사
+make hooks     # 복제한 뒤 한 번: 커밋 훅 걸기
+make run       # http://localhost:8787
+make check     # CI와 같은 검사
 ```
 
 브라우저에서 `http://localhost:8787`을 열고 '새 여행 만들기'를 누릅니다. 다른 기기는 같은 주소 끝에 `#코드`를 붙여 참가합니다. 운전석으로 참가한 사람에게만 출발·주차와 부탁 제안·수락 단추가 보입니다.
