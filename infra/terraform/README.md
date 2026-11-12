@@ -11,7 +11,7 @@ K3s 서버 한 대와 그 주변 자원을 만듭니다. **2026-11-12 기준으�
 | 서버 | EC2 `t4g.medium`(ARM), 우분투 24.04, 암호화한 gp3 30 GB, IMDSv2만, 고정 IP |
 | 역할 | SSM 세션, 데이터 버킷 읽기·쓰기, `/gachita/dev/*` SSM 값 읽기 |
 | 버킷 | Postgres 백업과 클립용. 공개 차단, 버전 관리, 암호화, 지난 버전 30일 뒤 삭제 |
-| 첫 부팅 | K3s `v1.37.2+k3s1` → Argo CD `v3.6.1` → 뿌리 앱(`infra/gitops/bootstrap`) |
+| 첫 부팅 | 비공개 이미지 받기 설정 → K3s `v1.37.2+k3s1` → Argo CD `v3.6.1` → 뿌리 앱(`infra/gitops/bootstrap`) |
 
 - 관리형 쿠버네티스와 관리형 DB를 쓰지 않습니다. Postgres는 클러스터 안에서 CloudNativePG로 돌립니다(`infra/gitops`).
 - 도메인이 없어 주소 이름은 `api.<고정 IP>.sslip.io`를 씁니다.
@@ -29,8 +29,11 @@ aws s3api create-bucket --bucket gachita-tfstate-<계정 ID> --region ap-northea
   --create-bucket-configuration LocationConstraint=ap-northeast-2
 aws s3api put-bucket-versioning --bucket gachita-tfstate-<계정 ID> --versioning-configuration Status=Enabled
 
-# 2. Argo CD가 비공개 저장소를 읽을 토큰(GitHub 세분화 토큰, 이 저장소의 Contents 읽기만)을 SSM에 넣기
-aws ssm put-parameter --region ap-northeast-2 --name /gachita/dev/argocd-repo-token --type SecureString --value '<토큰>'
+# 2. 서버가 첫 부팅 때 읽을 값 두 개를 SSM에 넣기
+#    - 배포 키: ssh-keygen -t ed25519 -f gachita-deploy -N '' 로 만들고, 공개 키를 저장소 Settings → Deploy keys에 읽기 전용으로 등록
+#    - 이미지 받기 토큰: GitHub 클래식 토큰, 권한은 read:packages 하나
+aws ssm put-parameter --region ap-northeast-2 --name /gachita/dev/argocd-deploy-key --type SecureString --value "$(cat gachita-deploy)"
+aws ssm put-parameter --region ap-northeast-2 --name /gachita/dev/ghcr-token --type SecureString --value '<토큰>'
 
 # 3. 계획 보기
 cd infra/terraform
@@ -43,7 +46,7 @@ terraform plan
 
 ```sh
 terraform apply                      # 승인 뒤에만
-terraform output api_host            # 이 값을 infra/gitops/apps/api/overlays/dev 의 인그레스에 적어 PR로 올린다
+terraform output api_host            # 이 값과 data_bucket을 infra/gitops/apps/api/overlays/dev 에 적어 PR로 올린다
 $(terraform output -raw ssm_session) # 서버에 들어가기
 sudo tail -f /var/log/gachita-bootstrap.log
 ```

@@ -31,3 +31,11 @@ jobs:
         run: |
           terraform -chdir=infra/terraform init -backend=false -input=false
           terraform -chdir=infra/terraform validate
+      - name: 클러스터 선언 조립과 스키마 검사
+        run: |
+          catalog='https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+          for dir in infra/gitops/bootstrap infra/gitops/platform infra/gitops/apps/api/overlays/dev; do
+            echo "== $dir"
+            kubectl kustomize "$dir" | docker run --rm -i ghcr.io/yannh/kubeconform:v0.8.0 \
+              -strict -summary -schema-location default -schema-location "$catalog" -
+          done

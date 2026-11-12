@@ -1,0 +1,18 @@
+# Postgres 한 대. 데이터는 서버의 디스크(K3s local-path)에 둔다.
+# ponytail: 인스턴스가 하나라 서버가 죽으면 DB도 멈춘다. 노드를 늘리면 instances를 올린다.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: gachita-pg
+spec:
+  instances: 1
+  imageName: ghcr.io/cloudnative-pg/postgresql:17
+  storage:
+    size: 5Gi
+  bootstrap:
+    initdb:
+      database: gachita
+      owner: gachita
+  resources:
+    requests: { cpu: 50m, memory: 256Mi }
+    limits: { memory: 512Mi }

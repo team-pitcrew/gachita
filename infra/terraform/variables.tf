@@ -41,9 +41,9 @@ variable "argocd_version" {
 }
 
 variable "gitops_repo" {
-  description = "Argo CD가 읽을 저장소"
+  description = "Argo CD가 읽을 저장소(배포 키로 읽으므로 SSH 주소)"
   type        = string
-  default     = "https://github.com/team-pitcrew/gachita.git"
+  default     = "git@github.com:team-pitcrew/gachita.git"
 }
 
 variable "gitops_revision" {
