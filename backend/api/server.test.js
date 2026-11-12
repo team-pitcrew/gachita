@@ -1,20 +1,21 @@
 // 실행: 저장소 루트에서 make check
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
-import { migrate, server } from "./server.js";
+import { migrate, rotateGoogleToken, server } from "./server.js";
 import { endStores, profilesDb, tripsDb } from "./db.js";
 
 let base;
-let fakeProvider; // 가짜 구글(T21). code가 곧 사용자 번호다. bad로 시작하면 거절.
+let fakeProvider; // 가짜 구글(T21). code가 곧 사용자 번호다. 특수 code로 장애 상황도 낸다.
 before(async () => {
   fakeProvider = createServer(async (req, res) => {
-    const send = (status, body) => {
-      res.writeHead(status, { "content-type": "application/json" });
-      res.end(JSON.stringify(body));
+    const send = (status, body, raw) => {
+      res.writeHead(status, { "content-type": raw ? "text/plain" : "application/json" });
+      res.end(raw ?? JSON.stringify(body));
     };
     const url = new URL(req.url, "http://localhost");
     if (url.pathname === "/token" && req.method === "POST") {
@@ -24,12 +25,21 @@ before(async () => {
         req.on("end", () => ok(body));
       });
       const code = new URLSearchParams(raw).get("code") ?? "";
+      if (code === "bad-client") return send(400, { error: "invalid_client" });
+      if (code === "bad-json") return send(200, null, "JSON이 아닌 응답");
+      if (code === "down") return send(503, { error: "unavailable" });
+      if (code === "overloaded") return send(429, { error: "rate_limited" });
+      if (code === "no-token") return send(200, {});
+      if (code === "slow") await new Promise((ok) => setTimeout(ok, 400));
       if (!code || code.startsWith("bad")) return send(400, { error: "invalid_grant" });
       return send(200, { access_token: `at-${code}` });
     }
     if (url.pathname === "/userinfo" && req.method === "GET") {
       const at = /^Bearer at-(.+)$/.exec(req.headers.authorization ?? "");
-      return at ? send(200, { sub: at[1], name: `구글-${at[1]}` }) : send(401, { error: "unauthorized" });
+      if (!at) return send(401, { error: "unauthorized" });
+      if (at[1] === "no-info") return send(500, { error: "internal" });
+      if (at[1] === "no-sub") return send(200, { name: "번호 없음" });
+      return send(200, { sub: at[1], name: `구글-${at[1]}` });
     }
     send(404, {});
   });
@@ -220,6 +230,47 @@ test("구글 OAuth: 기기 프로필에 연결하고, 다른 기기에서 계정
 
   // 제공자가 거절한 코드는 401.
   assert.equal((await link({ code: "bad-1", redirectUri: "x" }))[0], 401);
+});
+
+test("제공자 오류를 코드 거절과 장애으로 나눠 알린다(T21)", async () => {
+  const link = (code) => call("POST", "/api/profiles/me/links/google", { code, redirectUri: "x" });
+  assert.deepEqual(await link("bad-grant").then(([, b]) => b.error), "제공자가 코드를 거절함");
+  assert.equal((await link("down"))[0], 503, "제공자 503은 일시 장애");
+  assert.equal((await link("overloaded"))[0], 503, "제공자 429도 일시 장애");
+  assert.equal((await link("bad-client"))[0], 500, "클라이언트 설정 오류는 사용자 잘못이 아님");
+  assert.equal((await link("bad-json"))[0], 502, "읽을 수 없는 응답");
+  assert.equal((await link("no-token"))[0], 502, "접근 토큰이 없는 응답");
+  assert.equal((await link("no-info"))[0], 502, "사용자 정보 조회 실패");
+  assert.equal((await link("no-sub"))[0], 502, "사용자 번호가 없는 응답");
+  // 시간 제한을 짧게 두고 제공자가 늦게 답하면 504, 아예 연결이 안 되면 503.
+  process.env.GOOGLE_TIMEOUT_MS = "150";
+  try {
+    assert.equal((await link("slow"))[0], 504, "늦은 응답은 시간 초과");
+    const saved = process.env.GOOGLE_TOKEN_URL;
+    process.env.GOOGLE_TOKEN_URL = "http://127.0.0.1:9/token";
+    assert.equal((await link("code-3"))[0], 503, "연결 실패는 일시 장애");
+    process.env.GOOGLE_TOKEN_URL = saved;
+  } finally {
+    delete process.env.GOOGLE_TIMEOUT_MS;
+  }
+});
+
+test("조회 뒤 구글 연결이 바뀌면 오래된 계정으로 토큰을 받지 못한다(T21)", async () => {
+  const [, me] = await call("POST", "/api/profiles", { name: "주인" });
+  const [, after] = await call("POST", "/api/profiles/me/links/google", { code: "code-9", redirectUri: "x" }, me.token);
+  // 찾아 들어가기 요청이 연결 조회를 마친 뒤, 소유자가 다른 구글 계정으로 갈아끼운 상황(결정적 재현).
+  const beforeHash = (await profilesDb().query("SELECT token_hash FROM profiles WHERE id = $1", [after.id])).rows[0].token_hash;
+  await profilesDb().query("UPDATE profiles SET provider_user_id = 'code-B' WHERE id = $1", [after.id]);
+  const stale = await rotateGoogleToken(after.id, createHash("sha256").update("stale").digest(), "code-9");
+  assert.equal(stale, null, "연결이 바뀌었으면 갱신은 0행");
+  const keptHash = (await profilesDb().query("SELECT token_hash FROM profiles WHERE id = $1", [after.id])).rows[0].token_hash;
+  assert.ok(keptHash.equals(beforeHash), "현재 소유자의 토큰 해시는 그대로");
+  const fresh = await rotateGoogleToken(after.id, createHash("sha256").update("fresh").digest(), "code-B");
+  assert.ok(fresh?.id, "지금 연결된 계정으로는 갱신됨");
+  // 바뀐 뒤 오래된 계정이 다시 로그인하면 새 프로필이 만들어진다(그 계정의 연결은 없으므로).
+  const [s, again] = await call("POST", "/api/profiles/me/links/google", { code: "code-9", redirectUri: "x" });
+  assert.deepEqual([s, again.links], [201, ["google"]]);
+  assert.notEqual(again.id, after.id);
 });
 
 test("쓰기가 몰려도 서버가 멈추지 않는다", async () => {

@@ -144,6 +144,23 @@ async function profiles(req, seg, b) {
 // 구글 계정 연결(ADR-0006). 프로필 토큰과 함께 오면 내 프로필에 묶고,
 // 토큰 없이 오면 계정의 프로필을 찾아 들어가거나 새로 만든다.
 // 토큰은 해시만 남으니 찾아 들어갈 때는 새로 발급한다(이전 기기의 토큰은 못 쓰게 됨).
+// 갱신 자격은 마지막 순간에 다시 본다 — 앞서 본 연결이 그 사이에 바뀌어도 오래된 계정으로
+// 토큰을 받아 가지 못하게 한다(리뷰 재현). 동시 첫 로그인은 유일 색인 위반(23505)이 막아 준다.
+const isTaken = (e) => e?.code === "23505";
+
+// 찾아 들어가기의 토큰 갱신. 연결이 지금도 이 계정인지 UPDATE 조건으로 다시 확인한다.
+// 조건이 어긋나면 0행 — 테스트가 이 상황을 결정적으로 만들기 위해 직접 부른다.
+// profileId가 없으면 계정으로 프로필을 찾아 갱신한다(동시 첫 로그인 23505 뒤 재시도).
+export async function rotateGoogleToken(profileId, hash, providerUserId) {
+  const { rows } = await profilesDb().query(
+    `UPDATE profiles SET token_hash = $1, updated_at = now()
+     WHERE provider = 'google' AND provider_user_id = $2 ${profileId ? "AND id = $3" : ""}
+     RETURNING id, name, prefs, consent_default, provider`,
+    profileId ? [hash, providerUserId, profileId] : [hash, providerUserId]
+  );
+  return rows[0] ?? null;
+}
+
 async function googleLink(req, m, b) {
   if (m === "POST") {
     const identity = await googleIdentity(text(b.code, 500, "code"), text(b.redirectUri, 500, "redirectUri"));
@@ -152,16 +169,31 @@ async function googleLink(req, m, b) {
     const me = await profileOf(req);
     if (me) {
       if (found[0] && found[0].id !== me.id) fail(409, "이미 다른 프로필에 연결된 구글 계정");
-      await db.query("UPDATE profiles SET provider = 'google', provider_user_id = $2, updated_at = now() WHERE id = $1", [me.id, identity.providerUserId]);
+      // 묶는 순간 다른 프로필이 같은 계정을 가져가면 색인이 막는다(23505) → 409로 바꾼다.
+      await db.query("UPDATE profiles SET provider = 'google', provider_user_id = $2, updated_at = now() WHERE id = $1", [me.id, identity.providerUserId]).catch((e) => {
+        if (isTaken(e)) fail(409, "이미 다른 프로필에 연결된 구글 계정");
+        throw e;
+      });
       return [200, await profileById(me.id)];
     }
     const token = randomBytes(32).toString("base64url");
     if (found[0]) {
-      await db.query("UPDATE profiles SET token_hash = $2, updated_at = now() WHERE id = $1", [found[0].id, tokenHash(token)]);
-      return [200, { ...(await profileById(found[0].id)), token }];
+      // 조회와 갱신 사이에 연결이 바뀌었으면 0행이 돌아온다. 이전 계정의 요청은 토큰을
+      // 받지 못하고, 있던 프로필을 새로 만드는 길로 넘어가지도 않는다.
+      const rotated = await rotateGoogleToken(found[0].id, tokenHash(token), identity.providerUserId);
+      if (!rotated) fail(401, "구글 연결이 바뀌었어요. 다시 로그인해 주세요");
+      return [200, { ...asProfile(rotated), token }];
     }
     const p = { id: randomUUID(), name: identity.name, prefs: rolePrefs({}), consentDefault: false };
-    await db.query("INSERT INTO profiles (id, token_hash, name, prefs, consent_default, provider, provider_user_id) VALUES ($1, $2, $3, $4, $5, 'google', $6)", [p.id, tokenHash(token), p.name, p.prefs, p.consentDefault, identity.providerUserId]);
+    try {
+      await db.query("INSERT INTO profiles (id, token_hash, name, prefs, consent_default, provider, provider_user_id) VALUES ($1, $2, $3, $4, $5, 'google', $6)", [p.id, tokenHash(token), p.name, p.prefs, p.consentDefault, identity.providerUserId]);
+    } catch (e) {
+      // 동시 첫 로그인: 먼저 들어온 요청이 이미 프로필을 만들었다(23505). 그 계정의 프로필로 들어간다.
+      if (!isTaken(e)) throw e;
+      const rotated = await rotateGoogleToken(null, tokenHash(token), identity.providerUserId);
+      if (!rotated) fail(409, "구글 계정 연결이 경합 중이에요. 다시 시도해 주세요");
+      return [200, { ...asProfile(rotated), token }];
+    }
     return [201, { ...p, links: ["google"], token }];
   }
   if (m === "DELETE") {
