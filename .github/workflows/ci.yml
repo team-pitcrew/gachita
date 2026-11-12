@@ -144,20 +144,6 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    services:
-      postgres:
-        image: postgres:17
-        env:
-          POSTGRES_USER: gachita
-          POSTGRES_PASSWORD: gachita
-          POSTGRES_DB: gachita
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U gachita"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
     env:
       IN_SCOPE: ${{ needs.scope.outputs.backend_api }}
       # 이 검사에서만 쓰는 일회용 DB의 주소다
@@ -177,6 +163,13 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: backend/api/package-lock.json
+      # 범위 안일 때만 띄운다. services로 두면 문서만 바뀐 PR에서도 매번 뜬다.
+      - name: Postgres 띄우기
+        if: env.IN_SCOPE == 'true'
+        run: |
+          docker run -d --name pg -p 5432:5432 -e POSTGRES_USER=gachita -e POSTGRES_PASSWORD=gachita -e POSTGRES_DB=gachita postgres:17
+          # 처음 뜰 때 잠깐 도는 준비용 서버는 TCP를 듣지 않는다. TCP로 물어야 진짜 서버를 기다린다
+          until docker exec pg pg_isready -h 127.0.0.1 -U gachita -q; do sleep 1; done
       - name: API 테스트 (명세와 경로 대조 포함)
         if: env.IN_SCOPE == 'true'
         run: make api
@@ -227,20 +220,6 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    services:
-      postgres:
-        image: postgres:17
-        env:
-          POSTGRES_USER: gachita
-          POSTGRES_PASSWORD: gachita
-          POSTGRES_DB: gachita
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U gachita"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
     env:
       IN_SCOPE: ${{ needs.scope.outputs.package }}
       # 이 검사에서만 쓰는 일회용 DB의 주소다
@@ -254,6 +233,13 @@ jobs:
           if [ "$IN_SCOPE" != true ]; then echo "이 PR은 이미지에 들어가는 파일을 바꾸지 않아 검사할 것이 없습니다"; fi
       - uses: actions/checkout@v7
         if: env.IN_SCOPE == 'true'
+      # 범위 안일 때만 띄운다. services로 두면 문서만 바뀐 PR에서도 매번 뜬다.
+      - name: Postgres 띄우기
+        if: env.IN_SCOPE == 'true'
+        run: |
+          docker run -d --name pg -p 5432:5432 -e POSTGRES_USER=gachita -e POSTGRES_PASSWORD=gachita -e POSTGRES_DB=gachita postgres:17
+          # 처음 뜰 때 잠깐 도는 준비용 서버는 TCP를 듣지 않는다. TCP로 물어야 진짜 서버를 기다린다
+          until docker exec pg pg_isready -h 127.0.0.1 -U gachita -q; do sleep 1; done
       - name: 이미지 빌드
         if: env.IN_SCOPE == 'true'
         run: docker build -f backend/api/Dockerfile -t gachita-api:ci .
