@@ -142,6 +142,38 @@ test("여행 저장소와 프로필 저장소가 서로 다른 DB에 있다(T23)
   assert.equal((await profilesDb().query("SELECT to_regclass('trips')")).rows[0].to_regclass, null, "프로필 DB에 여행 표가 없다");
 });
 
+test("주소가 같아도 저장소마다 풀을 따로 둔다", async () => {
+  // DATABASE_URL 하나만 쓰는 실행에서 프로필 조회가 여행 풀의 연결을 빌리면,
+  // 여행 줄을 잠근 채 연결을 기다려 서버가 멈춘다(리뷰 재현). 풀이 나뉘면 고리가 안 생긴다.
+  const saved = process.env.PROFILES_DATABASE_URL;
+  delete process.env.PROFILES_DATABASE_URL;
+  delete process.env.TRIPS_DATABASE_URL;
+  const fresh = await import("./db.js?same-url"); // 쿼리를 붙여 새 모듈로 만든다. 풀은 첫 호출 때 만들어진다
+  assert.notEqual(fresh.tripsDb(), fresh.profilesDb());
+  await fresh.endStores();
+  process.env.PROFILES_DATABASE_URL = saved;
+});
+
+test("쓰기가 몰려도 서버가 멈추지 않는다", async () => {
+  // 자리 옮기기는 여행 줄을 잠근 연결을 쥔 채 프로필 저장소를 읽는다.
+  // 같은 여행에 쓰기 15개가 동시에 닥쳐도 모두 응답해야 한다(리뷰 재현).
+  const [, me] = await call("POST", "/api/profiles", { name: "지우", consentDefault: true });
+  const [, trip] = await call("POST", "/api/trips", {});
+  const t = `/api/trips/${trip.code}`;
+  const [, p] = await call("POST", `${t}/participants`, { seat: "ROW_1_LEFT" }, me.token);
+  const others = [];
+  for (const [name, seat] of [["민준", "ROW_2_LEFT"], ["하늘", "ROW_2_CENTER"], ["강토", "ROW_2_RIGHT"]]) {
+    const [, o] = await join(trip.code, name, seat, true);
+    others.push(o.id);
+  }
+  for (let round = 0; round < 5; round++) {
+    const writes = [call("PATCH", `${t}/participants/${p.id}`, { seat: round % 2 ? "ROW_1_LEFT" : "ROW_1_RIGHT" })];
+    for (let i = 0; i < 14; i++) writes.push(call("PATCH", `${t}/participants/${others[i % others.length]}`, { consent: true }));
+    const done = await Promise.all(writes);
+    assert.equal(done.filter(([s]) => s === 200).length, writes.length, `${round + 1}회차`);
+  }
+});
+
 test("명세(docs/api/openapi.yaml)와 서버의 경로가 같다", async () => {
   // 표준 라이브러리에 YAML 읽기가 없어 ruby로 JSON으로 바꾼다(macOS와 CI 실행기에 기본으로 있음)
   const file = fileURLToPath(new URL("../../docs/api/openapi.yaml", import.meta.url));

@@ -38,7 +38,6 @@ const NEXT = {
 };
 const MIME = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".json": "application/json", ".webmanifest": "application/manifest+json" };
 
-
 const fail = (status, error) => {
   throw { status, error };
 };
