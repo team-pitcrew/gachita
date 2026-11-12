@@ -4,7 +4,9 @@
 !backend/api/package-lock.json
 !backend/api/server.js
 !backend/api/db.js
+!backend/api/providers
 !backend/api/trips.sql
 !backend/api/profiles.sql
+!backend/api/profiles-2-links.sql
 !frontend/web
 frontend/web/*.test.mjs

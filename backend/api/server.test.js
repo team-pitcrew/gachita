@@ -1,6 +1,7 @@
 // 실행: 저장소 루트에서 make check
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { createServer } from "node:http";
 import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
@@ -8,7 +9,33 @@ import { migrate, server } from "./server.js";
 import { endStores, profilesDb, tripsDb } from "./db.js";
 
 let base;
+let fakeProvider; // 가짜 구글(T21). code가 곧 사용자 번호다. bad로 시작하면 거절.
 before(async () => {
+  fakeProvider = createServer(async (req, res) => {
+    const send = (status, body) => {
+      res.writeHead(status, { "content-type": "application/json" });
+      res.end(JSON.stringify(body));
+    };
+    const url = new URL(req.url, "http://localhost");
+    if (url.pathname === "/token" && req.method === "POST") {
+      const raw = await new Promise((ok) => {
+        let body = "";
+        req.on("data", (c) => (body += c));
+        req.on("end", () => ok(body));
+      });
+      const code = new URLSearchParams(raw).get("code") ?? "";
+      if (!code || code.startsWith("bad")) return send(400, { error: "invalid_grant" });
+      return send(200, { access_token: `at-${code}` });
+    }
+    if (url.pathname === "/userinfo" && req.method === "GET") {
+      const at = /^Bearer at-(.+)$/.exec(req.headers.authorization ?? "");
+      return at ? send(200, { sub: at[1], name: `구글-${at[1]}` }) : send(401, { error: "unauthorized" });
+    }
+    send(404, {});
+  });
+  await new Promise((ok) => fakeProvider.listen(0, "127.0.0.1", ok));
+  process.env.GOOGLE_TOKEN_URL = `http://127.0.0.1:${fakeProvider.address().port}/token`;
+  process.env.GOOGLE_USERINFO_URL = `http://127.0.0.1:${fakeProvider.address().port}/userinfo`;
   // 프로필 저장소를 여행 저장소와 다른 DB에 둔다(T23). 주소를 정하기 전에 그 DB을 만든다.
   const admin = new pg.Client({ connectionString: process.env.DATABASE_URL });
   await admin.connect();
@@ -27,6 +54,7 @@ before(async () => {
 });
 after(async () => {
   server.close();
+  fakeProvider.close();
   await endStores();
 });
 
@@ -152,6 +180,46 @@ test("주소가 같아도 저장소마다 풀을 따로 둔다", async () => {
   assert.notEqual(fresh.tripsDb(), fresh.profilesDb());
   await fresh.endStores();
   process.env.PROFILES_DATABASE_URL = saved;
+});
+
+test("구글 OAuth: 기기 프로필에 연결하고, 다른 기기에서 계정으로 이어 받는다(T21)", async () => {
+  const link = (body, token) => call("POST", "/api/profiles/me/links/google", body, token);
+
+  // 기기 프로필에 연결한다. 이름은 그대로, 토큰은 새로 주지 않는다.
+  const [, me] = await call("POST", "/api/profiles", { name: "민준" });
+  const [linked, after] = await link({ code: "code-1", redirectUri: "http://localhost:5173/cb" }, me.token);
+  assert.equal(linked, 200);
+  assert.deepEqual([after.name, after.links], ["민준", ["google"]]);
+  assert.equal(after.token, undefined, "연결할 때는 토큰을 새로 주지 않는다");
+
+  // 이미 다른 프로필에 연결된 계정은 거절한다.
+  const [, other] = await call("POST", "/api/profiles", { name: "다른 사람" });
+  assert.equal((await link({ code: "code-1", redirectUri: "x" }, other.token))[0], 409);
+
+  // 토큰 없이 같은 계정으로 찾아 들어가면 같은 프로필과 새 토큰을 준다. 이전 기기의 토큰은 못 쓴다.
+  const [status, again] = await link({ code: "code-1", redirectUri: "x" });
+  assert.equal(status, 200);
+  assert.equal(again.id, after.id);
+  assert.match(again.token, /^[A-Za-z0-9_-]{43}$/);
+  assert.equal((await call("GET", "/api/profiles/me", null, me.token))[0], 401, "이전 기기의 토큰은 못 쓴다");
+
+  // 그 토큰으로 여행에 참가한다(티켓의 완료 기준).
+  const [, trip] = await call("POST", "/api/trips", {});
+  const [joined, p] = await call("POST", `/api/trips/${trip.code}/participants`, { seat: "ROW_1_LEFT" }, again.token);
+  assert.deepEqual([joined, p.name], [201, "민준"]);
+
+  // 처음 보는 계정이면 프로필을 새로 만든다. 이름은 제공자가 준 값을 쓴다.
+  const [created, fresh] = await link({ code: "code-2", redirectUri: "x" });
+  assert.deepEqual([created, fresh.name, fresh.links], [201, "구글-code-2", ["google"]]);
+
+  // 연결을 끊는다. 끊은 뒤 다시 끊으면 404.
+  assert.equal((await call("DELETE", "/api/profiles/me/links/google", null, again.token))[0], 204);
+  const [, cut] = await call("GET", "/api/profiles/me", null, again.token);
+  assert.deepEqual(cut.links, []);
+  assert.equal((await call("DELETE", "/api/profiles/me/links/google", null, again.token))[0], 404);
+
+  // 제공자가 거절한 코드는 401.
+  assert.equal((await link({ code: "bad-1", redirectUri: "x" }))[0], 401);
 });
 
 test("쓰기가 몰려도 서버가 멈추지 않는다", async () => {

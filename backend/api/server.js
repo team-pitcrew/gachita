@@ -11,10 +11,12 @@ import { createServer } from "node:http";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { profilesDb, tripsDb } from "./db.js";
+import { googleIdentity } from "./providers/google.js";
 
 const WEB = fileURLToPath(new URL("../../frontend/web/", import.meta.url));
 const TRIPS_SQL = fileURLToPath(new URL("trips.sql", import.meta.url));
 const PROFILES_SQL = fileURLToPath(new URL("profiles.sql", import.meta.url));
+const LINKS_SQL = fileURLToPath(new URL("profiles-2-links.sql", import.meta.url));
 const TTL_MS = 48 * 60 * 60 * 1000; // 기획서 v4가 초기 제안으로 적은 보관 기간
 const MAX_BODY = 10_000;
 const CODE_CHARS = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"; // 0·O·1·I·L은 헷갈려서 뺌
@@ -65,8 +67,10 @@ const tokenHash = (token) => createHash("sha256").update(token).digest();
 
 export async function migrate() {
   // 저장소마다 제 표를 만든다. 두 주소가 같으면 한 DB에 둘 표가 생긴다.
+  // profiles-2부터는 profiles.sql을 고치지 않고 번호 붙은 마이그레이션을 쌓는다.
   await tripsDb().query(await readFile(TRIPS_SQL, "utf8"));
   await profilesDb().query(await readFile(PROFILES_SQL, "utf8"));
+  await profilesDb().query(await readFile(LINKS_SQL, "utf8"));
 }
 
 async function readBody(req) {
@@ -84,19 +88,27 @@ async function readBody(req) {
   return obj(v, "본문");
 }
 
+// profiles 표의 한 줄을 API가 돌려주는 프로필 모양으로 바꾼다.
+const asProfile = (r) => ({ id: r.id, name: r.name, prefs: r.prefs, consentDefault: r.consent_default, links: r.provider ? [r.provider] : [] });
+
+async function profileById(id) {
+  const { rows } = await profilesDb().query("SELECT id, name, prefs, consent_default, provider FROM profiles WHERE id = $1", [id]);
+  return asProfile(rows[0]);
+}
+
 // Authorization: Bearer <토큰>. 머리말이 없으면 null(손님), 틀린 토큰이면 401.
 async function profileOf(req) {
   const header = req.headers.authorization;
   if (header === undefined) return null;
   const m = /^Bearer ([A-Za-z0-9_-]{40,})$/.exec(header);
-  const { rows } = m ? await profilesDb().query("SELECT id, name, prefs, consent_default FROM profiles WHERE token_hash = $1", [tokenHash(m[1])]) : { rows: [] };
+  const { rows } = m ? await profilesDb().query("SELECT id, name, prefs, consent_default, provider FROM profiles WHERE token_hash = $1", [tokenHash(m[1])]) : { rows: [] };
   if (!rows[0]) fail(401, "알 수 없는 프로필 토큰");
-  return { id: rows[0].id, name: rows[0].name, prefs: rows[0].prefs, consentDefault: rows[0].consent_default };
+  return asProfile(rows[0]);
 }
 
-async function profiles(req, [who], b) {
+async function profiles(req, seg, b) {
   const m = req.method;
-  if (!who) {
+  if (!seg[0]) {
     if (m !== "POST") fail(405, "POST만 됨");
     const token = randomBytes(32).toString("base64url");
     const p = {
@@ -106,9 +118,11 @@ async function profiles(req, [who], b) {
       consentDefault: b.consentDefault === undefined ? false : bool(b.consentDefault, "consentDefault"),
     };
     await profilesDb().query("INSERT INTO profiles (id, token_hash, name, prefs, consent_default) VALUES ($1, $2, $3, $4, $5)", [p.id, tokenHash(token), p.name, p.prefs, p.consentDefault]);
-    return [201, { ...p, token }]; // 토큰은 이때 한 번만 준다. 서버에는 해시만 남는다.
+    return [201, { ...p, links: [], token }]; // 토큰은 이때 한 번만 준다. 서버에는 해시만 남는다.
   }
-  if (who !== "me") fail(404, "없는 경로");
+  if (seg[0] !== "me") fail(404, "없는 경로");
+  if (seg[1] === "links" && seg[2] === "google") return googleLink(req, m, b);
+  if (seg[1]) fail(404, "없는 경로");
   if (m !== "GET" && m !== "PATCH" && m !== "DELETE") fail(405, "GET, PATCH, DELETE만 됨");
   const me = (await profileOf(req)) ?? fail(401, "프로필 토큰이 필요함");
   if (m === "GET") return [200, me];
@@ -121,9 +135,42 @@ async function profiles(req, [who], b) {
     name: b.name === undefined ? me.name : text(b.name, 20, "name"),
     prefs: b.prefs === undefined ? me.prefs : rolePrefs(obj(b.prefs, "prefs"), me.prefs),
     consentDefault: b.consentDefault === undefined ? me.consentDefault : bool(b.consentDefault, "consentDefault"),
+    links: me.links,
   };
   await profilesDb().query("UPDATE profiles SET name = $2, prefs = $3, consent_default = $4, updated_at = now() WHERE id = $1", [me.id, next.name, next.prefs, next.consentDefault]);
   return [200, next];
+}
+
+// 구글 계정 연결(ADR-0005). 프로필 토큰과 함께 오면 내 프로필에 묶고,
+// 토큰 없이 오면 계정의 프로필을 찾아 들어가거나 새로 만든다.
+// 토큰은 해시만 남으니 찾아 들어갈 때는 새로 발급한다(이전 기기의 토큰은 못 쓰게 됨).
+async function googleLink(req, m, b) {
+  if (m === "POST") {
+    const identity = await googleIdentity(text(b.code, 500, "code"), text(b.redirectUri, 500, "redirectUri"));
+    const db = profilesDb();
+    const { rows: found } = await db.query("SELECT id FROM profiles WHERE provider = 'google' AND provider_user_id = $1", [identity.providerUserId]);
+    const me = await profileOf(req);
+    if (me) {
+      if (found[0] && found[0].id !== me.id) fail(409, "이미 다른 프로필에 연결된 구글 계정");
+      await db.query("UPDATE profiles SET provider = 'google', provider_user_id = $2, updated_at = now() WHERE id = $1", [me.id, identity.providerUserId]);
+      return [200, await profileById(me.id)];
+    }
+    const token = randomBytes(32).toString("base64url");
+    if (found[0]) {
+      await db.query("UPDATE profiles SET token_hash = $2, updated_at = now() WHERE id = $1", [found[0].id, tokenHash(token)]);
+      return [200, { ...(await profileById(found[0].id)), token }];
+    }
+    const p = { id: randomUUID(), name: identity.name, prefs: rolePrefs({}), consentDefault: false };
+    await db.query("INSERT INTO profiles (id, token_hash, name, prefs, consent_default, provider, provider_user_id) VALUES ($1, $2, $3, $4, $5, 'google', $6)", [p.id, tokenHash(token), p.name, p.prefs, p.consentDefault, identity.providerUserId]);
+    return [201, { ...p, links: ["google"], token }];
+  }
+  if (m === "DELETE") {
+    const me = (await profileOf(req)) ?? fail(401, "프로필 토큰이 필요함");
+    const { rowCount } = await profilesDb().query("UPDATE profiles SET provider = '', provider_user_id = '', updated_at = now() WHERE id = $1 AND provider = 'google'", [me.id]);
+    if (!rowCount) fail(404, "연결된 구글 계정이 없음");
+    return [204];
+  }
+  fail(405, "POST, DELETE만 됨");
 }
 
 // 여행 한 줄을 읽어 fn에 넘긴다. 바꾸는 요청이면 그 줄을 잠그고, 끝나면 문서를 다시 쓴다.
