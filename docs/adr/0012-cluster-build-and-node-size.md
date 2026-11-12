@@ -63,7 +63,7 @@
 | 4 oidc | 발급자 문서와 공개 키를 S3에 올림(서버를 새로 만들면 키가 바뀜) | 공개 주소의 키 = 클러스터의 키 |
 | 5 argocd | 우선순위 클래스, Argo CD v3.6.1(+Application 건강 판정, 요청·한도, dex·알림 끔), 저장소 자격 | 구성 요소 다섯이 준비됨 |
 | 6 root | 뿌리 앱(`backend/infra/gitops/bootstrap`) | 앱이 있음 |
-| 7 verify | 물결이 끝까지 올라오길 기다림(최대 30분) | 모든 앱 Synced·Healthy, 밖에서 `https://gachita.mangowhois.ai/healthz` 200. 남은 앱 이름이 멈춘 물결 |
+| 7 verify | 물결이 끝까지 올라오길 기다림(최대 30분), 두 Postgres의 WAL 보관 | 모든 앱 Synced·Healthy(남은 앱 이름이 멈춘 물결), `ContinuousArchiving=True`(보관이 실패해도 DB는 Healthy라 물결로는 안 보임), 밖에서 `https://gachita.mangowhois.ai/healthz` 200 |
 
 판 고르기: Cilium 1.20의 쿠버네티스 지원은 1.33~1.36이고(Cilium 문서 `compatibility`), Argo CD 3.6은 1.34~1.37이다. 그래서 K3s는 stable 채널의 1.37이 아니라 1.36의 최신(v1.36.6+k3s1, 11/3)으로 고정한다.
 
@@ -72,7 +72,7 @@
 | 구성 요소 | 개수 | 요청 | 한도 |
 |---|---|---|---|
 | OS·SSM 에이전트(`system-reserved`) | - | 512 | - |
-| K3s 서버 프로세스(`kube-reserved`) | - | 768 | - |
+| K3s 서버 프로세스(`kube-reserved`). 로컬 검증에서 RSS 1.6 GiB | - | 1,536 | - |
 | 축출 여유(`eviction-hard`) | - | 256 | - |
 | Cilium agent·operator·envoy | 3 | 384 | 1,536 |
 | CoreDNS·metrics-server(K3s 기본값) | 2 | 140 | 170 |
@@ -89,12 +89,13 @@
 
 | 인스턴스 | 메모리 | 파드에 쓸 수 있는 것 | 요청 대비 | 서울 시간당(가격표 API, 11/13) | 한 달 |
 |---|---|---|---|---|---|
-| t4g.medium | 4 GiB | 2,560 | 127% — 파드가 다 올라가지 못함 | $0.0416 | $30.4 |
-| **t4g.large** | 8 GiB | 6,656 | 49% | $0.0832 | $60.7 |
-| m7g.large | 8 GiB | 6,656 | 49% | $0.1003 | $73.2 |
-| t4g.xlarge | 16 GiB | 14,848 | 22% | $0.1664 | $121.5 |
+| t4g.medium | 4 GiB | 1,792 | 181% — 파드가 다 올라가지 못함 | $0.0416 | $30.4 |
+| **t4g.large** | 8 GiB | 5,888 | 55% | $0.0832 | $60.7 |
+| m7g.large | 8 GiB | 5,888 | 55% | $0.1003 | $73.2 |
+| t4g.xlarge | 16 GiB | 14,080 | 23% | $0.1664 | $121.5 |
 
-- **t4g.large**로 정한다. 요청의 두 배 넘게 남아 동기화 때 repo-server와 controller가 차트를 그리며 1 GiB 안팎 더 써도 견딘다. 한도 합계(8,426)는 넘지만 모든 구성 요소가 동시에 한도까지 쓰는 일은 없고, 넘치면 우선순위가 낮은 API부터 밀려난다(ADR-0013의 가용성).
+- '파드에 쓸 수 있는 것' = 메모리 − 예약 2,304(OS 512 + K3s 1,536 + 축출 기준 256). K3s 예약은 처음에 768로 잡았으나, 독립 검증의 로컬 K3s에서 서버 프로세스가 RSS 1.6 GiB를 써서 1,536으로 올렸다.
+- **t4g.large**로 정한다. 파드 요청 3,252를 넣고도 2,636 MiB가 남아, 동기화 때 repo-server와 controller가 차트를 그리며 1 GiB 안팎 더 써도 견딘다. 로컬 E2E의 실제 유휴 사용량(파드 1,121 MiB)은 요청보다 훨씬 작다. 한도 합계(8,426)는 넘지만 모든 구성 요소가 동시에 한도까지 쓰는 일은 없고, 넘치면 우선순위가 낮은 API부터 밀려난다(ADR-0013의 가용성).
 - CPU 요청 합계 1,040m / 쓸 수 있는 1,700m. CPU 한도는 두지 않는다(스로틀링으로 프로브가 실패하는 것을 막음). t4g는 버스트형이라 기준(30%/vCPU, 둘이면 0.6 vCPU)을 오래 넘기면 vCPU·시간당 $0.04가 더 붙는다. 평소에는 기준 안으로 본다. 늘 넘기면 m7g.large(고정 성능)로 바꾼다.
 - 디스크는 gp3 40 GB: 이미지 약 5 GB, OS 3 GB, Postgres 볼륨 5+2 GiB, WAL·로그 여유. 이미지 정리가 시작되는 85% 전에 60% 안쪽으로 둔다. 30 GB보다 월 $0.9 더 든다.
 
@@ -124,4 +125,5 @@ Terraform이 만든 값(터널 토큰) → SSM /gachita/dev/tf/* → 같은 길
 - 구축 단계를 고치면 서버를 새로 만들지 않고 `gachita-converge`로 맞춘다. 단, 첫 부팅 스크립트(`user_data`)를 고치면 Terraform이 서버를 바꾼다(`user_data_replace_on_change`).
 - 노드를 t4g.large로 올려 비용이 월 $30.4에서 $60.7로 는다. 지금 선언(t4g.medium)으로는 요청 합계가 넘쳐 애초에 올라오지 않는다.
 - 확인한 것(11/13): `terraform validate`, 로컬 자격으로 상태 없이 계획만(AWS 28개, Cloudflare 번호를 넣으면 32개), `ansible-playbook --syntax-check`, 템플릿 세 개를 표본 값으로 그려 YAML 확인, Argo CD 설치 묶음 `kubeconform`(61개, 스키마 없는 3개 건너뜀). 로컬 E2E(Docker 위 K3s v1.36.6 한 노드)에서 구축 5·6단계와 같은 일을 했다: 우선순위 클래스, 이 PR의 `argocd/` kustomization으로 Argo CD v3.6.1(다섯 구성 요소 1분 안에 준비, 우선순위·요청값 들어감), 뿌리 앱. `argocd-cm`의 Application 건강 판정 덕에 다음 물결이 앞 물결의 마지막 앱이 Healthy가 된 그 초에 만들어졌고, 뿌리 앱부터 API `/healthz`까지 2분 38초(T24 GitOps PR). 유휴 메모리는 파드 합계 1,121 MiB(Argo CD 552), 요청 합계 2,516 MiB(Cilium·cloudflared·백업 사이드카 없이)였다. 여기에 Cilium(요청 384)과 나머지를 더하면 위 표의 요청 3,252 MiB가 되고, OS·K3s 몫을 빼면 t4g.medium에는 들어가지 않는다는 판단이 그대로다.
+- 독립 검증 뒤(11/13 08:40~): 자리 표시가 남으면 Terraform 사전 조건이 계획에서 멈추고 `fill-account.sh`로 채우면 28개 계획이 나옴을 임시 사본에서 확인. 고친 선언으로 로컬 E2E를 다시 돌림(K3s에 이 표의 kubelet 예약을 그대로 줌): 노드 할당 가능 = 용량 − 2,304 MiB, 14개 앱이 물결 순서대로 Healthy(7분 12초), Postgres `17.11-minimal-trixie`와 저장소의 API 태그로 뜸, 유휴 파드 사용량 1,033 MiB. 물결 0의 Gateway API CRD 건강은 Argo CD가 상태만 바뀐 갱신을 무시하는 최적화(`ignoreResourceUpdates.all: /status`, 기본값) 때문에 다음 주기 갱신까지 약 3분 반 늦게 반영됐다. 물결을 막지는 않고 7단계의 30분 제한 안이라 그대로 둔다.
 - 확인하지 못한 것: 실제 서버에서 7단계가 끝까지 도는지, Cilium이 K3s 1.36에서 bootstrap으로 뜨는지, 발급자 공개 키로 STS가 역할을 내주는지. 모두 승인 뒤 T24에서 본다.

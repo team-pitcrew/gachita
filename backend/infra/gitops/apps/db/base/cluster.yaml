@@ -10,7 +10,8 @@ metadata:
     argocd.argoproj.io/sync-options: Prune=false,Delete=false
 spec:
   instances: 1
-  imageName: ghcr.io/cloudnative-pg/postgresql:17
+  # 판 고정(로컬·CI의 postgres:17과 같은 주 판). 백업은 플러그인 사이드카가 하므로 가장 작은 minimal 이미지
+  imageName: ghcr.io/cloudnative-pg/postgresql:17.11-minimal-trixie
   priorityClassName: gachita-data
   bootstrap:
     initdb:

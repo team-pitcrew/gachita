@@ -26,5 +26,6 @@ kube-apiserver-arg:
 kubelet-arg:
   # 노드 사양 표(ADR-0012)의 예약. 파드가 OS와 K3s의 몫을 넘보지 못한다.
   - system-reserved=cpu=100m,memory=512Mi
-  - kube-reserved=cpu=200m,memory=768Mi
+  # K3s 서버 프로세스(API 서버·컨트롤러·kine·containerd·kubelet이 한 프로세스)는 로컬 검증에서 RSS 1.6 GiB였다
+  - kube-reserved=cpu=200m,memory=1536Mi
   - eviction-hard=memory.available<256Mi,nodefs.available<10%,nodefs.inodesFree<5%,imagefs.available<15%

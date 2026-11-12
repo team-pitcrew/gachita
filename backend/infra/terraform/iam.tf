@@ -31,6 +31,15 @@ data "aws_iam_policy_document" "k3s" {
     actions   = ["ssm:GetParameter"]
     resources = ["${local.ssm_prefix}/bootstrap/*"]
   }
+  statement { # SecureString 복호화(aws/ssm 키). SSM을 거친 요청만
+    actions   = ["kms:Decrypt"]
+    resources = ["*"]
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values   = ["ssm.${var.region}.amazonaws.com"]
+    }
+  }
   statement {
     actions   = ["s3:PutObject"]
     resources = ["${aws_s3_bucket.oidc.arn}/.well-known/openid-configuration", "${aws_s3_bucket.oidc.arn}/openid/v1/jwks"]
@@ -59,6 +68,10 @@ locals {
       statements = [{
         actions   = ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath"]
         resources = ["${local.ssm_prefix}/app/*", "${local.ssm_prefix}/tf/*"]
+        }, {
+        actions   = ["kms:Decrypt"]
+        resources = ["*"]
+        via_ssm   = true # SecureString 복호화는 SSM을 거친 요청만
       }]
     }
     pg-trips = {
@@ -117,6 +130,14 @@ data "aws_iam_policy_document" "workload" {
     content {
       actions   = statement.value.actions
       resources = statement.value.resources
+      dynamic "condition" {
+        for_each = lookup(statement.value, "via_ssm", false) ? [1] : []
+        content {
+          test     = "StringEquals"
+          variable = "kms:ViaService"
+          values   = ["ssm.${var.region}.amazonaws.com"]
+        }
+      }
     }
   }
 }

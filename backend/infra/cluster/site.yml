@@ -91,13 +91,13 @@
     - name: "[2/7 k3s] 설치 스크립트(같은 판의 태그에서 받음)"
       ansible.builtin.get_url:
         url: "https://raw.githubusercontent.com/k3s-io/k3s/{{ k3s_version | urlencode }}/install.sh"
-        dest: /usr/local/sbin/k3s-install.sh
+        dest: "/usr/local/sbin/k3s-install-{{ k3s_version }}.sh" # 판마다 다른 파일: 판을 올리면 새로 받는다
         mode: "0755"
       when: k3s_version not in k3s_installed.stdout | default('')
       tags: [k3s]
 
     - name: "[2/7 k3s] 설치(스크립트가 바이너리의 해시를 확인한다)"
-      ansible.builtin.command: /usr/local/sbin/k3s-install.sh
+      ansible.builtin.command: "/usr/local/sbin/k3s-install-{{ k3s_version }}.sh"
       environment:
         INSTALL_K3S_VERSION: "{{ k3s_version }}"
       when: k3s_version not in k3s_installed.stdout | default('')
@@ -294,6 +294,18 @@
     - name: "[7/7 verify] 앱 표 보이기"
       ansible.builtin.debug:
         var: app_table.stdout_lines
+      tags: [verify]
+
+    - name: "[7/7 verify] Postgres WAL 보관(S3)이 도는지. 실패해도 DB는 Healthy라 물결로는 안 보인다"
+      ansible.builtin.command: >-
+        kubectl -n gachita-{{ item }} get cluster db
+        -o 'jsonpath={.status.conditions[?(@.type=="ContinuousArchiving")].status}'
+      loop: [trips, profiles]
+      register: archiving
+      until: archiving.stdout == 'True'
+      retries: 30
+      delay: 10
+      changed_when: false
       tags: [verify]
 
     - name: "[7/7 verify] 밖에서(Cloudflare를 거쳐) /healthz"

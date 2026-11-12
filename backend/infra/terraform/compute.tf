@@ -1,5 +1,10 @@
 # K3s 서버 한 대. 관리형 쿠버네티스를 쓰지 않고 직접 운영한다.
 # 첫 부팅 스크립트는 구축 도구만 깔고 저장소의 Ansible(backend/infra/cluster)을 부른다. 단계는 거기에 있다.
+locals {
+  gitops              = "${path.module}/../gitops"
+  gitops_placeholders = [for f in fileset(local.gitops, "**/*.yaml") : f if strcontains(file("${local.gitops}/${f}"), "000000000000")]
+}
+
 data "aws_ssm_parameter" "ubuntu" {
   name = "/aws/service/canonical/ubuntu/server/24.04/stable/current/arm64/hvm/ebs-gp3/ami-id"
 }
@@ -41,6 +46,17 @@ resource "aws_instance" "k3s" {
 
   lifecycle {
     ignore_changes = [ami] # 새 이미지가 나왔다고 서버를 갈아 치우지 않는다
+
+    # 서버가 뜨면 첫 부팅이 develop의 backend/infra/gitops를 그대로 올린다. 아래가 맞지 않으면 물결 2·4에서 멈추므로
+    # 서버를 만들기 전에 막는다(README '만들기 전에').
+    precondition {
+      condition     = length(local.gitops_placeholders) == 0 && strcontains(file("${local.gitops}/platform/secret-stores/ssm.yaml"), local.account)
+      error_message = "backend/infra/gitops의 계정 번호가 이 계정과 다르거나 자리 표시(000000000000)가 남았다: ${join(", ", local.gitops_placeholders)}. backend/infra/gitops/fill-account.sh 로 채워 develop에 병합한 뒤 만든다."
+    }
+    precondition {
+      condition     = !strcontains(file("${local.gitops}/apps/api/overlays/dev/kustomization.yaml"), "newTag: unreleased")
+      error_message = "API 이미지 태그가 unreleased다. make push 뒤 make deploy-tag TAG=<올린 태그> 를 develop에 병합한 뒤 만든다."
+    }
   }
 
   tags = { Name = "gachita-${var.env}-k3s" }

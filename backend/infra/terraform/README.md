@@ -77,6 +77,18 @@ gh variable set CLOUDFLARE_ZONE_ID    -R team-pitcrew/gachita --body <mangowhois
 gh workflow run infra-secrets -R team-pitcrew/gachita --ref develop   # GitHub 비밀 값 → SSM
 ```
 
+## 만들기 전에 (develop에 병합해 둘 것)
+
+서버는 뜨자마자 develop의 `backend/infra/gitops`를 그대로 올립니다. 아래 둘이 맞지 않으면 물결 2(SSM 저장소)나 물결 4(이미지)에서 멈추므로, Terraform이 서버를 만들기 전에 확인하고 맞지 않으면 계획에서 멈춥니다(`compute.tf`의 precondition).
+
+```sh
+# 1. 계정 번호 자리 표시(000000000000)를 이 계정 번호로. 역할 ARN과 버킷 이름에 쓰인다
+backend/infra/gitops/fill-account.sh                 # 지금 aws 자격의 계정. 번호를 직접 줄 수도 있음
+# 2. 클러스터가 받을 API 이미지 태그(GHCR에 올라가 있어야 함)
+make push && make deploy-tag TAG=<올린 태그>          # 지금 값은 c71304da7098(11/13 develop)
+# 3. 이 변경을 PR로 develop에 병합
+```
+
 ## 만들기와 그 뒤
 
 ```sh
@@ -84,8 +96,6 @@ gh workflow run terraform -R team-pitcrew/gachita --ref develop -f apply=true   
 # 서버가 뜨면 첫 부팅 스크립트가 7단계를 돈다(30분 안팎). 진행은:
 aws ssm start-session --region ap-northeast-2 --target <instance-id>          # terraform output ssm_session
 sudo tail -f /var/log/gachita/bootstrap.log; ls /var/lib/gachita/bootstrap      # 끝난 단계
-# 자리 표시를 실제 계정 번호로(역할 ARN, 버킷 이름) 바꿔 PR로 올린다
-grep -rl 000000000000 backend/infra/gitops | xargs sed -i '' "s/000000000000/$(terraform output -raw account_id)/g"
 curl -fsS https://gachita.mangowhois.ai/healthz                                 # 밖에서 확인
 ```
 
@@ -98,8 +108,10 @@ curl -fsS https://gachita.mangowhois.ai/healthz                                 
 #    남김: 버킷만 Terraform 관리에서 뺀다
 terraform state list | grep 'aws_s3_bucket.*\.data' | xargs -n1 terraform state rm
 #    지움: AWS 콘솔 → S3 → gachita-dev-<계정> → '비우기'(지난 버전까지 지움) 뒤 다음 단계
-# 2. 나머지를 지운다(발급자 버킷은 공개 키뿐이라 비우고 지우게 해 둠)
-terraform destroy
+# 2. 나머지를 지운다(발급자 버킷은 공개 키뿐이라 비우고 지우게 해 둠).
+#    워크플로가 아니라 로컬에서 지울 때는 Cloudflare 값이 환경에 있어야 한다(없으면 터널·레코드를 읽지 못해 멈춤)
+export CLOUDFLARE_API_TOKEN=<토큰> TF_VAR_cloudflare_account_id=<계정 번호> TF_VAR_cloudflare_zone_id=<영역 번호>
+terraform init -backend-config=backend.hcl && terraform destroy
 # 3. 터널 경로 설정은 'Terraform이 지우지 못한다'고 경고하지만 터널을 지우면 함께 사라진다. Cloudflare 대시보드에서 터널과 gachita 레코드가 없는지, 메일 레코드가 그대로인지 본다
 # 4. account/(OIDC 역할)는 남겨도 비용이 없다. 지우려면 terraform -chdir=account destroy, 상태 버킷은 마지막에
 ```

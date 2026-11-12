@@ -7,4 +7,4 @@ resources:
   - ../../base
 images:
   - name: ghcr.io/team-pitcrew/gachita-api
-    newTag: unreleased # make deploy-tag TAG=<올린 태그> 로 바꾼다(커밋 SHA 앞 12자)
+    newTag: c71304da7098 # GHCR에 올라간 develop(11/13). make deploy-tag TAG=<올린 태그> 로 바꾼다(커밋 SHA 앞 12자)

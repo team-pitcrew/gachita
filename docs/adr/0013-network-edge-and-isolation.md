@@ -34,7 +34,7 @@
 
 - 밖에 여는 것은 Gateway `edge/public` 하나다. 경로(HTTPRoute)를 붙일 수 있는 네임스페이스는 `gachita.io/expose: "true"` 라벨이 있는 곳뿐(지금 `gachita` 하나).
 - 웹앱과 API는 같은 이름에서 나간다(ADR-0010). 경로 `/` 전체를 API 서비스로 보내고, API가 `/api/`와 정적 파일을 나눈다.
-- 요청 수 제한은 Traefik 미들웨어로 사용자 주소당 초당 20회(순간 40). 클러스터 안에서는 출발지가 cloudflared로 보이므로 Cloudflare가 넣는 `CF-Connecting-IP`로 센다. Traefik에는 cloudflared만 닿게 막았으므로(5) 이 머리글은 믿을 수 있다.
+- 요청 수 제한은 Traefik 미들웨어로 사용자 주소당 초당 약 20회(순간 40). Traefik 2개가 따로 세므로 미들웨어 값은 하나당 10(순간 20)이다. 클러스터 안에서는 출발지가 cloudflared로 보이므로 Cloudflare가 넣는 `CF-Connecting-IP`로 센다. Traefik에는 cloudflared만 닿게 막았으므로(5) 이 머리글은 믿을 수 있다.
 
 ### 3. 로드 밸런서를 두지 않는 이유
 
@@ -153,7 +153,7 @@ CloudFront는 만들지 않는다(ADR-0010). Cloudflare가 CDN을 겸한다. 정
 | 장치 | 하는 일 |
 |---|---|
 | 우선순위 클래스 | `gachita-platform`(컨트롤러) > `gachita-data`(Postgres) > `gachita-app`(API). 메모리가 모자라면 API부터 밀려난다 |
-| kubelet 예약 | OS 512 MiB, K3s 768 MiB, 축출 기준 256 MiB. 파드가 노드 전체를 멈추지 못한다 |
+| kubelet 예약 | OS 512 MiB, K3s 1,536 MiB, 축출 기준 256 MiB. 파드가 노드 전체를 멈추지 못한다 |
 | Postgres | 메모리 요청=한도. 쓰는 양이 요청을 넘지 않아 축출 순서에서 뒤로 간다 |
 | 두 개씩 | API·Traefik·cloudflared 2개, 순차 교체(`maxUnavailable: 0`), 중단 예산(`minAvailable: 1`) |
 | 프로브 | API 준비 = 두 DB에 닿음(`/healthz`), 살아 있음 = 프로세스만(TCP). DB가 잠깐 멈췄다고 API를 다시 띄우지 않는다 |

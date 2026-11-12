@@ -27,13 +27,15 @@ backend/infra/gitops/
 | 4 | `api` | 비밀 값(DB 주소·이미지 받기·구글), 배포, 네트워크 정책 |
 | 5 | `edge` | Gateway, HTTPRoute, cloudflared. API가 건강해진 뒤에 밖으로 연다 |
 
-## 자원을 만든 뒤 바꿀 곳
+## 자원을 만들기 전에 채울 곳
 
-계정 번호 자리 표시 `000000000000`이 역할 ARN(서비스 계정 주석)과 버킷 이름에 있습니다. 주소(`gachita.mangowhois.ai`)는 정해져 있어 바꿀 것이 없습니다.
+계정 번호 자리 표시 `000000000000`이 역할 ARN(서비스 계정 주석)과 버킷 이름에 있습니다. 서버가 뜨자마자 이 폴더를 올리므로 **만들기 전에** 채워 develop에 병합합니다. 채우지 않으면 SSM 저장소가 `InvalidProviderConfig`로 물결 2에서 멈춥니다(독립 검증에서 확인). Terraform도 자리 표시가 남아 있으면 서버를 만들지 않습니다. 주소(`gachita.mangowhois.ai`)는 정해져 있어 바꿀 것이 없습니다.
 
 ```sh
-grep -rl 000000000000 backend/infra/gitops | xargs sed -i '' "s/000000000000/$(terraform -chdir=backend/infra/terraform output -raw account_id)/g"
+backend/infra/gitops/fill-account.sh          # 지금 aws 자격의 계정 번호로. 다시 돌려도 같은 결과
 ```
+
+API 이미지 태그(`apps/api/overlays/dev`)도 GHCR에 올라간 태그여야 합니다. 지금 값은 `c71304da7098`(11/13 develop)입니다.
 
 ## 새 판 내보내기
 
@@ -78,6 +80,8 @@ kubectl -n gachita create service nodeport probe --tcp=80:80
   - **로컬에서 확인하지 못한 것**: 네트워크 정책이 실제로 막는지(Cilium이 있어야 함), SSM·STS·S3에 닿는지, 백업, Cloudflare Tunnel, 노드 예약값. 모두 실제 클러스터에서 봅니다(T24·T26).
 
 ## 알고 쓰는 한계
+
+- 물결 0의 Gateway API CRD가 Established가 돼도 Argo CD가 다음 주기 갱신(약 2~3분)까지 Progressing으로 볼 수 있습니다. Argo CD 3.x 기본값이 상태만 바뀐 갱신을 무시하기 때문입니다(`resource.customizations.ignoreResourceUpdates.all: /status`). 로컬 E2E 두 번째에서 3분 반 늦었고, 물결은 그 뒤 순서대로 이어졌습니다.
 
 - Postgres와 노드가 한 대씩입니다. 서버가 죽으면 멈춥니다(ADR-0013의 '무엇이 죽으면').
 - 컨트롤러 네임스페이스에는 아직 네트워크 정책이 없습니다. 실제 클러스터에서 Hubble로 흐름을 본 뒤 조입니다.
