@@ -1,0 +1,54 @@
+#!/bin/bash
+# 첫 부팅에서 한 번 실행된다: K3s → Argo CD → 뿌리 앱. 그 뒤는 Argo CD가 infra/gitops를 읽어 맞춘다.
+set -euo pipefail
+exec > >(tee /var/log/gachita-bootstrap.log) 2>&1
+
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -y && apt-get install -y curl unzip
+
+# AWS CLI: 저장소 토큰을 SSM에서 읽는 데 쓴다
+curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip" -o /tmp/awscli.zip
+unzip -q /tmp/awscli.zip -d /tmp && /tmp/aws/install
+
+# K3s 서버 한 대. 인그레스는 K3s에 든 Traefik을 그대로 쓴다.
+curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION='${k3s_version}' sh -s - server \
+  --tls-san '${public_ip}' \
+  --write-kubeconfig-mode 0600
+export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+until kubectl get nodes 2>/dev/null | grep -q ' Ready '; do sleep 3; done
+
+# Argo CD
+kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
+kubectl apply -n argocd --server-side --force-conflicts \
+  -f 'https://raw.githubusercontent.com/argoproj/argo-cd/${argocd_version}/manifests/install.yaml'
+kubectl -n argocd rollout status deploy/argocd-repo-server --timeout=300s
+
+# 비공개 저장소를 읽을 토큰. 사람이 미리 넣어 둔 SSM 값에서 가져온다(없으면 여기서 멈춘다).
+REPO_TOKEN=$(aws ssm get-parameter --region '${region}' --name '/gachita/${env}/argocd-repo-token' --with-decryption --query Parameter.Value --output text)
+kubectl -n argocd create secret generic gachita-repo \
+  --from-literal=type=git --from-literal=url='${gitops_repo}' \
+  --from-literal=username=x-access-token --from-literal=password="$REPO_TOKEN" \
+  --dry-run=client -o yaml | kubectl label --local -f - argocd.argoproj.io/secret-type=repository -o yaml | kubectl apply -f -
+
+# 뿌리 앱 하나만 직접 넣는다. 나머지는 이 앱이 가리키는 폴더에서 온다.
+kubectl apply -f - <<APP
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: ${gitops_repo}
+    targetRevision: ${gitops_revision}
+    path: infra/gitops/bootstrap
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+APP
+echo "bootstrap done"

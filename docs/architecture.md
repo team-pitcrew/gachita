@@ -50,7 +50,7 @@ flowchart LR
 | 차량 앱 `apps/car` | Kotlin 2.0 · Jetpack Compose · AGP 8.6 · minSdk 28. Pleos Vehicle 2.3.2, NaviHelper 3.0.5, TextToSpeech 3.3.1 | 내비·공조·좌석·TTS는 Pleos SDK로만 부를 수 있음. 에뮬레이터에서 웹뷰 방식은 메모리 약 253 MB, 네이티브는 약 96 MB였음(Pleos 기준 400 MB) | 없음. T7에서 차박지도 앱의 연동 코드를 옮김 |
 | API 서버 `services/api` | Node 22 표준 `http`. Postgres 드라이버 `pg` 하나 | 경로가 열 개 안팎이라 프레임워크 없이 읽힘. 타입이 필요해지면 TypeScript로 옮김 | 있음. Postgres 저장과 기기 프로필 포함 |
 | 데이터 | Postgres 17, CloudNativePG로 클러스터 안에서 운영 | 관리형 DB 없이 직접 운영하는 조건. 백업과 복구를 선언으로 다룸 | 선언은 T5 |
-| 클라우드 | AWS. EC2 한 대에 K3s 직접 설치. Terraform으로 자원을 만들고 Argo CD가 `infra/gitops`를 읽어 맞춤 | 한 대로 시작해 비용을 낮추고, 클러스터 상태를 저장소에서 읽을 수 있게 함 | 코드는 T4·T5. **아직 아무 자원도 만들지 않음** |
+| 클라우드 | AWS. EC2 한 대에 K3s 직접 설치. Terraform으로 자원을 만들고 Argo CD가 `infra/gitops`를 읽어 맞춤 | 한 대로 시작해 비용을 낮추고, 클러스터 상태를 저장소에서 읽을 수 있게 함 | Terraform 있음([infra/terraform](../infra/terraform/README.md)), 클러스터 선언은 T5. **아직 아무 자원도 만들지 않음** |
 | CI | GitHub Actions. `policy`, `web`, `api` (추가 예정 `car`, `infra`) | SOVA와 같은 필수 검사 구성 | 있음 |
 
 ## 사용자 프로필 (OAuth 없음)

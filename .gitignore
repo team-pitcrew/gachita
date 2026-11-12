@@ -1,2 +1,8 @@
 .DS_Store
 node_modules/
+
+# terraform
+.terraform/
+*.tfstate*
+backend.hcl
+*.auto.tfvars
