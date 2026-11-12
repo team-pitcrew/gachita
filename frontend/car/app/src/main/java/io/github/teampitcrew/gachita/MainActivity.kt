@@ -33,6 +33,7 @@ import androidx.compose.material3.ProvideTextStyle
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
@@ -60,6 +61,9 @@ private val DarkColors = darkColorScheme(
     onSurfaceVariant = Color(0xFFAAA5BA), outline = Color(0xFF383549), primary = Color(0xFFB6A6EE), primaryContainer = Color(0xFF2F2A47),
     onPrimary = Color(0xFF17161F), error = Color(0xFFFF9288), tertiary = Color(0xFF74D3A8),
 )
+
+// 칩·단추(labelLarge)와 입력란(bodyLarge)의 기본 14~16sp는 차 화면에서 작다
+private val CarType = Typography(labelLarge = TextStyle(fontSize = 24.sp), bodyLarge = TextStyle(fontSize = 24.sp))
 
 private const val DEFAULT_SERVER = "http://10.0.2.2:8787" // 에뮬레이터에서 본 Mac의 make run
 private const val POLL_MS = 10_000L // 웹앱은 2초. 차에서는 주행 중 자원 기준(CPU 5% 미만)을 생각해 길게 둔다
@@ -92,7 +96,7 @@ class MainActivity : ComponentActivity() {
         car = Car(this) { carStatus = it; s = s.copy(gear = it.gear) }
         car.start()
         setContent {
-            MaterialTheme(colorScheme = if (isSystemInDarkTheme()) DarkColors else LightColors) {
+            MaterialTheme(colorScheme = if (isSystemInDarkTheme()) DarkColors else LightColors, typography = CarType) {
                 ProvideTextStyle(TextStyle(fontSize = 24.sp)) {
                     // ponytail: 에뮬레이터는 창을 나누지 않아 반쪽 창을 --ei widthDp 841로 흉내 낸다. 실제 분할 창 확인은 실차에서
                     val w = intent.getIntExtra("widthDp", 0)
