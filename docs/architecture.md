@@ -80,7 +80,8 @@ Pleos는 주행 중 내비가 아닌 앱의 CPU를 5% 미만, RAM을 400 MB 이�
 | Pleos SpeechToText | 차량 앱 | 대화 받아쓰기(앱이 받은 원음을 `sendAudio()`로 넣음) | 에뮬레이터에서 확인(11/13, [E2E 실측](emulator/e2e-flow.md)). ADR-0008 제안 |
 | 화자 대조 | API 서버 | 같은 좌석 구역 안의 사람 구분 | 정하지 않음(T38). 원음을 어디까지 보낼지는 T12 |
 | LLM(Claude API) | API 서버 | 장면 고르기 | 정하지 않음 |
-| Let's Encrypt | 클러스터 | 인증서 | 선언 있음. 발급은 미확인 |
+| Let's Encrypt | 클러스터 | 인증서 | 선언 있음. 발급은 미확인. Cloudflare로 옮기면 걷어냄(T27) |
+| Cloudflare | 가장자리 | 주소 `gachita.mangowhois.ai`, 서버로 가는 길, 요청 수 제한 | 정함(지환, 11/13). 아직 만들지 않음([ADR-0010](adr/0010-domain-and-cloudflare-edge.md) 제안, T27). 위 그림의 가장자리는 지금 선언(Traefik) 기준 |
 
 ## 아직 없는 것
 
