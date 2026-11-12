@@ -1,0 +1,311 @@
+# 서버 안에서 클러스터를 세우는 단계(ADR-0012). 서버의 첫 부팅 스크립트가 ansible-pull로 부른다.
+# SSH를 열지 않으므로 서버 안에서 로컬로 돈다. 다시 돌릴 때는 SSM Run Command로 gachita-converge.
+#
+#   1 os      패키지, 커널 설정
+#   2 k3s     K3s(판 고정) 설치와 설정
+#   3 cilium  CNI(K3s HelmChart, 노드가 준비되기 전에 호스트 네트워크로 설치)
+#   4 oidc    서비스 계정 발급자의 공개 키를 S3에 올림(파드가 AWS 역할을 받는 길, ADR-0011)
+#   5 argocd  우선순위 클래스, Argo CD(판 고정), 저장소 자격
+#   6 root    뿌리 앱 하나. 나머지는 Argo CD가 물결 순서로 올림(backend/infra/gitops)
+#   7 verify  모든 앱이 Synced·Healthy, 밖에서 /healthz 200
+#
+# 단계마다 '이미 됐는지'를 먼저 보고, 끝나면 /var/lib/gachita/bootstrap/<번호>-<이름>.done 에 시각을 남긴다.
+# 실패하면 로그(/var/log/gachita/bootstrap.log)의 마지막 '[n/7 이름]'이 멈춘 단계다.
+- name: 같이타 클러스터 구축
+  hosts: localhost
+  connection: local
+  become: true
+  gather_facts: true
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+    PATH: /usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin
+  vars:
+    # 판은 여기 한곳에 고정한다. Cilium 1.20이 쿠버네티스 1.33~1.36을 지원해 K3s는 1.36에 둔다.
+    k3s_version: v1.36.6+k3s1
+    cilium_version: 1.20.4
+    # Argo CD 판은 argocd/kustomization.yaml 의 주소에 있다(v3.6.1).
+    pod_cidr: 10.42.0.0/16
+    service_cidr: 10.43.0.0/16
+    stamp_dir: /var/lib/gachita/bootstrap
+    cluster_dir: "{{ playbook_dir }}"
+    node_ip: "{{ ansible_default_ipv4.address }}"
+    # 아래는 /etc/gachita/vars.yml(Terraform이 첫 부팅 스크립트로 넣음)에서 온다:
+    # env, region, account_id, gitops_repo, gitops_revision, service_host, oidc_bucket, oidc_issuer
+
+  tasks:
+    - name: "[0/7] 단계 기록 폴더"
+      ansible.builtin.file:
+        path: "{{ stamp_dir }}"
+        state: directory
+        mode: "0755"
+      tags: [always]
+
+    # ---------------------------------------------------------------- 1 os
+    - name: "[1/7 os] 패키지"
+      ansible.builtin.apt:
+        name: [curl, jq, git, unzip, ca-certificates]
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+      tags: [os]
+
+    - name: "[1/7 os] 커널 설정(파일 감시 한도. kubelet과 Argo CD가 많이 씀)"
+      ansible.builtin.copy:
+        dest: /etc/sysctl.d/90-gachita.conf
+        mode: "0644"
+        content: |
+          fs.inotify.max_user_instances = 1024
+          fs.inotify.max_user_watches = 524288
+      register: sysctl_conf
+      tags: [os]
+
+    - name: "[1/7 os] 커널 설정 적용"
+      ansible.builtin.command: sysctl --system
+      when: sysctl_conf.changed
+      tags: [os]
+
+    - name: "[1/7 os] 끝"
+      ansible.builtin.copy: { dest: "{{ stamp_dir }}/1-os.done", content: "{{ ansible_date_time.iso8601 }}\n", mode: "0644" }
+      tags: [os]
+
+    # ---------------------------------------------------------------- 2 k3s
+    - name: "[2/7 k3s] 설정 폴더"
+      ansible.builtin.file: { path: /etc/rancher/k3s, state: directory, mode: "0755" }
+      tags: [k3s]
+
+    - name: "[2/7 k3s] 설정 파일"
+      ansible.builtin.template:
+        src: templates/k3s-config.yaml.j2
+        dest: /etc/rancher/k3s/config.yaml
+        mode: "0600"
+      register: k3s_config
+      tags: [k3s]
+
+    - name: "[2/7 k3s] 설치된 판 보기"
+      ansible.builtin.command: k3s --version
+      register: k3s_installed
+      changed_when: false
+      failed_when: false
+      tags: [k3s]
+
+    - name: "[2/7 k3s] 설치 스크립트(같은 판의 태그에서 받음)"
+      ansible.builtin.get_url:
+        url: "https://raw.githubusercontent.com/k3s-io/k3s/{{ k3s_version | urlencode }}/install.sh"
+        dest: /usr/local/sbin/k3s-install.sh
+        mode: "0755"
+      when: k3s_version not in k3s_installed.stdout | default('')
+      tags: [k3s]
+
+    - name: "[2/7 k3s] 설치(스크립트가 바이너리의 해시를 확인한다)"
+      ansible.builtin.command: /usr/local/sbin/k3s-install.sh
+      environment:
+        INSTALL_K3S_VERSION: "{{ k3s_version }}"
+      when: k3s_version not in k3s_installed.stdout | default('')
+      tags: [k3s]
+
+    - name: "[2/7 k3s] 설정이 바뀌었으면 다시 시작"
+      ansible.builtin.systemd:
+        name: k3s
+        state: restarted
+      when: k3s_config.changed and k3s_version in k3s_installed.stdout | default('')
+      tags: [k3s]
+
+    - name: "[2/7 k3s] API 서버가 답하는지"
+      ansible.builtin.command: kubectl get --raw /readyz
+      register: readyz
+      until: readyz.rc == 0 and readyz.stdout == 'ok'
+      retries: 60
+      delay: 5
+      changed_when: false
+      tags: [k3s]
+
+    - name: "[2/7 k3s] 서비스 계정 발급자가 S3 주소인지(아니면 파드가 AWS 역할을 받지 못함)"
+      ansible.builtin.command: kubectl get --raw /.well-known/openid-configuration
+      register: discovery
+      changed_when: false
+      failed_when: (discovery.stdout | from_json).issuer != oidc_issuer
+      tags: [k3s]
+
+    - name: "[2/7 k3s] 끝"
+      ansible.builtin.copy: { dest: "{{ stamp_dir }}/2-k3s.done", content: "{{ ansible_date_time.iso8601 }} {{ k3s_version }}\n", mode: "0644" }
+      tags: [k3s]
+
+    # ---------------------------------------------------------------- 3 cilium
+    - name: "[3/7 cilium] K3s가 설치할 Cilium 차트"
+      ansible.builtin.template:
+        src: templates/cilium.yaml.j2
+        dest: /var/lib/rancher/k3s/server/manifests/cilium.yaml
+        mode: "0600"
+      tags: [cilium]
+
+    - name: "[3/7 cilium] 에이전트가 생길 때까지"
+      ansible.builtin.command: kubectl -n kube-system get ds cilium
+      register: cilium_ds
+      until: cilium_ds.rc == 0
+      retries: 60
+      delay: 5
+      changed_when: false
+      tags: [cilium]
+
+    - name: "[3/7 cilium] 에이전트 준비"
+      ansible.builtin.command: kubectl -n kube-system rollout status ds/cilium --timeout=600s
+      changed_when: false
+      tags: [cilium]
+
+    - name: "[3/7 cilium] 노드 Ready"
+      ansible.builtin.command: kubectl wait --for=condition=Ready node --all --timeout=300s
+      changed_when: false
+      tags: [cilium]
+
+    - name: "[3/7 cilium] 상태(cilium-dbg status)"
+      ansible.builtin.command: kubectl -n kube-system exec ds/cilium -c cilium-agent -- cilium-dbg status --brief
+      register: cilium_status
+      until: cilium_status.rc == 0
+      retries: 30
+      delay: 10
+      changed_when: false
+      tags: [cilium]
+
+    - name: "[3/7 cilium] 끝"
+      ansible.builtin.copy: { dest: "{{ stamp_dir }}/3-cilium.done", content: "{{ ansible_date_time.iso8601 }} {{ cilium_version }}\n", mode: "0644" }
+      tags: [cilium]
+
+    # ---------------------------------------------------------------- 4 oidc
+    - name: "[4/7 oidc] 발급자 문서와 공개 키"
+      ansible.builtin.command: "kubectl get --raw {{ item }}"
+      loop: [/.well-known/openid-configuration, /openid/v1/jwks]
+      register: oidc_docs
+      changed_when: false
+      tags: [oidc]
+
+    - name: "[4/7 oidc] S3에 올리기(서버를 새로 만들면 키가 바뀌므로 매번)"
+      ansible.builtin.shell: >-
+        printf '%s' "$DOC" | aws s3 cp - "s3://{{ oidc_bucket }}{{ item.item }}"
+        --region {{ region }} --content-type application/json --cache-control no-cache
+      environment:
+        DOC: "{{ item.stdout }}"
+      loop: "{{ oidc_docs.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      changed_when: false
+      tags: [oidc]
+
+    - name: "[4/7 oidc] 공개 주소의 키가 클러스터의 키와 같은지"
+      ansible.builtin.uri:
+        url: "{{ oidc_issuer }}/openid/v1/jwks"
+        return_content: true
+      register: public_jwks
+      until: public_jwks.json is defined and public_jwks.json == (oidc_docs.results[1].stdout | from_json)
+      retries: 10
+      delay: 3
+      tags: [oidc]
+
+    - name: "[4/7 oidc] 끝"
+      ansible.builtin.copy: { dest: "{{ stamp_dir }}/4-oidc.done", content: "{{ ansible_date_time.iso8601 }} {{ oidc_issuer }}\n", mode: "0644" }
+      tags: [oidc]
+
+    # ---------------------------------------------------------------- 5 argocd
+    - name: "[5/7 argocd] 우선순위 클래스(Argo CD와 컨트롤러가 쓰므로 먼저)"
+      ansible.builtin.command: "kubectl apply --server-side -f {{ cluster_dir }}/base/priorityclasses.yaml"
+      changed_when: false
+      tags: [argocd]
+
+    - name: "[5/7 argocd] Argo CD 설치(판은 argocd/kustomization.yaml)"
+      ansible.builtin.command: "kubectl apply --server-side --force-conflicts -k {{ cluster_dir }}/argocd"
+      changed_when: false
+      tags: [argocd]
+
+    - name: "[5/7 argocd] 저장소 자격(읽기 전용 배포 키)"
+      ansible.builtin.shell: |
+        set -o pipefail
+        kubectl -n argocd create secret generic gachita-repo \
+          --from-literal=type=git --from-literal=url='{{ gitops_repo }}' \
+          --from-file=sshPrivateKey=/root/.ssh/gachita-deploy \
+          --dry-run=client -o yaml \
+        | kubectl label --local -f - argocd.argoproj.io/secret-type=repository -o yaml \
+        | kubectl apply -f -
+      args:
+        executable: /bin/bash
+      changed_when: false
+      tags: [argocd]
+
+    - name: "[5/7 argocd] 준비 확인"
+      ansible.builtin.command: "kubectl -n argocd rollout status {{ item }} --timeout=300s"
+      loop:
+        - statefulset/argocd-application-controller
+        - deploy/argocd-repo-server
+        - deploy/argocd-server
+        - deploy/argocd-redis
+        - deploy/argocd-applicationset-controller
+      changed_when: false
+      tags: [argocd]
+
+    - name: "[5/7 argocd] 끝"
+      ansible.builtin.copy: { dest: "{{ stamp_dir }}/5-argocd.done", content: "{{ ansible_date_time.iso8601 }}\n", mode: "0644" }
+      tags: [argocd]
+
+    # ---------------------------------------------------------------- 6 root
+    - name: "[6/7 root] 뿌리 앱"
+      ansible.builtin.template:
+        src: templates/root-app.yaml.j2
+        dest: /etc/gachita/root-app.yaml
+        mode: "0644"
+      tags: [root]
+
+    - name: "[6/7 root] 적용"
+      ansible.builtin.command: kubectl apply -f /etc/gachita/root-app.yaml
+      changed_when: false
+      tags: [root]
+
+    - name: "[6/7 root] 끝"
+      ansible.builtin.copy: { dest: "{{ stamp_dir }}/6-root.done", content: "{{ ansible_date_time.iso8601 }} {{ gitops_revision }}\n", mode: "0644" }
+      tags: [root]
+
+    # ---------------------------------------------------------------- 7 verify
+    - name: "[7/7 verify] 물결이 끝까지 올라올 때까지(최대 30분). 남은 앱 이름이 멈춘 물결이다"
+      ansible.builtin.shell: |
+        set -o pipefail
+        kubectl -n argocd get applications -o json | jq -r '
+          [.items[] | select(.status.sync.status != "Synced" or .status.health.status != "Healthy")
+           | "\(.metadata.annotations["argocd.argoproj.io/sync-wave"] // "-"):\(.metadata.name):\(.status.sync.status // "?")/\(.status.health.status // "?")"]
+          | join(" ")'
+      args:
+        executable: /bin/bash
+      register: pending
+      until: pending.rc == 0 and pending.stdout == ''
+      retries: 180
+      delay: 10
+      changed_when: false
+      tags: [verify]
+
+    - name: "[7/7 verify] 앱 표(물결 순)"
+      ansible.builtin.shell: |
+        set -o pipefail
+        kubectl -n argocd get applications -o json | jq -r '
+          [.items[] | {w: (.metadata.annotations["argocd.argoproj.io/sync-wave"] // "-"), n: .metadata.name,
+                       s: (.status.sync.status // "?"), h: (.status.health.status // "?")}]
+          | sort_by(.w) | .[] | "\(.w)\t\(.n)\t\(.s)\t\(.h)"'
+      args:
+        executable: /bin/bash
+      register: app_table
+      changed_when: false
+      tags: [verify]
+
+    - name: "[7/7 verify] 앱 표 보이기"
+      ansible.builtin.debug:
+        var: app_table.stdout_lines
+      tags: [verify]
+
+    - name: "[7/7 verify] 밖에서(Cloudflare를 거쳐) /healthz"
+      ansible.builtin.uri:
+        url: "https://{{ service_host }}/healthz"
+        status_code: 200
+      register: healthz
+      until: healthz.status == 200
+      retries: 30
+      delay: 10
+      tags: [verify]
+
+    - name: "[7/7 verify] 끝"
+      ansible.builtin.copy: { dest: "{{ stamp_dir }}/7-verify.done", content: "{{ ansible_date_time.iso8601 }}\n", mode: "0644" }
+      tags: [verify]

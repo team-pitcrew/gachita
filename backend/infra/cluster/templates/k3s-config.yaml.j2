@@ -1,0 +1,30 @@
+# K3s 서버 설정. backend/infra/cluster/templates/k3s-config.yaml.j2 에서 만든다(손으로 고치지 않음).
+write-kubeconfig-mode: "0600"
+node-ip: {{ node_ip }}
+cluster-cidr: {{ pod_cidr }}
+service-cidr: {{ service_cidr }}
+
+# CNI와 네트워크 정책, 서비스 라우팅은 Cilium(3단계)이 맡는다.
+flannel-backend: none
+disable-network-policy: true
+disable-kube-proxy: true
+
+# 인그레스는 Argo CD가 Traefik 공식 차트로 올린다. 서비스 LB는 쓰지 않는다(들어오는 길은 Cloudflare Tunnel).
+disable:
+  - traefik
+  - servicelb
+
+# 저장소(kine)에 든 Secret을 암호화한다.
+secrets-encryption: true
+
+kube-apiserver-arg:
+  # 서비스 계정 발급자를 S3에 공개한 주소로(ADR-0011). 끝의 '-'는 K3s 기본값 앞에 붙이라는 뜻:
+  # 서명은 이 주소로 하고, K3s 기본 발급자의 토큰도 계속 받아들인다.
+  - service-account-issuer-={{ oidc_issuer }}
+  - service-account-jwks-uri={{ oidc_issuer }}/openid/v1/jwks
+
+kubelet-arg:
+  # 노드 사양 표(ADR-0012)의 예약. 파드가 OS와 K3s의 몫을 넘보지 못한다.
+  - system-reserved=cpu=100m,memory=512Mi
+  - kube-reserved=cpu=200m,memory=768Mi
+  - eviction-hard=memory.available<256Mi,nodefs.available<10%,nodefs.inodesFree<5%,imagefs.available<15%

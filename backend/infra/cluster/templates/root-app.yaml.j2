@@ -1,0 +1,23 @@
+# 뿌리 앱. 클러스터에 직접 넣는 Argo CD 앱은 이것 하나다. 나머지는 이 앱이 읽는 폴더에서 물결 순서로 온다.
+# 지우면 자식 앱이 남는다(지운 것이 모든 것을 지우지 않게 일부러 finalizer를 두지 않음).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: {{ gitops_repo }}
+    targetRevision: {{ gitops_revision }}
+    path: backend/infra/gitops/clusters/{{ env }}
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    retry:
+      limit: 5
+      backoff: { duration: 10s, factor: 2, maxDuration: 3m }
