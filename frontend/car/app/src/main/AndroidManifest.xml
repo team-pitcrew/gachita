@@ -1,0 +1,18 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+ <uses-feature android:name="android.hardware.type.automotive" android:required="true" />
+ <uses-permission android:name="android.permission.INTERNET" />
+ <uses-permission android:name="pleos.car.permission.CAR_DRIVE" />
+ <uses-permission android:name="pleos.car.permission.CAR_CLIMATE" />
+ <uses-permission android:name="pleos.car.permission.CONTROL_CAR_CLIMATE" />
+ <uses-permission android:name="pleos.car.permission.NAVI_ROUTE" />
+ <uses-permission android:name="pleos.car.permission.TTS_SERVICE" />
+ <!-- usesCleartextTraffic: 개발 서버(http://10.0.2.2:8787)에 붙는다. 배포 서버가 https가 되면 뺀다.
+      주행 중 화면 선언(distractionOptimized)은 T11에서 한다. -->
+ <application android:label="같이타" android:icon="@drawable/ic_launcher" android:theme="@android:style/Theme.Material.Light.NoActionBar"
+  android:allowBackup="false" android:usesCleartextTraffic="true">
+  <uses-library android:name="ai.pleos.playground.car" android:required="true" />
+  <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTop" android:resizeableActivity="true">
+   <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
+  </activity>
+ </application>
+</manifest>
