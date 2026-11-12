@@ -47,6 +47,21 @@ class Reading(unittest.TestCase):
         self.assertEqual(t.priority_of(FORM.format(part="backend-api")), "P1")
         self.assertIsNone(t.priority_of("### 우선순위\n\n_No response_"))
 
+    def test_bug_severity_sets_priority(self):
+        for severity, priority in (("S0 · 시연이 막힘", "P0"), ("S1 · 핵심 흐름", "P0"), ("S2 · 일부", "P1"), ("S3 · 불편", "P2")):
+            self.assertEqual(t.priority_of(f"### 심각도\n\n{severity}"), priority)
+
+    def test_emulator_tickets_go_to_the_emulator_owner(self):
+        body = FORM.format(part="backend-api")
+        self.assertFalse(t.needs_emulator(body))
+        self.assertEqual(t.owner_of(body), t.PARTS["backend-api"]["owner"])
+        for heading, value in (("필요한 환경", "에뮬레이터 · Pleos 에뮬레이터에서 확인"), ("확인한 환경", "에뮬레이터에서 확인")):
+            emulator = body + f"\n### {heading}\n\n{value}\n"
+            self.assertTrue(t.needs_emulator(emulator), heading)
+            self.assertEqual(t.owner_of(emulator), t.CONFIG["emulator_owner"], heading)
+        self.assertFalse(t.needs_emulator(body + "\n### 필요한 환경\n\n없음 · 로컬과 문서로 끝남\n"))
+        self.assertIsNone(t.owner_of("### 필요한 환경\n\n에뮬레이터"), "파트를 모르면 담당도 정하지 않는다")
+
     def test_forms_offer_exactly_the_parts(self):
         # 양식의 선택지는 parts.json의 이름과 같아야 한다(양식은 YAML이라 따로 적을 수밖에 없다)
         names = [p["name"] for p in t.PARTS.values()]

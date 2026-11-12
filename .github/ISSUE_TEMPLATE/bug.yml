@@ -3,6 +3,11 @@ description: 기대와 다르게 동작하는 것. 번호와 라벨, 담당은 �
 title: "[T] "
 labels: ["type:bug"]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        본 것과 짐작한 것을 나눠 적습니다. 원인을 몰라도 됩니다. 다른 사람이 같은 것을 다시 볼 수 있으면 충분합니다.
+        피해가 이어지고 있으면 원인을 찾기 전에 먼저 멈춥니다(되돌리기, 기능 끄기). 그렇게 한 것은 '임시 조치'에 적습니다.
   - type: dropdown
     id: part
     attributes:
@@ -15,39 +20,23 @@ body:
         - 백엔드 · 인프라
     validations:
       required: true
-  - type: textarea
-    id: steps
+  - type: dropdown
+    id: severity
     attributes:
-      label: 재현 순서
-      description: 다른 사람이 그대로 따라 할 수 있게 번호로 적습니다.
-      value: "1. "
-    validations:
-      required: true
-  - type: textarea
-    id: expected
-    attributes:
-      label: 기대한 동작
-    validations:
-      required: true
-  - type: textarea
-    id: actual
-    attributes:
-      label: 실제 동작
-      description: 오류 문구나 화면 캡처가 있으면 붙입니다. 비밀 값과 개인정보는 가립니다.
-    validations:
-      required: true
-  - type: textarea
-    id: impact
-    attributes:
-      label: 영향 범위
-      description: 누가, 어떤 화면이나 기능에서, 얼마나 자주 겪는지 적습니다.
+      label: 심각도
+      description: 사용자가 겪는 영향으로 고릅니다. 고치기 어려운 정도가 아닙니다.
+      options:
+        - S0 · 시연이나 제출이 막힘, 데이터를 잃음
+        - S1 · 핵심 흐름(참가, 부탁, 기록)이 안 됨. 돌아갈 길 없음
+        - S2 · 기능 일부가 안 됨. 돌아갈 길 있음
+        - S3 · 불편하거나 보기에 어색함
     validations:
       required: true
   - type: dropdown
     id: env
     attributes:
       label: 확인한 환경
-      description: 어디서 본 것인지 구분합니다.
+      description: 어디서 본 것인지 구분합니다. 에뮬레이터에서 본 결함은 에뮬레이터 담당에게 갑니다.
       options:
         - 로컬 실행(브라우저 · 서버)
         - 에뮬레이터에서 확인
@@ -55,3 +44,52 @@ body:
         - 문서에서만 확인(실행하지 않음)
     validations:
       required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 기대한 동작
+      description: 무엇이 일어나야 했는지. 근거(화면 문서, API 명세, 기획)가 있으면 링크합니다.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 실제 동작
+      description: 무엇이 일어났는지. 오류 문구는 그대로 붙입니다. 비밀 값과 개인정보는 가립니다.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 재현 순서
+      description: 다른 사람이 그대로 따라 할 수 있게 번호로 적습니다. 매번 생기는지, 가끔 생기는지(몇 번 중 몇 번)도 적습니다.
+      value: "1. "
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: 영향 범위
+      description: 누가, 어떤 화면이나 기능에서 겪는지. 데이터가 잘못됐거나 사라졌는지.
+    validations:
+      required: true
+  - type: textarea
+    id: detection
+    attributes:
+      label: 처음 본 때와 알아챈 경로
+      description: 언제(KST) 처음 봤고 어떻게 알았는지(테스트, CI, 직접 써 보다가, 다른 사람이 알려 줌). 마지막으로 잘 되던 때나 커밋을 알면 적습니다.
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 증거
+      description: 로그, 화면 캡처, 요청과 응답, 커밋이나 이미지 태그, 기기와 브라우저 버전.
+  - type: textarea
+    id: mitigation
+    attributes:
+      label: 임시 조치
+      description: 피해를 멈추려고 한 것이나 돌아가는 방법. 없으면 비웁니다.
+  - type: textarea
+    id: suspect
+    attributes:
+      label: 짐작하는 원인
+      description: 확인하지 않은 짐작이면 짐작이라고 적습니다. 없으면 비웁니다.

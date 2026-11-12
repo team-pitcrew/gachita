@@ -27,11 +27,11 @@ make check        # 테스트(로컬 Postgres 컨테이너를 띄운다)
 
 ## 티켓
 
-GitHub 이슈가 티켓입니다. 제목은 `[T번호] 제목`이고, 라벨 셋(`part:*`, `P0`~`P2`, `status:*`)이 붙습니다.
+GitHub 이슈가 티켓입니다. 제목은 `[T번호] 제목`이고, 라벨 셋(`part:*`, `P0`~`P2`, `status:*`)이 붙습니다. Pleos 에뮬레이터에서 확인해야 하는 티켓에는 `env:emulator`가 더 붙습니다.
 
 | 일어난 일 | 자동으로 되는 것 |
 |---|---|
-| 이슈 양식으로 티켓을 만듦 | 번호(`[T숫자]`), 파트·우선순위 라벨, `status:backlog`, 파트 담당 지정 |
+| 이슈 양식으로 티켓을 만듦 | 번호(`[T숫자]`), 파트·우선순위 라벨, `status:backlog`, 파트 담당 지정. 에뮬레이터가 필요하면 파트와 관계없이 지환 |
 | `feature/T번호-설명` 브랜치를 올림 | 티켓이 `status:in-progress` |
 | PR을 엶 | 티켓이 `status:in-review`, PR에 바뀐 파트의 `part:*` 라벨 |
 | PR이 병합됨 | 본문에 `Closes #번호`로 이은 티켓은 닫히고 `status:done`. `Refs #번호`로만 이은 티켓은 `status:in-progress`로 남음 |
@@ -41,6 +41,16 @@ GitHub 이슈가 티켓입니다. 제목은 `[T번호] 제목`이고, 라벨 셋
 - 프로젝트 보드도 같은 워크플로가 맞춥니다. 저장소에 비밀 값 `PROJECT_TOKEN`과 변수 `PROJECT_NUMBER`가 있어야 하고, 없으면 라벨까지만 합니다([프로젝트 보드](project-board.md)).
 - 계획에 있는 작업은 [`docs/tasks.md`](tasks.md)에 적고 `python3 .github/scripts/tasks.py --apply`로 티켓을 만듭니다.
 - 끝낸 할 일의 체크는 병합과 확인 뒤에 사람이 합니다. 체크는 자동으로 하지 않습니다.
+
+이슈 양식은 셋입니다. 칸은 Google SRE가 변경과 장애를 적는 방식에서 가져왔습니다.
+
+| 양식 | 칸 | 근거 |
+|---|---|---|
+| 작업 | 파트, 우선순위, 필요한 환경, 왜 하는가, 할 일, 하지 않는 것, 완료 기준, 위험과 되돌리기, 선행 작업 | 범위를 미리 긋고(하지 않는 것) 되돌릴 길을 정해 둔 변경이 안전합니다([Launch Checklist](https://sre.google/sre-book/launch-checklist/)) |
+| 결함 | 파트, 심각도, 확인한 환경, 기대한 동작, 실제 동작, 재현 순서, 영향 범위, 처음 본 때와 알아챈 경로, 증거, 임시 조치, 짐작하는 원인 | 기대·실제·재현을 적고 본 것과 짐작을 나눕니다([Effective Troubleshooting](https://sre.google/sre-book/effective-troubleshooting/)). 원인보다 피해를 멈추는 것이 먼저입니다([Managing Incidents](https://sre.google/sre-book/managing-incidents/)) |
+| 사후 검토 | 요약, 영향, 근본 원인, 계기, 감지, 해결, 시간순 기록, 잘된 것, 잘못된 것, 운이 좋았던 것, 후속 조치 | [Postmortem Culture](https://sre.google/sre-book/postmortem-culture/)와 [예시](https://sre.google/sre-book/example-postmortem/) |
+
+결함의 심각도는 우선순위 라벨로 옮겨집니다(S0·S1 → P0, S2 → P1, S3 → P2).
 
 ## 한 작업의 순서
 

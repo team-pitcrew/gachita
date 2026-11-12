@@ -19,7 +19,8 @@ from urllib.parse import quote
 
 REPO = os.environ.get("GITHUB_REPOSITORY", "team-pitcrew/gachita")
 ORG = REPO.split("/")[0]
-PARTS = json.loads(Path(__file__).resolve().parents[1].joinpath("parts.json").read_text())["parts"]
+CONFIG = json.loads(Path(__file__).resolve().parents[1].joinpath("parts.json").read_text())
+PARTS = CONFIG["parts"]
 DRY = bool(os.environ.get("TICKETS_DRY_RUN"))
 
 # 상태 라벨(status:*)과 프로젝트 보드 Status 열의 이름
@@ -49,8 +50,27 @@ def part_of(body):
 
 
 def priority_of(body):
-    m = re.match(r"(P[012])\b", sections(body).get("우선순위", ""))
-    return m[1] if m else None
+    """'### 우선순위'의 P0~P2. 결함은 '### 심각도'로 정한다(S0·S1 → P0, S2 → P1, S3 → P2)."""
+    s = sections(body)
+    m = re.match(r"(P[012])\b", s.get("우선순위", ""))
+    if m:
+        return m[1]
+    sev = re.match(r"S([0-3])\b", s.get("심각도", ""))
+    return ["P0", "P0", "P1", "P2"][int(sev[1])] if sev else None
+
+
+def needs_emulator(body):
+    """Pleos 에뮬레이터에서 봐야 하는 티켓인가. 작업은 '필요한 환경', 결함은 '확인한 환경'으로 안다."""
+    s = sections(body)
+    return any(s.get(key, "").startswith("에뮬레이터") for key in ("필요한 환경", "확인한 환경"))
+
+
+def owner_of(body):
+    """담당. 에뮬레이터가 필요한 티켓은 파트와 관계없이 에뮬레이터 담당에게 간다. 파트를 모르면 None."""
+    part = part_of(body)
+    if not part:
+        return None
+    return CONFIG["emulator_owner"] if needs_emulator(body) else PARTS[part]["owner"]
 
 
 def t_number(title):
@@ -225,13 +245,16 @@ def on_issue(event):
         part = part_of(i["body"])
         state = None if status_of(i["labels"]) else "backlog"
         add, remove = label_plan(i["labels"], part=part, priority=priority_of(i["body"]), state=state)
+        if needs_emulator(i["body"]) and "env:emulator" not in i["labels"]:
+            add = sorted(add + ["env:emulator"])
         if add or remove:
             set_labels(n, add, remove)
             print(f"#{n} 라벨: +{add} -{remove}")
             changed = True
-        if part and not i["assignees"]:
-            gh("api", "-X", "POST", f"repos/{REPO}/issues/{n}/assignees", "-f", f"assignees[]={PARTS[part]['owner']}", write=True)
-            print(f"#{n} 담당: {PARTS[part]['owner']}")
+        owner = owner_of(i["body"])
+        if owner and not i["assignees"]:
+            gh("api", "-X", "POST", f"repos/{REPO}/issues/{n}/assignees", "-f", f"assignees[]={owner}", write=True)
+            print(f"#{n} 담당: {owner}")
             changed = True
         if changed:
             sync_project(i["id"], status_of(i["labels"]) or "backlog")
