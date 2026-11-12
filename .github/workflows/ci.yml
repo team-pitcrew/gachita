@@ -57,9 +57,28 @@ jobs:
   api:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: gachita
+          POSTGRES_PASSWORD: gachita
+          POSTGRES_DB: gachita
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U gachita"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # 이 검사에서만 쓰는 일회용 DB의 주소다
+      DATABASE_URL: postgres://gachita:gachita@localhost:5432/gachita
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
           node-version: 22
+          cache: npm
+          cache-dependency-path: services/api/package-lock.json
       - run: make api
