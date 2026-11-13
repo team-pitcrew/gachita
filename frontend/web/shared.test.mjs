@@ -33,3 +33,13 @@ test("304는 null, 거절은 서버의 이유와 status, 닿지 않으면 status
   };
   await assert.rejects(api("GET", "/trips/ABC"), { status: 0 });
 });
+
+test("화면이 닫히면 진행 중인 읽기 요청도 취소할 수 있다", async () => {
+  globalThis.fetch = (url, { signal }) => new Promise((resolve, reject) => {
+    signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+  });
+  const controller = new AbortController();
+  const pending = api("GET", "/profiles/me/feed", null, "test-token", controller.signal);
+  controller.abort();
+  await assert.rejects(pending, { status: 0 });
+});

@@ -1,0 +1,58 @@
+name: journey-e2e
+
+# T38/T43/T75/T76가 함께 배포된 뒤 실행하는 확장 검증. 기존 live-e2e/배포 자동 실행은 그대로 둔다.
+# 합성 시험 데이터가 만들어진다. 프로필/클립/글은 finally로 지우며, 여행·장면 메타데이터는
+# 여행 DELETE API가 없어 48시간 만료 또는 ops clean-e2e로 정리한다. 자동 예약은 하지 않는다.
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 검증할 서버 주소 (시험 데이터 생성)
+        type: string
+        required: true
+      confirm:
+        description: 이 주소에 합성 시험 데이터를 만들고 남는 여행 메타데이터는 정리해야 함을 확인
+        type: boolean
+        required: true
+        default: false
+      asr:
+        description: required는 재전사 결과까지 필수, unverified는 미확인(partial, 종료 코드 3)을 남김
+        type: choice
+        options: [required, unverified]
+        default: required
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-e2e
+  cancel-in-progress: false
+
+jobs:
+  journey:
+    runs-on: [self-hosted, gachita]
+    timeout-minutes: 10
+    env:
+      URL: ${{ inputs.url }}
+      ASR: ${{ inputs.asr }}
+      CONFIRM: ${{ inputs.confirm }}
+      REPORT: ${{ runner.temp }}/journey-${{ github.run_id }}-${{ github.run_attempt }}.json
+    steps:
+      - name: 시험 데이터 생성 확인
+        run: test "$CONFIRM" = true || { echo "::error::confirm을 켜야 시험 데이터를 생성합니다"; exit 1; }
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: 확장 API 여정
+        run: node .github/scripts/journey-e2e.mjs "$URL" --storage=s3 "--asr=$ASR" > "$REPORT"
+      - name: 결과와 미확인 범위
+        if: always()
+        run: |
+          {
+            echo '### 확장 API 여정'
+            echo 'API에서 확인한 결과입니다. Google 브라우저 로그인·QR 카메라·실차·48시간 경과·버킷 버전 삭제는 별도 확인입니다.'
+            echo '```json'
+            cat "$REPORT" 2>/dev/null || echo '{"status":"not-run"}'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
