@@ -6,27 +6,28 @@
 - "화장실 가고 싶어"를 알아채 휴게소를 화면과 말로 제안하고, "응, 다음 휴게소 가자"로 순정 내비에 경유지를 넣습니다. 휴게소는 시연 경로(판교 → 강릉, 영동고속도로 강릉방향)의 고정 목록에서 아직 지나치지 않은 곳을 고릅니다.
 - "마트에서 우유랑 간식 사자"를 모아 두었다가 마트에 주차하면 할 일을 알립니다. 같은 기능을 Gleo 함수로 선언해 두었습니다(Pleos 승인 전, 음성 호출은 확인하지 않음).
 - 주행 중에는 Pleos 주행 제한 값에 맞춰 설정 화면과 목록을 가립니다.
+- "글레오"라고 부르거나 'Gleo 쓰기'를 누르면 기록을 잠시 멈추고 마이크를 Gleo에 넘겼다가, Gleo가 끝나면 다시 기록합니다.
 - 위 동작은 Pleos Connect Emulator 2.1.0에서 확인했습니다(Gleo 음성 호출은 빼고). 실차에서는 확인하지 않았습니다.
-- 서버와 폰 웹앱은 **https://gachita.mangowhois.ai**에서 돕니다(11/13부터, AWS). 폰은 수음하지 않고 프로필·여행 참가·기록 동의·부탁을 맡습니다.
+- 서버와 폰 웹앱은 **https://gachita.mangowhois.ai**에서 돕니다(11/13부터, AWS). 폰은 수음하지 않고 프로필, 동승 연결 QR, 기록 동의, 부탁, 여행 뒤 기록본·자막 고치기·공유·9:16 숏폼을 맡습니다.
 
 ## 심사 기준별로 볼 곳
 
 | 기준 | 무엇을 했나 | 근거와 확인 수준 |
 |---|---|---|
 | 차량특화성 | 차 마이크로 수음해 차 안에서 받아 적고, 말로 수락한 부탁을 순정 내비 경유지로 넣고, 기어 P에서 그 장소의 할 일을 알립니다. 주행 제한 값에 맞춰 화면을 가립니다. 폰에서는 수음하지 않습니다 | [차량 앱 README](frontend/car/README.md), [E2E 실측](docs/emulator/e2e-flow.md). 에뮬레이터에서 확인, 실차는 아님 |
-| 창의성 | 시키지 않은 대화에서 부탁과 할 일을 뽑습니다. 말한 자리의 캐릭터를 강조하고, 고른 장면을 영상 파일 없이 숏폼으로 다시 봅니다 | [차량 화면](frontend/spec/car.md), [도착 후 화면](frontend/spec/after-trip.md). 부탁·할 일은 에뮬레이터에서 확인, 강조와 숏폼은 만드는 중 |
-| 기술 활용성 | Pleos SDK 넷(Vehicle, NaviHelper, SpeechToText, TextToSpeech)과 Gleo 함수 선언, 좌석 두 구역과 등록한 목소리로 말한 사람 맞추기, 실서비스(Cloudflare → ALB → K3s, CloudNativePG, Argo CD) | [구조와 스택](docs/architecture.md)의 '음성 처리 흐름', [ADR-0008](docs/adr/0008-in-car-capture-and-sdk-stt.md), [ADR-0019](docs/adr/0019-speaker-matching.md). SDK는 에뮬레이터, 서버는 실서비스에서 확인. Gleo 음성 호출은 확인 전 |
+| 창의성 | 시키지 않은 대화에서 부탁과 할 일을 뽑습니다. 말한 자리의 캐릭터를 강조하고, 고른 장면을 영상 파일 없이 숏폼으로 다시 봅니다 | [차량 화면](frontend/spec/car.md), [도착 후 화면](frontend/spec/after-trip.md). 부탁·할 일은 에뮬레이터에서 확인. 숏폼 재생은 웹에 있음(브라우저). 차의 말하는 사람 강조는 만드는 중 |
+| 기술 활용성 | Pleos SDK 넷(Vehicle, NaviHelper, SpeechToText, TextToSpeech)과 Gleo 함수 선언, 좌석 두 구역과 등록한 목소리로 말한 사람 맞추기, 실서비스(Cloudflare → ALB → K3s, CloudNativePG, Argo CD) | [구조와 스택](docs/architecture.md)의 '음성 처리 흐름', [ADR-0008](docs/adr/0008-in-car-capture-and-sdk-stt.md), [ADR-0019](docs/adr/0019-speaker-matching.md). SDK와 Gleo에 마이크 넘기기는 에뮬레이터, 서버는 실서비스에서 확인. Gleo가 우리 함수를 음성으로 부르는 것은 확인 전 |
 | 사업성 | 첫 고객은 어린 자녀와 이동하는 부모입니다. 사람마다 기록이 프로필에 쌓이고, 여행 뒤에는 고른 장면만 남깁니다. 서버는 한 대로 동시 접속 300까지 재었고 월 약 $99로 둡니다 | [ADR-0016](docs/adr/0016-slo-capacity-single-postgres.md)(실제 EC2에서 잼), [음성 처리 명세](docs/api/voice.md) |
 
 ## 지금 들어 있는 것
 
 | 폴더 | 내용 | 상태 |
 |---|---|---|
-| `frontend/web/` | 폰 웹앱. 프로필(이름·캐릭터·사진), 한 화면에 한 가지씩 묻는 여행 참가와 기록 동의, 부탁 남기기와 상태 보기. 웹 시연(`/demo`) | 동작. 서버가 같이 내보냅니다. 11/14 결정으로 초대 코드 참가와 그룹 초대 수락(`/j/`)은 동승 연결 QR(차가 읽음)로 바꾸는 중(T46), 프로필·참가·여행 화면에 남은 좌석·공조(온도·시트)는 걷어내는 중(T6) |
-| `frontend/car/` | Pleos 차량 앱(Android · Kotlin · Compose). 여행과 기록 동의, 수음과 받아쓰기, 주행 중 화면, 부탁을 경유지로, 도착 브리핑([차량 앱 README](frontend/car/README.md)) | 동작(에뮬레이터). 받아 적은 말은 아직 서버로 보내지 않고 차 안에 쌓음 |
-| `backend/api/` | API 서버. 기기 프로필과 구글 계정 연결(OAuth), 여행 코드, 참가자와 자리, 기록 동의, 부탁의 상태, 장면, 발화·기록본·피드, 목소리 등록과 대조 | 동작. Postgres에 저장. 그룹과 QR 초대 API는 11/14 결정으로 걷어내는 중 |
+| `frontend/web/` | 폰 웹앱. 프로필(이름·캐릭터 10종·사진, 구글 계정 연결), 동승 연결 QR, 기록 동의, 부탁 남기기와 상태 보기, 여행 뒤 기록본·장면 고르기·자막 고치기·공유·9:16 숏폼. 홈 화면 설치. 웹 시연(`/demo`) | 동작. 서버가 같이 내보냅니다. 데스크톱·헤드리스 브라우저에서 확인, 실제 휴대폰은 아직 |
+| `frontend/car/` | Pleos 차량 앱(Android · Kotlin · Compose). 여행과 기록 동의, 수음과 받아쓰기, 받아 적은 말 올리기, 주행 중 화면, 부탁을 경유지로, 도착 브리핑, Gleo와 마이크 주고받기, 차 안 보관함 암호화([차량 앱 README](frontend/car/README.md)) | 동작(에뮬레이터). 개편 화면은 만드는 중(T20 #217), 고른 클립 올리기도 만드는 중(T63 #222). 좌석 구역·목소리 등록·동승 연결 QR 읽기는 계획(T37·T46) |
+| `backend/api/` | API 서버. 기기 프로필과 구글 계정 연결(OAuth, PKCE), 동승 연결, 참가자와 자리, 본인 토큰으로만 켜는 기록 동의, 부탁의 상태, 장면, 발화·기록본·피드, 목소리 등록과 대조, 장면 후보와 숏폼 구성, 고른 장면의 클립과 다시 받아 적기, 자막 고치기, 공유와 회수 | 동작. Postgres에 저장, 클립은 S3. 그룹과 초대 코드 경로는 닫음(11/14) |
 | `backend/infra/` | AWS 자원([Terraform](backend/infra/terraform/README.md))과 클러스터 선언([Argo CD](backend/infra/gitops/README.md)) | 실서비스 동작(11/13부터). Cloudflare → ALB → K3s 한 노드(t4g.large) → API, CloudNativePG Postgres 하나에 `trips`·`profiles` 두 DB. 실제 주소 E2E 통과, Route 53이 밖에서 30초마다 점검 |
-| `docs/` | [개발 규칙](docs/development.md), [구조와 스택](docs/architecture.md), [작업 목록](docs/tasks.md), [프로젝트 보드](docs/project-board.md), [결정 기록](docs/adr), [실측 보고](docs/research) | |
+| `docs/` | [개발 규칙](docs/development.md), [구조와 스택](docs/architecture.md), [디자인 시스템](docs/design.md), [전사록 데이터](docs/transcript-data.md), [작업 목록](docs/tasks.md), [프로젝트 보드](docs/project-board.md), [결정 기록](docs/adr), [실측 보고](docs/research) | |
 | `apk/` | 제출용 차량 앱 APK(`PITCREW_가치타_release.apk`) | 있음 |
 
 ## 실행 방법
@@ -59,7 +60,7 @@ make run       # http://localhost:8787 (로컬 Postgres 컨테이너를 같이 �
 make check     # CI와 같은 검사
 ```
 
-브라우저에서 `http://localhost:8787`을 열고 '새 여행 만들기'를 누릅니다. 다른 기기는 같은 주소 끝에 `#코드`를 붙여 참가합니다. 11/14 결정으로 이 초대 코드 길과 그룹 초대(`/j/`)는 없어지고, 폰이 띄운 동승 연결 QR을 차가 읽어 동승자를 넣는 방식으로 바뀝니다(T46 만드는 중, [프로필 화면](frontend/spec/profile.md)). 가족은 따로 묶지 않고 같은 차에 탄 기록으로만 이어집니다. 운전석으로 참가한 사람에게만 출발·주차와 부탁 제안·수락 단추가 보입니다.
+브라우저에서 `http://localhost:8787/demo`를 열면 차 화면 시연과 폰 웹앱이 나란히 뜹니다. 여행은 차가 만들고, 폰은 처음 화면의 '동승 연결'로 1회용 QR을 띄우며, 시연의 '폰의 QR 읽기'가 그 QR로 동승자를 넣습니다. 여행 코드나 초대 코드를 입력하는 길은 없고, 가족은 따로 묶지 않고 같은 차에 탄 기록으로만 이어집니다(11/14). 운전석으로 들어간 사람에게만 출발·주차와 부탁 제안·수락 단추가 보입니다.
 
 ## 테스트 환경 및 필요한 설정
 
@@ -76,7 +77,7 @@ make check     # CI와 같은 검사
 
 ## API
 
-정식 명세는 [docs/api/openapi.yaml](docs/api/openapi.yaml)입니다(0.6.0, 경로 27개). API 테스트가 명세와 서버의 경로가 같은지 봅니다. 발화·기록본·목소리처럼 음성에 닿는 경로의 인증과 보관 규칙은 [음성 처리 명세](docs/api/voice.md)에 있습니다.
+정식 명세는 [docs/api/openapi.yaml](docs/api/openapi.yaml)입니다(0.9.0, 경로 34개). API 테스트가 명세와 서버의 경로가 같은지 봅니다. 발화·기록본·목소리처럼 음성에 닿는 경로의 인증과 보관 규칙은 [음성 처리 명세](docs/api/voice.md)에 있습니다.
 
 - JSON을 주고받습니다. 오류는 `{ "error": "사람이 읽는 이유", "type": "invalid" }`처럼 오고, 클라이언트는 `type`으로 가릅니다.
 - **자리:** `ROW_1_LEFT`(운전석), `ROW_1_RIGHT`, `ROW_2_LEFT`, `ROW_2_CENTER`, `ROW_2_RIGHT`. Pleos Vehicle SDK의 `SeatArea` 이름과 같습니다.
