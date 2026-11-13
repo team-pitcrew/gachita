@@ -55,9 +55,11 @@ ADR-0013 7절과 ADR-0014 5절은 클립을 S3 데이터 버킷에 두고 **API�
 
 API의 구현(T76, `backend/api/server.js`의 `clipMedia`·`mediaCookie`):
 - 경로는 `GET /media/trips/{code}/recordings/{id}`(클립 id = 장면 id). 권한은 기록본과 같다(그 여행의 녹음에 동의한 참가자).
-- 쿠키는 웹앱이 `gachita.mangowhois.ai`에서 참가자 토큰 머리말로 `POST /api/trips/{code}/media-cookie`를 불러 받는다. 값은 그 참가자 토큰이고 `Path=/media/trips/{code}/`, `Max-Age`는 여행이 닫힐 때(만든 뒤 48시간)까지, `Domain`은 부른 주소(로컬 주소면 붙이지 않음). 같은 토큰이 웹앱 저장소에 이미 있으니 새로 늘어나는 노출은 없고, HttpOnly라 페이지 스크립트가 읽지 못한다. `<audio src>`만 쓰므로 CORS는 두지 않았다.
+- 쿠키는 웹앱이 `gachita.mangowhois.ai`에서 참가자 토큰 머리말로 `POST /api/trips/{code}/media-cookie`를 불러 받는다. 값은 그 참가자 토큰이고 `Path=/media/trips/{code}/`(위 1절의 `/media/`보다 좁게 — 여행마다 따로), `Max-Age`는 여행이 닫힐 때(만든 뒤 48시간)까지, `Domain`은 media 주소의 부모 이름(`gachita.mangowhois.ai`, 설정에서 정하고 요청의 Host를 쓰지 않음; 로컬 주소면 붙이지 않음). 이 토큰은 올리기·지우기·동의 켜기에도 쓰이는 자격이지만, 같은 토큰이 웹앱 저장소에 이미 있어 늘어나는 노출은 없고 HttpOnly라 페이지 스크립트가 읽지 못한다(듣기 전용 토큰은 따로 두지 않음). `<audio src>`만 쓰므로 CORS는 두지 않았다.
 - 범위 요청은 `bytes=시작-끝` 하나만 S3에 그대로 넘겨 `206`, 그 밖의 모양은 전체를 준다. 벗어나면 `416`.
-- 요청 수 제한은 파드마다 메모리에서 1분 창: 요청 주소마다 600(인증 전), 참가자마다 300. 넘으면 `429`(`rate_limited`).
+- 요청 수 제한은 파드마다 메모리에서 1분 창: 요청 주소마다 600(인증 전, IPv6는 /64), 참가자마다 300. 넘으면 `429`(`rate_limited`)와 `Retry-After`. 요청 주소는 `X-Forwarded-For`의 마지막 값이라 ALB의 XFF 처리 방식이 기본값(append)이어야 맞다.
+- 원래 경로와 정리된 경로가 `/media/`에서 어긋나면 Host와 상관없이 404(Host는 클라이언트가 정하므로 이름만 믿지 않는다). 토큰이 없으면 DB에 가기 전에, 없는 여행이면 틀린 토큰과 같은 401.
+- 받은 바이트를 모아 보낸다(클립은 5 MB까지) — '흘려보냄'은 그 뜻이다.
 - 주소는 `MEDIA_BASE_URL`(기본 `https://media.gachita.mangowhois.ai`). 로컬·CI는 localhost에서 `/api`와 `/media`를 함께 받는다.
 
 ### 5. 저장
