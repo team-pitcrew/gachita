@@ -170,7 +170,7 @@ async function profiles(req, seg, b) {
     const utterances = await tripsDb().query(
       `SELECT u.trip_code, u.at, u.text, u.seat_area FROM utterances u
        JOIN trips t ON t.code = u.trip_code
-       WHERE u.profile_id = $1 AND t.created_at > now() - interval '48 hours'
+       WHERE u.profile_id = $1 AND u.text <> '' AND t.created_at > now() - interval '48 hours'
        ORDER BY u.at DESC LIMIT 100`,
       [me.id]
     );
@@ -528,7 +528,7 @@ async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
       if (!caller.consent) fail(403, "녹음에 동의한 참가자만 볼 수 있음");
       const device = query.get("device");
       const params = [trip.code];
-      let where = "trip_code = $1";
+      let where = "trip_code = $1 AND text <> ''"; // 내용을 비운 줄(지운 글)은 빼고
       if (device) {
         params.push(device, int(Number(query.get("after") ?? 0), 0, 1_000_000_000, "after"));
         where += " AND device = $2 AND seq > $3";
@@ -538,10 +538,13 @@ async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
     }
     if (m === "DELETE") {
       // 자기 글 지우기. 프로필로 참가한 사람만, 자기 이름이 붙은 발화만 지운다. 세대는 올리지 않는다 —
-      // 세대를 올리면 옛 세대 전부, 곧 그 여행의 모든 사람 글이 지워진다. 지운 줄의 순번은 이미 확인 순번 안이라
-      // 차량이 다시 보내지 않는다.
+      // 세대를 올리면 옛 세대 전부, 곧 그 여행의 모든 사람 글이 지워진다.
+      // 줄은 지우지 않고 내용만 비운다: 순번에 빈자리가 있던 기기가 같은 순번을 다시 보내도(멱등 키에 걸려) 되살아나지 않게.
       if (!caller.profileId) fail(403, "프로필로 참가한 사람의 글만 지울 수 있음");
-      const { rowCount } = await client.query("DELETE FROM utterances WHERE trip_code = $1 AND profile_id = $2", [trip.code, caller.profileId]);
+      const { rowCount } = await client.query(
+        "UPDATE utterances SET text = '', seat_area = NULL, confidence = NULL, lat = NULL, lng = NULL WHERE trip_code = $1 AND profile_id = $2 AND text <> ''",
+        [trip.code, caller.profileId]
+      );
       return [200, { deleted: rowCount }];
     }
   }
@@ -550,7 +553,7 @@ async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
     // 기록본: 발화를 시간순으로, 부탁과 도착 할 일과 함께(T39).
     if (m !== "GET") fail(405, "GET만 됨");
     if (!participantOf(req, trip).consent) fail(403, "녹음에 동의한 참가자만 볼 수 있음"); // 이 여행의 허용된 참가자만 본다
-    const { rows } = await client.query("SELECT device, seq, at, text, seat_area, profile_id, confidence, lat, lng FROM utterances WHERE trip_code = $1 ORDER BY at", [trip.code]);
+    const { rows } = await client.query("SELECT device, seq, at, text, seat_area, profile_id, confidence, lat, lng FROM utterances WHERE trip_code = $1 AND text <> '' ORDER BY at", [trip.code]);
     // 도착 할 일 뽑기(LLM)는 아직 구현 전이다. 기록본 모양을 미리 맞춰 둔다(ADR-0007).
     return [200, { generation: trip.generation ?? 1, utterances: rows.map(asUtterance), requests: trip.requests, todos: [] }];
   }
