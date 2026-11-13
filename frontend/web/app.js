@@ -4,6 +4,7 @@
 // 사용자가 쓴 글은 textContent로만 넣는다(innerHTML 금지).
 
 import { SEATS, SEAT, WHEN, REQ, CLOSED, api, h, toast } from "/shared.js";
+import { createCaptions } from "/captions.js";
 
 const TRIP = {
   boarding: ["탑승 중", "모두 타면 운전자가 출발을 눌러요."],
@@ -59,6 +60,15 @@ const draft = { join: "", step: 0, name: "", seat: "" };
 // 여행 경로는 토큰 없이, 프로필 경로(mine)는 이 폰의 프로필 토큰으로.
 const call = (method, path, body) => api(method, `/trips${path}`, body);
 const mine = (method, path, body) => api(method, path, body, store("profile"));
+const captions = createCaptions({
+  getTrip: () => trip,
+  getParticipant: () => trip?.participants.find((p) => p.id === myId()),
+  request: (code, method, path, body, signal) => {
+    if (trip?.code !== code) return Promise.reject(new Error("여행이 바뀌었어요."));
+    return asMe(trip.participants.find((p) => p.id === myId()), (c, token) => api(method, `/trips/${c}${path}`, body, token, signal));
+  },
+  refreshTrip: () => refresh(true),
+});
 
 // 프로필 다시 읽기. 지워졌거나 모르는 토큰이면 이 폰에서도 잊는다.
 async function loadProfile() {
@@ -530,6 +540,7 @@ function tripView(me) {
       // 이미 동의한 사람도 지금의 동의 문구(바뀐 것 포함)를 언제든 다시 본다
       h("details", {}, h("summary", { className: "meta" }, "동의 문구 보기"), h("ul", {}, CONSENT.map((line) => h("li", {}, line)))),
     ),
+    me.consent && myToken() && button("자막 확인하기", captions.open),
     trip.moments.length > 0 &&
       h(
         "section",
@@ -647,6 +658,7 @@ function shortView() {
 }
 
 function render() {
+  captions.sync();
   stale = false;
   const me = trip?.participants.find((p) => p.id === myId());
   // 숏폼은 기록에 동의한 사람만 본다. 보는 사이 여행이 사라지거나 동의가 꺼지면(세대가 오름) 닫고 받은 소리를 버린다.
