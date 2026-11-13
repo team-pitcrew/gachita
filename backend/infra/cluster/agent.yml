@@ -1,0 +1,152 @@
+# 새 EC2 agent 전용입니다. server playbook·Argo CD·OIDC·DB는 실행하지 않습니다.
+- name: 가치타 사설 agent 구축
+  hosts: localhost
+  connection: local
+  become: true
+  gather_facts: true
+  environment:
+    PATH: /usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin
+  vars:
+    k3s_version: v1.36.6+k3s1 # site.yml의 server와 같은 판을 유지합니다.
+    node_ip: "{{ ansible_default_ipv4.address }}"
+  tasks:
+    - name: 기존 server의 상태 디렉터리 확인
+      ansible.builtin.stat:
+        path: /var/lib/rancher/k3s/server
+      register: server_state
+
+    - name: 기존 server 서비스 확인
+      ansible.builtin.stat:
+        path: /etc/systemd/system/k3s.service
+      register: server_service
+
+    - name: 기존 server에서의 실행과 잘못된 입력 거절
+      ansible.builtin.assert:
+        that:
+          - not server_state.stat.exists
+          - not server_service.stat.exists
+          - node_pool in ['app', 'data']
+          - node_name is match('^gachita-[a-z0-9-]+$')
+          - server_url is match('^https://10[.]10[.][0-9]+[.][0-9]+:6443$')
+          - agent_token_parameter == '/gachita/' + env + '/bootstrap/k3s-agent-token'
+          - ansible_architecture == 'aarch64'
+
+    - name: 패키지
+      ansible.builtin.apt:
+        name: [curl, ca-certificates, dnsutils]
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: 커널 설정
+      ansible.builtin.copy:
+        dest: /etc/sysctl.d/90-gachita-agent.conf
+        mode: "0644"
+        content: |
+          fs.inotify.max_user_instances = 1024
+          fs.inotify.max_user_watches = 524288
+          net.ipv4.ip_forward = 1
+      register: sysctl_config
+
+    - name: 커널 설정 적용
+      ansible.builtin.command: sysctl --system
+      when: sysctl_config.changed
+
+    - name: IMDSv2로 AZ와 인스턴스 번호 확인
+      ansible.builtin.shell: |
+        set -euo pipefail
+        t=$(curl -sf -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 60')
+        for p in placement/availability-zone instance-id instance-type; do
+          curl -sf -H "X-aws-ec2-metadata-token: $t" "http://169.254.169.254/latest/meta-data/$p"; echo
+        done
+      args:
+        executable: /bin/bash
+      register: imds
+      changed_when: false
+
+    - name: 설정 폴더
+      ansible.builtin.file:
+        path: /etc/rancher/k3s
+        state: directory
+        mode: "0700"
+
+    - name: 전용 agent 토큰 읽기
+      ansible.builtin.command:
+        argv: [aws, ssm, get-parameter, --region, "{{ region }}", --name, "{{ agent_token_parameter }}", --with-decryption, --query, Parameter.Value, --output, text]
+      register: agent_token
+      changed_when: false
+      no_log: true
+
+    - name: CA 검증이 포함된 agent 전용 토큰인지 확인
+      ansible.builtin.assert:
+        that:
+          - agent_token.stdout | trim is match('^K10[0-9a-f]{64}::node:[^\s]+$')
+      no_log: true
+
+    - name: 토큰 파일
+      ansible.builtin.copy:
+        dest: /etc/rancher/k3s/agent-token
+        content: "{{ agent_token.stdout | trim }}\n"
+        mode: "0600"
+      register: token_file
+      no_log: true
+
+    - name: agent 설정
+      ansible.builtin.template:
+        src: templates/k3s-agent-config.yaml.j2
+        dest: /etc/rancher/k3s/config.yaml
+        mode: "0600"
+      register: agent_config
+
+    - name: 설치된 판 확인
+      ansible.builtin.command: k3s --version
+      register: installed
+      changed_when: false
+      failed_when: false
+
+    - name: agent 서비스 설치 여부
+      ansible.builtin.stat:
+        path: /etc/systemd/system/k3s-agent.service
+      register: agent_service
+
+    - name: 고정된 판의 설치 스크립트
+      ansible.builtin.get_url:
+        url: "https://raw.githubusercontent.com/k3s-io/k3s/{{ k3s_version | urlencode }}/install.sh"
+        dest: "/usr/local/sbin/k3s-install-{{ k3s_version }}.sh"
+        mode: "0755"
+      when: not agent_service.stat.exists or k3s_version not in installed.stdout | default('')
+
+    - name: agent로 설치
+      ansible.builtin.command: "/usr/local/sbin/k3s-install-{{ k3s_version }}.sh"
+      environment:
+        INSTALL_K3S_VERSION: "{{ k3s_version }}"
+        INSTALL_K3S_EXEC: agent
+      when: not agent_service.stat.exists or k3s_version not in installed.stdout | default('')
+      register: install_agent
+
+    - name: 변경된 설정으로 agent 시작
+      ansible.builtin.systemd:
+        name: k3s-agent
+        enabled: true
+        state: "{{ 'restarted' if (agent_config.changed or token_file.changed) and not install_agent.changed else 'started' }}"
+
+    - name: 자기 노드가 Ready인지 확인
+      ansible.builtin.command:
+        argv: [k3s, kubectl, --kubeconfig, /var/lib/rancher/k3s/agent/kubelet.kubeconfig, wait, "node/{{ node_name }}", --for=condition=Ready, --timeout=30s]
+      register: node_ready
+      until: node_ready.rc == 0
+      retries: 20
+      delay: 5
+      changed_when: false
+
+    - name: agent 검증 기록 폴더
+      ansible.builtin.file:
+        path: /var/lib/gachita/agent
+        state: directory
+        mode: "0755"
+
+    - name: agent 검증 기록
+      ansible.builtin.copy:
+        dest: /var/lib/gachita/agent/ready.done
+        content: "{{ ansible_date_time.iso8601 }} {{ node_name }} {{ k3s_version }}\n"
+        mode: "0644"

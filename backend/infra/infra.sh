@@ -37,6 +37,19 @@ tf() { # tf <묶음 폴더> <명령...>. 묶음마다 상태 키가 다르다(ma
   terraform -chdir="$dir" init -input=false -reconfigure -backend-config="bucket=$TF_STATE_BUCKET" \
     -backend-config="key=$key" -backend-config="region=$REGION" -backend-config=use_lockfile=true \
     -backend-config=encrypt=true >/dev/null
+  if [ "$dir" = "$TF" ] && [ "${1:-}" = apply ]; then
+    # 환경 변수뿐 아니라 .tfvars로 켠 agent도 자동 up 경로에 들어오지 못하게 실제 계획을 검사합니다.
+    local plan_dir
+    plan_dir=$(mktemp -d)
+    if ! terraform -chdir="$dir" plan -input=false -out="$plan_dir/plan" >&2 ||
+      ! terraform -chdir="$dir" show -json "$plan_dir/plan" | python3 "$TF/../migration/check_plan.py" legacy; then
+      rm -rf "$plan_dir"
+      fail "단일 노드 up 계획을 중단했습니다. migration/README.md의 별도 절차를 따르십시오"
+    fi
+    terraform -chdir="$dir" apply -input=false "$plan_dir/plan" || { rm -rf "$plan_dir"; return 1; }
+    rm -rf "$plan_dir"
+    return 0
+  fi
   terraform -chdir="$dir" "$@"
 }
 
@@ -105,6 +118,28 @@ done
 echo "백업 $n 이 끝나지 않았습니다(마지막 상태: $p)"
 exit 1
 EOF
+}
+
+migration_on_server() {
+  local id=$1 action=$2
+  on_server "$id" 180 "export KUBECONFIG=/etc/rancher/k3s/k3s.yaml; python3 - '$action' <<'MIGRATION_PY'
+$(cat "$TF/../migration/control.py")
+MIGRATION_PY"
+}
+
+guard_legacy() {
+  local agents ids
+  agents=$(aws ec2 describe-instances --filters "Name=tag:Project,Values=gachita" "Name=tag:Env,Values=$ENV_NAME" \
+    Name=tag:NodePool,Values=app,data Name=instance-state-name,Values=pending,running,stopping,stopped \
+    --query 'Reservations[].Instances[].InstanceId' --output text) || fail "agent 조회 실패: 기존 운영 명령을 실행하지 않습니다"
+  [ -z "$agents" ] || fail "사설 agent가 있습니다. 단일 노드 운영 명령을 사용할 수 없습니다"
+  ids=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=$CLUSTER-k3s" \
+    Name=instance-state-name,Values=pending,running,stopping,stopped \
+    --query 'Reservations[].Instances[].InstanceId' --output text) || fail "서버 조회 실패"
+  [ -n "$ids" ] || return 0
+  [[ $ids =~ ^i-[0-9a-f]+$ ]] || fail "서버가 한 대가 아니어서 전환 상태를 판정할 수 없습니다"
+  ssm_online "$ids" || fail "서버의 전환 상태를 읽을 수 없습니다. 기존 운영 명령을 실행하지 않습니다"
+  migration_on_server "$ids" guard || fail "전환 상태 보호 장치가 기존 운영 명령을 차단했습니다"
 }
 
 server() { # 떠 있는 서버(Name 태그)의 인스턴스 번호. 없거나 SSM에 붙지 않으면 실패한다
@@ -448,6 +483,10 @@ EOF
 }
 
 case ${1:-} in
+up | down | converge | backup | restore | clean-e2e) guard_legacy ;;
+esac
+
+case ${1:-} in
 up) up ;;
 down) down ;;
 status) status ;;
@@ -455,8 +494,13 @@ converge) converge "${2:-}" ;;
 backup) backup ;;
 restore) restore "${2:-}" "${3:-}" ;;
 clean-e2e) clean_e2e ;;
+migration)
+  case ${2:-} in status | freeze | resume) migration_on_server "$(server)" "$2" ;;
+    *) fail "쓰는 법: $0 migration status|freeze|resume" ;;
+  esac
+  ;;
 *)
-  echo "쓰는 법: $0 up|down|status|converge [단계,...]|backup|restore [시각] [apply]|clean-e2e" >&2
+  echo "쓰는 법: $0 up|down|status|converge [단계,...]|backup|restore [시각] [apply]|clean-e2e|migration status|freeze|resume" >&2
   exit 2
   ;;
 esac

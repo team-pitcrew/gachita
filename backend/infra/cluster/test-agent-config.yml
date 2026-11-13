@@ -1,0 +1,30 @@
+# Render both roles with synthetic metadata; never installs anything or contacts AWS.
+- name: Agent 설정 렌더링 검증
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    server_url: https://10.10.0.58:6443
+    node_name: gachita-test-app-a
+    node_ip: 10.10.10.10
+    region: ap-northeast-2
+    imds:
+      stdout_lines: [ap-northeast-2a, i-0123456789abcdef0, t4g.small]
+  tasks:
+    - name: 앱과 데이터 설정의 보안·배치 경계
+      ansible.builtin.assert:
+        that:
+          - config['server'] == server_url
+          - config['token-file'] == '/etc/rancher/k3s/agent-token'
+          - "'token' not in config"
+          - "'cluster-cidr' not in config"
+          - "'disable-kube-proxy' not in config"
+          - "'gachita.io/bootstrap=pending:NoSchedule' in config['node-taint']"
+          - "('gachita.io/pool=data:NoSchedule' in config['node-taint']) == (item == 'data')"
+          - "'provider-id=aws:///ap-northeast-2a/i-0123456789abcdef0' in config['kubelet-arg']"
+          - "'node.kubernetes.io/instance-type=t4g.small' in config['node-label']"
+          - "'node.kubernetes.io/exclude-from-external-load-balancers=true' in config['node-label']"
+      vars:
+        node_pool: "{{ item }}"
+        config: "{{ lookup('ansible.builtin.template', 'templates/k3s-agent-config.yaml.j2') | from_yaml }}"
+      loop: [app, data]

@@ -1,0 +1,23 @@
+server: {{ server_url }}
+token-file: /etc/rancher/k3s/agent-token
+node-name: {{ node_name }}
+node-ip: {{ node_ip }}
+# CNI·kube-proxy 비활성화는 server에서 전달받습니다(agent CLI에 server 전용 flag를 넣지 않습니다).
+node-label:
+  - gachita.io/pool={{ node_pool }}
+  - topology.kubernetes.io/zone={{ imds.stdout_lines[0] }}
+  - topology.kubernetes.io/region={{ region }}
+  - node.kubernetes.io/instance-type={{ imds.stdout_lines[2] }}
+  # 가입 직후 ALB instance target에 자동 등록되지 않게 합니다. P05에서 앱 노드만 해제합니다.
+  - node.kubernetes.io/exclude-from-external-load-balancers=true
+# P04 배치 검증이 끝날 때까지 기존 앱·DB가 새 노드에 우연히 배치되지 않게 합니다.
+node-taint:
+  - gachita.io/bootstrap=pending:NoSchedule
+{% if node_pool == 'data' %}
+  - gachita.io/pool=data:NoSchedule
+{% endif %}
+kubelet-arg:
+  - provider-id=aws:///{{ imds.stdout_lines[0] }}/{{ imds.stdout_lines[1] }}
+  - system-reserved=cpu=100m,memory=256Mi
+  - kube-reserved=cpu=100m,memory=384Mi
+  - eviction-hard=memory.available<128Mi,nodefs.available<10%,nodefs.inodesFree<5%,imagefs.available<15%

@@ -43,11 +43,19 @@ jobs:
             terraform -chdir="backend/infra/terraform/$dir" init -backend=false -input=false
             terraform -chdir="backend/infra/terraform/$dir" validate
           done
+      - name: 전환 보호 장치와 agent 계획 (AWS에 접속하지 않음)
+        run: |
+          python3 -m unittest discover -s backend/infra/migration -v
+          bash -n backend/infra/infra.sh
+          terraform -chdir=backend/infra/terraform init -backend=false -input=false
+          terraform -chdir=backend/infra/terraform test -no-color
       # 서버의 첫 부팅(user_data)과 같은 Ubuntu 24.04 꾸러미 ansible-core
-      - name: Ansible 구문 (site.yml)
+      - name: Ansible 구문 (server, agent)
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq ansible-core
           /usr/bin/ansible-playbook -i localhost, --syntax-check backend/infra/cluster/site.yml
+          /usr/bin/ansible-playbook -i localhost, --syntax-check backend/infra/cluster/agent.yml
+          /usr/bin/ansible-playbook -i localhost, backend/infra/cluster/test-agent-config.yml
 
   waves:
     runs-on: [self-hosted, gachita]

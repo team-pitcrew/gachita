@@ -30,6 +30,8 @@
 | `docs/` | [개발 규칙](docs/development.md), [구조와 스택](docs/architecture.md), [디자인 시스템](docs/design.md), [전사록 데이터](docs/transcript-data.md), [작업 목록](docs/tasks.md), [프로젝트 보드](docs/project-board.md), [결정 기록](docs/adr), [실측 보고](docs/research) | |
 | `apk/` | 제출용 차량 앱 APK(`PITCREW_가치타_release.apk`) | 있음 |
 
+4노드 역할 분리의 첫 구현과 적용 전 검증 조건은 [클러스터 전환 준비](backend/infra/migration/README.md)에 있습니다. 현재 운영 배치는 위 표와 같으며, 새 agent 선언은 기본값이 꺼져 있습니다.
+
 ## 실행 방법
 
 ### 차량 앱(Pleos 에뮬레이터)

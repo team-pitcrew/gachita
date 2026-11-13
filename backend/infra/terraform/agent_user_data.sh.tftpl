@@ -1,0 +1,50 @@
+#!/bin/bash
+# 기존 server의 user_data와 분리합니다. 토큰 값은 Terraform 상태나 EC2 user-data에 넣지 않습니다.
+set -euo pipefail
+umask 077
+install -d -m 700 /etc/gachita /root/.config/gachita
+install -d -m 755 /var/log/gachita
+exec > >(tee -a /var/log/gachita/agent-bootstrap.log) 2>&1
+cat > /etc/gachita/agent.json <<'VARS'
+${vars}
+VARS
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -y
+apt-get install -y ansible-core git curl unzip jq ca-certificates
+if ! command -v aws >/dev/null; then
+  curl -fsSL https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip -o /tmp/awscli.zip
+  unzip -qo /tmp/awscli.zip -d /tmp && /tmp/aws/install
+fi
+region=$(jq -r .region /etc/gachita/agent.json)
+for i in $(seq 1 30); do
+  aws sts get-caller-identity --region "$region" >/dev/null 2>&1 && break
+  sleep 10
+done
+aws sts get-caller-identity --region "$region" >/dev/null
+snap restart amazon-ssm-agent || systemctl restart amazon-ssm-agent || true
+
+cat > /usr/local/sbin/gachita-agent-converge <<'RUN'
+#!/bin/bash
+set -euo pipefail
+umask 077
+exec 9>/run/gachita-agent-converge.lock
+flock -n 9 || { echo 'agent 구축이 이미 실행 중입니다' >&2; exit 1; }
+exec > >(tee -a /var/log/gachita/agent-bootstrap.log) 2>&1
+cfg=/etc/gachita/agent.json
+region=$(jq -r .region "$cfg")
+env_name=$(jq -r .env "$cfg")
+repo=$(jq -r .gitops_repo "$cfg")
+rev=$(jq -r .gitops_revision "$cfg")
+f=/root/.config/gachita/repo-token
+trap 'rm -f "$f.new"' EXIT
+aws ssm get-parameter --region "$region" --name "/gachita/$env_name/bootstrap/argocd-repo-token" \
+  --with-decryption --query Parameter.Value --output text | tr -d '\r\n' > "$f.new"
+test -s "$f.new"
+mv "$f.new" "$f"
+git config --system credential.https://github.com.helper \
+  '!f() { echo username=x-access-token; echo "password=$(cat /root/.config/gachita/repo-token)"; }; f'
+ansible-pull -U "$repo" -C "$rev" -d /opt/gachita-agent \
+  -i localhost, -e @/etc/gachita/agent.json backend/infra/cluster/agent.yml
+RUN
+chmod 755 /usr/local/sbin/gachita-agent-converge
+/usr/local/sbin/gachita-agent-converge

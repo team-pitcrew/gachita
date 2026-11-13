@@ -18,9 +18,9 @@ locals {
   # 붙은 자원만 고친다. 다른 프로젝트 자원에는 Project 태그가 없는 것도 많아 '남의 태그면 거부'로는 막을 수 없다.
   ec2_arn  = "arn:aws:ec2:${var.region}:${local.account}"
   project  = "gachita" # provider default_tags의 Project 값
-  ec2_made = ["vpc", "subnet", "internet-gateway", "route-table", "security-group", "security-group-rule", "vpc-endpoint", "instance"]
+  ec2_made = ["vpc", "subnet", "internet-gateway", "route-table", "security-group", "security-group-rule", "vpc-endpoint", "instance", "elastic-ip", "natgateway"]
   ec2_create = ["CreateVpc", "CreateSubnet", "CreateInternetGateway", "CreateRouteTable", "CreateSecurityGroup",
-  "CreateVpcEndpoint", "RunInstances", "AuthorizeSecurityGroupEgress", "AuthorizeSecurityGroupIngress"]
+  "CreateVpcEndpoint", "RunInstances", "AuthorizeSecurityGroupEgress", "AuthorizeSecurityGroupIngress", "AllocateAddress", "CreateNatGateway"]
   # 우리 발급자 하나(본 설정의 storage.tf: gachita-<env>-oidc-<계정> 버킷 주소)
   cluster_oidc_arn = "arn:aws:iam::${local.account}:oidc-provider/gachita-*-oidc-${local.account}.s3.${var.region}.amazonaws.com"
   # ALB는 클러스터의 AWS Load Balancer Controller가 만든다(ADR-0017). 이름은 gachita-<env>로 고정
@@ -186,7 +186,7 @@ data "aws_iam_policy_document" "apply" {
     actions = concat([for a in local.ec2_create : "ec2:${a}"], ["ec2:Delete*", "ec2:Modify*", "ec2:Associate*",
       "ec2:Disassociate*", "ec2:Attach*", "ec2:Detach*", "ec2:Replace*", "ec2:Revoke*", "ec2:CreateRoute",
       "ec2:CreateTags", "ec2:DeleteTags", "ec2:StartInstances", "ec2:StopInstances", "ec2:RebootInstances",
-    "ec2:TerminateInstances"])
+    "ec2:TerminateInstances", "ec2:ReleaseAddress"])
     resources = ["${local.ec2_arn}:*/*"]
     condition {
       test     = "StringEquals"
