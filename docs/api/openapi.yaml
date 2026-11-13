@@ -96,10 +96,11 @@ paths:
       summary: 구글 계정 연결 또는 계정으로 찾아 들어가기
       description: |
         프로필 토큰과 함께 부르면 내 프로필에 구글 계정을 묶습니다(이름은 그대로). 이미 다른 프로필에 묶인 계정이면 409입니다.
-        토큰 없이 부르면 그 계정의 프로필을 찾아 들어갑니다. 있으면 새 기기 토큰을 함께 돌려주고(이전 기기의 토큰은 못 쓰게 됨), 없으면 프로필을 새로 만듭니다.
+        토큰 없이 부르면 그 계정의 프로필을 찾아 들어갑니다. 있으면 이 기기에 쓸 토큰을 하나 더 돌려주고(다른 기기의 토큰은 그대로, ADR-0009), 없으면 프로필을 새로 만듭니다.
         찾아 들어가기는 갱신 순간에 연결을 다시 확인합니다 — 요청 중 연결이 바뀌었으면 토큰을 주지 않고 401로 끝냅니다.
         코드는 서버가 구글과 바꾸므로 클라이언트 비밀 값은 클라이언트에 없습니다(ADR-0006).
-        오류는 나눠 옵니다: 401 코드 거절 또는 연결 변경, 500 서버의 클라이언트 설정 오류, 502 제공자 응답 오류, 503 제공자 일시 장애·연결 실패, 504 제공자 응답 시간 초과.
+        `redirectUri`는 우리 출처만 받습니다(T27): `https://gachita.mangowhois.ai`와 로컬 개발(`http://localhost`·`http://127.0.0.1`의 아무 포트). 다른 주소는 구글을 부르지 않고 400입니다.
+        오류는 나눠 옵니다: 400 입력 오류(허용하지 않는 `redirectUri` 포함), 401 코드 거절 또는 연결 변경, 500 서버의 클라이언트 설정 오류, 502 제공자 응답 오류, 503 제공자 일시 장애·연결 실패, 504 제공자 응답 시간 초과.
       security: [{}, { profileToken: [] }]
       requestBody:
         required: true
@@ -110,7 +111,7 @@ paths:
               required: [code, redirectUri]
               properties:
                 code: { type: string, minLength: 1, maxLength: 500, description: 구글이 redirect 주소로 돌려준 인증 코드 }
-                redirectUri: { type: string, minLength: 1, maxLength: 500, description: 코드를 받을 때 쓴 주소. 구글에 등록된 값과 같아야 함 }
+                redirectUri: { type: string, minLength: 1, maxLength: 500, description: "코드를 받을 때 쓴 주소. https://gachita.mangowhois.ai 또는 http://localhost·127.0.0.1의 주소를 정규형으로(사용자 정보 없이). 구글에 등록된 값과 같아야 함" }
       responses:
         "200": { description: 연결했거나 찾아 들어간 프로필, content: { application/json: { schema: { $ref: "#/components/schemas/ProfileMaybeToken" } } } }
         "201": { description: 계정으로 새로 만든 프로필, content: { application/json: { schema: { $ref: "#/components/schemas/ProfileMaybeToken" } } } }
