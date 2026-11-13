@@ -10,7 +10,17 @@ export DEBIAN_FRONTEND=noninteractive
 
 # ubuntu-latest에 미리 있던 도구 가운데 워크플로가 쓰는 것
 sudo apt-get update -qq
-sudo apt-get install -y -qq git curl jq make python3 unzip zip ca-certificates
+sudo apt-get install -y -qq git curl jq make python3 unzip zip ca-certificates nodejs ruby
+# nodejs: setup-terraform의 래퍼, ruby: backend/api 테스트가 OpenAPI(YAML)를 읽음. 둘 다 ubuntu-latest에 미리 있던 것
+# x86_64 C 라이브러리: Rosetta로 도는 Android SDK 도구(aapt2)가 쓴다. amd64 꾸러미는 ports가 아니라 archive에 있다
+if ! dpkg --print-foreign-architectures | grep -qx amd64; then
+  sudo sed -i '/^URIs: http:\/\/ports.ubuntu.com/a Architectures: arm64' /etc/apt/sources.list.d/ubuntu.sources
+  printf 'Types: deb\nURIs: http://archive.ubuntu.com/ubuntu\nSuites: noble noble-updates noble-security\nComponents: main universe\nArchitectures: amd64\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n' |
+    sudo tee /etc/apt/sources.list.d/amd64.sources >/dev/null
+  sudo dpkg --add-architecture amd64
+  sudo apt-get update -qq
+fi
+sudo apt-get install -y -qq libc6:amd64 libstdc++6:amd64 zlib1g:amd64
 curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg status=none
 echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" |
   sudo tee /etc/apt/sources.list.d/github-cli.list >/dev/null
