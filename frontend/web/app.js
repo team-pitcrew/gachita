@@ -14,7 +14,7 @@ const TRIP = {
 const NEXT_TRIP = { boarding: ["출발", "driving"], driving: ["주차", "parked"], parked: ["여행 끝내기", "ended"] };
 const ONLY_HERE = "이 폰에서 참가한 사람만 켤 수 있어요.";
 // 켜져 있던 동의를 끄면 서버가 동의 세대를 올려 그 여행의 받아 적은 글을 모두 지운다(ADR-0007). 누르기 전에 알린다.
-const OFF_WIPES = "동의를 끄면 기록이 멈추고, 이 여행에서 지금까지 받아 적은 글이 모두 지워져요. 끌까요?";
+const OFF_WIPES = "동의를 끄면 기록이 멈추고, 이 여행에서 지금까지 받아 적은 글과 올라간 소리가 모두 지워져요. 끌까요?";
 // 프로필 캐릭터. 사진이 없을 때 이 그림으로 보인다(목록 고정은 T46).
 const CHARACTERS = [
   ["bunny", "🐰", "토끼"],
@@ -332,6 +332,19 @@ const missing = () => [
   bar(button("처음으로", () => (location.hash = ""), "primary")),
 ];
 
+// 기록 동의 문구. docs/api/voice.md '동의 문구'(api-media가 #183에서 고침)와 글자까지 같게 둔다(#156, 11/14).
+// 앱이 실제로 하는 것만 적는다: 외부 음성 인식으로 보내는 것, 지울 수 있는 것, 동의를 끄면 지워지는 것.
+const CONSENT = [
+  "대화는 차에서 받아 적힙니다.",
+  "녹음은 기본 꺼져 있고, 참가자 모두가 동의할 때만 켭니다.",
+  "받아 적은 글은 여행 기록과 함께 여행을 만든 뒤 48시간이 지나면 지워지고, 그 뒤엔 사람이 장면으로 남긴 것만 남습니다.",
+  "장면을 고를 수 있게 소리는 48시간 동안 차 안에 암호화해 두었다가 지웁니다.",
+  "장면으로 남기면 그 구간의 소리가 서버로 올라갑니다.",
+  "자막을 바로잡으려고 그 구간의 소리와 받아 적은 글, 참가자 이름을 외부 음성 인식 서버로 보내 다시 받아 적습니다.",
+  "누가 말했는지 가리려고 말소리가 잠시 서버로 갔다가 저장되지 않고 지워집니다.",
+  "프로필로 참가한 사람은 자기 이름이 붙은 글을, 참가자 누구나 장면으로 남긴 소리를 바로 지울 수 있습니다.",
+  "동의는 여행 중 언제든 끌 수 있고, 끄면 이 여행에서 그때까지 받아 적은 글과 올라간 소리가 모두 지워집니다.",
+];
 // 참가: 한 화면에 한 가지씩 묻는다
 function join() {
   const taken = Object.fromEntries(trip.participants.map((p) => [p.seat, p.name]));
@@ -375,13 +388,7 @@ function join() {
       title: "이동 중 대화를 기록해도 될까요?",
       sub: "도착한 뒤 재미있던 장면을 클립으로 남기는 데 써요.",
       body: [
-        h(
-          "ul",
-          { className: "card" },
-          h("li", {}, "주행하는 동안 차 안의 대화를 기록해요."),
-          h("li", {}, "한 명이라도 동의하지 않으면 기록하지 않아요."),
-          h("li", {}, "동의는 여행 중 언제든 끌 수 있어요."),
-        ),
+        h("ul", { className: "card" }, CONSENT.map((line) => h("li", {}, line))),
         bar(button("동의하고 참가", () => submit(true), "primary"), button("동의하지 않고 참가", () => submit(false))),
       ],
     }),
@@ -417,6 +424,24 @@ function tripView(me) {
         .catch((e) => {
           throw e.status === 401 || e.status === 403 ? new Error(ONLY_HERE) : e;
         });
+    });
+  // 지우기(#156 동의 문구): 장면 소리는 이 여행의 참가자 누구나, 자기 글은 프로필로 참가한 사람만
+  const eraseClip = (m) =>
+    confirm("이 장면의 소리를 지울까요? 받아 적은 글과 장면은 남아요.") &&
+    act(async () => {
+      const del = () => api("DELETE", `/trips${t}/recordings/${m.id}`, null, myToken());
+      await del()
+        .catch((e) => (e.status === 409 ? del() : Promise.reject(e))) // 그사이 새로 올라왔으면 한 번 더 지운다
+        .then(
+          () => toast("장면 소리를 지웠어요."),
+          (e) => (e.status === 404 ? toast("지울 소리가 없어요.") : Promise.reject(e)),
+        );
+    });
+  const eraseMine = () =>
+    confirm("이 여행에서 내 이름이 붙은 받아 적은 글을 지울까요? 되돌릴 수 없어요.") &&
+    act(async () => {
+      const { deleted } = await api("DELETE", `/trips${t}/utterances`, null, myToken());
+      toast(deleted ? `내 이름이 붙은 글 ${deleted}줄을 지웠어요.` : "지울 내 글이 없어요.");
     });
   const open = trip.requests.filter((r) => !CLOSED.includes(r.status));
   const rec = trip.recording ? ["기록 중", "rec"] : trip.status !== "driving" ? ["기록 안 함", ""] : waiting.length ? ["동의 대기", ""] : ["기록 일시정지", ""];
@@ -480,6 +505,10 @@ function tripView(me) {
         h("div", {}, h("p", { className: "what" }, "대화 기록 동의"), h("p", { className: "meta" }, me.consent ? "동의했어요." : "동의하지 않았어요.")),
         me.consent ? button("동의 끄기", () => confirm(OFF_WIPES) && patch(`/participants/${me.id}`, { consent: false })()) : myToken() ? button("동의 켜기", consentOn) : h("p", { className: "meta" }, ONLY_HERE),
       ),
+      // 동의 문구가 약속한 지우기: 프로필로 참가한 사람의 자기 글(손님 발화는 누구 것인지 가릴 수 없어 서버가 403)
+      me.profileId &&
+        myToken() &&
+        h("div", { className: "between" }, h("div", {}, h("p", { className: "what" }, "내 글"), h("p", { className: "meta" }, "내 이름이 붙은 받아 적은 글")), button("내 글 지우기", eraseMine, "plain")),
     ),
     trip.moments.length > 0 &&
       h(
@@ -487,7 +516,18 @@ function tripView(me) {
         { className: "card" },
         h("div", { className: "between" }, h("h2", {}, `남긴 장면 ${trip.moments.length}개`), me.consent && myToken() && button("숏폼 보기", () => openShort().catch((e) => toast(e.status === 0 ? "연결이 끊겨서 열지 못했어요." : e.message)))),
         !(me.consent && myToken()) && h("p", { className: "meta" }, "기록에 동의한 사람만 숏폼을 볼 수 있어요."),
-        h("ul", {}, trip.moments.map((m) => h("li", {}, h("span", { className: "what" }, m.label || "이름 없는 장면"), h("span", { className: "meta" }, new Date(m.at).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" }))))),
+        h(
+          "ul",
+          {},
+          trip.moments.map((m) =>
+            h(
+              "li",
+              { className: "between" },
+              h("div", { className: "grow" }, h("span", { className: "what" }, m.label || "이름 없는 장면"), " ", h("span", { className: "meta" }, new Date(m.at).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" }))),
+              myToken() && button("소리 지우기", () => eraseClip(m), "plain"),
+            ),
+          ),
+        ),
       ),
     trip.status !== "ended" && bar(button("부탁 남기기", () => (sheet.showModal(), sheet.querySelector("#sheet-text").focus()), "primary")),
   ];
@@ -619,3 +659,6 @@ await loadProfile();
 fillDraft();
 refresh(true);
 navigator.serviceWorker?.register("/sw.js").catch(() => {}); // 홈 화면 설치와 끊겼을 때의 마지막 화면(T6)
+// 처음 설치되는 방문에서는 여행을 워커가 맡기 전에 읽었고 그 뒤 폴링은 304라 캐시에 여행이 없다.
+// 워커가 이 화면을 맡는 순간 한 번 더 읽어 끊겼을 때 보일 여행을 남긴다.
+navigator.serviceWorker?.addEventListener("controllerchange", () => refresh(true));
