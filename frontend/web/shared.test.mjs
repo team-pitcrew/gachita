@@ -1,0 +1,35 @@
+// shared.js의 api()가 토큰 머리말과 실패를 약속대로 다루는지 본다. 실행: 저장소 루트에서 make check
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { api } from "./shared.js";
+
+const answer = (status, body) => async (url, init) => ((answer.last = { url, init }), new Response(body === undefined ? null : JSON.stringify(body), { status }));
+
+test("토큰은 Bearer 머리말로, JSON 본문에는 형식을 붙인다", async () => {
+  globalThis.fetch = answer(200, { ok: 1 });
+  assert.deepEqual(await api("PATCH", "/trips/ABC", { consent: true }, "t".repeat(43)), { ok: 1 });
+  assert.equal(answer.last.url, "/api/trips/ABC");
+  assert.deepEqual(answer.last.init.headers, { authorization: `Bearer ${"t".repeat(43)}`, "content-type": "application/json" });
+  assert.equal(answer.last.init.body, '{"consent":true}');
+});
+
+test("토큰이 없으면 머리말도 없고, 사진(Blob)은 그대로 보낸다", async () => {
+  globalThis.fetch = answer(204);
+  const photo = new Blob(["x"], { type: "image/jpeg" });
+  assert.equal(await api("PUT", "/profiles/me/photo", photo), null);
+  assert.deepEqual(answer.last.init.headers, {});
+  assert.equal(answer.last.init.body, photo);
+});
+
+test("304는 null, 거절은 서버의 이유와 status, 닿지 않으면 status 0", async () => {
+  globalThis.fetch = answer(304);
+  assert.equal(await api("GET", "/trips/ABC?v=3"), null);
+  globalThis.fetch = answer(401, { error: "참가자 토큰이 필요함" });
+  await assert.rejects(api("PATCH", "/trips/ABC/participants/p1", { consent: true }), { status: 401, message: "참가자 토큰이 필요함" });
+  globalThis.fetch = async () => new Response("<html>", { status: 502 });
+  await assert.rejects(api("GET", "/trips/ABC"), { status: 502 });
+  globalThis.fetch = async () => {
+    throw new TypeError("Failed to fetch");
+  };
+  await assert.rejects(api("GET", "/trips/ABC"), { status: 0 });
+});

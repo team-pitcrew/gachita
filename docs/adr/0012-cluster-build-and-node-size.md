@@ -22,7 +22,7 @@
 | 첫 부팅 스크립트 한 덩어리(지금) | 파일 하나 | 단계·검사가 없음. 다시 돌리기 어려움. 바꾸면 서버 교체 |
 | Ansible을 밖에서 SSH로 | 흔한 방식 | 22를 열어야 함. 설계와 어긋남 |
 | Ansible을 밖에서 SSM 연결 플러그인으로 | 포트를 열지 않음 | 파일 전송용 S3 버킷, 실행하는 쪽에 세션 플러그인·컬렉션 필요. 느리고 실패 지점이 많음 |
-| **서버 안에서 `ansible-pull`(로컬 연결)** | 포트를 열지 않음. 저장소의 플레이북을 그대로 받아 돎. 다시 돌릴 때는 SSM Run Command로 같은 명령 | 서버에 ansible-core를 깐다. 저장소를 읽을 배포 키가 서버에 있어야 함(Argo CD도 어차피 필요) |
+| **서버 안에서 `ansible-pull`(로컬 연결)** | 포트를 열지 않음. 저장소의 플레이북을 그대로 받아 돎. 다시 돌릴 때는 SSM Run Command로 같은 명령 | 서버에 ansible-core를 깐다. 저장소를 읽을 자격(11/14부터 읽기 전용 토큰)이 서버에 있어야 함(Argo CD도 어차피 필요) |
 
 **Argo CD보다 먼저 있어야 하는 것(CNI, Argo CD 자신)을 누가 관리하나**
 
@@ -54,7 +54,7 @@
 | 구축 단계(`backend/infra/cluster`, Ansible) | 서버 OS, K3s, Cilium, 서비스 계정 발급자, Argo CD, 뿌리 앱 | `gachita-converge`(SSM Run Command) |
 | Argo CD(`backend/infra/gitops`) | 나머지 전부를 물결 순서로(ADR-0013) | PR 병합 |
 
-**첫 부팅 스크립트는 얇게**: 패키지(ansible-core, git, AWS CLI) → SSM에서 배포 키 → GitHub 호스트 키 고정 → `/usr/local/sbin/gachita-converge`(= `ansible-pull … site.yml`) 실행. 환경마다 다른 값(계정, 발급자 주소, 브랜치, 서비스 주소)만 Terraform이 `/etc/gachita/vars.yml`로 넘기고, 판은 저장소 한곳(`site.yml`, `argocd/kustomization.yaml`)에 고정한다.
+**첫 부팅 스크립트는 얇게**: 패키지(ansible-core, git, AWS CLI) → SSM에서 저장소 읽기 토큰(git 자격 도우미) → `/usr/local/sbin/gachita-converge`(= `ansible-pull … site.yml`) 실행. 환경마다 다른 값(계정, 발급자 주소, 브랜치, 서비스 주소)만 Terraform이 `/etc/gachita/vars.yml`로 넘기고, 판은 저장소 한곳(`site.yml`, `argocd/kustomization.yaml`)에 고정한다.
 
 **단계 일곱 개.** 각 단계는 먼저 이미 됐는지 보고, 끝나면 `/var/lib/gachita/bootstrap/<번호>-<이름>.done`에 시각을 남긴다. 로그(`/var/log/gachita/bootstrap.log`)의 작업 이름에 `[3/7 cilium]`처럼 단계가 붙어 멈춘 곳이 보인다. `--tags <이름>`으로 한 단계만 다시 돌린다.
 
@@ -114,7 +114,7 @@ Terraform이 만든 값(`/tf/`) → SSM /gachita/dev/tf/* → 같은 길
 |---|---|---|---|---|
 | `GHCR_PULL_TOKEN` | `app/ghcr-pull-token` | 클래식 토큰, `read:packages` 하나 | 사람 | `gachita`의 imagePullSecret |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | `app/google/*` | 구글 OAuth 웹 클라이언트, 리다이렉트 `https://gachita.mangowhois.ai/…` | 사람 | API 환경 변수. 없어도 서버는 뜬다 |
-| `ARGOCD_DEPLOY_KEY` | `bootstrap/argocd-deploy-key` | 저장소 배포 키(읽기 전용 SSH) | 승인 뒤 | 첫 부팅(ansible-pull), Argo CD 저장소 자격 |
+| `ARGOCD_REPO_TOKEN` | `bootstrap/argocd-repo-token` | 저장소 읽기 토큰(이 저장소 하나, HTTPS. 배포 키가 조직 설정으로 막혀 11/14에 바꿈) | 승인 뒤 | 첫 부팅(ansible-pull), Argo CD 저장소 자격 |
 | `CLOUDFLARE_API_TOKEN` | (SSM에 두지 않음) | `mangowhois.ai` DNS 편집 + 영역 WAF 편집 | 사람 | `terraform`·`infra` 워크플로의 develop 실행에서만(PR 계획에는 주지 않음) |
 | - | - | DB 주소(사용자·비밀번호 포함) | CloudNativePG가 DB 네임스페이스에 생성 | 그 Secret 하나만 읽는 역할로 `gachita`에 복사(ADR-0013) |
 

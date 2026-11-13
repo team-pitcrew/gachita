@@ -231,12 +231,12 @@
       changed_when: false
       tags: [argocd]
 
-    - name: "[5/7 argocd] 저장소 자격(읽기 전용 배포 키)"
+    - name: "[5/7 argocd] 저장소 자격(이 저장소 읽기 전용 토큰, 첫 부팅이 SSM에서 받아 둔 파일)"
       ansible.builtin.shell: |
         set -o pipefail
         kubectl -n argocd create secret generic gachita-repo \
           --from-literal=type=git --from-literal=url='{{ gitops_repo }}' \
-          --from-file=sshPrivateKey=/root/.ssh/gachita-deploy \
+          --from-literal=username=x-access-token --from-file=password=/root/.config/gachita/repo-token \
           --dry-run=client -o yaml \
         | kubectl label --local -f - argocd.argoproj.io/secret-type=repository -o yaml \
         | kubectl apply -f -
