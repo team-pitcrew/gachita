@@ -110,6 +110,21 @@ async function rejoin() {
   return true;
 }
 
+// 이 폰의 참가자 토큰으로 부른다(동의 켜기, 지우기, 숏폼). 누른 여행을 잡아 그 여행의 토큰만 쓴다.
+// 서버가 토큰을 잊었으면(401: 같은 프로필이 다른 곳에서 다섯 번 넘게 다시 참가) 프로필로 들어온 사람은
+// 다시 참가해 새 토큰으로 한 번 더 한다. 기다리는 사이 다른 여행으로 옮겼으면 다시 하지 않는다. 손님은 다시 받을 길이 없다.
+async function asMe(me, call) {
+  const c = trip.code;
+  const go = () => call(c, store(`${c}:token`));
+  return go().catch(async (e) => {
+    if (e.status !== 401 || !profile || me.profileId !== profile.id || trip?.code !== c) throw e;
+    store(`${c}:token`, null);
+    await claim();
+    if (trip?.code !== c) throw e;
+    return go();
+  });
+}
+
 const typing = () => app.contains(document.activeElement) && /^(INPUT|SELECT)$/.test(document.activeElement.tagName);
 
 async function refresh(force) {
@@ -411,29 +426,17 @@ function tripView(me) {
   const patch = (path, body) => () => act(() => call("PATCH", t + path, body));
   // 켜기는 본인의 참가자 토큰으로만 된다(끄기는 누구나). 서버가 이 폰의 토큰을 잊었으면(다른 곳에서 다섯 번 넘게
   // 다시 참가) 프로필로 들어온 사람은 다시 참가해 새 토큰으로 한 번 더 켠다. 손님은 다시 받을 길이 없다.
-  // 누른 여행·참가자를 고정한다: 응답을 기다리는 사이 다른 여행으로 옮겨도 그 여행의 토큰을 건드리지 않는다.
   const consentOn = () =>
-    act(async () => {
-      const c = trip.code;
-      const mine = profile && me.profileId === profile.id;
-      const on = () => api("PATCH", `/trips/${c}/participants/${me.id}`, { consent: true }, store(`${c}:token`));
-      await on()
-        .catch(async (e) => {
-          if (e.status !== 401 || !mine || trip?.code !== c) throw e; // 화면이 바뀌었으면 다시 하지 않는다
-          store(`${c}:token`, null);
-          await claim();
-          if (trip?.code !== c) throw e;
-          await on();
-        })
-        .catch((e) => {
-          throw e.status === 401 || e.status === 403 ? new Error(ONLY_HERE) : e;
-        });
-    });
+    act(() =>
+      asMe(me, (c, token) => api("PATCH", `/trips/${c}/participants/${me.id}`, { consent: true }, token)).catch((e) => {
+        throw e.status === 401 || e.status === 403 ? new Error(ONLY_HERE) : e;
+      }),
+    );
   // 지우기(#156 동의 문구): 장면 소리는 이 여행의 참가자 누구나, 자기 글은 프로필로 참가한 사람만
   const eraseClip = (m) =>
     confirm("이 장면의 소리를 지울까요? 받아 적은 글과 장면은 남아요.") &&
     act(async () => {
-      const del = () => api("DELETE", `/trips${t}/recordings/${m.id}`, null, myToken());
+      const del = () => asMe(me, (c, token) => api("DELETE", `/trips/${c}/recordings/${m.id}`, null, token));
       await del()
         .catch((e) => (e.status === 409 ? del() : Promise.reject(e))) // 그사이 새로 올라왔으면 한 번 더 지운다
         .then(
@@ -444,7 +447,7 @@ function tripView(me) {
   const eraseMine = () =>
     confirm("이 여행에서 내 이름이 붙은 받아 적은 글을 지울까요? 되돌릴 수 없어요.") &&
     act(async () => {
-      const { deleted } = await api("DELETE", `/trips${t}/utterances`, null, myToken());
+      const { deleted } = await asMe(me, (c, token) => api("DELETE", `/trips/${c}/utterances`, null, token));
       toast(deleted ? `내 이름이 붙은 글 ${deleted}줄을 지웠어요.` : "지울 내 글이 없어요.");
     });
   const open = trip.requests.filter((r) => !CLOSED.includes(r.status));
