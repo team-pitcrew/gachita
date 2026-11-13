@@ -13,6 +13,7 @@ hooks: ## 커밋 훅과 커밋 양식을 이 저장소에 건다(복제한 뒤 �
 
 check-fast: ## 올리기 전에 도는 빠른 검사(1초 안팎)
 	node --check frontend/web/app.js
+	node --check frontend/web/demo/demo.js
 	node --test "frontend/web/*.test.mjs"
 
 check: check-fast db api ## CI와 같은 검사(로컬 Postgres 컨테이너를 띄운다)
