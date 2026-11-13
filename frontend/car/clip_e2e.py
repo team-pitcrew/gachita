@@ -63,15 +63,16 @@ def env10(x):
     return 20 * np.log10(np.sqrt((x[:n * 160].reshape(n, 160) ** 2).mean(1)) + 1)
 
 
-def match(clip, ref):
-    """클립 포락선과 넣은 소리(ref) 포락선이 가장 잘 맞는 자리: (상관, 클립 첫 표본이 넣은 소리에서 몇 초 자리인지. 넣은 소리 앞이면 음수)."""
-    a = env10(clip); b = env10(ref); sign = 1
-    if len(a) > len(b): a, b, sign = b, a, -1  # 짧은 쪽을 긴 쪽 위에서 민다
+def match(clip, ref, pad=15):
+    """클립 포락선과 넣은 소리(ref) 포락선이 가장 잘 맞는 자리: (상관, 클립 첫 표본이 넣은 소리에서 몇 초 자리인지. 넣은 소리 앞이면 음수).
+    넣은 소리 앞뒤에 무음 pad초를 붙여, 넣기 전부터 시작하는 클립도 맞춘다."""
+    z = np.zeros(pad * 16000, dtype=ref.dtype)
+    a = env10(clip); b = env10(np.concatenate([z, ref, z]))
     a = (a - a.mean()) / (a.std() + 1e-9)
     best = (-1, 0)
     for i in range(0, len(b) - len(a) + 1):
         w = b[i:i + len(a)]; c = float((a * (w - w.mean()) / (w.std() + 1e-9)).mean())
-        if c > best[0]: best = (c, sign * i / 100)
+        if c > best[0]: best = (c, i / 100 - pad)
     return round(best[0], 3), round(best[1], 2)
 
 
@@ -167,12 +168,16 @@ def main(apk, minutes):
         check(f"{minutes}분 동안 원음을 쌓으며 막힘 없음", not any("BLOCKED" in c["line"] or "녹음 끝" in c["line"] or "원음을 쓰지 못함" in c["line"] for c in window))
         gear("Park"); adb("shell", "am", "start", "--user", "10", "-n", f"{PKG}/.MainActivity"); time.sleep(3)
     # 4. 원음 지우기(기록 중): 지난 원음이 지워지고 그 뒤로는 새 파일에 이어 쓴다. 받아 적은 글과 동의는 그대로
+    # 대화의 "화장실 가고 싶어"·"응, 다음 휴게소 가자"로 경유지가 들어가 내비가 앞에 올 수 있다(T9). 우리 앱을 앞으로
+    adb("shell", "am", "start", "--user", "10", "-n", f"{PKG}/.MainActivity")
+    wait_texts(lambda u: "이 차에 둔 원음 지우기" in u, 15)
     before = raw_names()
     tap_text("이 차에 둔 원음 지우기"); time.sleep(3)
     after = raw_names(); ui = texts(); note("raw.drop", before=before, after=after, ui=ui)
     check("원음 지우기: 지난 원음 파일이 지워지고 새 파일로 이어 씀(기록은 계속)", before and after and not set(before) & set(after) and "● 기록 중" in ui,
           before=before, after=after)
     # 5. 동의를 끄면 원음 파일이 모두 지워진다(동의 세대가 오름)
+    adb("shell", "am", "start", "--user", "10", "-n", f"{PKG}/.MainActivity"); time.sleep(2)
     tap_switch(); time.sleep(5)
     left = raw_files(); note("raw.off", files=left)
     check("동의를 끄면 원음 파일이 모두 지워짐", not left and not mic_holders(), files=left)
