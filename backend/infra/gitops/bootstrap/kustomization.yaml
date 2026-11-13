@@ -1,8 +1,8 @@
 # 뿌리 앱(root)이 읽는 곳. 여기 Application들이 물결(sync-wave) 순서로 나머지를 올린다(ADR-0013).
 # 뿌리 앱은 앞 물결의 앱이 Healthy가 된 뒤 다음 물결로 간다(Argo CD의 Application 건강 판정은
 # backend/infra/cluster/argocd/argocd-cm.yaml 에서 켠다).
-#   0 cluster-base, gateway-api → 1 cert-manager, cnpg, external-secrets, traefik
-#   → 2 barman-cloud, pod-identity-webhook, secret-stores → 3 db-trips, db-profiles → 4 api → 5 edge
+#   0 cluster-base, gateway-api → 1 cert-manager, cnpg, external-secrets
+#   → 2 barman-cloud, pod-identity-webhook, secret-stores → 3 db, aws-load-balancer-controller → 4 api → 5 edge
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: argocd
@@ -12,11 +12,10 @@ resources:
   - 10-cert-manager.yaml
   - 10-cnpg.yaml
   - 10-external-secrets.yaml
-  - 10-traefik.yaml
   - 20-barman-cloud.yaml
   - 20-pod-identity-webhook.yaml
   - 20-secret-stores.yaml
-  - 30-db-trips.yaml
-  - 30-db-profiles.yaml
+  - 30-db.yaml
+  - 30-aws-load-balancer-controller.yaml
   - 40-api.yaml
   - 50-edge.yaml

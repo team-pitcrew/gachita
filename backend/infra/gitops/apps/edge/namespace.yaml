@@ -1,4 +1,4 @@
-# Traefik(물결 1)이 먼저 이 네임스페이스를 만들고, edge 앱(물결 5)이 라벨을 붙여 넘겨받는다.
+# Gateway와 그 ALB 설정만 있는 네임스페이스. 파드는 없다.
 apiVersion: v1
 kind: Namespace
 metadata:

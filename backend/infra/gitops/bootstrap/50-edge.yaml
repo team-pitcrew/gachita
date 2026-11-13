@@ -1,4 +1,5 @@
-# 물결 5. 밖으로 여는 것: Gateway, HTTPRoute(gachita 네임스페이스), 요청 수 제한, cloudflared.
+# 물결 5. 밖으로 여는 것: GatewayClass(ALB), Gateway와 그 ALB 설정, HTTPRoute와 대상 그룹 설정(gachita 네임스페이스).
+# 이 앱이 생기면 ALB 컨트롤러가 ALB를 만들고, 이 앱을 지우면(finalizer) ALB를 지운다. 접을 때 Terraform보다 먼저 지운다(ADR-0017).
 # API가 건강해진 뒤에야 밖에서 닿는다. HTTPRoute를 API 앱에 두면 Gateway가 없어 물결 4가 끝나지 않는다.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
