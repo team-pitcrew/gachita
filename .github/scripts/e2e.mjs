@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 떠 있는 같이타 서버에 대고 여행 하나의 흐름을 실제 HTTP로 확인한다. 의존성 없음(Node 22 기본 fetch).
+// 떠 있는 가치타 서버에 대고 여행 하나의 흐름을 실제 HTTP로 확인한다. 의존성 없음(Node 22 기본 fetch).
 //
 //   node .github/scripts/e2e.mjs http://localhost:8787
 //
@@ -157,7 +157,7 @@ step("웹앱 첫 화면과 정적 파일", async () => {
   const page = await call("GET", "/");
   status(page, 200);
   same("첫 화면 형식", page.type, "text/html");
-  same("첫 화면에 '같이타'", page.text.includes("같이타"), true);
+  same("첫 화면에 '가치타'", page.text.includes("가치타"), true);
   for (const [file, type] of [["/app.js", "text/javascript"], ["/style.css", "text/css"]]) {
     const r = await call("GET", file);
     status(r, 200);

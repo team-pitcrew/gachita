@@ -1,4 +1,4 @@
-// 같이타 API 서버. Node 22 표준 http와 Postgres 드라이버(pg) 하나만 쓴다.
+// 가치타 API 서버. Node 22 표준 http와 Postgres 드라이버(pg) 하나만 쓴다.
 // 한 프로세스가 API(/api)와 웹앱(frontend/web)을 같이 내보낸다. 경로와 형식은 docs/api/openapi.yaml에 있다.
 //
 // ponytail: 여행 하나를 JSONB 문서 한 줄로 저장한다. 바꿀 때는 그 줄을 잠그고 통째로 다시 쓴다.

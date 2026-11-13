@@ -1,4 +1,4 @@
-// 같이타 모바일 화면(gachita.mangowhois.ai). 빌드 없이 브라우저가 그대로 읽는다.
+// 가치타 모바일 화면(gachita.mangowhois.ai). 빌드 없이 브라우저가 그대로 읽는다.
 // 주소: /#코드는 여행, /#me는 내 프로필, /j/<초대>는 그룹 초대 수락(QR, ADR-0009).
 // 이 폰이 누구인지(프로필 토큰, 여행마다 참가자 id와 토큰)는 localStorage에 둔다. 폰에서는 수음하지 않는다.
 // 사용자가 쓴 글은 textContent로만 넣는다(innerHTML 금지).
@@ -179,7 +179,7 @@ const car = (seat, className = "car") =>
 
 function share() {
   const url = `${location.origin}/#${trip.code}`;
-  if (navigator.share) navigator.share({ title: "같이타 여행 초대", url }).catch(() => {});
+  if (navigator.share) navigator.share({ title: "가치타 여행 초대", url }).catch(() => {});
   else navigator.clipboard.writeText(url).then(() => toast("초대 주소를 복사했어요."), () => toast(url));
 }
 
@@ -286,7 +286,7 @@ function profileView() {
 function inviteView() {
   if (inviteError)
     return [
-      header(h("span", { className: "brand" }, "같이타")),
+      header(h("span", { className: "brand" }, "가치타")),
       h("h1", {}, "이 초대는 쓸 수 없어요"),
       h("p", { className: "sub" }, `${inviteError}. 대표에게 새 초대를 부탁해 주세요.`),
       bar(button("처음으로", () => (location.href = "/"), "primary")),
@@ -294,7 +294,7 @@ function inviteView() {
   if (invited) {
     const kind = invited.group.kind === "family" ? "가족" : "동승자";
     return [
-      header(h("span", { className: "brand" }, "같이타")),
+      header(h("span", { className: "brand" }, "가치타")),
       h("h1", {}, `${invited.group.name || kind} 그룹에 들어왔어요`),
       h("p", { className: "sub" }, invited.trip ? "지금 함께 가는 여행이 있어요. 앉은 자리만 고르면 돼요." : "대표가 여행을 만들면 자리만 고르면 돼요."),
       bar(button(invited.trip ? "자리 고르기" : "처음으로", () => (location.href = invited.trip ? `/#${invited.trip.code}` : "/"), "primary")),
@@ -313,7 +313,7 @@ function inviteView() {
       invited = res;
     });
   return [
-    header(h("span", { className: "brand" }, "같이타")),
+    header(h("span", { className: "brand" }, "가치타")),
     h("h1", {}, "그룹 초대를 받았어요"),
     profile
       ? [
@@ -329,7 +329,7 @@ function inviteView() {
 
 function home() {
   return [
-    header(h("span", { className: "brand" }, "같이타")),
+    header(h("span", { className: "brand" }, "가치타")),
     h("h1", {}, "여행을 시작할까요?"),
     h("p", { className: "sub" }, "같이 탄 사람들의 부탁과 자리 설정을 한곳에서 챙겨요."),
     profile
@@ -362,10 +362,10 @@ function home() {
   ];
 }
 
-const loading = () => [header(h("span", { className: "brand" }, "같이타")), h("div", { className: "skeleton" }), h("div", { className: "skeleton" })];
+const loading = () => [header(h("span", { className: "brand" }, "가치타")), h("div", { className: "skeleton" }), h("div", { className: "skeleton" })];
 
 const missing = () => [
-  header(h("span", { className: "brand" }, "같이타")),
+  header(h("span", { className: "brand" }, "가치타")),
   h("h1", {}, "여행을 찾지 못했어요"),
   h("p", { className: "sub" }, `${failed}. 코드를 다시 확인해 주세요.`),
   bar(button("처음으로", () => (location.hash = ""), "primary")),
@@ -487,7 +487,7 @@ function tripView(me) {
   };
 
   return [
-    header(h("span", { className: "brand" }, "같이타"), h("span", { className: "meta" }, trip.title || `코드 ${trip.code}`)),
+    header(h("span", { className: "brand" }, "가치타"), h("span", { className: "meta" }, trip.title || `코드 ${trip.code}`)),
     h(
       "section",
       { className: "card" },

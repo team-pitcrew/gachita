@@ -215,7 +215,7 @@ class CaptureService : Service() {
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(NotificationChannel("capture", "대화 기록", NotificationManager.IMPORTANCE_LOW))
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
-        return Notification.Builder(this, "capture").setContentTitle("같이타").setContentText(text)
+        return Notification.Builder(this, "capture").setContentTitle("가치타").setContentText(text)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now).setOngoing(true).setContentIntent(open).build()
     }
 

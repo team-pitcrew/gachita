@@ -1,4 +1,4 @@
-# 같이타 API 서버 이미지. 웹앱 파일을 같이 담아 한 주소에서 내보낸다.
+# 가치타 API 서버 이미지. 웹앱 파일을 같이 담아 한 주소에서 내보낸다.
 # 빌드는 저장소 루트에서: docker build -f backend/api/Dockerfile .
 FROM node:22-alpine
 WORKDIR /app

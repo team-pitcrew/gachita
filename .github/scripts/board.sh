@@ -24,7 +24,7 @@ case "${1:-}" in
     ;;
   setup)
     gh project list --owner team-pitcrew >/dev/null || { echo "먼저: gh auth refresh -s project,read:project" >&2; exit 1; }
-    url=$(gh project create --owner team-pitcrew --title "같이타" --format json --jq .url)
+    url=$(gh project create --owner team-pitcrew --title "가치타" --format json --jq .url)
     num=${url##*/}
     gh project link "$num" --owner team-pitcrew --repo "$REPO"
     gh issue list -R "$REPO" --state all --limit 200 --json url,title --jq '.[] | select(.title | test("^\\[T[0-9]+\\] ")) | .url' |

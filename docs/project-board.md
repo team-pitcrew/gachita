@@ -19,7 +19,7 @@
 
 ## 보드
 
-[같이타 보드](https://github.com/orgs/team-pitcrew/projects/1)는 조직의 비공개 프로젝트이고 이 저장소에 이어져 있습니다. 기본 화면은 Status별 칸반('칸반')이고 열은 Backlog, Ready, In progress, In review, Done입니다. 번호는 저장소 변수 `PROJECT_NUMBER`(1)에 있습니다.
+[가치타 보드](https://github.com/orgs/team-pitcrew/projects/1)는 조직의 비공개 프로젝트이고 이 저장소에 이어져 있습니다. 기본 화면은 Status별 칸반('칸반')이고 열은 Backlog, Ready, In progress, In review, Done입니다. 번호는 저장소 변수 `PROJECT_NUMBER`(1)에 있습니다.
 
 ## 카드가 저절로 옮겨지는 길
 

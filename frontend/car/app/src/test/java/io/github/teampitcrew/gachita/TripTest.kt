@@ -10,7 +10,7 @@ import org.junit.Test
 class TripTest {
     // backend/api가 돌려주는 모양(openapi.yaml의 Trip)
     private fun json(vararg consent: Boolean, requests: String = "[]") = """
-        {"code":"AB23CD","title":"같이타 가족 여행","status":"boarding","recording":false,
+        {"code":"AB23CD","title":"가치타 가족 여행","status":"boarding","recording":false,
          "participants":[${consent.mapIndexed { i, c -> """{"id":"p$i","name":"사람$i","seat":"ROW_1_LEFT","prefs":{},"consent":$c}""" }.joinToString(",")}],
          "requests":$requests,"moments":[],"version":3,"createdAt":1}
     """.trimIndent()

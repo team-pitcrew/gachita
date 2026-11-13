@@ -1,4 +1,4 @@
-# 같이타
+# 가치타
 
 **가족이 차 안에서 나눈 대화를 차가 받아 적어, 아이의 부탁은 내비 경유지로, 장소별 할 일은 도착했을 때 알려 주는 Pleos 차량 앱입니다.** PITCREW 팀의 현대자동차그룹 차량용 앱 개발 공모전 출품작입니다.
 
@@ -17,7 +17,7 @@
 | `backend/api/` | API 서버. 기기 프로필(OAuth 없음), 여행 코드, 참가자와 자리, 좌석·공조 선호, 기록 동의, 부탁의 상태, 장면의 시각과 위치 | 동작. Postgres에 저장 |
 | `backend/infra/` | AWS 자원([Terraform](backend/infra/terraform/README.md))과 클러스터 선언([Argo CD](backend/infra/gitops/README.md)) | 코드 있음. 실제 자원은 만들지 않음 |
 | `docs/` | [개발 규칙](docs/development.md), [구조와 스택](docs/architecture.md), [작업 목록](docs/tasks.md), [프로젝트 보드](docs/project-board.md), [결정 기록](docs/adr), [실측 보고](docs/research) | |
-| `apk/` | 제출용 차량 앱 APK(`PITCREW_같이타_release.apk`) | 있음 |
+| `apk/` | 제출용 차량 앱 APK(`PITCREW_가치타_release.apk`) | 있음 |
 
 ## 실행 방법
 
@@ -29,7 +29,7 @@
 3. **설치와 실행:** 앱은 사용자 10에서 돕니다. 같은 패키지의 디버그 빌드를 깔았던 에뮬레이터라면 서명이 달라 먼저 지웁니다(`adb uninstall io.github.teampitcrew.gachita`).
 
 ```bash
-adb install --user 10 -r -g apk/PITCREW_같이타_release.apk
+adb install --user 10 -r -g apk/PITCREW_가치타_release.apk
 ```
 
 ```bash
@@ -89,4 +89,4 @@ make check     # CI와 같은 검사
 
 ## APK 파일 위치
 
-[`apk/PITCREW_같이타_release.apk`](apk/PITCREW_같이타_release.apk) — 차량 앱 release 빌드(패키지 `io.github.teampitcrew.gachita`, 버전 0.1.0, minSdk 29, targetSdk 34). 같은 커밋의 `frontend/car`에서 `./gradlew assembleRelease`로 만들었습니다.
+[`apk/PITCREW_가치타_release.apk`](apk/PITCREW_가치타_release.apk) — 차량 앱 release 빌드(패키지 `io.github.teampitcrew.gachita`, 버전 0.1.0, minSdk 29, targetSdk 34). 같은 커밋의 `frontend/car`에서 `./gradlew assembleRelease`로 만들었습니다.

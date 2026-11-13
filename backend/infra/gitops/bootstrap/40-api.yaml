@@ -1,4 +1,4 @@
-# 물결 4. 같이타 API(웹앱 포함). DB 둘이 건강해진 뒤에 뜬다.
+# 물결 4. 가치타 API(웹앱 포함). DB 둘이 건강해진 뒤에 뜬다.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:

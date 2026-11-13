@@ -1,4 +1,4 @@
-// 같이타 웹 시연(/demo). 에뮬레이터 모양의 차량 화면을 브라우저에 그리고, 실제 API로 여행 하나를 돌린다(T66).
+// 가치타 웹 시연(/demo). 에뮬레이터 모양의 차량 화면을 브라우저에 그리고, 실제 API로 여행 하나를 돌린다(T66).
 // 차량 앱(frontend/car)의 흐름과 문구를 따른다. Pleos SDK에서만 되는 것(내비 경유지, 공조, 차량 STT·TTS)은
 // 흉내만 내고 화면에 '시연'이라고 적는다. 마이크는 쓰지 않는다. 사용자가 쓴 글은 textContent로만 넣는다.
 // 차량은 운전석 참가자로 들어가 참가자 토큰을 받고, 여행 코드·토큰·순번은 localStorage에 두어 새로 고쳐도 이어진다.
@@ -329,7 +329,7 @@ function joinCard() {
   const url = `${location.origin}/#${trip.code}`;
   const copy = () => navigator.clipboard?.writeText(url).then(() => toast("폰 주소를 복사했어요."), () => toast(url));
   return card(
-    h("div", { className: "between" }, h("h3", {}, trip.title || "같이타 여행"), h("span", { className: "pill" }, `일행 ${trip.participants.length}명`)),
+    h("div", { className: "between" }, h("h3", {}, trip.title || "가치타 여행"), h("span", { className: "pill" }, `일행 ${trip.participants.length}명`)),
     h("p", { className: "code", title: "여행 코드" }, trip.code),
     h("p", { className: "sub" }, "폰에서 이 주소를 열어 자리를 고르고 기록에 동의해요."),
     h("p", { className: "link" }, h("a", { href: url, target: "_blank", rel: "noopener" }, url)),
