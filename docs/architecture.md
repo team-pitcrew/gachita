@@ -50,9 +50,9 @@ flowchart LR
 
 | 묶음 | 스택 | 고른 이유 | 상태 |
 |---|---|---|---|
-| 웹앱 `frontend/web` | HTML · CSS · ES 모듈, 빌드 없음. 글꼴 Pretendard. 홈 화면 설치(매니페스트와 서비스 워커)는 T6 | 화면 수가 적고, 차량 웹뷰와 폰 브라우저가 같은 파일을 그대로 읽음. 의존성이 없어 CI가 1초 안에 끝남. 화면이 열 개를 넘거나 상태가 얽히면 Vite + React로 옮김([ADR-0002](adr/0002-stack-split.md)) | 있음. 프로필, 그룹 초대 수락, 여행 참가와 여행 화면, 웹 시연(`/demo`). 홈 화면 설치는 만드는 중(T6) |
+| 웹앱 `frontend/web` | HTML · CSS · ES 모듈, 빌드 없음. 글꼴 Pretendard. 홈 화면 설치(매니페스트와 서비스 워커)는 T6 | 화면 수가 적고, 차량 웹뷰와 폰 브라우저가 같은 파일을 그대로 읽음. 의존성이 없어 CI가 1초 안에 끝남. 화면이 열 개를 넘거나 상태가 얽히면 Vite + React로 옮김([ADR-0002](adr/0002-stack-split.md)) | 있음. 프로필, 여행 참가와 여행 화면, 웹 시연(`/demo`). 홈 화면 설치는 만드는 중(T6). 초대 코드 참가와 그룹 초대 수락은 동승 연결 QR(차가 읽음)로 바꾸는 중(T46, 11/14) |
 | 차량 앱 `frontend/car` | Kotlin 2.0 · Jetpack Compose · AGP 8.6 · minSdk 29 · targetSdk 34. Pleos Vehicle 2.3.2, NaviHelper 3.0.5, TextToSpeech 3.3.1, SpeechToText 3.3.1 | 내비·기어·TTS·STT는 Pleos SDK로만 부를 수 있음. 에뮬레이터에서 웹뷰 방식은 메모리 약 253 MB, 네이티브는 약 96 MB였음(Pleos 기준 400 MB) | 있음. 여행과 기록 동의, 수음과 받아쓰기, 주행 중 화면, 부탁을 경유지로, 도착 브리핑(에뮬레이터에서 확인, [차량 앱 README](../frontend/car/README.md)). 실차에서는 확인하지 않음 |
-| API 서버 `backend/api` | Node 22 표준 `http`. Postgres 드라이버 `pg` 하나 | 경로가 열 개 안팎이라 프레임워크 없이 읽힘. 타입이 필요해지면 TypeScript로 옮김 | 있음. 프로필과 구글 연결, 그룹과 초대, 여행, 발화·기록본·피드, 목소리 등록과 대조([API 명세](api/openapi.yaml)) |
+| API 서버 `backend/api` | Node 22 표준 `http`. Postgres 드라이버 `pg` 하나 | 경로가 열 개 안팎이라 프레임워크 없이 읽힘. 타입이 필요해지면 TypeScript로 옮김 | 있음. 프로필과 구글 연결, 여행, 발화·기록본·피드, 목소리 등록과 대조([API 명세](api/openapi.yaml)). 그룹과 초대 API는 걷어내는 중(11/14) |
 | 데이터 | Postgres 17, CloudNativePG로 클러스터 안에서 운영 | 관리형 DB 없이 직접 운영하는 조건. 백업과 복구를 선언으로 다룸 | 실서비스: CloudNativePG 클러스터 하나에 `trips`·`profiles` 두 DB([ADR-0016](adr/0016-slo-capacity-single-postgres.md)). 로컬과 CI는 Postgres 17 컨테이너 |
 | 클라우드 | AWS. EC2 한 대에 K3s 직접 설치. Terraform으로 자원을 만들고 Argo CD가 `backend/infra/gitops`를 읽어 맞춤 | 한 대로 시작해 비용을 낮추고, 클러스터 상태를 저장소에서 읽을 수 있게 함 | 11/13부터 실서비스(`https://gachita.mangowhois.ai`). EC2 t4g.large 한 대에 K3s, Cloudflare → ALB → API. 실제 주소 E2E 통과, Route 53이 밖에서 30초마다 점검. 선언은 [backend/infra/terraform](../backend/infra/terraform/README.md), [backend/infra/gitops](../backend/infra/gitops/README.md) |
 | CI | GitHub Actions. 네 파트 중 바뀐 것만 검사: `scope`, `policy`, `frontend-spec`, `frontend-app`, `backend-api`, `backend-infra`, `package` | SOVA처럼 필수 검사가 항상 결과를 내고 범위는 그 안에서 고름 | 있음. 11/13부터 자체 러너(Lima VM 다섯, T65)에서 돎 |
@@ -60,7 +60,7 @@ flowchart LR
 ## 사용자 프로필
 
 - **기기 프로필:** 처음 열면 서버가 프로필 ID와 긴 무작위 토큰을 발급하고, 기기에 저장합니다. 이후 요청은 이 토큰으로 본인임을 보입니다. 서버에는 토큰의 해시만 둡니다.
-- **담는 것:** 이름 또는 별명, 캐릭터나 사진, 기록 동의의 기본값. 좌석·공조 선호는 11/13 계획에서 뺐고 서버와 웹에서 걷어내는 중입니다(T68·T6). 가족과 동승자는 그룹으로 묶고 QR로 초대합니다([ADR-0009](adr/0009-family-group-and-qr-invite.md)). 사람별 기록은 발화 표와 피드에 쌓입니다(T39, [ADR-0014](adr/0014-transcript-storage.md)).
+- **담는 것:** 이름 또는 별명, 캐릭터나 사진, 기록 동의의 기본값. 좌석·공조 선호는 11/13 계획에서 뺐습니다. 서버에서는 걷어냈고(T68) 웹은 걷어내는 중입니다(T6). 가족은 따로 묶지 않고 같은 차에 탄 기록으로만 이어집니다. 동승자는 폰의 동승 연결 QR을 차가 읽어 넣습니다(11/14 결정, [ADR-0009](adr/0009-family-group-and-qr-invite.md)의 그룹·QR 초대를 대신함). 사람별 기록은 발화 표와 피드에 쌓입니다(T39, [ADR-0014](adr/0014-transcript-storage.md)).
 - **여러 기기:** 기기마다 토큰을 따로 둡니다(`POST /api/profiles/me/tokens`). 다른 기기의 토큰은 그대로입니다.
 - **따로 둘 것:** OAuth 로그인으로 만드는 프로필과 현대차 개인 프로필 연동은 기기 프로필과도, 서로와도 다른 기능으로 둡니다. 구글 계정 연결은 서버에 있습니다(T21, [ADR-0006](adr/0006-oauth-provider-google.md)). 한 프로필에 구글 계정 하나이고, 다른 기기에서 계정으로 들어오면 그 기기의 토큰을 새로 줍니다. 웹앱에는 아직 구글 단추가 없습니다. 현대 계정 연동은 조건만 조사했습니다(T22, [ADR-0004](adr/0004-hyundai-profile-link.md)).
 - **격리:** 실서비스는 Postgres 클러스터 하나에 프로필(`profiles`)과 여행(`trips`)을 다른 DB로 두고, DB마다 접속 계정을 나눕니다([ADR-0016](adr/0016-slo-capacity-single-postgres.md)). 네트워크는 기본 차단이고 API 파드만 DB에 닿습니다([ADR-0013](adr/0013-network-edge-and-isolation.md)). 처음 선언한 '네임스페이스마다 Postgres 하나'는 ADR-0016으로 바꿨습니다.
