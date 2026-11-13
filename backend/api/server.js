@@ -19,6 +19,9 @@ const PROFILES_SQL = fileURLToPath(new URL("profiles.sql", import.meta.url));
 const LINKS_SQL = fileURLToPath(new URL("profiles-2-links.sql", import.meta.url));
 const UTTERANCES_SQL = fileURLToPath(new URL("trips-2-utterances.sql", import.meta.url));
 const ALBUM_SQL = fileURLToPath(new URL("profiles-3-moments.sql", import.meta.url));
+const GROUPS_SQL = fileURLToPath(new URL("profiles-4-groups.sql", import.meta.url));
+const INVITE_BASE = process.env.INVITE_BASE_URL ?? "https://gachita.mangowhois.ai/j"; // QR에 담는 초대 주소(ADR-0009·0010)
+const PHOTO_MAX = 1_000_000; // 프로필 사진 상한. 형식은 매직 바이트로 확인해 다시 저장한다(ADR-0009 위험)
 const TTL_MS = 48 * 60 * 60 * 1000; // 기획서 v4가 초기 제안으로 적은 보관 기간
 const MAX_BODY = 10_000;
 const CODE_CHARS = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"; // 0·O·1·I·L은 헷갈려서 뺌
@@ -75,6 +78,7 @@ export async function migrate() {
   await profilesDb().query(await readFile(PROFILES_SQL, "utf8"));
   await profilesDb().query(await readFile(LINKS_SQL, "utf8"));
   await profilesDb().query(await readFile(ALBUM_SQL, "utf8"));
+  await profilesDb().query(await readFile(GROUPS_SQL, "utf8"));
 }
 
 async function readBody(req, limit = MAX_BODY) {
@@ -93,7 +97,21 @@ async function readBody(req, limit = MAX_BODY) {
 }
 
 // profiles 표의 한 줄을 API가 돌려주는 프로필 모양으로 바꾼다.
-const asProfile = (r) => ({ id: r.id, name: r.name, prefs: r.prefs, consentDefault: r.consent_default, links: r.provider ? [r.provider] : [] });
+const asProfile = (r) => ({
+  id: r.id,
+  name: r.name,
+  prefs: r.prefs,
+  consentDefault: r.consent_default,
+  character: r.character ?? "",
+  hasPhoto: Boolean(r.has_photo),
+  links: r.provider ? [r.provider] : [],
+});
+
+// 기기 토큰을 하나 더 만든다(ADR-0009). 다른 기기의 토큰은 그대로다.
+async function issueToken(profileId, device = "", token = randomBytes(32).toString("base64url")) {
+  await profilesDb().query("INSERT INTO tokens (token_hash, profile_id, device) VALUES ($1, $2, $3)", [tokenHash(token), profileId, device]);
+  return token;
+}
 
 // 여행 문서의 참가자를 API가 돌려주는 모양으로 바꾼다. 참가자 토큰 해시는 절대 나가지 않는다.
 const asParticipant = ({ tokenHash, ...p }) => p;
@@ -127,33 +145,62 @@ const asUtterance = (r) => ({
 });
 
 async function profileById(id) {
-  const { rows } = await profilesDb().query("SELECT id, name, prefs, consent_default, provider FROM profiles WHERE id = $1", [id]);
+  const { rows } = await profilesDb().query(
+    "SELECT id, name, prefs, consent_default, provider, character, (photo IS NOT NULL) AS has_photo FROM profiles WHERE id = $1",
+    [id]
+  );
   return asProfile(rows[0]);
 }
 
 // Authorization: Bearer <토큰>. 머리말이 없으면 null(손님), 틀린 토큰이면 401.
+// 토큰은 기기마다 하나씩(tokens 표, T45) — 한 프로필을 차량과 폰에서 함께 쓴다(ADR-0009).
 async function profileOf(req) {
   const header = req.headers.authorization;
   if (header === undefined) return null;
   const m = /^Bearer ([A-Za-z0-9_-]{40,})$/.exec(header);
-  const { rows } = m ? await profilesDb().query("SELECT id, name, prefs, consent_default, provider FROM profiles WHERE token_hash = $1", [tokenHash(m[1])]) : { rows: [] };
+  const { rows } = m
+    ? await profilesDb().query(
+        `SELECT p.id, p.name, p.prefs, p.consent_default, p.provider, p.character, (p.photo IS NOT NULL) AS has_photo
+         FROM profiles p JOIN tokens t ON t.profile_id = p.id WHERE t.token_hash = $1`,
+        [tokenHash(m[1])]
+      )
+    : { rows: [] };
   if (!rows[0]) fail(401, "알 수 없는 프로필 토큰");
   return asProfile(rows[0]);
 }
+
+// 이진 본문(프로필 사진). 크기만 지키고 형식은 매직 바이트로 판별한다.
+async function readRaw(req, limit) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > limit) fail(413, "본문이 너무 큼");
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+}
+const photoType = (b) =>
+  b.length >= 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47
+    ? "image/png"
+    : b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff
+      ? "image/jpeg"
+      : fail(400, "PNG 또는 JPEG만 됨");
 
 async function profiles(req, seg, b) {
   const m = req.method;
   if (!seg[0]) {
     if (m !== "POST") fail(405, "POST만 됨");
-    const token = randomBytes(32).toString("base64url");
     const p = {
       id: randomUUID(),
       name: text(b.name, 20, "name"),
       prefs: rolePrefs(obj(b.prefs ?? {}, "prefs")),
       consentDefault: b.consentDefault === undefined ? false : bool(b.consentDefault, "consentDefault"),
+      character: b.character === undefined ? "" : text(b.character, 20, "character"),
     };
-    await profilesDb().query("INSERT INTO profiles (id, token_hash, name, prefs, consent_default) VALUES ($1, $2, $3, $4, $5)", [p.id, tokenHash(token), p.name, p.prefs, p.consentDefault]);
-    return [201, { ...p, links: [], token }]; // 토큰은 이때 한 번만 준다. 서버에는 해시만 남는다.
+    await profilesDb().query("INSERT INTO profiles (id, name, prefs, consent_default, character) VALUES ($1, $2, $3, $4, $5)", [p.id, p.name, p.prefs, p.consentDefault, p.character]);
+    const token = await issueToken(p.id, b.device === undefined ? "" : text(b.device, 20, "device"));
+    return [201, { ...p, hasPhoto: false, links: [], token }]; // 토큰은 이때 한 번만 준다. 서버에는 해시만 남는다.
   }
   if (seg[0] !== "me") fail(404, "없는 경로");
   if (seg[1] === "links" && seg[2] === "google") return googleLink(req, m, b);
@@ -187,12 +234,43 @@ async function profiles(req, seg, b) {
     if (!rowCount) fail(404, "앨범에 없는 장면");
     return [204];
   }
+  if (seg[1] === "tokens" && !seg[2]) {
+    // 이 기기에 쓸 토큰을 하나 더 만든다(ADR-0009). 다른 기기의 토큰은 그대로다.
+    if (m !== "POST") fail(405, "POST만 됨");
+    const me = (await profileOf(req)) ?? fail(401, "프로필 토큰이 필요함");
+    const device = b.device === undefined ? "" : text(b.device, 20, "device");
+    const token = await issueToken(me.id, device);
+    return [201, { token, device }];
+  }
+  if (seg[1] === "photo" && !seg[2]) {
+    // 프로필 사진. 형식은 매직 바이트로 확인하고 크기 상한 안에서 다시 저장한다(ADR-0009).
+    if (m === "PUT") {
+      const me = (await profileOf(req)) ?? fail(401, "프로필 토큰이 필요함");
+      const raw = await readRaw(req, PHOTO_MAX);
+      const type = photoType(raw);
+      await profilesDb().query("UPDATE profiles SET photo = $2, photo_type = $3, updated_at = now() WHERE id = $1", [me.id, raw, type]);
+      return [204];
+    }
+    if (m === "GET") {
+      const me = (await profileOf(req)) ?? fail(401, "프로필 토큰이 필요함");
+      const { rows } = await profilesDb().query("SELECT photo, photo_type FROM profiles WHERE id = $1", [me.id]);
+      if (!rows[0]?.photo) fail(404, "사진이 없음");
+      return [200, rows[0].photo, rows[0].photo_type]; // 이진 응답 — 서버 핸들러가 그대로 보낸다
+    }
+    if (m === "DELETE") {
+      const me = (await profileOf(req)) ?? fail(401, "프로필 토큰이 필요함");
+      await profilesDb().query("UPDATE profiles SET photo = NULL, photo_type = '', updated_at = now() WHERE id = $1", [me.id]);
+      return [204];
+    }
+    fail(405, "PUT, GET, DELETE만 됨");
+  }
   if (seg[1]) fail(404, "없는 경로");
   if (m !== "GET" && m !== "PATCH" && m !== "DELETE") fail(405, "GET, PATCH, DELETE만 됨");
   const me = (await profileOf(req)) ?? fail(401, "프로필 토큰이 필요함");
   if (m === "GET") return [200, me];
   if (m === "DELETE") {
     await profilesDb().query("DELETE FROM profile_moments WHERE profile_id = $1", [me.id]); // 앨범도 함께 지운다
+    await profilesDb().query("DELETE FROM tokens WHERE profile_id = $1", [me.id]); // 모든 기기 토큰이 함께 끊긴다
     await profilesDb().query("DELETE FROM profiles WHERE id = $1", [me.id]);
     return [204];
   }
@@ -201,28 +279,31 @@ async function profiles(req, seg, b) {
     name: b.name === undefined ? me.name : text(b.name, 20, "name"),
     prefs: b.prefs === undefined ? me.prefs : rolePrefs(obj(b.prefs, "prefs"), me.prefs),
     consentDefault: b.consentDefault === undefined ? me.consentDefault : bool(b.consentDefault, "consentDefault"),
+    character: b.character === undefined ? me.character : text(b.character, 20, "character"),
+    hasPhoto: me.hasPhoto,
     links: me.links,
   };
-  await profilesDb().query("UPDATE profiles SET name = $2, prefs = $3, consent_default = $4, updated_at = now() WHERE id = $1", [me.id, next.name, next.prefs, next.consentDefault]);
+  await profilesDb().query("UPDATE profiles SET name = $2, prefs = $3, consent_default = $4, character = $5, updated_at = now() WHERE id = $1", [me.id, next.name, next.prefs, next.consentDefault, next.character]);
   return [200, next];
 }
 
 // 구글 계정 연결(ADR-0006). 프로필 토큰과 함께 오면 내 프로필에 묶고,
 // 토큰 없이 오면 계정의 프로필을 찾아 들어가거나 새로 만든다.
-// 토큰은 해시만 남으니 찾아 들어갈 때는 새로 발급한다(이전 기기의 토큰은 못 쓰게 됨).
-// 갱신 자격은 마지막 순간에 다시 본다 — 앞서 본 연결이 그 사이에 바뀌어도 오래된 계정으로
-// 토큰을 받아 가지 못하게 한다(리뷰 재현). 동시 첫 로그인은 유일 색인 위반(23505)이 막아 준다.
+// 찾아 들어가면 이 기기에 쓸 토큰을 하나 더 만든다(기기마다 토큰, ADR-0009) —
+// 다른 기기의 토큰은 그대로다. 갱신 자격은 마지막 순간에 다시 본다 — 앞서 본 연결이
+// 그 사이에 바뀌어도 오래된 계정으로 토큰을 받아 가지 못하게 한다(리뷰 재현).
+// 동시 첫 로그인은 유일 색인 위반(23505)이 막아 준다.
 const isTaken = (e) => e?.code === "23505";
 
-// 찾아 들어가기의 토큰 갱신. 연결이 지금도 이 계정인지 UPDATE 조건으로 다시 확인한다.
+// 찾아 들어가기 전에 연결이 지금도 이 계정인지 UPDATE 조건으로 다시 확인한다.
 // 조건이 어긋나면 0행 — 테스트가 이 상황을 결정적으로 만들기 위해 직접 부른다.
-// profileId가 없으면 계정으로 프로필을 찾아 갱신한다(동시 첫 로그인 23505 뒤 재시도).
-export async function rotateGoogleToken(profileId, hash, providerUserId) {
+// profileId가 없으면 계정으로 프로필을 찾는다(동시 첫 로그인 23505 뒤 재시도).
+export async function verifyGoogleLink(profileId, providerUserId) {
   const { rows } = await profilesDb().query(
-    `UPDATE profiles SET token_hash = $1, updated_at = now()
-     WHERE provider = 'google' AND provider_user_id = $2 ${profileId ? "AND id = $3" : ""}
-     RETURNING id, name, prefs, consent_default, provider`,
-    profileId ? [hash, providerUserId, profileId] : [hash, providerUserId]
+    `UPDATE profiles SET updated_at = now()
+     WHERE provider = 'google' AND provider_user_id = $1 ${profileId ? "AND id = $2" : ""}
+     RETURNING id, name, prefs, consent_default, provider, character, (photo IS NOT NULL) AS has_photo`,
+    profileId ? [providerUserId, profileId] : [providerUserId]
   );
   return rows[0] ?? null;
 }
@@ -244,23 +325,26 @@ async function googleLink(req, m, b) {
     }
     const token = randomBytes(32).toString("base64url");
     if (found[0]) {
-      // 조회와 갱신 사이에 연결이 바뀌었으면 0행이 돌아온다. 이전 계정의 요청은 토큰을
+      // 조회와 확인 사이에 연결이 바뀌었으면 0행이 돌아온다. 이전 계정의 요청은 토큰을
       // 받지 못하고, 있던 프로필을 새로 만드는 길로 넘어가지도 않는다.
-      const rotated = await rotateGoogleToken(found[0].id, tokenHash(token), identity.providerUserId);
-      if (!rotated) fail(401, "구글 연결이 바뀌었어요. 다시 로그인해 주세요");
-      return [200, { ...asProfile(rotated), token }];
+      const current = await verifyGoogleLink(found[0].id, identity.providerUserId);
+      if (!current) fail(401, "구글 연결이 바뀌었어요. 다시 로그인해 주세요");
+      await issueToken(current.id, b.device === undefined ? "" : text(b.device, 20, "device"), token);
+      return [200, { ...asProfile(current), token }];
     }
-    const p = { id: randomUUID(), name: identity.name, prefs: rolePrefs({}), consentDefault: false };
+    const p = { id: randomUUID(), name: identity.name, prefs: rolePrefs({}), consentDefault: false, character: "" };
     try {
-      await db.query("INSERT INTO profiles (id, token_hash, name, prefs, consent_default, provider, provider_user_id) VALUES ($1, $2, $3, $4, $5, 'google', $6)", [p.id, tokenHash(token), p.name, p.prefs, p.consentDefault, identity.providerUserId]);
+      await db.query("INSERT INTO profiles (id, name, prefs, consent_default, character, provider, provider_user_id) VALUES ($1, $2, $3, $4, '', 'google', $5)", [p.id, p.name, p.prefs, p.consentDefault, identity.providerUserId]);
     } catch (e) {
       // 동시 첫 로그인: 먼저 들어온 요청이 이미 프로필을 만들었다(23505). 그 계정의 프로필로 들어간다.
       if (!isTaken(e)) throw e;
-      const rotated = await rotateGoogleToken(null, tokenHash(token), identity.providerUserId);
-      if (!rotated) fail(409, "구글 계정 연결이 경합 중이에요. 다시 시도해 주세요");
-      return [200, { ...asProfile(rotated), token }];
+      const current = await verifyGoogleLink(null, identity.providerUserId);
+      if (!current) fail(409, "구글 계정 연결이 경합 중이에요. 다시 시도해 주세요");
+      await issueToken(current.id, b.device === undefined ? "" : text(b.device, 20, "device"), token);
+      return [200, { ...asProfile(current), token }];
     }
-    return [201, { ...p, links: ["google"], token }];
+    await issueToken(p.id, b.device === undefined ? "" : text(b.device, 20, "device"), token);
+    return [201, { ...p, hasPhoto: false, links: ["google"], token }];
   }
   if (m === "DELETE") {
     const me = (await profileOf(req)) ?? fail(401, "프로필 토큰이 필요함");
@@ -269,6 +353,152 @@ async function googleLink(req, m, b) {
     return [204];
   }
   fail(405, "POST, DELETE만 됨");
+}
+
+// 가족·동승자 그룹과 QR 초대(ADR-0009, T45). 모든 경로의 인증은 프로필 토큰이다.
+const GROUP_KIND = ["family", "crew"];
+async function groups(req, seg, b) {
+  const m = req.method;
+  const db = profilesDb();
+  if (!seg[0]) {
+    if (m !== "POST") fail(405, "POST만 됨");
+    const me = (await profileOf(req)) ?? fail(401, "프로필 토큰이 필요함");
+    const g = { id: randomUUID().slice(0, 8), kind: oneOf(b.kind ?? "family", GROUP_KIND, "kind"), name: b.name === undefined ? "" : text(b.name, 40, "name"), ownerId: me.id };
+    await db.query("INSERT INTO groups (id, kind, name, owner_id) VALUES ($1, $2, $3, $4)", [g.id, g.kind, g.name, g.ownerId]);
+    await db.query("INSERT INTO group_members (group_id, profile_id) VALUES ($1, $2)", [g.id, me.id]);
+    return [201, { ...g, members: [{ profileId: me.id, name: me.name, character: me.character, isOwner: true }] }];
+  }
+  const [id, sub, arg] = seg;
+  // 인증보다 먼저 못 쓰는 메서드를 가른다(없는 경로·메서드는 404·405로 답한다).
+  if (!sub && m !== "GET" && m !== "DELETE") fail(405, "GET, DELETE만 됨");
+  if (sub === "members" && !arg && m !== "POST") fail(405, "POST만 됨");
+  if (sub === "members" && arg && m !== "DELETE") fail(405, "DELETE만 됨");
+  if (sub === "invites" && !arg && m !== "POST" && m !== "GET") fail(405, "POST, GET만 됨");
+  if (sub === "invites" && arg && m !== "DELETE") fail(405, "DELETE만 됨");
+  if (sub && sub !== "members" && sub !== "invites") fail(404, "없는 경로");
+  const me = (await profileOf(req)) ?? fail(401, "프로필 토큰이 필요함");
+  const { rows: found } = await db.query("SELECT id, kind, name, owner_id FROM groups WHERE id = $1", [id]);
+  const group = found[0] ?? fail(404, "없는 그룹");
+  const isOwner = group.owner_id === me.id;
+  const isMember = isOwner || (await db.query("SELECT 1 FROM group_members WHERE group_id = $1 AND profile_id = $2", [id, me.id])).rows.length > 0;
+  const memberRows = () =>
+    db.query(
+      `SELECT m.profile_id, p.name, p.character, (p.photo IS NOT NULL) AS has_photo, g.owner_id
+       FROM group_members m JOIN profiles p ON p.id = m.profile_id JOIN groups g ON g.id = m.group_id
+       WHERE m.group_id = $1 ORDER BY m.joined_at`,
+      [id]
+    );
+
+  if (!sub) {
+    if (m === "GET") {
+      if (!isMember) fail(403, "구성원만 볼 수 있음");
+      const { rows } = await memberRows();
+      return [200, { id: group.id, kind: group.kind, name: group.name, ownerId: group.owner_id, members: rows.map((r) => ({ profileId: r.profile_id, name: r.name, character: r.character, hasPhoto: r.has_photo, isOwner: r.owner_id === r.profile_id })) }];
+    }
+    // 그룹을 지워도 이미 남긴 기록본과 앨범은 프로필 소유라 그대로 남는다(ADR-0009).
+    if (!isOwner) fail(403, "대표만 지울 수 있음");
+    await db.query("DELETE FROM group_members WHERE group_id = $1", [id]);
+    await db.query("DELETE FROM invites WHERE group_id = $1", [id]);
+    await db.query("DELETE FROM groups WHERE id = $1", [id]);
+    return [204];
+  }
+
+  if (sub === "members" && !arg) {
+    // 계정 없는 구성원(아이) 프로필을 대표가 만든다. 토큰은 없다 — 대표의 기기가 참가시킨다.
+    if (!isOwner) fail(403, "대표만 구성원을 만들 수 있음");
+    const p = { id: randomUUID(), name: text(b.name, 20, "name"), prefs: rolePrefs({}), consentDefault: false, character: b.character === undefined ? "" : text(b.character, 20, "character") };
+    await db.query("INSERT INTO profiles (id, name, prefs, consent_default, character) VALUES ($1, $2, $3, false, $4)", [p.id, p.name, p.prefs, p.character]);
+    await db.query("INSERT INTO group_members (group_id, profile_id) VALUES ($1, $2)", [id, p.id]);
+    return [201, { profileId: p.id, name: p.name, character: p.character, isOwner: false }];
+  }
+  if (sub === "members" && arg) {
+    if (!isOwner && arg !== me.id) fail(403, "대표만 내보낼 수 있음");
+    if (arg === group.owner_id) fail(409, "대표는 그룹을 지워야 나갈 수 있음");
+    const { rowCount } = await db.query("DELETE FROM group_members WHERE group_id = $1 AND profile_id = $2", [id, arg]);
+    if (!rowCount) fail(404, "없는 구성원");
+    return [204]; // 기록본·앨범은 프로필 소유라 그대로다
+  }
+
+  if (sub === "invites" && !arg) {
+    if (m === "POST") {
+      if (!isOwner) fail(403, "대표만 초대를 만들 수 있음");
+      const code = randomBytes(12).toString("base64url");
+      const maxUses = b.maxUses === undefined ? 5 : int(b.maxUses, 0, 100, "maxUses");
+      const minutes = b.expiresInMinutes === undefined ? 60 : int(b.expiresInMinutes, 1, 1440, "expiresInMinutes");
+      const expiresAt = Date.now() + minutes * 60_000;
+      await db.query("INSERT INTO invites (code, group_id, max_uses, expires_at) VALUES ($1, $2, $3, to_timestamp($4 / 1000.0))", [code, id, maxUses, expiresAt]);
+      return [201, { code, url: `${INVITE_BASE}/${code}`, expiresAt, maxUses }]; // QR에 담을 주소(ADR-0009)
+    }
+    if (!isOwner) fail(403, "대표만 봄");
+    const { rows } = await db.query("SELECT code, max_uses, uses, expires_at, cancelled_at FROM invites WHERE group_id = $1 ORDER BY created_at DESC", [id]);
+    return [200, { invites: rows.map((r) => ({ code: r.code, url: `${INVITE_BASE}/${r.code}`, maxUses: r.max_uses, uses: r.uses, expiresAt: r.expires_at.getTime(), cancelled: r.cancelled_at !== null })) }];
+  }
+  if (sub === "invites" && arg) {
+    if (!isOwner) fail(403, "대표만 취소할 수 있음");
+    const { rowCount } = await db.query("UPDATE invites SET cancelled_at = now() WHERE code = $1 AND group_id = $2 AND cancelled_at IS NULL", [arg, id]);
+    if (!rowCount) fail(404, "없는 초대");
+    return [204];
+  }
+  fail(404, "없는 경로");
+}
+
+// 그룹의 진행 중인 여행에 자동 참가시킨다(ADR-0009: 수락한 사람은 자리만 고르면 된다).
+// 자리가 남은 첫 여행에 동의 기본값 꺼짐으로 들어간다.
+async function joinActiveGroupTrip(groupId, profile) {
+  const { rows } = await tripsDb().query(
+    `SELECT code FROM trips WHERE doc->>'groupId' = $1 AND created_at > now() - interval '48 hours'
+     AND (doc->>'status') IN ('boarding', 'driving') ORDER BY created_at DESC LIMIT 5`,
+    [groupId]
+  );
+  for (const r of rows) {
+    const joined = await withTrip(r.code, true, (trip) => {
+      const seat = SEATS.find((s) => trip.participants.every((p) => p.seat !== s));
+      if (!seat) return null;
+      const token = randomBytes(32).toString("base64url");
+      const p = {
+        name: profile.name,
+        prefs: profile.prefs?.[ROLE[seat]] ?? prefs({}),
+        consent: false, // 기록 동의는 각자 따로 받는다(기본값 꺼짐, ADR-0009)
+        profileId: profile.id,
+        id: randomUUID().slice(0, 8),
+        seat,
+        tokenHash: tokenHash(token).toString("hex"),
+      };
+      trip.participants.push(p);
+      trip.version++;
+      return { code: trip.code, participant: asParticipant(p), token };
+    }).catch(() => null);
+    if (joined) return joined;
+  }
+  return null;
+}
+
+// 초대 수락. QR 주소(/j/<코드>)로 들어온 폰 브라우저가 부른다(ADR-0009).
+async function acceptInvite(req, code, b) {
+  const db = profilesDb();
+  // 횟수 소진·만료·취소와의 경합은 UPDATE 조건으로 막는다(마지막 한 번을 두 명이 못 쓴다).
+  const { rows } = await db.query(
+    `UPDATE invites SET uses = uses + 1
+     WHERE code = $1 AND cancelled_at IS NULL AND expires_at > now() AND (max_uses = 0 OR uses < max_uses)
+     RETURNING group_id`,
+    [code]
+  );
+  if (!rows[0]) {
+    const { rows: check } = await db.query("SELECT cancelled_at, expires_at, (max_uses = 0 OR uses < max_uses) AS usable FROM invites WHERE code = $1", [code]);
+    if (!check[0]) fail(404, "없는 초대");
+    fail(409, check[0].cancelled_at ? "취소된 초대" : new Date(check[0].expires_at).getTime() <= Date.now() ? "만료된 초대" : "쓸 수 있는 횟수가 다한 초대");
+  }
+  // 프로필 토큰이 있으면 있던 프로필로, 없으면 새 프로필을 만들어 이 기기 토큰을 준다.
+  const me = await profileOf(req);
+  const profile = me ?? { id: randomUUID(), name: text(b.name, 20, "name"), prefs: rolePrefs(obj(b.prefs ?? {}, "prefs")), consentDefault: false, character: b.character === undefined ? "" : text(b.character, 20, "character"), links: [] };
+  if (!me) {
+    await db.query("INSERT INTO profiles (id, name, prefs, consent_default, character) VALUES ($1, $2, $3, false, $4)", [profile.id, profile.name, profile.prefs, profile.character]);
+  }
+  const token = me ? null : await issueToken(profile.id, b.device === undefined ? "" : text(b.device, 20, "device"));
+  await db.query("INSERT INTO group_members (group_id, profile_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", [rows[0].group_id, profile.id]);
+  const { rows: g } = await db.query("SELECT id, kind, name FROM groups WHERE id = $1", [rows[0].group_id]);
+  const trip = await joinActiveGroupTrip(rows[0].group_id, profile);
+  return [200, { group: g[0], profile: { ...profile, hasPhoto: me?.hasPhoto ?? false }, ...(token ? { token } : {}), ...(trip ? { trip } : {}) }];
 }
 
 // 여행 한 줄을 읽어 fn에 넘긴다. 바꾸는 요청이면 그 줄을 잠그고, 끝나면 문서를 다시 쓴다.
@@ -297,6 +527,14 @@ async function trips(req, [code, sub, id], b, query) {
   const m = req.method;
   if (!code) {
     if (m !== "POST") fail(405, "POST만 됨");
+    // 그룹 여행(ADR-0009): 대표가 그룹을 지정하면 수락한 구성원이 자동 참가한다.
+    let groupId = null;
+    if (b.groupId !== undefined) {
+      groupId = text(b.groupId, 8, "groupId");
+      const me = await profileOf(req);
+      const { rows } = me ? await profilesDb().query("SELECT id FROM groups WHERE id = $1 AND owner_id = $2", [groupId, me.id]) : { rows: [] };
+      if (!rows[0]) fail(403, "그룹의 대표만 그룹 여행을 만들 수 있음");
+    }
     const trip = {
       code: "",
       title: b.title === undefined ? "" : text(b.title, 40, "title"),
@@ -308,6 +546,7 @@ async function trips(req, [code, sub, id], b, query) {
       moments: [],
       version: 1,
       createdAt: Date.now(),
+      ...(groupId ? { groupId } : {}),
     };
     await tripsDb().query("DELETE FROM trips WHERE created_at < now() - interval '48 hours'");
     await tripsDb().query("DELETE FROM utterances WHERE trip_code NOT IN (SELECT code FROM trips)"); // 여행이 닫힌 발화도 함께 지운다
@@ -355,18 +594,34 @@ async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
   if (sub === "participants") {
     const seatFree = (seat, self) => trip.participants.every((p) => p === self || p.seat !== seat);
     if (m === "POST" && !id) {
+      // 대표가 그룹의 계정 없는 구성원(아이) 프로필로 참가시킬 수 있다(ADR-0009).
+      let kidOf = null;
+      if (b.profileId !== undefined) {
+        if (!profile) fail(401, "프로필 토큰이 필요함");
+        const { rows: kid } = await profilesDb().query(
+          `SELECT p.id, p.name, p.prefs, p.consent_default FROM profiles p
+           JOIN group_members gm ON gm.profile_id = p.id
+           JOIN groups g ON g.id = gm.group_id
+           WHERE p.id = $1 AND g.owner_id = $2 LIMIT 1`,
+          [text(b.profileId, 36, "profileId"), profile.id]
+        );
+        if (!kid[0]) fail(403, "내 그룹의 구성원 프로필만 참가시킬 수 있음");
+        kidOf = kid[0];
+      }
       // 같은 프로필이 다시 참가하면 이미 있는 참가자를 돌려준다(폰에서 다시 열었을 때).
       // 참가자 토큰은 문서에 해시만 남으니 다시 참가할 때마다 새로 만들어 준다(옛 토큰은 못 쓰게 됨).
-      const again = profile && trip.participants.find((p) => p.profileId === profile.id);
+      const again = !kidOf && profile && trip.participants.find((p) => p.profileId === profile.id);
       if (again) {
         const token = randomBytes(32).toString("base64url");
         again.tokenHash = tokenHash(token).toString("hex");
         return changed(200, { ...asParticipant(again), token });
       }
       const seat = oneOf(b.seat, SEATS, "seat");
-      const p = profile
-        ? { name: profile.name, prefs: profile.prefs[ROLE[seat]], consent: b.consent === undefined ? profile.consentDefault : bool(b.consent, "consent"), profileId: profile.id }
-        : { name: text(b.name, 20, "name"), prefs: prefs(obj(b.prefs ?? {}, "prefs")), consent: bool(b.consent, "consent") };
+      const p = kidOf
+        ? { name: kidOf.name, prefs: kidOf.prefs[ROLE[seat]], consent: b.consent === undefined ? false : bool(b.consent, "consent"), profileId: kidOf.id } // 아이는 동의 기본값 꺼짐
+        : profile
+          ? { name: profile.name, prefs: profile.prefs[ROLE[seat]], consent: b.consent === undefined ? profile.consentDefault : bool(b.consent, "consent"), profileId: profile.id }
+          : { name: text(b.name, 20, "name"), prefs: prefs(obj(b.prefs ?? {}, "prefs")), consent: bool(b.consent, "consent") };
       if (!seatFree(seat)) fail(409, "이미 다른 사람이 앉은 자리");
       // 참가자 토큰(프로필·손님 모두)은 이때 한 번씩 준다. 음성 경로의 인증에 쓴다(ADR-0007).
       const token = randomBytes(32).toString("base64url");
@@ -546,6 +801,10 @@ export const server = createServer(async (req, res) => {
     res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
     res.end(data === undefined ? undefined : JSON.stringify(data));
   };
+  const sendRaw = (status, buf, type) => {
+    res.writeHead(status, { "content-type": type, "cache-control": "no-store" });
+    res.end(buf);
+  };
   try {
     const url = new URL(req.url, "http://localhost");
     const seg = url.pathname.split("/").filter(Boolean);
@@ -558,7 +817,16 @@ export const server = createServer(async (req, res) => {
       // 발화 묶음은 본문이 커서 그 경로만 따로 한도를 둔다(docs/api/voice.md).
       const big = seg[1] === "trips" && seg[3] === "utterances";
       const body = req.method === "POST" || req.method === "PATCH" ? await readBody(req, big ? 1_000_000 : MAX_BODY) : {};
-      if (seg[1] === "profiles") return send(...(await profiles(req, seg.slice(2), body)));
+      if (seg[1] === "profiles") {
+        const r = await profiles(req, seg.slice(2), body);
+        if (Buffer.isBuffer(r[1])) return void sendRaw(r[0], r[1], r[2]); // 사진 같은 이진 응답
+        return send(...r);
+      }
+      if (seg[1] === "groups") return send(...(await groups(req, seg.slice(2), body)));
+      if (seg[1] === "j" && seg[2] && !seg[3]) {
+        if (req.method !== "POST") fail(405, "POST만 됨");
+        return send(...(await acceptInvite(req, seg[2], body)));
+      }
       if (seg[1] === "trips") return send(...(await trips(req, seg.slice(2), body, url.searchParams)));
       fail(404, "없는 경로");
     }

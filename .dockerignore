@@ -10,5 +10,6 @@
 !backend/api/profiles.sql
 !backend/api/profiles-2-links.sql
 !backend/api/profiles-3-moments.sql
+!backend/api/profiles-4-groups.sql
 !frontend/web
 frontend/web/*.test.mjs
