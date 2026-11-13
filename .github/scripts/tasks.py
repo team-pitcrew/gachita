@@ -21,7 +21,9 @@ from pathlib import Path
 REPO = "team-pitcrew/gachita"
 ROOT = Path(__file__).resolve().parents[2]
 HEAD = re.compile(r"^### (T\d+) (.+?) \((P[012])\) · ([a-z-]+)(?: · 선행 (.+))?$")
-EXTRA = {"왜": "why", "환경": "env", "하지 않는 것": "skip", "위험": "risk"}  # 작업마다 적어도 되는 줄
+# 작업마다 적어도 되는 줄(한 줄). 설계부터 보안까지는 이슈 양식의 선택 칸이다.
+EXTRA = {"왜": "why", "환경": "env", "하지 않는 것": "skip", "설계": "design", "대안": "alternatives", "서비스 수준": "slo",
+         "용량": "capacity", "의존성": "dependencies", "관측": "observability", "보안": "security", "위험": "risk"}
 ENV_NONE, ENV_EMULATOR = "없음 · 로컬과 문서로 끝남", "에뮬레이터 · Pleos 에뮬레이터에서 확인"  # 이슈 양식의 선택지와 같아야 한다
 
 
@@ -32,7 +34,7 @@ def parse(text, parts):
         if m:
             assert m[4] in parts, f"{m[1]}: 모르는 파트 {m[4]}"
             cur = {"id": m[1], "title": m[2], "priority": m[3], "part": m[4], "after": m[5] or "", "todo": [], "done": "",
-                   "why": "", "env": "", "skip": "", "risk": ""}
+                   **{key: "" for key in EXTRA.values()}}
             tasks.append(cur)
         elif line.startswith("### "):
             raise AssertionError(f"제목 줄 형식이 다름: {line}")
@@ -67,6 +69,13 @@ def body(task, parts):
         ("왜 하는가", task["why"] or "계획 원문: docs/tasks.md"),
         ("할 일", "\n".join(task["todo"])),
         ("하지 않는 것", task["skip"] or "_No response_"),
+        ("설계", task["design"] or "_No response_"),
+        ("검토한 대안", task["alternatives"] or "_No response_"),
+        ("서비스 수준", task["slo"] or "_No response_"),
+        ("용량과 비용", task["capacity"] or "_No response_"),
+        ("의존성과 장애 동작", task["dependencies"] or "_No response_"),
+        ("관측", task["observability"] or "_No response_"),
+        ("보안과 개인정보", task["security"] or "_No response_"),
         ("완료 기준", task["done"]),
         ("위험과 되돌리기", task["risk"] or "_No response_"),
         ("선행 작업", task["after"] or "_No response_"),

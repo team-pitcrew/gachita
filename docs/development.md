@@ -46,11 +46,26 @@ GitHub 이슈가 티켓입니다. 제목은 `[T번호] 제목`이고, 라벨 셋
 
 | 양식 | 칸 | 근거 |
 |---|---|---|
-| 작업 | 파트, 우선순위, 필요한 환경, 왜 하는가, 할 일, 하지 않는 것, 완료 기준, 위험과 되돌리기, 선행 작업 | 범위를 미리 긋고(하지 않는 것) 되돌릴 길을 정해 둔 변경이 안전합니다([Launch Checklist](https://sre.google/sre-book/launch-checklist/)) |
+| 작업 | 파트, 우선순위, 필요한 환경, 왜 하는가, 할 일, 하지 않는 것, 설계, 검토한 대안, 서비스 수준, 용량과 비용, 의존성과 장애 동작, 관측, 보안과 개인정보, 완료 기준, 위험과 되돌리기, 선행 작업. 설계부터 보안과 개인정보까지는 선택 | 범위를 미리 긋고(하지 않는 것) 되돌릴 길을 정해 둔 변경이 안전합니다([Launch Checklist](https://sre.google/sre-book/launch-checklist/)). 칸 순서는 구글 설계 문서(배경, 목표와 비목표, 설계, 대안, 교차 관심사: [Design Docs at Google](https://www.industrialempathy.com/posts/design-docs-at-google/))를 따르고, 서비스 수준은 [SLO 문서](https://sre.google/workbook/slo-document/)를 줄인 것입니다 |
 | 결함 | 파트, 심각도, 확인한 환경, 기대한 동작, 실제 동작, 재현 순서, 영향 범위, 처음 본 때와 알아챈 경로, 증거, 임시 조치, 짐작하는 원인 | 기대·실제·재현을 적고 본 것과 짐작을 나눕니다([Effective Troubleshooting](https://sre.google/sre-book/effective-troubleshooting/)). 원인보다 피해를 멈추는 것이 먼저입니다([Managing Incidents](https://sre.google/sre-book/managing-incidents/)) |
 | 사후 검토 | 요약, 영향, 근본 원인, 계기, 감지, 해결, 시간순 기록, 잘된 것, 잘못된 것, 운이 좋았던 것, 후속 조치 | [Postmortem Culture](https://sre.google/sre-book/postmortem-culture/)와 [예시](https://sre.google/sre-book/example-postmortem/) |
 
 결함의 심각도는 우선순위 라벨로 옮겨집니다(S0·S1 → P0, S2 → P1, S3 → P2).
+
+작업 양식의 선택 칸은 서버, 데이터, 모델, 외부 서비스에 닿는 일에 채웁니다. 문서 고치기 같은 작은 일은 비워 둡니다. 출시 점검표의 질문을 우리 크기에 맞춰 줄였습니다.
+
+| 칸 | 묻는 것 | 점검표 항목 |
+|---|---|---|
+| 설계 | 입력과 출력, 어디서 도는지, API와 저장하는 데이터의 모양, 핵심 판단 규칙 | Architecture |
+| 검토한 대안 | 다른 방법과 고르지 않은 이유 | (설계 문서) |
+| 서비스 수준 | 무엇을 재고 목표가 얼마인지, 어디서 어떻게 재는지, 지금 값과 근거 | Volume estimates, capacity, and performance |
+| 용량과 비용 | 요청 수, 데이터 크기, CPU·메모리·저장소, 한 달 비용, 열 배로 늘면 막히는 곳 | Machines, Growth issues |
+| 의존성과 장애 동작 | 기대는 것과, 그것이 느리거나 죽었을 때의 동작 | System reliability and failover, External dependencies |
+| 관측 | 로그·지표·알림, 볼 화면이나 명령 | Monitoring and server management |
+| 보안과 개인정보 | 다루는 데이터, 동의, 보관과 삭제, 밖으로 나가는 것, 권한 | Security |
+| 위험과 되돌리기 | 내보내는 순서와 되돌리는 방법 | Automation and manual tasks, Schedule and rollout planning |
+
+작업 목록(`docs/tasks.md`)에서는 같은 칸을 한 줄로 적습니다: `설계:`, `대안:`, `서비스 수준:`, `용량:`, `의존성:`, `관측:`, `보안:`. 이미 있는 티켓의 본문에 새 칸을 넣으려면 `python3 .github/scripts/tasks.py --apply --refresh`를 돌립니다(체크한 항목이 없는 열린 티켓의 본문을 작업 목록대로 다시 씁니다).
 
 ## 한 작업의 순서
 
@@ -152,6 +167,7 @@ make deploy-tag TAG=<올린 태그>   # dev 환경의 태그를 바꾼다
 - `make push`는 CI를 거치지 않고 로컬에서 올릴 때 씁니다. `make e2e`를 통과해야 올립니다.
 - 되돌릴 때는 `make deploy-tag`로 이전 태그를 다시 적어 PR로 올립니다.
 - 자동으로: develop에 병합돼 이미지가 올라가면 `deploy-tag` 워크플로가 그 태그로 바꾸는 PR(`bot/deploy-tag`, 제목 `[sync]`)을 엽니다. 되돌릴 때는 Actions → `deploy-tag` → Run workflow에 이전 태그를 넣습니다. 병합은 사람이 하고, 병합 뒤 실제 주소 E2E(`live-e2e`)가 돕니다(T56).
+- 클러스터가 선 뒤에는 실제 주소에 대고 같은 E2E를 돕니다: Actions → `live-e2e` → Run workflow(기본 주소 `https://gachita.mangowhois.ai`). 닿지 않으면 첫 단계에서 실패합니다(T54).
 - 이미지 저장소는 GHCR입니다. `gachita-api`는 조직의 비공개 패키지이고 이 저장소에 이어져 있습니다. 2026-11-13에 로컬에서 `make push`로 ARM64 이미지를 올려 확인했습니다.
 
 토큰과 권한은 이렇게 씁니다. 따로 만든 토큰은 `gh secret set`으로 저장소 비밀 값에 둡니다.

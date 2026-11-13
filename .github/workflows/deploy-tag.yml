@@ -22,14 +22,14 @@ on:
     branches: [develop]
     paths: [backend/infra/gitops/apps/api/overlays/dev/kustomization.yaml]
 
+# 쓰기 권한은 PR을 여는 잡에만 준다(아래 open-pr). 기다리기와 E2E는 읽기만
 permissions:
-  contents: write
-  pull-requests: write
-  actions: write
-  packages: read
+  contents: read
 
+# PR 열기(병합 뒤·되돌리기)와 병합 뒤 E2E(push)를 따로 줄 세운다. 한 줄이면 5분 기다리는 E2E 뒤에 서 있던
+# 되돌리기가 새 ci 완료에 밀려 취소될 수 있다(GitHub는 대기 중인 앞 실행을 취소함)
 concurrency:
-  group: deploy-tag
+  group: deploy-tag-${{ github.event_name == 'push' && 'e2e' || 'pr' }}
   cancel-in-progress: false
 
 env:
@@ -40,6 +40,11 @@ env:
 jobs:
   open-pr:
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success')
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+      packages: read
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
