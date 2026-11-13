@@ -15,7 +15,7 @@ info:
     - 프로필 토큰은 기기마다 하나씩입니다 — 한 프로필을 차량과 폰에서 함께 쓸 수 있습니다(ADR-0009). 가족·동승자 그룹과 QR 초대도 있습니다.
     - 목소리 등록·발화 대조(ADR-0019)의 음성은 WAV(16 kHz PCM) 이진 본문입니다. 등록 음성 원본은 어디에도 저장하지 않고 대조용 값만 남습니다.
 
-    - 녹음 클립(`/recordings`)은 사람이 장면으로 고른 구간의 원음입니다. WAV(16 kHz·16비트·모노) 이진 본문을 5 MB까지 받아 클립 버킷(S3)에 두고 참가자 토큰으로 지웁니다(T76). 듣기는 `media` 하위 도메인의 `/media/` 주소입니다(ADR-0020).
+    - 녹음 클립(`/recordings`)은 사람이 장면으로 고른 구간의 원음입니다. WAV(16 kHz·16비트·모노) 이진 본문을 5 MB까지 받아 클립 버킷(S3)에 두고, 받아 적은 글과 같은 참가자 토큰으로 듣고 지웁니다(T76).
 
     이 서버가 부르는 외부 API는 구글 OAuth(계정 연결을 켰을 때)와 클립 버킷(S3, `CLIPS_BUCKET`이 있을 때)입니다. 예정과 결정 상태는 docs/api/external.md에 있습니다.
 servers:
@@ -599,60 +599,33 @@ paths:
     parameters:
       - { $ref: "#/components/parameters/code" }
       - { name: id, in: path, required: true, schema: { type: string }, description: 클립 id(= 장면 id) }
+    get:
+      tags: [클립]
+      summary: 클립 듣기
+      description: |
+        받은 WAV 바이트를 그대로, `Cache-Control: private, no-store`로 줍니다. 기록본처럼 녹음에 동의한 참가자만 듣습니다(`403`).
+        토큰은 머리말로만 보냅니다 — 웹은 `fetch` → blob → `<audio>`로 재생합니다(클립 하나 약 0.5~1.1 MB). 서명한 S3 주소를 주지 않고, 별도 media 주소도 두지 않습니다(ADR-0020은 11/14 대체됨: 영상 파일이 없음).
+      security: [{ participantToken: [] }]
+      responses:
+        "200": { description: WAV 바이트, content: { audio/wav: { schema: { type: string, format: binary } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
     delete:
       tags: [클립]
       summary: 클립 지우기
       description: |
         이 여행의 참가자라면 누구나 지웁니다(동의 끄기처럼 지우는 쪽은 넓게). 버킷에서 바로 지우고(버전 관리를 끈 버킷이라 남는 버전 없음) `204`.
-        지운 클립은 표시를 남겨 차가 다시 올려도 받지 않습니다(`409`). 받아 적은 글과 장면은 그대로입니다.
+        지운 클립은 표시를 남겨 차가 다시 올려도 받지 않습니다(`409`, 동의를 철회했다 다시 켜도 여행이 닫힐 때까지). 받아 적은 글과 장면은 그대로입니다.
         녹음 동의를 철회하면(켜져 있던 동의를 끔) 그 여행의 클립이 모두, 여행을 만든 뒤 48시간이 지나면 여행과 함께 지워집니다(커밋 뒤 버킷에서, 실패하면 10분마다 다시).
+        버킷을 기다리는 사이 같은 장면의 클립이 새로 올라왔으면(철회 → 다시 동의 → 다시 올림) 그 새 클립은 건드리지 않고 `409` — 다시 지우면 됩니다.
       security: [{ participantToken: [] }]
       responses:
         "204": { description: 지움 }
         "401": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
-        "503": { $ref: "#/components/responses/Error" }
-  /api/trips/{code}/media-cookie:
-    parameters: [{ $ref: "#/components/parameters/code" }]
-    post:
-      tags: [클립]
-      summary: 폰의 <audio>가 쓸 클립 쿠키 받기
-      description: |
-        `<audio>`는 머리말을 붙일 수 없어서, 웹앱이 참가자 토큰 머리말로 이 경로를 부르면 쿠키를 줍니다(ADR-0020).
-        `Set-Cookie: gachita_media=<참가자 토큰>; Path=/media/trips/{code}/; Max-Age=<여행이 닫힐 때까지>; HttpOnly; Secure; SameSite=Lax; Domain=gachita.mangowhois.ai`(media 주소의 부모 이름). 경로의 여행 코드는 대문자(API가 돌려준 그대로).
-        Domain이 `gachita.mangowhois.ai`라 `media.gachita.mangowhois.ai`에도 실리고, 그 여행의 `/media/` 경로에만 쓰입니다. 로컬 주소(localhost)에는 Domain을 붙이지 않습니다.
-        녹음에 동의한 참가자만 받습니다(`403`).
-      security: [{ participantToken: [] }]
-      responses:
-        "204": { description: 쿠키를 줌 }
-        "401": { $ref: "#/components/responses/Error" }
-        "403": { $ref: "#/components/responses/Error" }
-        "404": { $ref: "#/components/responses/Error" }
-  /media/trips/{code}/recordings/{id}:
-    parameters:
-      - { $ref: "#/components/parameters/code" }
-      - { name: id, in: path, required: true, schema: { type: string }, description: 클립 id(= 장면 id) }
-    get:
-      tags: [클립]
-      summary: 클립 듣기(media 하위 도메인)
-      servers: [{ url: "https://media.gachita.mangowhois.ai", description: 실제(Cloudflare를 지나지 않음, ADR-0020) }, { url: "http://localhost:8787", description: 로컬 }]
-      description: |
-        `https://media.gachita.mangowhois.ai/media/…`에서 API가 권한을 보고 클립 버킷에서 읽어 줍니다(ADR-0020). 서명한 S3 주소를 주지 않고 토큰을 URL에 넣지 않습니다.
-        인증은 참가자 토큰 머리말(차) 또는 `media-cookie`가 준 쿠키(폰의 `<audio>`). 기록본처럼 녹음에 동의한 참가자만 듣습니다(`403`).
-        `Range: bytes=시작-끝` 하나를 그대로 전해 `206`과 `Content-Range`로 답합니다(범위가 크기를 벗어나면 `416`). 응답은 `Cache-Control: private, no-store`.
-        media 하위 도메인에서는 `/media/`만, `/media/`는 그 이름에서만 받습니다(다른 경로·이름은 `404`, 경로 정리 전의 원래 경로로 확인). 로컬 주소는 둘 다 받습니다.
-        토큰이 없거나 여행이 없으면 `401`(여행 코드가 있는지 드러내지 않음). 요청 수 제한(파드마다, 1분): 요청 주소마다 600(인증 전, `X-Forwarded-For`의 마지막 값, IPv6는 /64), 참가자마다 300. 넘으면 `429`와 `Retry-After`.
-      security: [{ participantToken: [] }, { mediaCookie: [] }]
-      parameters:
-        - { name: Range, in: header, schema: { type: string }, description: "bytes=시작-끝" }
-      responses:
-        "200": { description: WAV 바이트, content: { audio/wav: { schema: { type: string, format: binary } } } }
-        "206": { description: 요청한 범위, content: { audio/wav: { schema: { type: string, format: binary } } } }
-        "401": { $ref: "#/components/responses/Error" }
-        "403": { $ref: "#/components/responses/Error" }
-        "404": { $ref: "#/components/responses/Error" }
-        "416": { $ref: "#/components/responses/Error" }
-        "429": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
         "503": { $ref: "#/components/responses/Error" }
   /api/groups:
     post:
@@ -860,11 +833,6 @@ components:
       type: http
       scheme: bearer
       description: POST /api/profiles가 돌려준 토큰
-    mediaCookie:
-      type: apiKey
-      in: cookie
-      name: gachita_media
-      description: POST /api/trips/{code}/media-cookie가 준 쿠키(그 여행의 /media/ 경로에만, ADR-0020)
     participantToken:
       type: http
       scheme: bearer
@@ -884,7 +852,7 @@ components:
               error: { type: string, description: 사람이 읽는 이유(바뀔 수 있음) }
               type:
                 type: string
-                enum: [invalid, unauthenticated, forbidden, not_found, method_not_allowed, conflict, too_large, rate_limited, unavailable, internal]
+                enum: [invalid, unauthenticated, forbidden, not_found, method_not_allowed, conflict, too_large, unavailable, internal]
                 description: "오류 종류(T71). 클라이언트는 문장이 아니라 이것으로 가른다. unavailable(503)은 DB에 닿지 않거나 질의 시간 제한 — 잠시 뒤 다시 해도 된다"
       headers:
         x-request-id: { schema: { type: string }, description: "요청 id(로그와 맞춰 볼 때). 성공 응답에도 같은 머리말이 있다(경로마다 적지 않음)" }

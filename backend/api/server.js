@@ -27,11 +27,6 @@ const GROUPS_SQL = fileURLToPath(new URL("profiles-4-groups.sql", import.meta.ur
 const VOICE_SQL = fileURLToPath(new URL("profiles-5-voice.sql", import.meta.url));
 const NO_PREFS_SQL = fileURLToPath(new URL("profiles-6-no-prefs.sql", import.meta.url));
 const INVITE_BASE = process.env.INVITE_BASE_URL ?? "https://gachita.mangowhois.ai/j"; // QR에 담는 초대 주소(ADR-0009·0010)
-// 클립을 내주는 주소(ADR-0020): Cloudflare를 지나지 않는 media 하위 도메인. 로컬은 MEDIA_BASE_URL=http://localhost:8787처럼 같은 서버로.
-export const MEDIA_BASE = process.env.MEDIA_BASE_URL ?? "https://media.gachita.mangowhois.ai";
-const MEDIA_HOSTNAME = new URL(MEDIA_BASE).hostname;
-const COOKIE_DOMAIN = MEDIA_HOSTNAME.split(".").slice(1).join("."); // media.gachita.mangowhois.ai → gachita.mangowhois.ai(웹앱과 media가 함께 받음)
-const DEV_HOSTNAMES = ["localhost", "127.0.0.1", "[::1]"]; // 로컬·CI: /api와 /media를 한 주소에서 받는다
 const PHOTO_MAX = 1_000_000; // 프로필 사진 상한. 형식은 매직 바이트로만 확인한다(다시 그리기는 T46 화면, ADR-0009 위험)
 const TTL_MS = 48 * 60 * 60 * 1000; // 기획서 v4가 초기 제안으로 적은 보관 기간
 const MAX_BODY = 10_000;
@@ -60,7 +55,7 @@ const fail = (status, error) => {
 };
 
 // 오류 종류(T71): 응답의 type과 로그의 err.type. 상태에서 정하는 닫힌 목록이라 클라이언트는 문장이 아니라 종류로 가른다.
-const ERROR_TYPE = { 400: "invalid", 401: "unauthenticated", 403: "forbidden", 404: "not_found", 405: "method_not_allowed", 409: "conflict", 413: "too_large", 416: "invalid", 429: "rate_limited", 502: "unavailable", 503: "unavailable", 504: "unavailable" };
+const ERROR_TYPE = { 400: "invalid", 401: "unauthenticated", 403: "forbidden", 404: "not_found", 405: "method_not_allowed", 409: "conflict", 413: "too_large", 502: "unavailable", 503: "unavailable", 504: "unavailable" };
 // DB에 닿지 않거나(연결 끊김·거절, 연결 수 초과) 질의 시간 제한(57014, T26)에 걸린 것: 다시 해도 되는 503.
 // Postgres 오류 번호 08xxx 연결, 53xxx 자원 부족, 57014 질의 취소, 57P0x 서버 종료·시작 중.
 const DB_DOWN = /^(08|53|57014|57P0)/;
@@ -73,9 +68,9 @@ export function classify(e) {
 }
 
 // 로그의 경로 틀: 정한 낱말이 아닌 마디(여행 코드, id, 초대 코드)는 :p로 가린다. 웹 파일은 /(web) 하나로.
-const ROUTE_WORDS = new Set(["api", "trips", "participants", "requests", "moments", "utterances", "transcript", "voice-match", "recordings", "media", "media-cookie", "profiles", "me", "links", "google", "feed", "tokens", "photo", "voice", "groups", "members", "invites", "j"]);
+const ROUTE_WORDS = new Set(["api", "trips", "participants", "requests", "moments", "utterances", "transcript", "voice-match", "recordings", "profiles", "me", "links", "google", "feed", "tokens", "photo", "voice", "groups", "members", "invites", "j"]);
 const routeOf = (pathname) =>
-  pathname === "/healthz" ? pathname : pathname.startsWith("/api/") || pathname.startsWith("/media/") ? `/${pathname.split("/").filter(Boolean).map((s) => (ROUTE_WORDS.has(s) ? s : ":p")).join("/")}` : "/(web)";
+  pathname === "/healthz" ? pathname : pathname.startsWith("/api/") ? `/${pathname.split("/").filter(Boolean).map((s) => (ROUTE_WORDS.has(s) ? s : ":p")).join("/")}` : "/(web)";
 // ALB가 붙이는 추적 id(X-Amzn-Trace-Id)를 그대로 쓴다. 없거나 모양이 이상하면 새로.
 const requestIdOf = (req) => {
   const v = req.headers["x-amzn-trace-id"];
@@ -168,9 +163,10 @@ async function bumpGeneration(trip, client) {
   await client.query("DELETE FROM utterances WHERE trip_code = $1 AND generation < $2", [trip.code, trip.generation]);
   // 그 여행의 클립도 모두 지운다(T76). 같은 트랜잭션에서 지울 키를 적고 버킷은 커밋 뒤에 비운다(sweepClips) —
   // 잠금을 쥔 채 S3를 기다리지 않고, 되돌려지면 적은 것도 되돌려진다. 늦게 올라오는 옛 세대 클립은 세대 확인이 막는다.
+  // 사람이 지운 표시(deleted_at)는 남긴다 — 철회 뒤 다시 동의해도 지운 장면의 클립을 다시 받지 않게(여행이 닫힐 때 함께 지움).
   await client.query(
-    `WITH r AS (DELETE FROM recordings WHERE trip_code = $1 RETURNING object_key, deleted_at)
-     INSERT INTO clip_trash (object_key) SELECT object_key FROM r WHERE deleted_at IS NULL ON CONFLICT DO NOTHING`,
+    `WITH r AS (DELETE FROM recordings WHERE trip_code = $1 AND deleted_at IS NULL RETURNING object_key)
+     INSERT INTO clip_trash (object_key) SELECT object_key FROM r ON CONFLICT DO NOTHING`,
     [trip.code]
   );
 }
@@ -509,17 +505,32 @@ const trashClips = (keys) =>
 async function recordings(code, id, req, query) {
   const m = req.method;
   if (!id && m !== "POST") fail(405, "POST만 됨");
-  if (id && m !== "DELETE") fail(405, "DELETE만 됨"); // 듣기는 media 주소에서(clipMedia)
+  if (id && m !== "GET" && m !== "DELETE") fail(405, "GET, DELETE만 됨");
   const store = clipStore() ?? fail(503, "클립 저장소가 없음"); // CLIPS_BUCKET이 없는 환경(로컬·E2E)
   const live = async (client, trip) =>
     (await client.query("SELECT object_key FROM recordings WHERE trip_code = $1 AND moment_id = $2 AND deleted_at IS NULL", [trip.code, id])).rows[0] ?? fail(404, "없는 클립");
 
+  if (m === "GET") {
+    // 기록본과 같은 규칙: 녹음에 동의한 참가자만. 소리는 잠금 밖에서 받는다. 토큰은 머리말로만 —
+    // 웹은 fetch → blob → <audio>로 튼다(클립 하나 약 0.5~1.1 MB). 서명한 S3 주소는 주지 않는다(ADR-0020은 대체됨).
+    const { object_key } = await withTrip(code, false, (trip, client) =>
+      participantOf(req, trip).consent ? live(client, trip) : fail(403, "녹음에 동의한 참가자만 들을 수 있음")
+    );
+    return [200, (await store.get(object_key)) ?? fail(404, "없는 클립"), "audio/wav"];
+  }
   if (m === "DELETE") {
     // 이 여행의 참가자라면 누구나 — 동의 끄기처럼 지우는 쪽은 넓게 둔다. 버킷에서 먼저 지우고(실패하면 503, 다시 하면 됨)
     // 줄에는 지운 표시를 남긴다: 차가 늦게 다시 올려도 되살아나지 않게. 받아 적은 글과 장면은 그대로다.
     const { trip, row } = await withTrip(code, false, async (t, client) => (participantOf(req, t), { trip: t, row: await live(client, t) }));
     await store.remove([row.object_key]);
-    await tripsDb().query("UPDATE recordings SET deleted_at = now() WHERE trip_code = $1 AND moment_id = $2 AND deleted_at IS NULL", [trip.code, id]);
+    // 지운 객체의 줄에만 표시한다. 버킷을 기다리는 사이 철회 → 다시 동의 → 같은 장면을 새로 올렸으면 그 새 클립은 건드리지 않고 409.
+    const { rowCount } = await tripsDb().query(
+      "UPDATE recordings SET deleted_at = now() WHERE trip_code = $1 AND moment_id = $2 AND object_key = $3 AND deleted_at IS NULL",
+      [trip.code, id, row.object_key]
+    );
+    if (!rowCount && (await tripsDb().query("SELECT 1 FROM recordings WHERE trip_code = $1 AND moment_id = $2 AND deleted_at IS NULL", [trip.code, id])).rows[0]) {
+      fail(409, "그 사이 같은 장면의 클립이 새로 올라옴 — 다시 지워 주세요");
+    }
     return [204];
   }
 
@@ -567,78 +578,6 @@ async function recordings(code, id, req, query) {
     await trashClips([key]); // 남기지 못한 소리는 버킷에 두지 않는다
     throw e;
   }
-}
-
-// 클립 듣기(ADR-0020): GET /media/trips/{code}/recordings/{id}. media 하위 도메인(Cloudflare를 지나지 않음)에서
-// API가 권한을 보고 S3에서 읽어 준다. 서명한 S3 주소를 주지 않고, 토큰을 URL에 넣지 않는다:
-// 차는 Authorization 머리말, 폰의 <audio>는 머리말을 붙일 수 없어 쿠키(POST /api/trips/{code}/media-cookie가 줌).
-// 권한은 기록본과 같은 규칙(녹음에 동의한 참가자). 범위 요청(Range)을 그대로 전한다.
-// 이 길에는 Cloudflare의 요청 수 제한이 없어 API가 센다: 인증 전에는 요청 주소마다, 인증 뒤에는 참가자마다.
-const MEDIA_COOKIE = "gachita_media";
-const tokenFromCookie = (req) => /(?:^|;\s*)gachita_media=([A-Za-z0-9_-]{40,})/.exec(req.headers.cookie ?? "")?.[1];
-// 이 이름에는 누구나 바로 들어와 CF-Connecting-IP를 꾸밀 수 있다. ALB가 붙인 X-Forwarded-For의 마지막 값을 쓴다
-// (ALB의 xff 처리 방식이 기본값 append일 때 맞다). IPv6는 /64로 묶어 센다 — 주소 하나가 대역 전체를 쓸 수 있어서.
-const clientIp = (req) => {
-  const ip = (req.headers["x-forwarded-for"]?.split(",").at(-1)?.trim() || req.socket.remoteAddress || "").replace(/^::ffff:/, "");
-  return ip.includes(":") ? ip.split(":").slice(0, 4).join(":") : ip; // ponytail: 줄여 쓴 IPv6(::)는 대충 묶인다
-};
-// ponytail: 파드마다 메모리에서 1분 창으로 센다(파드가 둘이면 실제 한도는 두 배, ADR-0020). 분이 바뀌면 통째로 비우고,
-// 한 분에 키가 5만 개를 넘으면 새 키는 거절한다(비우면 걸린 쪽의 계수도 풀리므로).
-const hits = new Map();
-let hitsMinute = 0;
-function limited(key, max) {
-  const minute = Math.floor(Date.now() / 60_000);
-  if (minute !== hitsMinute) {
-    hits.clear();
-    hitsMinute = minute;
-  }
-  const n = (hits.get(key) ?? 0) + 1;
-  if (n === 1 && hits.size >= 50_000) return true;
-  hits.set(key, n);
-  return n > max;
-}
-const IP_PER_MIN = 600; // <audio>는 클립 하나에 범위 요청을 여러 번 보낸다
-const PARTICIPANT_PER_MIN = 300;
-
-async function clipMedia(req, res, seg) {
-  if (req.method !== "GET") fail(405, "GET만 됨");
-  const tooMany = () => {
-    res.setHeader("retry-after", String(60 - (Math.floor(Date.now() / 1000) % 60))); // 다음 분까지
-    fail(429, "요청이 너무 많음");
-  };
-  if (limited(`ip:${clientIp(req)}`, IP_PER_MIN)) tooMany();
-  const [, kind, code, sub, id, extra] = seg;
-  if (kind !== "trips" || sub !== "recordings" || !id || extra !== undefined) fail(404, "없는 경로");
-  const store = clipStore() ?? fail(503, "클립 저장소가 없음");
-  const cookie = tokenFromCookie(req);
-  const auth = req.headers.authorization === undefined && cookie ? { headers: { authorization: `Bearer ${cookie}` } } : req;
-  // 토큰 모양이 없으면 DB에 가기 전에 끝낸다(WAF 없는 이름). 없는 여행도 틀린 토큰과 같은 401 — 여행 코드가 있는지 드러내지 않게.
-  if (!/^Bearer [A-Za-z0-9_-]{40,}$/.test(auth.headers.authorization ?? "")) fail(401, "참가자 토큰이 필요함");
-  const { key, who } = await withTrip(code, false, async (trip, client) => {
-    const p = participantOf(auth, trip);
-    if (!p.consent) fail(403, "녹음에 동의한 참가자만 들을 수 있음");
-    const { rows } = await client.query("SELECT object_key FROM recordings WHERE trip_code = $1 AND moment_id = $2 AND deleted_at IS NULL", [trip.code, id]);
-    return { key: rows[0]?.object_key ?? fail(404, "없는 클립"), who: `${trip.code}:${p.id}` };
-  }).catch((e) => Promise.reject(e?.status === 404 && e.error !== "없는 클립" ? { status: 401, error: "참가자 토큰이 필요함" } : e));
-  if (limited(`p:${who}`, PARTICIPANT_PER_MIN)) tooMany();
-  const range = /^bytes=(\d+-\d*|-\d+)$/.test(req.headers.range ?? "") ? req.headers.range : undefined; // 범위 하나만, 아니면 전체
-  return (await store.get(key, range)) ?? fail(404, "없는 클립");
-}
-
-// 폰의 <audio>가 쓸 쿠키(ADR-0020). 이 여행의 녹음에 동의한 참가자가 자기 참가자 토큰으로 부른다.
-// 값은 그 토큰이고, HttpOnly·Secure·SameSite=Lax, 이 여행의 /media/ 경로에만, 여행이 닫힐 때(만든 뒤 48시간)까지.
-// Domain은 media 주소의 부모 이름(gachita.mangowhois.ai, 설정에서 정함 — 요청의 Host를 쓰지 않는다)이라 웹앱이 받아
-// media 하위 도메인에도 실린다. 로컬 주소에는 Domain을 붙이지 않는다. Path의 여행 코드는 대문자(API가 돌려준 그대로)다.
-// 값은 참가자 토큰 그 자체라 올리기·지우기·동의에도 쓰일 수 있다 — 같은 토큰이 웹앱 저장소에 이미 있어 늘어나는 노출은 없다.
-async function mediaCookie(req, code) {
-  if (req.method !== "POST") fail(405, "POST만 됨");
-  const trip = await withTrip(code, false, (t) => t);
-  if (!participantOf(req, trip).consent) fail(403, "녹음에 동의한 참가자만 들을 수 있음");
-  const token = /^Bearer (\S+)$/.exec(req.headers.authorization)[1];
-  const hostname = URL.parse(`http://${req.headers.host ?? ""}`)?.hostname ?? "";
-  const maxAge = Math.max(0, Math.floor((trip.createdAt + TTL_MS - Date.now()) / 1000));
-  const domain = DEV_HOSTNAMES.includes(hostname) || !COOKIE_DOMAIN ? "" : `; Domain=${COOKIE_DOMAIN}`;
-  return `${MEDIA_COOKIE}=${token}; Path=/media/trips/${trip.code}/; Max-Age=${maxAge}; HttpOnly; Secure; SameSite=Lax${domain}`;
 }
 
 // 지우기는 프로필 DB의 한 트랜잭션에서 한다 — 중간에 실패해도 토큰만 지워지고 프로필이 남는 일이 없게.
@@ -1183,7 +1122,7 @@ export const server = createServer(async (req, res) => {
   res.on("close", () => {
     const aborted = !res.writableFinished;
     const status = aborted ? 499 : res.statusCode;
-    if (!route.startsWith("/api/") && !route.startsWith("/media/") && status < 400) return;
+    if (!route.startsWith("/api/") && status < 400) return;
     log(status >= 500 && !aborted ? "error" : "info", "request", {
       requestId,
       method: req.method,
@@ -1200,33 +1139,13 @@ export const server = createServer(async (req, res) => {
   };
   const sendRaw = (status, buf, type) => {
     // 매직 바이트만 본 파일이라 브라우저가 다른 형식으로 추측해 열지 못하게 한다.
-    res.writeHead(status, { "content-type": type, "cache-control": "no-store", "x-content-type-options": "nosniff" });
+    res.writeHead(status, { "content-type": type, "cache-control": "private, no-store", "x-content-type-options": "nosniff" });
     res.end(buf);
   };
   try {
     const url = new URL(req.url, "http://localhost");
     route = routeOf(url.pathname);
     const seg = url.pathname.split("/").filter(Boolean);
-    // media 하위 도메인에서는 /media/만, /media/는 그 이름(또는 로컬 주소)에서만 받는다(ADR-0020). 경로 정리가
-    // /media/%2e%2e/api/…를 /api/…로 바꾸므로 정리 전의 원래 경로(req.url)도 함께 본다.
-    const hostname = (URL.parse(`http://${req.headers.host ?? ""}`)?.hostname ?? "").replace(/\.$/, "");
-    const isMedia = req.url.startsWith("/media/") && url.pathname.startsWith("/media/");
-    const dev = DEV_HOSTNAMES.includes(hostname);
-    // 원래 경로와 정리된 경로가 /media/에서 어긋나면(%2e%2e, 절대형 요청 대상) Host와 상관없이 막는다 — Host는 클라이언트가 정한다.
-    if (req.url.startsWith("/media/") !== url.pathname.startsWith("/media/")) fail(404, "없는 경로");
-    if (hostname === MEDIA_HOSTNAME && !dev ? !isMedia : isMedia && !dev) fail(404, "없는 경로");
-    if (isMedia) {
-      const clip = await clipMedia(req, res, seg);
-      res.writeHead(clip.range ? 206 : 200, {
-        "content-type": "audio/wav",
-        "content-length": clip.body.length,
-        "accept-ranges": "bytes",
-        "cache-control": "private, no-store",
-        "x-content-type-options": "nosniff",
-        ...(clip.range ? { "content-range": clip.range } : {}),
-      });
-      return void res.end(clip.body);
-    }
     if (url.pathname === "/healthz") {
       if (req.method !== "GET") fail(405, "GET만 됨");
       await Promise.all([tripsDb().query("SELECT 1"), profilesDb().query("SELECT 1")]); // 두 저장소 모두 닿는지 본다
@@ -1248,11 +1167,11 @@ export const server = createServer(async (req, res) => {
         if (req.method !== "POST") fail(405, "POST만 됨");
         return send(...(await acceptInvite(req, seg[2], body)));
       }
-      if (seg[1] === "trips" && seg[3] === "media-cookie" && !seg[4]) {
-        res.writeHead(204, { "set-cookie": await mediaCookie(req, seg[2]), "cache-control": "no-store" });
-        return void res.end();
+      if (seg[1] === "trips") {
+        const r = await trips(req, seg.slice(2), body, url.searchParams);
+        if (Buffer.isBuffer(r[1])) return void sendRaw(r[0], r[1], r[2]); // 클립 소리 같은 이진 응답
+        return send(...r);
       }
-      if (seg[1] === "trips") return send(...(await trips(req, seg.slice(2), body, url.searchParams)));
       fail(404, "없는 경로");
     }
     if (req.method !== "GET") fail(405, "GET만 됨");
