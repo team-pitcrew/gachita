@@ -14,7 +14,7 @@ const TRIP = {
 const NEXT_TRIP = { boarding: ["출발", "driving"], driving: ["주차", "parked"], parked: ["여행 끝내기", "ended"] };
 const ONLY_HERE = "이 폰에서 참가한 사람만 켤 수 있어요.";
 // 켜져 있던 동의를 끄면 서버가 동의 세대를 올려 그 여행의 받아 적은 글을 모두 지운다(ADR-0007). 누르기 전에 알린다.
-const OFF_WIPES = "동의를 끄면 기록이 멈추고, 이 여행에서 지금까지 받아 적은 글이 모두 지워져요. 끌까요?";
+const OFF_WIPES = "동의를 끄면 기록이 멈추고, 이 여행에서 지금까지 받아 적은 글과 올라간 소리가 모두 지워져요. 끌까요?";
 // 프로필 캐릭터. 사진이 없을 때 이 그림으로 보인다(목록 고정은 T46).
 const CHARACTERS = [
   ["bunny", "🐰", "토끼"],
@@ -425,6 +425,24 @@ function tripView(me) {
           throw e.status === 401 || e.status === 403 ? new Error(ONLY_HERE) : e;
         });
     });
+  // 지우기(#156 동의 문구): 장면 소리는 이 여행의 참가자 누구나, 자기 글은 프로필로 참가한 사람만
+  const eraseClip = (m) =>
+    confirm("이 장면의 소리를 지울까요? 받아 적은 글과 장면은 남아요.") &&
+    act(async () => {
+      const del = () => api("DELETE", `/trips${t}/recordings/${m.id}`, null, myToken());
+      await del()
+        .catch((e) => (e.status === 409 ? del() : Promise.reject(e))) // 그사이 새로 올라왔으면 한 번 더 지운다
+        .then(
+          () => toast("장면 소리를 지웠어요."),
+          (e) => (e.status === 404 ? toast("지울 소리가 없어요.") : Promise.reject(e)),
+        );
+    });
+  const eraseMine = () =>
+    confirm("이 여행에서 내 이름이 붙은 받아 적은 글을 지울까요? 되돌릴 수 없어요.") &&
+    act(async () => {
+      const { deleted } = await api("DELETE", `/trips${t}/utterances`, null, myToken());
+      toast(deleted ? `내 이름이 붙은 글 ${deleted}줄을 지웠어요.` : "지울 내 글이 없어요.");
+    });
   const open = trip.requests.filter((r) => !CLOSED.includes(r.status));
   const rec = trip.recording ? ["기록 중", "rec"] : trip.status !== "driving" ? ["기록 안 함", ""] : waiting.length ? ["동의 대기", ""] : ["기록 일시정지", ""];
   const next = NEXT_TRIP[trip.status];
@@ -487,13 +505,28 @@ function tripView(me) {
         h("div", {}, h("p", { className: "what" }, "대화 기록 동의"), h("p", { className: "meta" }, me.consent ? "동의했어요." : "동의하지 않았어요.")),
         me.consent ? button("동의 끄기", () => confirm(OFF_WIPES) && patch(`/participants/${me.id}`, { consent: false })()) : myToken() ? button("동의 켜기", consentOn) : h("p", { className: "meta" }, ONLY_HERE),
       ),
+      // 동의 문구가 약속한 지우기: 프로필로 참가한 사람의 자기 글(손님 발화는 누구 것인지 가릴 수 없어 서버가 403)
+      me.profileId &&
+        myToken() &&
+        h("div", { className: "between" }, h("div", {}, h("p", { className: "what" }, "내 글"), h("p", { className: "meta" }, "내 이름이 붙은 받아 적은 글")), button("내 글 지우기", eraseMine, "plain")),
     ),
     trip.moments.length > 0 &&
       h(
         "section",
         { className: "card" },
         h("h2", {}, `남긴 장면 ${trip.moments.length}개`),
-        h("ul", {}, trip.moments.map((m) => h("li", {}, h("span", { className: "what" }, m.label || "이름 없는 장면"), h("span", { className: "meta" }, new Date(m.at).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" }))))),
+        h(
+          "ul",
+          {},
+          trip.moments.map((m) =>
+            h(
+              "li",
+              { className: "between" },
+              h("div", { className: "grow" }, h("span", { className: "what" }, m.label || "이름 없는 장면"), " ", h("span", { className: "meta" }, new Date(m.at).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" }))),
+              myToken() && button("소리 지우기", () => eraseClip(m), "plain"),
+            ),
+          ),
+        ),
       ),
     trip.status !== "ended" && bar(button("부탁 남기기", () => (sheet.showModal(), sheet.querySelector("#sheet-text").focus()), "primary")),
   ];
