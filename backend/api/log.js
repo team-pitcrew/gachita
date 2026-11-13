@@ -16,6 +16,6 @@ export const captureLog = (fn) => {
 export const errFields = (e, withStack = false) => ({
   ...(e?.name && { name: e.name }),
   ...(e?.code && { code: e.code }),
-  ...(e?.message && { message: e.message }),
+  ...((e?.message ?? e?.error) && { message: e.message ?? e.error }), // fail()의 {status, error}는 error가 문장
   ...(withStack && e?.stack && { stack: e.stack }),
 });

@@ -55,7 +55,7 @@ const fail = (status, error) => {
 };
 
 // 오류 종류(T71): 응답의 type과 로그의 err.type. 상태에서 정하는 닫힌 목록이라 클라이언트는 문장이 아니라 종류로 가른다.
-const ERROR_TYPE = { 400: "invalid", 401: "unauthenticated", 403: "forbidden", 404: "not_found", 405: "method_not_allowed", 409: "conflict", 413: "too_large", 503: "unavailable" };
+const ERROR_TYPE = { 400: "invalid", 401: "unauthenticated", 403: "forbidden", 404: "not_found", 405: "method_not_allowed", 409: "conflict", 413: "too_large", 502: "unavailable", 503: "unavailable", 504: "unavailable" };
 // DB에 닿지 않거나(연결 끊김·거절, 연결 수 초과) 질의 시간 제한(57014, T26)에 걸린 것: 다시 해도 되는 503.
 // Postgres 오류 번호 08xxx 연결, 53xxx 자원 부족, 57014 질의 취소, 57P0x 서버 종료·시작 중.
 const DB_DOWN = /^(08|53|57014|57P0)/;
@@ -988,15 +988,19 @@ export const server = createServer(async (req, res) => {
   const requestId = requestIdOf(req);
   res.setHeader("x-request-id", requestId);
   let failure = null;
-  res.on("finish", () => {
-    const route = routeOf(new URL(req.url, "http://localhost").pathname);
-    if (!route.startsWith("/api/") && res.statusCode < 400) return;
-    log(res.statusCode >= 500 ? "error" : "info", "request", {
+  let route = "/(bad-url)"; // 주소를 읽지 못한 요청. 아래 try에서 한 번만 읽는다(로그에서 다시 읽다 던지면 프로세스가 죽는다)
+  // 'close'는 응답을 다 보냈을 때도, 클라이언트가 먼저 끊었을 때도 한 번 온다. 끊긴 것은 499(nginx의 관례)와 aborted로.
+  res.on("close", () => {
+    const aborted = !res.writableFinished;
+    const status = aborted ? 499 : res.statusCode;
+    if (!route.startsWith("/api/") && status < 400) return;
+    log(status >= 500 && !aborted ? "error" : "info", "request", {
       requestId,
       method: req.method,
       route,
-      status: res.statusCode,
+      status,
       ms: Math.round(performance.now() - started),
+      ...(aborted && { aborted }),
       ...(failure && { err: failure }),
     });
   });
@@ -1011,6 +1015,7 @@ export const server = createServer(async (req, res) => {
   };
   try {
     const url = new URL(req.url, "http://localhost");
+    route = routeOf(url.pathname);
     const seg = url.pathname.split("/").filter(Boolean);
     if (url.pathname === "/healthz") {
       if (req.method !== "GET") fail(405, "GET만 됨");

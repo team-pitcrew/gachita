@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
+import { createConnection } from "node:net";
 import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
@@ -12,6 +13,7 @@ import { endStores, profilesDb, tripsDb } from "./db.js";
 
 let base;
 let fakeProvider; // 가짜 구글(T21). code가 곧 사용자 번호다. 특수 code로 장애 상황도 낸다.
+captureLog(() => {}); // 서버의 구조화 로그는 시험 출력에 섞지 않는다(T71 시험은 따로 받아 본다)
 before(async () => {
   fakeProvider = createServer(async (req, res) => {
     const send = (status, body, raw) => {
@@ -755,6 +757,14 @@ test("오류 종류와 요청 로그(T71)", async () => {
   const miss = logged.find((l) => l.status === 404);
   assert.deepEqual([miss.route, miss.err], ["/api/trips/:p/:p", { type: "not_found" }]);
   assert.ok(!logged.some((l) => l.route === "/(web)"), "성공한 웹 파일 요청은 남기지 않음");
+  // 주소를 읽지 못하는 요청(new URL이 거절)도 서버를 죽이지 않고 로그에 남는다
+  const raw = await new Promise((ok, no) => {
+    const s = createConnection(server.address().port, "127.0.0.1", () => s.end("GET //a:99999/x HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"));
+    let got = "";
+    s.on("data", (d) => (got += d)).on("end", () => ok(got)).on("error", no);
+  });
+  assert.match(raw, /^HTTP\/1\.1 (400|404|500)/);
+  assert.equal((await fetch(`${base}/healthz`)).status, 200, "서버가 살아 있음");
   const all = lines.join("\n");
   assert.ok(!all.includes(trip.code) && !all.includes(p.token) && !all.includes("민준"), "여행 코드·토큰·이름은 로그에 없다");
 });
