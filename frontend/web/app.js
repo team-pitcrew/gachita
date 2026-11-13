@@ -12,6 +12,9 @@ const TRIP = {
   ended: ["여행 종료", "이 여행은 만든 뒤 48시간까지 볼 수 있어요."],
 };
 const NEXT_TRIP = { boarding: ["출발", "driving"], driving: ["주차", "parked"], parked: ["여행 끝내기", "ended"] };
+const ONLY_HERE = "이 폰에서 참가한 사람만 켤 수 있어요.";
+// 켜져 있던 동의를 끄면 서버가 동의 세대를 올려 그 여행의 받아 적은 글을 모두 지운다(ADR-0007). 누르기 전에 알린다.
+const OFF_WIPES = "동의를 끄면 기록이 멈추고, 이 여행에서 지금까지 받아 적은 글이 모두 지워져요. 끌까요?";
 // 프로필 캐릭터. 사진이 없을 때 이 그림으로 보인다(목록 고정은 T46).
 const CHARACTERS = [
   ["bunny", "🐰", "토끼"],
@@ -39,6 +42,7 @@ const inviteCode = () => /^\/j\/([\w-]+)$/.exec(location.pathname)?.[1];
 const store = (key, value) =>
   value === undefined ? localStorage.getItem(`gachita:${key}`) : value === null ? localStorage.removeItem(`gachita:${key}`) : localStorage.setItem(`gachita:${key}`, value);
 const myId = () => store(code());
+const myToken = () => store(`${code()}:token`); // 참가자 토큰: 동의 켜기와 음성 경로의 인증(T68, ADR-0007)
 
 let trip = null; // 서버에서 받은 여행
 let profile = null; // 이 폰의 프로필(GET /api/profiles/me). 토큰은 store("profile")
@@ -92,6 +96,20 @@ async function act(fn) {
   }
 }
 
+// 다른 폰에서 이 프로필로 이미 참가한 여행이면 프로필 토큰으로 다시 참가해 이 폰의 참가자 토큰을 받는다.
+// 서버는 있던 참가자를 돌려주고 앞 폰의 토큰도 최근 4개까지 살려 둔다(T68). 참가자 id만 빌려 쓰면 동의를 켤 수 없다.
+// 다시 참가했으면 true. 겹쳐 불러도 한 번만 보낸다(보낼 때마다 토큰이 바뀐다).
+let claiming = null;
+const claim = () => (claiming ??= rejoin().finally(() => (claiming = null)));
+async function rejoin() {
+  const c = trip?.code;
+  if (!c || (store(c) && store(`${c}:token`)) || !profile || !trip.participants.some((p) => p.profileId === profile.id)) return false;
+  const p = await api("POST", `/trips/${c}/participants`, {}, store("profile"));
+  store(c, p.id);
+  store(`${c}:token`, p.token);
+  return true;
+}
+
 const typing = () => app.contains(document.activeElement) && /^(INPUT|SELECT)$/.test(document.activeElement.tagName);
 
 async function refresh(force) {
@@ -100,9 +118,10 @@ async function refresh(force) {
     try {
       const next = await call("GET", `/${code()}${trip && !force ? `?v=${trip.version}` : ""}`);
       offline = false;
-      if (!next) return;
-      trip = next;
-      failed = "";
+      if (next) (trip = next), (failed = "");
+      // 못 받았으면 다음 폴링에서 다시 한다. 그동안은 참가 화면이 보이고, 거기서 참가해도 같은 참가자로 들어간다.
+      const claimed = await claim().catch(() => false);
+      if (!next && !claimed) return;
     } catch (e) {
       if (e.status === 0) {
         // 터널 같은 곳에서는 마지막 화면을 그대로 두고 계속 다시 묻는다
@@ -390,6 +409,26 @@ function tripView(me) {
   const seated = Object.fromEntries(trip.participants.map((p) => [p.seat, p]));
   const waiting = trip.status === "driving" ? trip.participants.filter((p) => !p.consent).map((p) => p.name) : [];
   const patch = (path, body) => () => act(() => call("PATCH", t + path, body));
+  // 켜기는 본인의 참가자 토큰으로만 된다(끄기는 누구나). 서버가 이 폰의 토큰을 잊었으면(다른 곳에서 다섯 번 넘게
+  // 다시 참가) 프로필로 들어온 사람은 다시 참가해 새 토큰으로 한 번 더 켠다. 손님은 다시 받을 길이 없다.
+  // 누른 여행·참가자를 고정한다: 응답을 기다리는 사이 다른 여행으로 옮겨도 그 여행의 토큰을 건드리지 않는다.
+  const consentOn = () =>
+    act(async () => {
+      const c = trip.code;
+      const mine = profile && me.profileId === profile.id;
+      const on = () => api("PATCH", `/trips/${c}/participants/${me.id}`, { consent: true }, store(`${c}:token`));
+      await on()
+        .catch(async (e) => {
+          if (e.status !== 401 || !mine || trip?.code !== c) throw e; // 화면이 바뀌었으면 다시 하지 않는다
+          store(`${c}:token`, null);
+          await claim();
+          if (trip?.code !== c) throw e;
+          await on();
+        })
+        .catch((e) => {
+          throw e.status === 401 || e.status === 403 ? new Error(ONLY_HERE) : e;
+        });
+    });
   const open = trip.requests.filter((r) => !CLOSED.includes(r.status));
   const rec = trip.recording ? ["기록 중", "rec"] : trip.status !== "driving" ? ["기록 안 함", ""] : waiting.length ? ["동의 대기", ""] : ["기록 일시정지", ""];
   const next = NEXT_TRIP[trip.status];
@@ -450,7 +489,7 @@ function tripView(me) {
         "div",
         { className: "between" },
         h("div", {}, h("p", { className: "what" }, "대화 기록 동의"), h("p", { className: "meta" }, me.consent ? "동의했어요." : "동의하지 않았어요.")),
-        button(me.consent ? "동의 끄기" : "동의 켜기", patch(`/participants/${me.id}`, { consent: !me.consent })),
+        me.consent ? button("동의 끄기", () => confirm(OFF_WIPES) && patch(`/participants/${me.id}`, { consent: false })()) : myToken() ? button("동의 켜기", consentOn) : h("p", { className: "meta" }, ONLY_HERE),
       ),
     ),
     trip.moments.length > 0 &&
@@ -466,9 +505,7 @@ function tripView(me) {
 
 function render() {
   stale = false;
-  let me = trip?.participants.find((p) => p.id === myId());
-  // 다른 폰에서 이 프로필로 이미 참가했으면 그 자리를 이 폰에서도 쓴다
-  if (!me && profile && trip) (me = trip.participants.find((p) => p.profileId === profile.id)) && store(trip.code, me.id);
+  const me = trip?.participants.find((p) => p.id === myId());
   const view = inviteCode() ? inviteView() : location.hash === "#me" ? profileView() : !code() ? home() : failed ? missing() : !trip ? loading() : me ? tripView(me) : join();
   app.replaceChildren(...view.flat().filter(Boolean));
 }
