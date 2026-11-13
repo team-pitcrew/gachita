@@ -42,7 +42,7 @@ data "aws_iam_policy_document" "k3s" {
   }
   statement {
     actions   = ["s3:PutObject"]
-    resources = ["${data.aws_s3_bucket.oidc.arn}/.well-known/openid-configuration", "${data.aws_s3_bucket.oidc.arn}/openid/v1/jwks"]
+    resources = ["${data.aws_s3_bucket.oidc.arn}/openid/v1/jwks"] # 발급자 문서는 남는 묶음이 올림
   }
   # 구축 6단계가 Postgres 전체 백업이 있는지 보고 복구로 펼지 정한다(T52). 목록만, 내용은 못 읽는다
   statement {

@@ -145,6 +145,38 @@ resource "aws_s3_bucket_policy" "oidc" {
   depends_on = [aws_s3_bucket_public_access_block.oidc]
 }
 
+# 발급자 문서는 내용이 버킷 이름만으로 정해진다(K3s API 서버가 내놓는 것과 같은 다섯 값). IAM은 OIDC 제공자를 만들 때
+# 이 문서를 읽으므로 서버보다 먼저 있어야 한다(접는 묶음의 aws_iam_openid_connect_provider). 그래서 여기서 올린다.
+locals {
+  issuer = "https://${aws_s3_bucket.oidc.bucket_regional_domain_name}"
+}
+
+resource "aws_s3_object" "oidc_discovery" {
+  bucket        = aws_s3_bucket.oidc.id
+  key           = ".well-known/openid-configuration"
+  content_type  = "application/json"
+  cache_control = "no-cache"
+  content = jsonencode({
+    issuer                                = local.issuer
+    jwks_uri                              = "${local.issuer}/openid/v1/jwks"
+    response_types_supported              = ["id_token"]
+    subject_types_supported               = ["public"]
+    id_token_signing_alg_values_supported = ["RS256"]
+  })
+}
+
+# 공개 키는 서버마다 새로 생겨 서버가 구축 4단계에서 덮어쓴다. 여기서는 처음 한 번 빈 자리만 만들고 그 뒤로는 손대지 않는다.
+resource "aws_s3_object" "oidc_jwks" {
+  bucket        = aws_s3_bucket.oidc.id
+  key           = "openid/v1/jwks"
+  content_type  = "application/json"
+  cache_control = "no-cache"
+  content       = jsonencode({ keys = [] })
+  lifecycle {
+    ignore_changes = [content, etag, metadata, tags_all, version_id]
+  }
+}
+
 # ---- 인증서: ALB 컨트롤러가 Gateway 리스너의 호스트 이름으로 찾는다(Git에 ARN이 없음) ----
 # 남는 묶음이라 다시 펼 때 새로 받지 않는다. 검증 레코드는 DNS만(프록시 안 함).
 resource "aws_acm_certificate" "service" {
