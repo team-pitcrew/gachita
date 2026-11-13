@@ -1133,6 +1133,40 @@ test("재전사 도중 글이나 클립을 지우면 더 보내지 않고 붙이
   assert.deepEqual(rows.map((r) => Number(r.seq)), [2], "아들의 첫 말만 붙음");
 });
 
+test("클립이 발화보다 먼저 와도, 늦게 온 발화로 다시 받아 적고 이미 본 줄은 다시 보내지 않는다(T75)", async () => {
+  const [, trip] = await call("POST", "/api/trips", { title: "속초" });
+  const t = `/api/trips/${trip.code}`;
+  const t0 = Date.now() - 600_000;
+  await tripsDb().query("UPDATE trips SET doc = jsonb_set(doc, '{createdAt}', to_jsonb($2::bigint)) WHERE code = $1", [trip.code, t0 - 1000]);
+  const [, mom] = await join(trip.code, "엄마", "ROW_1_LEFT");
+  const [, m] = await call("POST", `${t}/moments`, { at: t0, from: t0 - 1000, to: t0 + 9000 });
+  const lines = (from, texts) => call("POST", `${t}/utterances`, { device: "car", items: texts.map((text, i) => ({ seq: from + i, at: t0 + (from + i - 1) * 3000, text, seatArea: "ROW_1_LEFT", generation: 1 })) }, mom.token);
+  Object.assign(process.env, { ASR_URL: `http://127.0.0.1:${fakeAsr.address().port}/asr/v1`, ASR_TOKEN: "test-asr-token", ASR_GAP_MS: "20" });
+  const events = [];
+  const restore = captureLog((line) => events.push(JSON.parse(line)));
+  const runs = async (n) => {
+    for (let i = 0; i < 300 && events.filter((e) => e.msg === "clip_retranscribed").length < n; i++) await new Promise((ok) => setTimeout(ok, 20));
+    return events.filter((e) => e.msg === "clip_retranscribed").map((e) => [e.lines, e.fixed]);
+  };
+  const before = asr.calls.length;
+  try {
+    assert.equal((await fetch(`${base}${t}/recordings?moment=${m.id}&generation=1&from=${t0 - 1000}`, { method: "POST", headers: { authorization: `Bearer ${mom.token}` }, body: wav(200, 10) })).status, 201);
+    assert.deepEqual(await runs(1), [[0, 0]], "발화가 아직 없음");
+    assert.equal((await lines(1, ["서와 왔어", "고장 난 말"]))[0], 200);
+    assert.deepEqual(await runs(2), [[0, 0], [2, 1]], "늦게 온 발화로 다시(하나는 오류로 원문)");
+    assert.equal((await lines(3, ["서와 갔어"]))[0], 200);
+    assert.deepEqual(await runs(3), [[0, 0], [2, 1], [1, 1]], "새로 온 줄만 — 오류로 남은 줄은 되풀이해 보내지 않음");
+  } finally {
+    restore();
+    delete process.env.ASR_URL;
+    delete process.env.ASR_TOKEN;
+    delete process.env.ASR_GAP_MS;
+  }
+  assert.deepEqual(asr.calls.slice(before).map((c) => c.draft), ["서와 왔어", "고장 난 말", "서와 갔어"]);
+  const { rows } = await tripsDb().query("SELECT text, asr_text FROM utterances WHERE trip_code = $1 ORDER BY seq", [trip.code]);
+  assert.deepEqual(rows.map((r) => r.asr_text), ["서아 왔어.", null, "서아 갔어."]);
+});
+
 test("짧은 말도 초안과 글자가 절반 넘게 다르면 원문으로 남는다(T75)", async () => {
   const [, trip] = await call("POST", "/api/trips", {});
   const t = `/api/trips/${trip.code}`;

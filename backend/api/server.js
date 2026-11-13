@@ -577,11 +577,9 @@ async function recordings(code, id, req, query) {
   const key = `${before.tripCode}/${before.momentId}-${randomUUID().slice(0, 8)}.wav`;
   try {
     await store.put(key, raw); // 늦게 실패해도(제한 시간 뒤에 저장됨) 아래에서 키를 버린다
-    let context = "";
     const result = await withTrip(code, true, async (trip, client) => {
       const now = await check(trip, client);
       if (now.existing) return [200, asRecording(now.existing)];
-      context = contextOf(trip.participants.map((p) => p.name), trip.title);
       await client.query(
         "INSERT INTO recordings (trip_code, moment_id, generation, participant_id, object_key, start_at, bytes, seconds) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
         [trip.code, now.momentId, now.current, now.caller.id, key, now.startAt, raw.length, seconds]
@@ -589,11 +587,7 @@ async function recordings(code, id, req, query) {
       return [201, asRecording({ moment_id: now.momentId, start_at: now.startAt, seconds, bytes: raw.length })];
     });
     if (result[0] === 200) await trashClips([key]); // 같은 장면을 동시에 올린 다른 요청이 먼저 남겼다 — 내 것은 버린다
-    // 새로 남긴 클립은 기다리지 않고 다시 받아 적는다(T75). 응답은 바로 간다.
-    else if (asrReady()) {
-      const pcm = Int16Array.from(samples, (v) => Math.max(-32768, Math.min(32767, Math.round(v * 32768))));
-      queueRetranscribe({ code: before.tripCode, momentId: before.momentId, generation: before.current, startAt: before.startAt, pcm, context });
-    }
+    else queueRetranscribe(before.tripCode, before.momentId); // 새로 남긴 클립은 기다리지 않고 다시 받아 적는다(T75). 응답은 바로 간다
     return result;
   } catch (e) {
     await trashClips([key]); // 남기지 못한 소리는 버킷에 두지 않는다
@@ -607,14 +601,18 @@ async function recordings(code, id, req, query) {
 // 보내기 직전마다 클립이 살아 있고(지우지 않음, 동의 철회 전 세대) 그 줄의 글이 그대로인지 본다 — 아니면 보내지 않고 붙이지 않는다.
 // 자르기: 발화의 at을 말 시작으로 보고 0.5초 앞부터 같은 자리의 다음 말까지(다른 자리의 말은 겹칠 수 있다).
 // 다음 말이 바로 붙어도 이 말의 어림 길이(글자당 0.15초, 1.5초 이상)는 남기고, 앞 0.5초를 넣어 15초·클립 끝을 넘지 않는다. 0.8초보다 짧으면 보내지 않는다.
-// 한 프로세스에서 한 클립씩 차례로 돈다(요청 간격을 지키고 메모리를 묶으려고). 대기열이 차면(10개) 새 클립은 원문 자막으로 남는다.
-// ponytail: 올린 파드의 메모리에서 기다린다. 그 사이 파드가 죽으면 남은 클립은 원문 자막으로 남는다.
+// 한 프로세스에서 한 클립씩 차례로 돈다(요청 간격을 지키려고). 대기열은 클립 id만 쥐고 소리는 돌 때 클립 버킷에서 읽는다.
+// 같은 클립이 이미 기다리면 다시 넣지 않고, 차면(10개) 새 클립은 원문 자막으로 남는다 — 그 여행에 발화가 더 오면 다시 예약된다.
+// 클립마다 '여기까지 봤다'(asr_done_at)를 남겨, 다음 실행은 그 뒤에 들어온 줄만 보낸다(고치지 못한 줄을 되풀이해 보내지 않게).
+// ponytail: 올린 파드의 메모리에서 기다린다. 그 사이 파드가 죽으면 그 여행에 발화가 다시 올 때 이어서 한다.
 const ASR_QUEUE_MAX = 10;
 const asrQueue = [];
 let asrBusy = false;
-function queueRetranscribe(job) {
+function queueRetranscribe(code, momentId) {
+  if (!asrReady() || !clipStore()) return;
+  if (asrQueue.some((j) => j.code === code && j.momentId === momentId)) return;
   if (asrQueue.length >= ASR_QUEUE_MAX) return log("warn", "clip_retranscribe_dropped", { queued: asrQueue.length });
-  asrQueue.push(job);
+  asrQueue.push({ code, momentId });
   if (asrBusy) return;
   asrBusy = true;
   (async () => {
@@ -623,22 +621,54 @@ function queueRetranscribe(job) {
   })();
 }
 
-async function retranscribeClip({ code, momentId, generation, startAt, pcm, context }) {
+// 발화 묶음이 클립보다 늦게 왔으면 그 클립의 재전사는 줄 없이 끝났다. 클립 구간에 아직 보지 않은(표시 뒤에 들어온) 줄이 있으면 다시 예약한다.
+async function requeueRetranscribe(code) {
+  if (!asrReady() || !clipStore()) return;
+  const { rows } = await tripsDb().query(
+    `SELECT r.moment_id FROM recordings r WHERE r.trip_code = $1 AND r.deleted_at IS NULL AND EXISTS (
+       SELECT 1 FROM utterances u WHERE u.trip_code = r.trip_code AND u.generation = r.generation AND u.text <> '' AND u.asr_text IS NULL
+         AND u.at >= r.start_at AND u.at < r.start_at + r.seconds * 1000 AND (r.asr_done_at IS NULL OR u.created_at > r.asr_done_at))`,
+    [code]
+  );
+  for (const r of rows) queueRetranscribe(code, r.moment_id);
+}
+
+async function retranscribeClip({ code, momentId }) {
+  // 표시를 먼저 옮기고(이번 실행이 볼 줄의 경계), 앞 표시 뒤에 들어온 줄만 보낸다. 자르기의 '같은 자리의 다음 말'은 모든 줄로 본다.
+  const { rows: recs } = await tripsDb().query(
+    `UPDATE recordings r SET asr_done_at = now() FROM (SELECT asr_done_at FROM recordings WHERE trip_code = $1 AND moment_id = $2) prev
+     WHERE r.trip_code = $1 AND r.moment_id = $2 AND r.deleted_at IS NULL
+     RETURNING r.object_key, r.start_at, r.generation, prev.asr_done_at AS since`,
+    [code, momentId]
+  );
+  const rec = recs[0];
+  const { rows: trips } = rec ? await tripsDb().query("SELECT doc FROM trips WHERE code = $1", [code]) : { rows: [] };
+  const raw = trips[0] && (await clipStore()?.get(rec.object_key));
+  if (!raw) return; // 그 사이 지웠거나 여행이 닫힘
+  const pcm = Int16Array.from(wavMono(raw).samples, (v) => Math.max(-32768, Math.min(32767, Math.round(v * 32768))));
+  const context = contextOf(trips[0].doc.participants.map((p) => p.name), trips[0].doc.title);
+  const startAt = Number(rec.start_at);
+  const generation = rec.generation;
   const clipMs = pcm.length / 16; // 16 kHz: 1 ms = 16 표본
   const live = "SELECT 1 FROM recordings WHERE trip_code = $1 AND moment_id = $2 AND generation = $3 AND deleted_at IS NULL";
   const { rows } = await tripsDb().query(
-    "SELECT device, seq, at, text, seat_area FROM utterances WHERE trip_code = $1 AND generation = $2 AND text <> '' AND at >= $3 AND at < $4 ORDER BY at",
-    [code, generation, startAt, startAt + Math.ceil(clipMs)]
+    `SELECT device, seq, at, text, seat_area, (asr_text IS NULL AND ($5::timestamptz IS NULL OR created_at > $5)) AS todo
+     FROM utterances WHERE trip_code = $1 AND generation = $2 AND text <> '' AND at >= $3 AND at < $4 ORDER BY at`,
+    [code, generation, startAt, startAt + Math.ceil(clipMs), rec.since]
   );
+  const todo = rows.filter((r) => r.todo).length;
   const started = Date.now();
   const reasons = {};
   let fixed = 0;
   let changed = 0;
+  let seen = 0;
   for (const [i, u] of rows.entries()) {
+    if (!u.todo) continue;
     if (!(await tripsDb().query(live, [code, momentId, generation])).rows[0]) {
-      reasons.stopped = (reasons.stopped ?? 0) + rows.length - i; // 클립을 지웠거나 동의가 철회됨 — 남은 줄은 보내지 않는다
+      reasons.stopped = (reasons.stopped ?? 0) + todo - seen; // 클립을 지웠거나 동의가 철회됨 — 남은 줄은 보내지 않는다
       break;
     }
+    seen++;
     const at = Number(u.at) - startAt;
     const next = rows.slice(i + 1).find((r) => r.seat_area === u.seat_area);
     const from = Math.max(0, at - 500);
@@ -671,7 +701,7 @@ async function retranscribeClip({ code, momentId, generation, startAt, pcm, cont
   }
   // 관측(T75): 다시 받아 적은 줄, 원문으로 남은 줄과 그 이유(timeout·http_NNN·suspicious·stopped 등), 원문과 글자가 달라진 줄, 걸린 시간.
   // 글과 토큰은 남기지 않는다.
-  log("info", "clip_retranscribed", { lines: rows.length, fixed, fellBack: rows.length - fixed, reasons, changed, ms: Date.now() - started });
+  log("info", "clip_retranscribed", { lines: todo, fixed, fellBack: todo - fixed, reasons, changed, ms: Date.now() - started });
 }
 
 // 지우기는 프로필 DB의 한 트랜잭션에서 한다 — 중간에 실패해도 토큰만 지워지고 프로필이 남는 일이 없게.
@@ -921,6 +951,8 @@ async function trips(req, [code, sub, id], b, query) {
   const profile = sub === "participants" && m === "POST" && !id ? await profileOf(req) : null;
   const result = await withTrip(code, m !== "GET", (trip, client) => handle(trip, { req, m, sub, id, b, query, profile }, client));
   if (sub === "participants" && m === "PATCH") void sweepClips(); // 동의 철회가 적은 클립을 커밋 뒤에 버킷에서 지운다
+  // 커밋 뒤에: 클립보다 늦게 온 발화를 다시 받아 적는다(T75)
+  if (sub === "utterances" && m === "POST") requeueRetranscribe(String(code).toUpperCase()).catch((e) => log("warn", "clip_retranscribe_failed", { err: errFields(e) }));
   return result;
 }
 

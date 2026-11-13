@@ -5,5 +5,7 @@ BEGIN;
 SELECT pg_advisory_xact_lock(74626); -- 서버 여러 대가 동시에 시작해도 한 번에 하나만 실행
 
 ALTER TABLE utterances ADD COLUMN IF NOT EXISTS asr_text text;
+-- 클립마다 재전사가 '여기까지 봤다'(그 실행이 시작한 시각). 그 뒤에 들어온 줄만 다음에 보낸다.
+ALTER TABLE recordings ADD COLUMN IF NOT EXISTS asr_done_at timestamptz;
 
 COMMIT;
