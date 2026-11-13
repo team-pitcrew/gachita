@@ -6,6 +6,16 @@ android {
  compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
  kotlinOptions { jvmTarget = '17' }
  buildFeatures { compose true }
+ // 릴리스 서명: 키와 비밀번호는 저장소 밖 파일에서 읽는다(GACHITA_KEYSTORE 또는 ~/.gachita/keystore.properties).
+ // 그 파일이 없으면(CI 등) 서명하지 않은 릴리스가 만들어진다. 키를 저장소에 넣지 않는다
+ def ks = file(System.getenv('GACHITA_KEYSTORE') ?: "${System.getProperty('user.home')}/.gachita/keystore.properties")
+ signingConfigs {
+  if (ks.exists()) release {
+   def p = new Properties(); ks.withInputStream { p.load(it) }
+   storeFile file(p.storeFile); storePassword p.storePassword; keyAlias p.keyAlias; keyPassword p.keyPassword
+  }
+ }
+ buildTypes { release { if (ks.exists()) signingConfig signingConfigs.release } }
  useLibrary 'android.car' // 주행 제한 값(CarUxRestrictionsManager). SDK의 optional/android.car.jar로 빌드하고 기기에 있는 것을 씀
 }
 dependencies {

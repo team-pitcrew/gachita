@@ -1,19 +1,45 @@
 # 같이타
 
-차 안에서 웃었던 대화를 짧은 콘텐츠로 남기고, 동승자의 부탁과 자리 설정을 함께 챙기는 차량 서비스입니다. PITCREW 팀의 현대자동차그룹 차량용 앱 개발 공모전 출품작입니다.
+**가족이 차 안에서 나눈 대화를 차가 받아 적어, 아이의 부탁은 내비 경유지로, 장소별 할 일은 도착했을 때 알려 주는 Pleos 차량 앱입니다.** PITCREW 팀의 현대자동차그룹 차량용 앱 개발 공모전 출품작입니다.
+
+- 차량 앱(`frontend/car`)이 기록 동의를 받은 뒤 차량 마이크로 수음해 Pleos STT(ON_DEVICE)로 받아 적습니다.
+- "화장실 가고 싶어"를 알아채 다음 휴게소를 화면과 말로 제안하고, "응, 다음 휴게소 가자"로 순정 내비에 경유지를 넣습니다.
+- "마트에서 우유랑 간식 사자"를 모아 두었다가 마트에 주차하면 할 일을 알립니다. 같은 기능을 Gleo 함수로 선언해 두었습니다(Pleos 승인 전, 음성 호출은 확인하지 않음).
+- 주행 중에는 Pleos 주행 제한 값에 맞춰 설정 화면과 목록을 가립니다.
+- 모든 동작은 Pleos Connect Emulator 2.1.0에서 확인했고 실차에서는 확인하지 않았습니다.
 
 ## 지금 들어 있는 것
 
 | 폴더 | 내용 | 상태 |
 |---|---|---|
 | `frontend/web/` | 웹앱. 한 화면에 한 가지씩 네 단계로 참가하고(이름, 자리, 온도·시트, 기록 동의), 부탁을 남기고 상태를 봅니다 | 동작. 서버가 같이 내보냅니다 |
-| `frontend/car/` | Pleos 차량 앱(Android · Kotlin · Compose) | 아직 없음(T7) |
+| `frontend/car/` | Pleos 차량 앱(Android · Kotlin · Compose). 여행과 기록 동의, 수음과 받아쓰기, 주행 중 화면, 부탁을 경유지로, 도착 브리핑([차량 앱 README](frontend/car/README.md)) | 동작(에뮬레이터). 받아 적은 말은 아직 서버로 보내지 않고 차 안에 쌓음 |
 | `backend/api/` | API 서버. 기기 프로필(OAuth 없음), 여행 코드, 참가자와 자리, 좌석·공조 선호, 기록 동의, 부탁의 상태, 장면의 시각과 위치 | 동작. Postgres에 저장 |
 | `backend/infra/` | AWS 자원([Terraform](backend/infra/terraform/README.md))과 클러스터 선언([Argo CD](backend/infra/gitops/README.md)) | 코드 있음. 실제 자원은 만들지 않음 |
 | `docs/` | [개발 규칙](docs/development.md), [구조와 스택](docs/architecture.md), [작업 목록](docs/tasks.md), [프로젝트 보드](docs/project-board.md), [결정 기록](docs/adr), [실측 보고](docs/research) | |
-| `apk/` | 제출용 APK(`팀명_앱이름_release.apk`) | 아직 없음(T13) |
+| `apk/` | 제출용 차량 앱 APK(`PITCREW_같이타_release.apk`) | 있음 |
 
 ## 실행 방법
+
+### 차량 앱(Pleos 에뮬레이터)
+
+1. **서버:** 저장소 루트에서 `make run`. `http://localhost:8787`에 API와 웹앱이 뜨고 로컬 Postgres 컨테이너를 같이 띄웁니다(Docker 필요).
+2. **에뮬레이터:** Pleos Connect Emulator 2.1.0(AVD `Pleos_Connect_v2_0` 기기 정의)을 **Cold boot**로 켭니다. Quick boot에서는 기어 같은 차량 값을 읽지 못합니다. 기어와 속도는 Virtual Console(`adb forward tcp:8088 tcp:8088` 뒤 `http://127.0.0.1:8088/`)에서 바꿉니다.
+3. **설치와 실행:** 앱은 사용자 10에서 돕니다. 같은 패키지의 디버그 빌드를 깔았던 에뮬레이터라면 서명이 달라 먼저 지웁니다(`adb uninstall io.github.teampitcrew.gachita`).
+
+```bash
+adb install --user 10 -r -g apk/PITCREW_같이타_release.apk
+```
+
+```bash
+adb shell am start --user 10 -n io.github.teampitcrew.gachita/.MainActivity
+```
+
+4. **시연과 같은 흐름:** 첫 화면에서 가족을 고르고 '여행 만들기'(서버 주소 기본값 `http://10.0.2.2:8787`은 에뮬레이터에서 본 Mac의 `make run`) → 기어 P에서 '대화 기록 동의'를 켬('● 기록 중') → 순정 내비에서 목적지를 정하고 기어 D → 차량 마이크에 대화를 들려줌 → "화장실 가고 싶어", "응, 다음 휴게소 가자" → 경유지 추가 → "마트에서 우유랑 간식 사자" 뒤 목적지가 마트일 때 기어 P → 도착 브리핑.
+   - 에뮬레이터 마이크에 소리를 넣는 법과 자동으로 같은 흐름을 도는 스크립트(`frontend/car/demo.py`, `waypoint_e2e.py`, `arrival_e2e.py`)는 [차량 앱 README](frontend/car/README.md)에 있습니다. 시연 영상도 `demo.py`로 찍었습니다.
+   - 마이크·알림 권한은 처음 기록할 때 묻습니다(`-g`로 설치하면 미리 허용).
+
+### 서버와 웹앱
 
 ```bash
 make hooks     # 복제한 뒤 한 번: 커밋 훅과 커밋 양식 걸기
@@ -25,6 +51,9 @@ make check     # CI와 같은 검사
 
 ## 테스트 환경 및 필요한 설정
 
+- **차량 앱:** Pleos Connect Emulator 2.1.0(Android 14, API 34, arm64), Mac mini M5 Pro, 2026-11-13. 실차에서는 확인하지 않았습니다. 화면 크기와 확인 범위는 [에뮬레이터 스펙](docs/emulator/README.md)에 있습니다.
+- 차량 앱이 서버에 닿는 주소는 첫 화면의 '서버 주소'입니다. 평문 http는 `10.0.2.2`·`localhost`·`127.0.0.1`에만 열려 있고 그 밖은 https만 씁니다. 실제 서버 주소(`gachita.mangowhois.ai`)는 아직 열려 있지 않습니다.
+- 차량 앱을 빌드하려면 JDK 21과 Android SDK 34가 필요합니다(`cd frontend/car && ./gradlew assembleRelease`). 릴리스 서명 키는 저장소에 없고, `~/.gachita/keystore.properties`가 있을 때만 서명합니다.
 - Node.js 22 이상, Docker(로컬 Postgres 17 컨테이너용). API 서버의 의존성은 `pg` 하나입니다.
 - 확인한 환경: macOS, Node 22.22.3, 데스크톱 Chromium 계열 브라우저. 실제 휴대폰과 Pleos 에뮬레이터에서는 아직 열어 보지 않았습니다.
 - 화면 글꼴 Pretendard는 CDN에서 받습니다. 받지 못하면 기기의 한글 글꼴로 보입니다.
@@ -58,4 +87,4 @@ make check     # CI와 같은 검사
 
 ## APK 파일 위치
 
-아직 없습니다. 차량 앱을 만들면 `apk/` 폴더에 올리고 이 절을 고칩니다.
+[`apk/PITCREW_같이타_release.apk`](apk/PITCREW_같이타_release.apk) — 차량 앱 release 빌드(패키지 `io.github.teampitcrew.gachita`, 버전 0.1.0, minSdk 29, targetSdk 34). 같은 커밋의 `frontend/car`에서 `./gradlew assembleRelease`로 만들었습니다.
