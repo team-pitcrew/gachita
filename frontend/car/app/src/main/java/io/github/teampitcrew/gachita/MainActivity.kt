@@ -37,6 +37,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.ui.unit.Dp
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -175,6 +180,7 @@ class MainActivity : ComponentActivity() {
     private var shortPos by mutableStateOf(0.0) // 그 장면의 초
     private var shortPaused by mutableStateOf(false)
     private var shortNote by mutableStateOf("")
+    private var chatOpen by mutableStateOf(false) // 대화록을 대화방으로 연 상태(주차 중, 왼쪽 무대 전체)
     private var player: MediaPlayer? = null
     private var shortGen = 0 // 장면을 열 때마다 하나씩. 늦게 끝난 받기가 닫힌 숏폼이나 다른 장면을 건드리지 않게
     private var shortFile: File? = null // 지금 트는 장면의 클립(장면마다 다른 파일, 닫으면 지움)
@@ -250,7 +256,7 @@ class MainActivity : ComponentActivity() {
         if (s.offPending) s.trip?.let { dropRawAll(it.code) } // 끈 뒤 지우기 전에 앱이 꺼졌으면 마저 지운다
         car = Car(this) {
             carStatus = it
-            if (it.restricted) closeCamera() // 주행 중에는 카메라를 닫는다(T11). 카드도 그리지 않는다
+            if (it.restricted) { closeCamera(); chatOpen = false } // 주행 중에는 카메라와 대화방을 닫는다(T11)
             if (it.restricted && shortAt >= 0) stopShort() // 주행 중에는 숏폼을 틀지 않는다(T11)
             val was = s.gear
             s = s.withGear(it.gear)
@@ -992,12 +998,12 @@ class MainActivity : ComponentActivity() {
     }
 
     /** 왼쪽 무대 전체를 쓰는 것: 숏폼 재생, 동승 연결(카메라·자리 고르기). 주차 중에만(제한이 걸리면 각자 닫는다). */
-    private fun takeover() = !carStatus.restricted && ((short != null && shortAt >= 0) || scanning || rideQr != null)
+    private fun takeover() = !carStatus.restricted && ((short != null && shortAt >= 0) || scanning || rideQr != null || chatOpen)
 
     @Composable
     private fun Takeover(t: Trip, modifier: Modifier) {
         val sh = short
-        if (sh != null && shortAt >= 0) ShortStage(sh, modifier) else RideStage(t, modifier)
+        if (sh != null && shortAt >= 0) ShortStage(sh, modifier) else if (scanning || rideQr != null) RideStage(t, modifier) else ChatStage(t, modifier)
     }
 
     private data class Status(val big: String, val sub: String, val bigColor: Color = Color.Unspecified, val strong: Boolean = false)
@@ -1103,24 +1109,105 @@ class MainActivity : ComponentActivity() {
 
     /**
      * 받아 적은 말(C1). 주행 중에는 '방금 받아 적은 말' 두 줄(docs/emulator/README.md: 글자 24sp 이상, 자동 스크롤·움직이는 표시 없음).
-     * 주차 중에는 '대화록': 이 차가 받아 적은 말 전체를 최신순으로 칸 안에서 손으로 넘겨 본다. 말한 사람 고치기(T37)는 최근 두 줄만.
+     * 주차 중에는 대화록을 대화방 하나로 보인다(지환님 11/14: 단체 대화방처럼): 일행 캐릭터, 방 이름, 최근 두 줄, '대화방 열기'.
+     * 누르면 왼쪽 무대 전체가 대화방이 된다(ChatStage). 말한 사람 고치기(T37)는 최근 두 줄에서.
      */
     @Composable
     private fun Heard(t: Trip, modifier: Modifier) {
         val c = MaterialTheme.colorScheme
-        val parked = !carStatus.restricted
         heardTick // 말한 사람이 바뀌면 다시 그린다
-        val lines = if (parked) remember(Live.count, Live.recent) { Live.box?.recent(Live.count).orEmpty() } else Live.recent
-        Card(modifier = modifier) {
+        val recent = Live.recent
+        if (carStatus.restricted) return Card(modifier = modifier) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(if (parked) "대화록" else "방금 받아 적은 말", Modifier.weight(1f), fontSize = 30.sp, fontWeight = FontWeight.Bold)
+                Text("방금 받아 적은 말", Modifier.weight(1f), fontSize = 30.sp, fontWeight = FontWeight.Bold)
                 Text("${Live.count}건", color = c.onSurfaceVariant)
             }
-            if (lines.isEmpty()) Text("아직 받아 적은 말이 없어요", color = c.onSurfaceVariant)
-            Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(20.dp)) {
-                lines.asReversed().forEachIndexed { i, u -> HeardLine(t, u, fix = parked && i < 2) }
+            if (recent.isEmpty()) Text("아직 받아 적은 말이 없어요", color = c.onSurfaceVariant)
+            recent.asReversed().forEach { u -> HeardLine(t, u, fix = false) }
+        }
+        Surface(onClick = { chatOpen = true }, modifier = modifier.fillMaxWidth(), shape = RoundedCornerShape(32.dp), color = c.surface, enabled = Live.count > 0) {
+            Column(Modifier.padding(28.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+                    GroupFace(t, 80.dp)
+                    Column(Modifier.weight(1f)) {
+                        Text("대화록", fontSize = 30.sp, fontWeight = FontWeight.Bold)
+                        Text("${t.title.ifEmpty { "가족 여행" }} · ${t.people.size}명", color = c.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    Column(horizontalAlignment = Alignment.End) {
+                        recent.lastOrNull()?.let { Text(SimpleDateFormat("HH:mm", Locale.KOREA).format(Date(it.startedAt)), color = c.onSurfaceVariant, fontSize = 20.sp) }
+                        Text("${Live.count}건", color = c.onSurfaceVariant)
+                    }
+                }
+                if (recent.isEmpty()) Text("아직 받아 적은 말이 없어요", color = c.onSurfaceVariant)
+                Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(20.dp)) {
+                    recent.asReversed().forEach { u -> HeardLine(t, u, fix = true) }
+                }
+                if (Live.pending > 0) Text("서버에 아직 보내지 못하고 이 차에 보관 중 ${Live.pending}건", color = c.onSurfaceVariant, fontSize = 20.sp, maxLines = 1)
+                if (Live.count > 0) FilledTonalButton({ chatOpen = true }, Modifier.fillMaxWidth().height(72.dp), colors = ButtonDefaults.filledTonalButtonColors(containerColor = c.primaryContainer, contentColor = c.onPrimaryContainer)) {
+                    Text("대화방 열기", fontSize = 26.sp)
+                }
             }
-            if (parked && Live.pending > 0) Text("서버에 아직 보내지 못하고 이 차에 보관 중 ${Live.pending}건", color = c.onSurfaceVariant, fontSize = 20.sp, maxLines = 1)
+        }
+    }
+
+    /** 방 얼굴: 일행 캐릭터를 겹쳐 놓는다(단체 대화방 목록의 묶음 얼굴). 넷까지. */
+    @Composable
+    private fun GroupFace(t: Trip, size: Dp) {
+        val faces = t.people.take(4).map { runCatching { Seat.valueOf(it.seat).ordinal }.getOrDefault(0) }
+        val one = size * 0.6f
+        Box(Modifier.size(size)) {
+            faces.forEachIndexed { i, f ->
+                Box(Modifier.align(listOf(Alignment.TopStart, Alignment.BottomEnd, Alignment.TopEnd, Alignment.BottomStart)[i])) { Character(f, one) }
+            }
+        }
+    }
+
+    /**
+     * 대화방(주차 중, 왼쪽 무대 전체): 이 차가 받아 적은 말 전체를 단체 대화방처럼. 말한 사람의 캐릭터와 이름(모르면 '누구?'),
+     * 말풍선, 옆에 시각. 오래된 말이 위, 처음 열면 맨 아래(최신)부터. 주행 제한이 걸리면 닫힌다(T11).
+     */
+    @Composable
+    private fun ChatStage(t: Trip, modifier: Modifier) {
+        val c = MaterialTheme.colorScheme
+        heardTick
+        val all = remember(Live.count, Live.recent) { Live.box?.recent(Live.count).orEmpty() }
+        val list = rememberLazyListState(initialFirstVisibleItemIndex = (all.size - 1).coerceAtLeast(0))
+        Surface(modifier.fillMaxWidth(), RoundedCornerShape(32.dp), color = c.surface) {
+            Column {
+                Row(Modifier.fillMaxWidth().background(c.surfaceVariant).padding(horizontal = 20.dp, vertical = 16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    OutlinedButton({ chatOpen = false }, Modifier.height(64.dp)) { Text("‹ 닫기") }
+                    GroupFace(t, 64.dp)
+                    Column(Modifier.weight(1f)) {
+                        Text(t.title.ifEmpty { "가족 여행" }, fontSize = 30.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text("${t.people.size}명 · 받아 적은 말 ${all.size}건", color = c.onSurfaceVariant, fontSize = 20.sp)
+                    }
+                }
+                LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = list, contentPadding = PaddingValues(24.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
+                    items(all, key = { it.seq }) { u -> ChatBubble(t, u) }
+                }
+            }
+        }
+    }
+
+    /** 말풍선 한 개: 캐릭터, 이름(·앞줄), 풍선, 시각. 말한 사람을 모르면 회색 동그라미와 '누구?'(구역만 알면 구역). */
+    @Composable
+    private fun ChatBubble(t: Trip, u: Utterance) {
+        val c = MaterialTheme.colorScheme
+        val sp = speakers?.takeIf { it.trip == t.code }?.get(u.seq)
+        val who = sp?.who?.let { id -> t.people.firstOrNull { it.id == id } }
+        val zone = u.seatZone?.let { if (it == 0) "앞줄" else "뒷줄" }
+        Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            if (who != null) Character(runCatching { Seat.valueOf(who.seat).ordinal }.getOrDefault(0), 64.dp)
+            else Box(Modifier.size(64.dp).clip(CircleShape).background(c.surfaceVariant))
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(listOfNotNull(who?.name ?: "누구?", zone).joinToString(" · "), fontSize = 22.sp, fontWeight = FontWeight.Bold, color = c.onSurfaceVariant)
+                Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Surface(Modifier.weight(1f, fill = false), RoundedCornerShape(topStart = 6.dp, topEnd = 28.dp, bottomEnd = 28.dp, bottomStart = 28.dp), color = c.surfaceVariant) {
+                        Text(u.text, Modifier.padding(horizontal = 22.dp, vertical = 14.dp), fontSize = 28.sp)
+                    }
+                    Text(SimpleDateFormat("HH:mm", Locale.KOREA).format(Date(u.startedAt)), color = c.onSurfaceVariant, fontSize = 20.sp)
+                }
+            }
         }
     }
 
