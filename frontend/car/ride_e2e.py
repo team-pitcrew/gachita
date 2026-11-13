@@ -121,6 +121,14 @@ def main(apk):
     check("이미 쓴 QR은 거절되고 안내", any("이미 연결한 QR" in t for t in ui))
     tap_text("취소")
 
+    # 카메라가 QR을 보는 채로 열고 바로 닫기를 되풀이한다: 닫는 순간 이미지 읽기·해석과 겹쳐도 앱이 죽지 않고, 닫은 뒤 늦은 결과가 오지 않아야 한다
+    aim(inj); pid = adb("shell", "pidof", PKG).strip(); adb("logcat", "-b", "crash", "-c")
+    for i in range(6):
+        tap_text("폰 QR 읽기"); time.sleep(0.3 * i)
+        ui = texts()
+        tap_text("닫기" if "닫기" in ui else "취소")
+    time.sleep(2); ui = texts()
+    check("QR을 보는 채로 열고 바로 닫기 6번: 앱이 살아 있고 죽은 기록이 없음", adb("shell", "pidof", PKG).strip() == pid and PKG not in adb("logcat", "-d", "-b", "crash") and "동승자 연결" in ui)
     def last_camera(): return next((l for l in adb("shell", "dumpsys", "media.camera").splitlines() if "client for package " + PKG in l), "").strip()  # 가장 최근 줄이 위
     aim(inj, on=False)  # QR에서 돌려 둔다. 다시 읽으면 읽어서 카메라를 닫으므로 기어 D가 닫는지 가릴 수 없다
     tap_text("폰 QR 읽기"); time.sleep(3); opened = last_camera()
