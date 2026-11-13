@@ -60,16 +60,6 @@ on_server() { # on_server <인스턴스> <최대 초> <명령>
   return 1
 }
 
-server_state() { # 인스턴스 상태(running, stopped …). 없으면 gone. 묻지 못하면 실패
-  local out
-  if out=$(aws ec2 describe-instances --instance-ids "$1" --query 'Reservations[0].Instances[0].State.Name' --output text 2>&1); then
-    echo "$out"
-  elif [[ $out == *InvalidInstanceID.NotFound* ]]; then
-    echo gone
-  else
-    fail "서버 $1 의 상태를 묻지 못했습니다: $out"
-  fi
-}
 ssm_online() { # 서버의 SSM 에이전트가 붙었는지
   [ "$(aws ssm describe-instance-information --filters "Key=InstanceIds,Values=$1" \
     --query 'InstanceInformationList[0].PingStatus' --output text 2>/dev/null)" = Online ]
@@ -189,13 +179,15 @@ up() {
 
 down() {
   : "${TF_STATE_BUCKET:?상태 버킷 이름(TF_STATE_BUCKET)이 필요합니다}"
-  local id="" up="" state="" i
-  id=$(tf "$TF" output -raw instance_id 2>/dev/null || true)
-  [[ $id == i-* ]] && state=$(server_state "$id")
-  # 서버가 있으면(멈춘 것도) 마지막 백업을 확인해야 접는다. destroy는 루트 디스크(DB와 아직 보관 못 한 WAL)를 같이 지운다
-  if [[ -n $state && $state != gone && $state != terminated && $state != shutting-down ]]; then
+  local id up="" i
+  # 서버가 있으면(멈춘 것도) 마지막 백업을 확인해야 접는다. destroy는 루트 디스크(DB와 아직 보관 못 한 WAL)를 같이 지운다.
+  # 서버는 상태 파일(terraform output)이 아니라 이름 태그로 찾는다: output이 실패하거나 낡아도 놓치지 않게. 묻지 못하면 여기서 멈춘다(set -e)
+  id=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=$CLUSTER-k3s" \
+    Name=instance-state-name,Values=pending,running,stopping,stopped --query 'Reservations[].Instances[].InstanceId' --output text)
+  [[ -z $id || $id =~ ^i-[0-9a-f]+$ ]] || fail "서버($CLUSTER-k3s)가 하나가 아닙니다: $id"
+  if [ -n "$id" ]; then
     for ((i = 0; i < 30; i++)); do ssm_online "$id" && up=1 && break || sleep 10; done
-    [ -n "$up" ] || fail "서버 $id ($state)가 있는데 5분 동안 SSM에 닿지 않아 마지막 백업을 확인할 수 없습니다. 데이터를 지키려고 접지 않습니다.
+    [ -n "$up" ] || fail "서버 $id 가 있는데 5분 동안 SSM에 닿지 않아 마지막 백업을 확인할 수 없습니다. 데이터를 지키려고 접지 않습니다.
   서버를 되살려 SSM이 붙은 뒤 다시 접습니다. S3의 마지막 WAL까지만 남겨도 된다고 정했으면 사람이 서버를 지운 뒤(aws ec2 terminate-instances) 다시 접습니다"
   fi
   # 길을 먼저 닫고 백업한다. 백업 뒤에 길을 닫으면 그사이 들어온 쓰기는 다음 WAL 조각에만 있어(보관 주기 5분)
@@ -210,7 +202,7 @@ down() {
       kubectl -n argocd delete application edge --ignore-not-found --wait=true --timeout=600s' ||
       echo "  edge 앱을 지우지 못했습니다. 태그로 정리합니다"
   else
-    log 1/5 "서버가 없어(${state:-상태에 없음}) edge 앱 지우기와 백업을 건너뜀(이미 접힘)"
+    log 1/5 "서버가 없어 edge 앱 지우기와 백업을 건너뜀(이미 접힘)"
   fi
 
   log 2/5 "컨트롤러가 만든 ALB가 사라졌는지(최대 5분). 남았으면 태그로 지운다"
@@ -317,7 +309,7 @@ wal=$([ -z "$p" ] || kubectl -n gachita-db exec "$p" -c postgres -- psql -tA -F'
 echo "  ${wal:-묻지 못함}"
 read -r ready failing _ <<<"$wal"
 [[ ${ready:-x} =~ ^[0-9]+$ && $ready -le 8 && $failing == f ]] || bad="$bad WAL보관"
-echo "== 디스크(루트, 70% 넘으면 실패)"
+echo "== 디스크(루트, 70% 이상이면 실패. kubelet 이미지 정리 85%·축출 90%보다 앞섬)"
 df -h / | tail -1; df -i / | tail -1
 use=$(df --output=pcent / | tail -1 | tr -dc 0-9); iuse=$(df --output=ipcent / | tail -1 | tr -dc 0-9)
 [ "${use:-100}" -lt 70 ] && [ "${iuse:-100}" -lt 70 ] || bad="$bad 디스크(${use}%,inode${iuse}%)"
@@ -373,9 +365,11 @@ restore_script() { # restore_script <시각> <apply|"">
 set -euo pipefail
 export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 k() { kubectl -n gachita-db "$@"; }
+k delete cluster db-pitr --ignore-not-found --wait=true # 지난번에 남은 것. 그 공간까지 세지 않게 먼저 지운다
 # db-pitr도 같은 루트 디스크(local-path)에 선다. 복구본, WAL 재생·임시 파일, apply의 덮어쓰기 WAL을 생각해
 # db 실제 크기(PV 디렉터리, PVC 요청 8Gi가 아님)의 3배와 2 GiB가 남아 있어야 시작한다
-db_bytes=$(du -sb /var/lib/rancher/k3s/storage/*_gachita-db_db-[0-9]* 2>/dev/null | awk '{s += $1} END {print s + 0}')
+# du는 재는 도중 사라진 파일(WAL 재활용)에도 0이 아닌 값으로 끝나므로 결과만 쓴다
+db_bytes=$({ du -sb /var/lib/rancher/k3s/storage/*_gachita-db_db-[0-9]* 2>/dev/null || true; } | awk '{s += $1} END {print s + 0}')
 avail=$(df -B1 --output=avail / | tail -1 | tr -dc 0-9)
 need=$((db_bytes * 3 + 2 * 1024 ** 3))
 echo "루트 남은 공간 $(numfmt --to=iec "$avail"), db 실제 크기 $(numfmt --to=iec "$db_bytes"), 필요 $(numfmt --to=iec "$need")"
@@ -384,7 +378,6 @@ echo "루트 남은 공간 $(numfmt --to=iec "$avail"), db 실제 크기 $(numfm
 acct=$(sed -n 's/^account_id: "*\([0-9]*\)"*$/\1/p' /etc/gachita/vars.yml)
 env=$(sed -n 's/^env: //p' /etc/gachita/vars.yml)
 image=$(k get cluster db -o jsonpath='{.spec.imageName}')
-k delete cluster db-pitr --ignore-not-found --wait=true
 trap 'k delete cluster db-pitr --ignore-not-found --wait=false >/dev/null' EXIT
 start=$(date +%s)
 k apply -f - <<YAML
