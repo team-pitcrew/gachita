@@ -44,7 +44,9 @@ class QrCamera(ctx: Context, private val onCode: (String) -> Unit, private val o
     @Volatile private var device: CameraDevice? = null
     @Volatile private var session: CameraCaptureSession? = null
     private var reader: ImageReader? = null
-    @Volatile private var done = false
+    @Volatile private var done = false // 우리 QR을 읽었거나 닫음: 더 읽지 않는다
+    @Volatile private var closed = false // stop()이 불림(메인 스레드). 메인으로 넘기는 결과는 이 값을 보고 버린다
+    @Volatile private var opening = false // openCamera 뒤 onOpened·onError를 기다리는 중. 그동안은 스레드를 끝내지 않는다(늦게 열린 장치를 닫아야 함)
 
     /** 카메라가 내는 크기 가운데 가로 1280에 가까운 것. 미리보기 표면도 이 크기로 맞춘다. 카메라가 없으면 null. */
     fun size(): android.util.Size? = runCatching {
@@ -62,10 +64,12 @@ class QrCamera(ctx: Context, private val onCode: (String) -> Unit, private val o
         val sz = size() ?: return onFail("카메라를 열지 못했어요")
         val r = ImageReader.newInstance(sz.width, sz.height, ImageFormat.YUV_420_888, 2).also { reader = it }
         r.setOnImageAvailableListener({ it.acquireLatestImage()?.use(::decode) }, bg)
+        opening = true
         runCatching {
             cm.openCamera(id, object : CameraDevice.StateCallback() {
                 override fun onOpened(d: CameraDevice) {
-                    if (done) { d.close(); return } // 열리기 전에 닫힘(주행 제한·닫기)
+                    opening = false
+                    if (closed) { d.close(); thread.quitSafely(); return } // 열리기 전에 닫힘(주행 제한·닫기)
                     device = d
                     @Suppress("DEPRECATION") // 목록으로 만드는 것이 API 29부터 다 되는 가장 짧은 길
                     runCatching { d.createCaptureSession(listOf(preview, r.surface), object : CameraCaptureSession.StateCallback() {
@@ -79,16 +83,19 @@ class QrCamera(ctx: Context, private val onCode: (String) -> Unit, private val o
                         override fun onConfigureFailed(s: CameraCaptureSession) { if (!done) fail("카메라를 열지 못했어요", null) }
                     }, bg) }.onFailure { if (!done) fail("카메라를 열지 못했어요", it) }
                 }
-                override fun onDisconnected(d: CameraDevice) { d.close(); if (!done) fail("카메라 연결이 끊겼어요", null) }
-                override fun onError(d: CameraDevice, error: Int) { d.close(); fail("카메라를 쓸 수 없어요($error)", null) }
+                override fun onDisconnected(d: CameraDevice) { opening = false; d.close(); if (closed) thread.quitSafely() else fail("카메라 연결이 끊겼어요", null) }
+                override fun onError(d: CameraDevice, error: Int) { opening = false; d.close(); if (closed) thread.quitSafely() else fail("카메라를 쓸 수 없어요($error)", null) }
             }, bg)
-        }.onFailure { fail("카메라를 열지 못했어요", it) }
+        }.onFailure { opening = false; fail("카메라를 열지 못했어요", it) }
         Log.i(TAG, "카메라 $id ${sz.width}×${sz.height}")
     }
 
-    private fun fail(why: String, t: Throwable?) { Log.w(TAG, why, t); main.post { onFail(why) } }
+    private fun fail(why: String, t: Throwable?) { Log.w(TAG, why, t); main.post { if (!closed) onFail(why) } }
 
-    /** Y 평면만으로 읽는다(QR은 밝기만 본다). 우리 QR이 아니면 계속 찾는다. */
+    /**
+     * Y 평면만으로 읽는다(QR은 밝기만 본다). 우리 QR이 아니면 계속 찾는다. bg 스레드에서만 돈다.
+     * ImageReader를 닫는 것도 같은 스레드에서 하므로(stop) 읽는 중인 이미지가 무효가 되지 않는다.
+     */
     private fun decode(img: android.media.Image) {
         if (done) return
         val y = img.planes[0]
@@ -98,13 +105,17 @@ class QrCamera(ctx: Context, private val onCode: (String) -> Unit, private val o
         if (rideCode(text) == null) { Log.i(TAG, "우리 QR이 아님"); return }
         done = true
         Log.i(TAG, "동승 QR 읽음")
-        main.post { onCode(text) }
+        main.post { if (!closed) onCode(text) } // 해석하는 사이 닫혔으면(닫기·주행 제한·새 스캔) 버린다
     }
 
+    /** 메인 스레드에서 부른다. 닫기는 이미지 읽기와 같은 bg 스레드 차례로 넘기고, 열리는 중이면 onOpened가 장치를 닫고 끝낸다. */
     fun stop() {
-        done = true
-        runCatching { session?.close() }; runCatching { device?.close() }; runCatching { reader?.close() }
-        thread.quitSafely()
+        if (closed) return
+        closed = true; done = true
+        bg.post {
+            runCatching { session?.close() }; runCatching { device?.close() }; runCatching { reader?.close() }
+            if (!opening) thread.quitSafely()
+        }
     }
 
     companion object { private const val TAG = "GachitaRide" }
