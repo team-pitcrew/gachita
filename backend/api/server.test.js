@@ -59,7 +59,7 @@ before(async () => {
   // 예전에 한 DB에 같이 두던 표가 남았으면 치운다.
   await tripsDb().query("DROP TABLE IF EXISTS profiles");
   await tripsDb().query("TRUNCATE trips");
-  await profilesDb().query("TRUNCATE profiles");
+  await profilesDb().query("TRUNCATE profiles CASCADE"); // 목소리 값(voice_prints)은 외래 키로 함께
   await new Promise((ok) => server.listen(0, () => ok((base = `http://localhost:${server.address().port}`))));
 });
 after(async () => {
@@ -554,6 +554,115 @@ test("이전 판(프로필마다 토큰 하나)으로 되돌려도 프로필이 
   const [, fresh] = await call("POST", "/api/profiles", { name: "새 판" });
   const { rows } = await profilesDb().query("SELECT token_hash FROM profiles WHERE id = $1", [fresh.id]);
   assert.ok(rows[0].token_hash.equals(createHash("sha256").update(fresh.token).digest()));
+});
+
+test("목소리 등록으로 발화의 화자를 프로필에 붙인다(T38)", async () => {
+  // 16 kHz 모노 16비트 WAV 합성 — 기본음+배음이 다른 두 '사람'
+  const wav = (freq, seconds) => {
+    const n = Math.floor(seconds * 16000);
+    const data = Buffer.alloc(n * 2);
+    for (let i = 0; i < n; i++) {
+      const t = i / 16000;
+      const v = 0.6 * Math.sin(2 * Math.PI * freq * t + Math.sin(t * 3)) + 0.25 * Math.sin(2 * Math.PI * freq * 2 * t) + 0.1 * Math.sin(2 * Math.PI * freq * 3 * t + 1);
+      data.writeInt16LE(Math.round(Math.max(-1, Math.min(1, v)) * 20000), i * 2);
+    }
+    const head = Buffer.alloc(44);
+    head.write("RIFF", 0);
+    head.writeUInt32LE(36 + data.length, 4);
+    head.write("WAVE", 8);
+    head.write("fmt ", 12);
+    head.writeUInt32LE(16, 16);
+    head.writeUInt16LE(1, 20);
+    head.writeUInt16LE(1, 22);
+    head.writeUInt32LE(16000, 24);
+    head.writeUInt32LE(32000, 28);
+    head.writeUInt16LE(2, 32);
+    head.writeUInt16LE(16, 34);
+    head.write("data", 36);
+    head.writeUInt32LE(data.length, 40);
+    return Buffer.concat([head, data]);
+  };
+  const postRaw = (path, buf, token) => fetch(base + path, { method: "POST", headers: token ? { authorization: `Bearer ${token}` } : {}, body: buf });
+
+  // 등록: 원본은 어디에도 남기지 않고 대조용 값만
+  const [, mom] = await call("POST", "/api/profiles", { name: "엄마" });
+  const [, dad] = await call("POST", "/api/profiles", { name: "아빠" });
+  const reg = await postRaw("/api/profiles/me/voice", wav(210, 3), mom.token);
+  assert.equal(reg.status, 200);
+  const regBody = await reg.json();
+  assert.deepEqual([regBody.seconds, regBody.dims > 50], [3, true]);
+  assert.equal((await postRaw("/api/profiles/me/voice", wav(210, 2), mom.token)).status, 200, "다시 등록하면 값을 바꿈");
+  assert.equal((await postRaw("/api/profiles/me/voice", wav(340, 2), dad.token)).status, 200);
+  assert.equal((await postRaw("/api/profiles/me/voice", wav(210, 3))).status, 401, "토큰 없이는 등록 못 함");
+  assert.equal((await fetch(`${base}/api/profiles/me/voice`, { method: "POST", headers: { authorization: `Bearer ${mom.token}` }, body: Buffer.from("not-wav") })).status, 400, "WAV만 받음");
+  const raws = await profilesDb().query("SELECT count(*)::int AS n FROM voice_prints");
+  assert.equal(raws.rows[0].n, 2, "등록값 두 개(원본 음성은 표에 없음)");
+
+  // 여행: 두 사람이 다른 자리에 앉고, 발화를 올려 둔다
+  const [, trip] = await call("POST", "/api/trips", {});
+  const t = `/api/trips/${trip.code}`;
+  const [, pm] = await call("POST", `${t}/participants`, { seat: "ROW_1_LEFT", consent: true }, mom.token);
+  const [, pd] = await call("POST", `${t}/participants`, { seat: "ROW_1_RIGHT", consent: true }, dad.token);
+  await call("POST", `${t}/utterances`, { device: "car", generation: 1, items: [{ seq: 1, at: trip.createdAt + 1000, text: "바다 보인다", seatArea: "ROW_1_LEFT" }] }, pm.token);
+
+  // 대조: 엄마 자리의 발화 음성은 엄마로, 아빠 소리는 '모름'
+  const m1 = await postRaw(`${t}/voice-match?seatArea=ROW_1_LEFT&device=car&seq=1`, wav(210, 1.5), pm.token);
+  assert.equal(m1.status, 200);
+  const r1 = await m1.json();
+  assert.deepEqual([r1.profileId, r1.applied], [mom.id, true], "엄마 목소리는 엄마 프로필로");
+  const m2 = await postRaw(`${t}/voice-match?seatArea=ROW_1_LEFT&device=car&seq=1`, wav(340, 1.5), pm.token);
+  const r2 = await m2.json();
+  assert.deepEqual([r2.profileId, r2.applied], [null, false], "다른 목소리는 모름");
+  assert.ok(r1.confidence > r2.confidence, "같은 목소리의 확신이 더 높다");
+  assert.ok(r1.confidence >= r1.threshold, "같은 목소리는 기준을 넘는다");
+
+  // 발화 줄에 화자가 붙는다(기록본·피드에 나온다)
+  const [, tr] = await call("GET", `${t}/transcript`, null, pm.token);
+  assert.equal(tr.utterances[0].profileId, mom.id);
+  const [, feed] = await call("GET", "/api/profiles/me/feed", null, mom.token);
+  assert.equal(feed.items.filter((i) => i.kind === "utterance").length, 1, "화자가 붙은 발화는 피드에 나옴");
+
+  // 등록을 지우면 그 자리는 후보가 없어 모름
+  assert.equal((await call("DELETE", "/api/profiles/me/voice", null, dad.token))[0], 204);
+  const m3 = await postRaw(`${t}/voice-match?seatArea=ROW_1_RIGHT`, wav(340, 1.5), pd.token);
+  const r3 = await m3.json();
+  assert.deepEqual([r3.profileId, r3.confidence], [null, 0], "등록이 없으면 모름");
+  assert.equal((await postRaw(`${t}/voice-match?seatArea=ROW_1_LEFT`, wav(210, 1.5))).status, 401, "참가자 토큰이 필요함");
+  assert.equal((await fetch(`${base}${t}/voice-match?seatArea=TRUNK`, { method: "POST", headers: { authorization: `Bearer ${pm.token}` }, body: wav(210, 1) })).status, 400, "없는 좌석은 거절");
+
+  // 화자는 그 발화를 올린 기기(참가자)만, 아직 화자가 없는 줄에만 붙인다
+  await call("POST", `${t}/utterances`, { device: "car", generation: 1, items: [{ seq: 2, at: trip.createdAt + 2000, text: "응" }] }, pm.token);
+  const notMine = await (await postRaw(`${t}/voice-match?device=car&seq=2`, wav(210, 1.5), pd.token)).json();
+  assert.deepEqual([notMine.profileId, notMine.applied], [mom.id, false], "남이 올린 줄에는 붙이지 못함");
+  const relabel = await (await postRaw(`${t}/voice-match?device=car&seq=1`, wav(210, 1.5), pm.token)).json();
+  assert.equal(relabel.applied, false, "이미 화자가 있는 줄은 바꾸지 않음");
+  assert.equal((await postRaw(`${t}/voice-match`, wav(210, 11), pm.token)).status, 400, "대조 음성은 10초까지");
+  const [, guest] = await call("POST", `${t}/participants`, { seat: "ROW_2_LEFT", name: "손님", consent: false });
+  assert.equal((await postRaw(`${t}/voice-match`, wav(210, 1.5), guest.token)).status, 403, "동의하지 않은 참가자는 대조 못 함");
+  await call("PATCH", `${t}/participants/${guest.id}`, { consent: true });
+
+  // 좌석 구역을 모르면 이 여행의 프로필 참가자 모두가 후보다
+  const m4 = await (await postRaw(`${t}/voice-match`, wav(210, 1.5), pd.token)).json();
+  assert.equal(m4.profileId, mom.id, "구역 없이도 엄마를 찾음");
+
+  // 대조는 여행 줄을 잠그지 않는다: 같은 여행에 대조가 몰려도, 그사이 동의를 바꿔도 모두 응답한다(리뷰 재현)
+  const jobs = Array.from({ length: 15 }, () => postRaw(`${t}/voice-match?seatArea=ROW_1_LEFT&device=car&seq=1`, wav(210, 1.5), pm.token));
+  const [consent] = await call("PATCH", `${t}/participants/${pd.id}`, { consent: true });
+  assert.deepEqual([consent, ...(await Promise.all(jobs)).map((r) => r.status)], Array(16).fill(200));
+
+  // 아이(계정 없는 구성원)의 목소리는 그 아이를 만든 대표가 대신 등록한다
+  const [, g] = await call("POST", "/api/groups", { kind: "family" }, mom.token);
+  const [, kid] = await call("POST", `/api/groups/${g.id}/members`, { name: "민준" }, mom.token);
+  const kidVoice = `/api/groups/${g.id}/members/${kid.profileId}/voice`;
+  assert.equal((await postRaw(kidVoice, wav(300, 2), dad.token)).status, 403, "대표만");
+  assert.equal((await postRaw(`/api/groups/${g.id}/members/${dad.id}/voice`, wav(300, 2), mom.token)).status, 404, "대표가 만든 구성원만");
+  assert.equal((await postRaw(kidVoice, wav(300, 2), mom.token)).status, 200);
+  const prints = async (id) => (await profilesDb().query("SELECT count(*)::int AS n FROM voice_prints WHERE profile_id = $1", [id])).rows[0].n;
+  assert.equal(await prints(kid.profileId), 1);
+
+  // 프로필을 지우면 목소리 값도 함께 지운다. 대표가 지우면 대표가 만든 아이의 값도
+  assert.equal((await call("DELETE", "/api/profiles/me", null, mom.token))[0], 204);
+  assert.deepEqual([await prints(mom.id), await prints(kid.profileId)], [0, 0]);
 });
 
 test("쓰기가 몰려도 서버가 멈추지 않는다", async () => {
