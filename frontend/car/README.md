@@ -16,7 +16,7 @@ adb shell am start --user 10 -n io.github.teampitcrew.gachita/.MainActivity --es
 - 서버는 저장소 루트에서 `make run`(http://localhost:8787). 에뮬레이터에서 Mac은 `10.0.2.2`입니다.
 - 서버 주소는 첫 화면의 '서버 주소'나 `--es server <주소>`로 바꾸고, 앱이 기억합니다.
 - 기어 값은 Cold boot한 에뮬레이터에서만 읽힙니다(`docs/emulator/README.md`).
-- 마이크 권한(`RECORD_AUDIO`)은 처음 기록할 때 묻습니다. `-g`로 설치하면 미리 허용됩니다.
+- 마이크 권한(`RECORD_AUDIO`)과 알림 권한(`POST_NOTIFICATIONS`, 화면 뒤에서 '기록 멈춤'을 알림으로 보임)은 처음 기록할 때 함께 묻습니다. `-g`로 설치하면 미리 허용됩니다.
 
 ## 수음과 받아쓰기(T36)
 
@@ -35,7 +35,7 @@ adb shell am start --user 10 -n io.github.teampitcrew.gachita/.MainActivity --es
 3. `frontend/car`에서 `./gradlew assembleDebug`.
 4. `python3 frontend/car/e2e.py frontend/car/app/build/outputs/apk/debug/app-debug.apk <저장소 밖 폴더>`
 
-수음과 받아쓰기는 `python3 frontend/car/capture_e2e.py <APK> <저장소 밖 폴더> [분]`입니다. 에뮬레이터를 `-grpc 8556 -grpc-use-token -audio none`으로 켜 두면 macOS 합성 음성으로 만든 가족 대화를 gRPC `injectAudio`로 가상 마이크에 넣고(호스트 마이크는 쓰지 않음), 내비를 앞에 둔 기어 D에서 보관함에 쌓인 발화를 넣은 문장과 맞춰 봅니다. 30초마다 CPU·메모리를 재고, 마이크 막기(`appops`) → '기록 멈춤', 동의 끄기 → 마이크 놓음, 앱 다시 켜기 → 순번 이어짐까지 확인합니다. 넣은 문장과 받아 적은 문장은 `transcript.tsv`에 나란히 남습니다.
+수음과 받아쓰기는 `python3 frontend/car/capture_e2e.py <APK> <저장소 밖 폴더> [분]`입니다. 에뮬레이터를 `-grpc 8556 -grpc-use-token -audio none`으로 켜 두면 macOS 합성 음성으로 만든 가족 대화를 gRPC `injectAudio`로 가상 마이크에 넣고(호스트 마이크는 쓰지 않음), 내비를 앞에 둔 기어 D에서 보관함에 쌓인 발화를 넣은 문장과 맞춰 봅니다. 30초마다 CPU·메모리를 재고, 내비가 앞일 때 시스템 마이크 차단(`cmd sensor_privacy`) → '기록 멈춤', 동의 끄기 → 마이크 놓음, 앱 다시 켜기 → 순번 이어짐까지 확인합니다. 공용 DB를 다른 시험이 비울 수 있으면 따로 띄운 서버를 `GACHITA_PORT`로 줍니다. 넣은 문장과 받아 적은 문장은 `transcript.tsv`에 나란히 남습니다.
 
 `e2e.py`의 스크립트는 설치 → 여행 만들기(가족 4명) → 기어 D에서 동의 켜기(안 켜짐) → 기어 P에서 켜기(기록 중) → 기어 D에서 유지 → 끄기(바로 멈춤) → 반쪽 폭(841) 순서로 화면을 캡처하고, 단계마다 서버의 여행(`GET /api/trips/{코드}`)을 함께 적어 `results.json`에 판정을 남깁니다. 실패가 있으면 종료 코드 1입니다.
 

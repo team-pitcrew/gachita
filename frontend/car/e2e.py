@@ -124,6 +124,8 @@ def main(apk):
     gear("Park")
     adb("shell", "am", "force-stop", "--user", "10", PKG)
     adb("shell", "pm", "clear", "--user", "10", PKG)  # 지난 여행 없이 시작
+    for perm in ("RECORD_AUDIO", "POST_NOTIFICATIONS"):  # pm clear는 허용한 권한도 지운다. 기록을 켜면 수음하므로(T36) 다시 준다
+        adb("shell", "pm", "grant", "--user", "10", PKG, f"android.permission.{perm}")
     adb("shell", "am", "start", "--user", "10", "-n", f"{PKG}/.MainActivity", "--es", "server", "http://10.0.2.2:8787")
     time.sleep(4); shot("01-setup"); ui = texts(); note("ui", texts=ui)
     check("첫 화면", "여행 만들기" in ui)

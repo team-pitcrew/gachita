@@ -6,15 +6,26 @@
       분은 주행 구간 길이(기본 10). 넣는 소리는 macOS say(Yuna)로 만든 합성 음성이다. 사람 목소리가 아니다.
 
 순서: 여행 만들기 → P에서 동의 켬(수음 시작) → 내비를 앞에, 기어 D → 가족 대화를 [분] 동안 넣음(왼쪽 채널 = 앞줄, 오른쪽 = 뒷줄)
-      → 30초마다 CPU·메모리 → P, 앱을 앞에 → 마이크 막기(appops)로 '기록 멈춤' → 풀기 → 동의 끔(마이크 놓음)
+      → 30초마다 CPU·메모리 → P, 앱을 앞에 → 내비가 앞일 때 시스템 마이크 차단으로 '기록 멈춤' → 풀기 → 동의 끔(마이크 놓음)
       → 앱 다시 켜기(보관함과 순번 이어짐).
+- 넣는 소리의 쉼에는 −77 dBFS 잡음을 깐다(막히지 않은 에뮬레이터 마이크의 무음 수준, T10). 디지털 0이면 막힘과 구별되지 않는다.
+- GACHITA_PORT=8797처럼 주면 그 포트의 서버를 쓴다. 공용 DB(gachita-pg)는 다른 시험(make api)이 비울 수 있다.
 - 소리는 우리 AudioRecord가 열려 있을 때만 넣는다(아무도 녹음하지 않을 때 넣으면 에뮬레이터가 멈춘 적이 있음, T10).
 - 결과는 OUT/results.json, 넣은 문장과 받아 적은 문장은 OUT/transcript.tsv. 넣은 소리(WAV)는 OUT/inputs에 두고 저장소에 넣지 않는다.
 """
-import importlib, json, pathlib, random, re, subprocess, sys, tempfile, threading, time, urllib.request, wave
+import importlib, json, os, pathlib, random, re, subprocess, sys, tempfile, threading, time, urllib.request, wave
 import numpy as np
 import e2e  # 같은 폴더의 T7 E2E: adb, 캡처, 화면 트리, 기어, 판정 기록을 같이 쓴다
-from e2e import ADB, PKG, OUT, adb, shot, texts, tap_text, tap_switch, gear, server, check, note
+from e2e import ADB, PKG, OUT, adb, shot, texts, tap_text, tap_switch, gear, check, note
+
+PORT = int(os.environ.get("GACHITA_PORT", "8787"))  # 공용 DB를 다른 시험이 비울 수 있어 따로 띄운 서버를 쓸 때(11/13 run2)
+NOISE_DBFS = -77  # 막히지 않은 에뮬레이터 마이크의 무음 수준(T10). 넣는 소리의 쉼이 디지털 0이면 막힘과 구별되지 않는다
+
+
+def server(code):
+    t = json.load(urllib.request.urlopen(f"http://localhost:{PORT}/api/trips/{code}", timeout=5))
+    note("server", code=code, recording=t["recording"], consent=[(p["name"], p["consent"]) for p in t["participants"]], version=t["version"])
+    return t
 
 R = 16000
 NAVI = "ai.umos.maps.android.navigation.app/.MainActivity"
@@ -77,11 +88,14 @@ def fixture(name, lines, seconds=None, lead=1.0, tail=3.0, seed=36):
         parts.append((n, x, ROW[who])); rows.append({"who": who, "text": text, "channel": "LR"[ROW[who]], "start_s": round(n / R, 3), "end_s": round((n + len(x)) / R, 3)})
         n += len(x) + int(R * g)
     n += int(R * tail)
-    st = np.zeros((n, 2), dtype="<i2")
-    for at, x, ch in parts: st[at:at + len(x), ch] = x
+    rms = 32768 * 10 ** (NOISE_DBFS / 20)  # 실제 마이크처럼 잡음 바닥을 깐다. 말소리(−14~−18 dBFS)보다 약 60 dB 작다
+    st = np.random.default_rng(seed).normal(0, rms, (n, 2)).round()
+    for at, x, ch in parts: st[at:at + len(x), ch] += x
+    st = np.clip(st, -32768, 32767).astype("<i2")
     d = OUT / "inputs"; d.mkdir(exist_ok=True)
     with wave.open(str(d / f"{name}.wav"), "wb") as w: w.setnchannels(2); w.setsampwidth(2); w.setframerate(R); w.writeframes(st.tobytes())
-    meta = {"name": name, "seconds": round(n / R, 2), "format": "16 kHz 2채널 s16le, 왼쪽 = 앞줄, 오른쪽 = 뒷줄", "voice": "macOS say Yuna(합성)", "utterances": rows}
+    meta = {"name": name, "seconds": round(n / R, 2), "format": "16 kHz 2채널 s16le, 왼쪽 = 앞줄, 오른쪽 = 뒷줄", "voice": "macOS say Yuna(합성)",
+            "noise_dbfs": NOISE_DBFS, "utterances": rows}
     (d / f"{name}.json").write_text(json.dumps(meta, ensure_ascii=False, indent=1))
     note("fixture", name=name, seconds=meta["seconds"], lines=len(rows))
     return meta
@@ -146,7 +160,7 @@ def mic_holders():
 
 
 def top():
-    m = re.search(r"topResumedActivity=\S+ \S+ \S+ (\S+)", adb("shell", "dumpsys", "activity", "activities"))
+    m = re.search(r"topResumedActivity=ActivityRecord\{\S+ \S+ (\S+)", adb("shell", "dumpsys", "activity", "activities"))
     return m.group(1) if m else None
 
 
@@ -236,6 +250,19 @@ def compare(meta, t_inj, offset, got):
     return rows, total
 
 
+def notice():
+    """우리 앱 알림의 글자(dumpsys notification). 화면이 뒤에 있을 때 사용자가 볼 수 있는 표시."""
+    out = adb("shell", "dumpsys", "notification", "--noredact")
+    return " ".join(re.findall(r"android\.text=String \(([^)]*)\)", out.split(f"pkg={PKG}", 1)[1][:4000])) if f"pkg={PKG}" in out else ""
+
+
+def save(code, offset, t_inj, total, rows, minutes):
+    (OUT / "outbox.jsonl").write_text("".join(json.dumps(g, ensure_ascii=False) + "\n" for g in outbox(code)))
+    (OUT / "capture-log.json").write_text(json.dumps(capture_log, ensure_ascii=False, indent=1))
+    (OUT / "results.json").write_text(json.dumps({"code": code, "minutes": minutes, "clock_offset_ms": round(offset), "inject_start_ms": t_inj,
+                                                  "total_char_acc": total, "rows": rows, "log": e2e.log}, ensure_ascii=False, indent=1))
+
+
 def wait_texts(pred, timeout):
     end = time.time() + timeout
     while time.time() < end:
@@ -252,13 +279,19 @@ def main(apk, minutes):
     drive = fixture("drive", TALK, seconds=minutes * 60)
     for name, line in (("after", AFTER), ("again", AGAIN)): fixture(name, [line], tail=4.0)
     offset = clock_offset()
-    note("apk", sha256=e2e.hashlib.sha256(open(apk, "rb").read()).hexdigest(), size=pathlib.Path(apk).stat().st_size)
-    note("install", out=subprocess.run(ADB + ["install", "--user", "10", "-r", "-g", apk], capture_output=True, text=True).stdout.strip()[-200:])
+    sha = e2e.hashlib.sha256(open(apk, "rb").read()).hexdigest()
+    note("apk", sha256=sha, size=pathlib.Path(apk).stat().st_size)
+    # 같은 APK가 이미 깔려 있으면 다시 깔지 않는다. 바쁜 기기에서 설치하다 Watchdog이 system_server를 죽인 적이 있다(11/13 10:42)
+    path = adb("shell", "pm", "path", "--user", "10", PKG).strip().removeprefix("package:")
+    if not path or sha not in adb("shell", "sha256sum", path):
+        note("install", out=subprocess.run(ADB + ["install", "--user", "10", "-r", "-g", apk], capture_output=True, text=True).stdout.strip()[-200:])
+    if sha not in adb("shell", "sha256sum", adb("shell", "pm", "path", "--user", "10", PKG).strip().removeprefix("package:")):
+        raise SystemExit("깔린 APK가 이번 빌드와 다릅니다")
     gear("Park")
     adb("shell", "am", "force-stop", "--user", "10", PKG)
     adb("shell", "pm", "clear", "--user", "10", PKG)
-    adb("shell", "pm", "grant", "--user", "10", PKG, "android.permission.RECORD_AUDIO")
-    adb("shell", "am", "start", "--user", "10", "-n", f"{PKG}/.MainActivity", "--es", "server", "http://10.0.2.2:8787")
+    for perm in ("RECORD_AUDIO", "POST_NOTIFICATIONS"): adb("shell", "pm", "grant", "--user", "10", PKG, f"android.permission.{perm}")
+    adb("shell", "am", "start", "--user", "10", "-n", f"{PKG}/.MainActivity", "--es", "server", f"http://10.0.2.2:{PORT}")
     time.sleep(4); tap_text("여행 만들기"); time.sleep(4)
     ui = texts(); code = next((t.split()[-1] for t in ui if t.startswith("여행 코드")), None); note("trip", code=code)
     # 1. 주차 중 동의 → 수음 시작
@@ -266,7 +299,8 @@ def main(apk, minutes):
     ui = wait_texts(lambda u: "● 기록 중" in u, 10); shot("01-recording-park"); note("ui", texts=ui)
     held = mic_holders(); note("mic", holders=held)
     started = [c["line"] for c in capture_log if c["line"].startswith("녹음 시작")]
-    check("P에서 동의를 켜면 기록 중, 마이크를 쥠(16 kHz 2채널)", "● 기록 중" in ui and held and any("16000 Hz 2채널" in l for l in started), log=started)
+    if not check("P에서 동의를 켜면 기록 중, 마이크를 쥠(16 kHz 2채널)", "● 기록 중" in ui and held and any("16000 Hz 2채널" in l for l in started), log=started):
+        raise SystemExit("수음이 열리지 않아 소리를 넣지 않고 멈춥니다(아무도 녹음하지 않을 때 넣으면 에뮬레이터가 멈춘 적이 있음)")
     # 2. 내비를 앞에, 기어 D, 가족 대화를 넣음
     adb("shell", "am", "start", "--user", "10", "-n", NAVI); time.sleep(4)
     gear("Drive")
@@ -298,31 +332,47 @@ def main(apk, minutes):
     shot("04-app-park-heard"); ui = texts(); note("ui", texts=ui)
     last = got[-1]["text"] if got else "?"
     check("P에서 기록 중과 방금 받아 적은 말이 보임", "● 기록 중" in ui and any(last in t for t in ui), last=last)
-    # 4. 마이크 막기: 녹음 중에 시스템이 우리 녹음을 막게 한다(앱 권한 ops). 화면 뒤 막힘을 대신하는 방법이다.
+    # 4. 화면 뒤에서 막힘: 내비가 앞일 때 시스템 마이크 차단(센서 개인정보 보호)을 켠다. 시스템이 우리 녹음을 막는다(isClientSilenced).
+    #    앱 권한 ops(appops RECORD_AUDIO ignore·deny)로는 이미 열린 녹음이 막히지 않았다(11/13 11:08 시험).
     #    막힌 동안에는 소리를 넣지 않는다. 에뮬레이터가 소리를 당겨 가지 않으면 넣기가 끝나지 않을 수 있다
-    adb("shell", "appops", "set", "--user", "10", PKG, "RECORD_AUDIO", "ignore"); t_block = time.time()
-    ui = wait_texts(lambda u: "기록 멈춤" in u, 8); shot("05-blocked"); note("ui", texts=ui)
-    why = [c["line"] for c in capture_log if "BLOCKED" in c["line"]]
-    check("마이크가 막히면 기록 멈춤", "기록 멈춤" in ui, after_s=round(time.time() - t_block, 1), log=why)
-    n0 = len(outbox(code)); time.sleep(3)
-    adb("shell", "appops", "set", "--user", "10", PKG, "RECORD_AUDIO", "allow")
+    adb("shell", "am", "start", "--user", "10", "-n", NAVI); time.sleep(3)
+    log1 = len(capture_log)
+    adb("shell", "cmd", "sensor_privacy", "enable", "10", "microphone"); t_block = time.time()
+    try:
+        time.sleep(4)
+        held = mic_holders(); n_text = notice()
+        note("blocked.behind", top=top(), holders=held, notification=n_text, log=[c["line"] for c in capture_log[log1:]])
+        check("화면 뒤(내비가 앞)에서 막히면 기록 멈춤(앱 상태 줄과 알림)", any("BLOCKED" in c["line"] for c in capture_log[log1:]) and "기록 멈춤" in n_text,
+              silenced=[l.split("silenced:")[1].split()[0] for l in held if "silenced:" in l])
+        adb("shell", "am", "start", "--user", "10", "-n", f"{PKG}/.MainActivity")
+        ui = wait_texts(lambda u: "기록 멈춤" in u, 8); shot("05-blocked"); note("ui", texts=ui)
+        check("앱을 열면 기록 멈춤이 보임", "기록 멈춤" in ui)
+        n0 = len(outbox(code))
+    finally:
+        adb("shell", "cmd", "sensor_privacy", "disable", "10", "microphone")
     ui = wait_texts(lambda u: "● 기록 중" in u, 10); shot("06-unblocked"); note("ui", texts=ui)
-    check("막힘이 풀리면 기록 중", "● 기록 중" in ui)
+    on = [c for c in capture_log[log1:] if c["line"].startswith("수음 ")]
+    check("막힘이 풀리면 기록 중", "● 기록 중" in ui, log=[(round((c["device_ms"] - offset) / 1000 - t_block, 2), c["line"]) for c in on])
     inj.play("after"); time.sleep(3)
     new = outbox(code)[n0:]
     check("풀린 뒤에 넣은 말은 다시 적힘", any(edits(norm(AFTER[1]), norm(g["text"])) <= 4 for g in new), got=[g["text"] for g in new])
     # 5. 동의 끄기: 바로 멈추고 마이크를 놓는다
-    t_off = time.time(); tap_switch()
+    log2 = len(capture_log); t_off = time.time(); tap_switch()
     gone = None
     for _ in range(50):
         if not mic_holders(): gone = round(time.time() - t_off, 2); break
         time.sleep(0.1)
     time.sleep(1); shot("07-off"); ui = texts(); note("ui", texts=ui)
     svc = adb("shell", "dumpsys", "activity", "services", PKG)
-    check("동의를 끄면 바로 멈추고 마이크를 놓음", "기록 꺼짐" in ui and gone is not None and "CaptureService" not in svc, mic_released_s=gone,
-          log=[c["line"] for c in capture_log if c["line"].startswith(("녹음 끝", "수음 OFF"))][-2:])
-    t = server(code)
-    check("서버의 동의도 꺼짐", not any(p["consent"] for p in t["participants"]))
+    # 앱 기록의 시각(기기 시계 − offset)으로 누름부터 '수음 OFF'·'녹음 끝'까지. dumpsys audio 확인은 한 번에 1초 안팎 걸려 상한만 준다
+    stops = [(round((c["device_ms"] - offset) / 1000 - t_off, 2), c["line"]) for c in capture_log[log2:]]
+    check("동의를 끄면 바로 멈추고 마이크를 놓음", "기록 꺼짐" in ui and gone is not None and "CaptureService" not in svc, mic_gone_by_dumpsys_s=gone, log=stops)
+    save(code, offset, t_inj, total, rows, minutes)
+    try:
+        t = server(code)
+        check("서버의 동의도 꺼짐", not any(p["consent"] for p in t["participants"]))
+    except Exception as ex:
+        check("서버의 동의도 꺼짐", False, error=str(ex)[:200])
     # 6. 앱을 다시 켜도 보관함과 순번이 이어진다
     before = outbox(code)
     adb("shell", "am", "force-stop", "--user", "10", PKG)
@@ -335,10 +385,7 @@ def main(apk, minutes):
     check("다시 켠 뒤의 발화는 순번이 이어짐", len(after) > len(before) and after[len(before)]["seq"] == before[-1]["seq"] + 1, seq=[g["seq"] for g in after[len(before) - 1:]])
     tap_switch(); time.sleep(2)
     gear("Park")
-    (OUT / "outbox.jsonl").write_text("".join(json.dumps(g, ensure_ascii=False) + "\n" for g in outbox(code)))
-    (OUT / "capture-log.json").write_text(json.dumps(capture_log, ensure_ascii=False, indent=1))
-    (OUT / "results.json").write_text(json.dumps({"code": code, "minutes": minutes, "clock_offset_ms": round(offset), "inject_start_ms": t_inj,
-                                                  "total_char_acc": total, "rows": rows, "log": e2e.log}, ensure_ascii=False, indent=1))
+    save(code, offset, t_inj, total, rows, minutes)
     fails = [e["name"] for e in e2e.log if e["step"] == "check" and not e["ok"]]
     print("실패:", fails if fails else "없음")
     sys.exit(1 if fails else 0)

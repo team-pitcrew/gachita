@@ -113,8 +113,9 @@ class MainActivity : ComponentActivity() {
         override fun run() { refresh(); if (visible || s.recording) main.postDelayed(this, POLL_MS) }
     }
 
-    private val askMic = registerForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
-        if (ok) syncCapture() else Live.set(Mic.FAILED, "마이크 권한이 없어 기록할 수 없어요")
+    /** 마이크(꼭 필요)와 알림(화면 뒤에서 '기록 멈춤'을 보이는 데 씀. 없으면 API 33부터 알림이 올라가지 않음)을 한 번에 묻는다. */
+    private val askMic = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { got ->
+        if (got[Manifest.permission.RECORD_AUDIO] == true) syncCapture() else Live.set(Mic.FAILED, "마이크 권한이 없어 기록할 수 없어요")
     }
 
     /**
@@ -129,7 +130,7 @@ class MainActivity : ComponentActivity() {
         }
         if (CaptureService.running || !resumed || Live.mic == Mic.FAILED) return
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            if (!askedMic) { askedMic = true; askMic.launch(Manifest.permission.RECORD_AUDIO) }
+            if (!askedMic) { askedMic = true; askMic.launch(arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.POST_NOTIFICATIONS)) }
             else Live.set(Mic.FAILED, "마이크 권한이 없어 기록할 수 없어요")
             return
         }

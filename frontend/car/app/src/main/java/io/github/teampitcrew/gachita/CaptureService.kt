@@ -186,11 +186,14 @@ class CaptureService : Service() {
         }
     }
 
-    /** 조각 하나(메인 스레드). 막히지 않았을 때만 STT에 넣는다. */
+    /**
+     * 조각 하나(메인 스레드). 막혔어도 STT에는 그대로 넣는다(막힌 조각은 0이라 무음일 뿐).
+     * 넣지 않으면 STT가 말 끝의 무음을 받지 못해 발화를 닫지 못한다(11/13 E2E run2: 쉼이 디지털 0인 소리에서 쉼마다 막힘으로 판정됨).
+     */
     private fun chunk(c: Chunk, now: Long) {
         if (stopping) return
         block.chunk(c.allZero, now)
-        if (block.reason(now) == null && sttReady) runCatching { stt?.sendAudio(c.mono) }.onFailure { Log.w(TAG, "sendAudio 실패", it) }
+        if (sttReady) runCatching { stt?.sendAudio(c.mono) }.onFailure { Log.w(TAG, "sendAudio 실패", it) }
         judge()
     }
 

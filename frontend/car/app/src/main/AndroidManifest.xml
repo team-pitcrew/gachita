@@ -8,6 +8,7 @@
  <uses-permission android:name="android.permission.RECORD_AUDIO" />
  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+ <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
  <!-- 공조 권한(CAR_CLIMATE, CONTROL_CAR_CLIMATE)은 공조를 부르는 T8에서 넣는다.
       평문 http는 디버그 빌드에서 개발 서버 주소에만 허용한다(src/debug/res/xml/network_security_config.xml). 릴리스는 https만.
       minSdk 29: 마이크 유형 포그라운드 서비스와 녹음 막힘 확인(AudioRecordingConfiguration)이 API 29부터. Pleos Connect는 API 34.
