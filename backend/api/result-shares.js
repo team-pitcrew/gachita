@@ -14,7 +14,8 @@ export async function createShare(client, trip, caller, b) {
   if (recipients.some((p) => !p?.profileId || !p.consent || p.profileId === caller.profileId)) fail(403, "같은 여행에서 동의한 다른 프로필 참가자만 받을 수 있음");
   if (typeof b.includeLocation !== "boolean") fail(400, "위치 포함 여부를 선택해 주세요");
   if (typeof b.caption !== "string" || !b.caption.isWellFormed() || b.caption.includes("\0") || b.caption.trim().length > 500) fail(400, "문구는 500자 이내로 확인해 주세요");
-  if (typeof b.momentId !== "string" || b.momentId.length > 40) fail(400, "공유할 장면을 골라 주세요");
+  // 장면 id는 서버가 만든 짧은 영숫자다. NUL·짝 없는 서로게이트 같은 글자는 DB에 닿기 전에 400(Postgres가 거절해 500이 되던 것, Astra).
+  if (typeof b.momentId !== "string" || !/^[A-Za-z0-9_-]{1,40}$/.test(b.momentId)) fail(400, "공유할 장면을 골라 주세요");
   const ids = [caller.profileId, ...recipients.map((p) => p.profileId)];
   const people = await profilesDb().query("SELECT id, managed_by FROM profiles WHERE id = ANY($1::uuid[])", [ids]);
   if (new Set(people.rows.map((p) => p.id)).size !== new Set(ids).size) fail(404, "삭제된 참가자 프로필이 있어요");

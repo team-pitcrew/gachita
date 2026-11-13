@@ -98,6 +98,7 @@ test("본인 앨범과 동의한 같은 여행 참가자만 선택하고 오래�
   assert.equal((await f.share({ recipientIds: [] })).status, 400);
   assert.equal((await f.share({ recipientIds: [f.riders[1].id, f.riders[1].id] })).status, 400);
   assert.equal((await f.share({ momentId: "does-not-exist" })).status, 404);
+  for (const odd of ["abc\u0000", "\ud800", "", "a b", "가".repeat(3)]) assert.equal((await f.share({ momentId: odd })).status, 400, "DB에 닿기 전에 400");
   assert.equal((await f.share({ recipientIds: [f.riders[0].id] }, f.riders[1].token)).status, 404, "다른 사람의 앨범 장면을 공유하지 못함");
   for (const caption of [null, "x".repeat(501), "\0", "\uD800"]) assert.equal((await f.share({ caption })).status, 400);
   assert.equal((await f.share({ includeLocation: "false" })).status, 400);
