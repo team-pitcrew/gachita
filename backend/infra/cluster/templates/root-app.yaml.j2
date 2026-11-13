@@ -11,6 +11,21 @@ spec:
     repoURL: {{ gitops_repo }}
     targetRevision: {{ gitops_revision }}
     path: backend/infra/gitops/bootstrap
+    kustomize:
+      patches:
+        # 이 저장소를 읽는 자식 앱도 뿌리 앱과 같은 판을 따라간다. 병합 전 브랜치를 실제 계정에 펴 볼 수 있다
+        # (gitops_revision, Terraform 변수). 차트를 읽는 앱의 targetRevision은 차트 판이라 건드리지 않는다.
+        - target:
+            kind: Application
+            name: "(cluster-base|secret-stores|pod-identity-webhook|db|api|edge)"
+          patch: |-
+            - { op: replace, path: /spec/source/targetRevision, value: "{{ gitops_revision }}" }
+{% if db_bootstrap == 'recover' %}
+        # 데이터 버킷에 Postgres 전체 백업이 있어 복구로 편다(T52, 구축 6단계가 정함)
+        - target: { kind: Application, name: db }
+          patch: |-
+            - { op: replace, path: /spec/source/path, value: backend/infra/gitops/apps/db/recover }
+{% endif %}
   destination:
     server: https://kubernetes.default.svc
     namespace: argocd

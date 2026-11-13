@@ -7,7 +7,7 @@
 #   4 oidc    서비스 계정 발급자의 공개 키를 S3에 올림(파드가 AWS 역할을 받는 길, ADR-0011)
 #   5 argocd  우선순위 클래스, Argo CD(판 고정), 저장소 자격
 #   6 root    뿌리 앱 하나. 나머지는 Argo CD가 물결 순서로 올림(backend/infra/gitops)
-#   7 verify  모든 앱이 Synced·Healthy, 밖에서 /healthz 200
+#   7 verify  모든 앱이 Synced·Healthy, Postgres WAL 보관. 밖에서의 확인(ALB·Cloudflare)은 펴기 스크립트(backend/infra/infra.sh)
 #
 # 단계마다 '이미 됐는지'를 먼저 보고, 끝나면 /var/lib/gachita/bootstrap/<번호>-<이름>.done 에 시각을 남긴다.
 # 실패하면 로그(/var/log/gachita/bootstrap.log)의 마지막 '[n/7 이름]'이 멈춘 단계다.
@@ -43,7 +43,7 @@
     # ---------------------------------------------------------------- 1 os
     - name: "[1/7 os] 패키지"
       ansible.builtin.apt:
-        name: [curl, jq, git, unzip, ca-certificates]
+        name: [curl, jq, git, unzip, ca-certificates, dnsutils]
         state: present
         update_cache: true
         cache_valid_time: 3600
@@ -69,6 +69,25 @@
       tags: [os]
 
     # ---------------------------------------------------------------- 2 k3s
+    - name: "[2/7 k3s] 이 서버의 가용 영역과 인스턴스 번호(IMDSv2. 노드의 providerID가 됨)"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        t=$(curl -sf -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 60')
+        for p in placement/availability-zone instance-id; do
+          curl -sf -H "X-aws-ec2-metadata-token: $t" "http://169.254.169.254/latest/meta-data/$p"; echo
+        done
+      args:
+        executable: /bin/bash
+      register: imds
+      changed_when: false
+      tags: [k3s]
+
+    - name: "[2/7 k3s] 값으로 두기"
+      ansible.builtin.set_fact:
+        ec2_az: "{{ imds.stdout_lines[0] }}"
+        ec2_instance_id: "{{ imds.stdout_lines[1] }}"
+      tags: [k3s]
+
     - name: "[2/7 k3s] 설정 폴더"
       ansible.builtin.file: { path: /etc/rancher/k3s, state: directory, mode: "0755" }
       tags: [k3s]
@@ -245,7 +264,27 @@
       tags: [argocd]
 
     # ---------------------------------------------------------------- 6 root
+    # 다시 펼 때 Postgres를 복구로 시작할지(T52). 서버마다 한 번 정해 기록한다: 같은 서버에서 구축 단계를 다시 돌려도
+    # 바뀌지 않는다(복구로 뜬 DB가 백업을 남기기 시작한 뒤 'initdb'로 바뀌면 안 됨).
+    - name: "[6/7 root] Postgres 시작 방식: 데이터 버킷에 전체 백업이 있으면 recover, 없으면 initdb"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        f={{ stamp_dir }}/db-bootstrap
+        if [ ! -s "$f" ]; then
+          n=$(aws s3api list-objects-v2 --region {{ region }} --bucket gachita-{{ env }}-{{ account_id }} \
+                --prefix postgres/db/base/ --max-keys 1 --no-paginate --query KeyCount --output text)
+          if [ "$n" = 0 ]; then echo initdb > "$f"; else echo recover > "$f"; fi
+        fi
+        cat "$f"
+      args:
+        executable: /bin/bash
+      register: db_bootstrap_out
+      changed_when: false
+      tags: [root]
+
     - name: "[6/7 root] 뿌리 앱"
+      vars:
+        db_bootstrap: "{{ db_bootstrap_out.stdout | trim }}"
       ansible.builtin.template:
         src: templates/root-app.yaml.j2
         dest: /etc/gachita/root-app.yaml
@@ -298,9 +337,8 @@
 
     - name: "[7/7 verify] Postgres WAL 보관(S3)이 도는지. 실패해도 DB는 Healthy라 물결로는 안 보인다"
       ansible.builtin.command: >-
-        kubectl -n gachita-{{ item }} get cluster db
+        kubectl -n gachita-db get cluster db
         -o 'jsonpath={.status.conditions[?(@.type=="ContinuousArchiving")].status}'
-      loop: [trips, profiles]
       register: archiving
       until: archiving.stdout == 'True'
       retries: 30
@@ -308,14 +346,22 @@
       changed_when: false
       tags: [verify]
 
-    - name: "[7/7 verify] 밖에서(Cloudflare를 거쳐) /healthz"
-      ansible.builtin.uri:
-        url: "https://{{ service_host }}/healthz"
-        status_code: 200
+    # 클러스터 안의 이름(쿠버네티스 DNS)으로 확인한다: API가 DB를 이름으로 찾고, ALB가 볼 /healthz가 200인지.
+    # 노드에서는 클러스터 DNS를 못 쓰므로 CoreDNS에 직접 묻고 서비스 주소로 간다. 밖(ALB·Cloudflare)은 펴기 스크립트가 본다.
+    - name: "[7/7 verify] 쿠버네티스 DNS로 API(gachita-api.gachita.svc.cluster.local)의 /healthz"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        dns=$(kubectl -n kube-system get svc kube-dns -o jsonpath='{.spec.clusterIP}')
+        ip=$(dig +short @"$dns" gachita-api.gachita.svc.cluster.local | head -1)
+        test -n "$ip"
+        curl -sf --max-time 5 "http://$ip/healthz"
+      args:
+        executable: /bin/bash
       register: healthz
-      until: healthz.status == 200
+      until: healthz.rc == 0
       retries: 30
       delay: 10
+      changed_when: false
       tags: [verify]
 
     - name: "[7/7 verify] 끝"

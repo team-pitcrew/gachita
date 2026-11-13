@@ -12,10 +12,10 @@ data "aws_ssm_parameter" "ubuntu" {
 resource "aws_instance" "k3s" {
   ami                         = data.aws_ssm_parameter.ubuntu.value
   instance_type               = var.instance_type
-  subnet_id                   = aws_subnet.public.id
+  subnet_id                   = aws_subnet.public[local.azs[0]].id
   vpc_security_group_ids      = [aws_security_group.k3s.id]
   iam_instance_profile        = aws_iam_instance_profile.k3s.name
-  associate_public_ip_address = true # 나가는 길에만 쓴다. 들어오는 길은 Cloudflare Tunnel이라 고정 IP가 필요 없다
+  associate_public_ip_address = true # 나가는 길에만 쓴다(NAT 없음). 들어오는 길은 ALB라 고정 IP가 필요 없다
 
   user_data = templatefile("${path.module}/user_data.sh.tftpl", {
     env             = var.env
@@ -24,7 +24,7 @@ resource "aws_instance" "k3s" {
     gitops_repo     = var.gitops_repo
     gitops_revision = var.gitops_revision
     service_host    = var.service_host
-    oidc_bucket     = aws_s3_bucket.oidc.bucket
+    oidc_bucket     = data.aws_s3_bucket.oidc.bucket
     oidc_issuer     = local.oidc_issuer
   })
   user_data_replace_on_change = true

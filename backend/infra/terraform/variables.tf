@@ -40,15 +40,9 @@ variable "gitops_revision" {
   default     = "develop"
 }
 
-# ---- Cloudflare(가장자리, ADR-0010). 계정 번호와 영역 번호는 비밀 값이 아니다 ----
-variable "cloudflare_account_id" {
-  description = "Cloudflare 계정 번호. 비우면 Cloudflare 자원을 만들지 않는다(AWS만 계획할 때)"
-  type        = string
-  default     = ""
-}
-
+# ---- Cloudflare(가장자리, ADR-0010). 영역 번호는 비밀 값이 아니다 ----
 variable "cloudflare_zone_id" {
-  description = "mangowhois.ai 영역 번호. 이 영역에서 service_name 레코드 하나만 다룬다"
+  description = "mangowhois.ai 영역 번호. 이 영역에서 service_host 레코드 하나만 다룬다. 비우면 레코드를 만들지 않는다"
   type        = string
   default     = ""
 }

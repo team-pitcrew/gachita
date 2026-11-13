@@ -8,9 +8,14 @@ output "account_id" {
   value       = local.account
 }
 
-output "data_bucket" {
-  description = "백업과 클립 버킷"
-  value       = aws_s3_bucket.data.bucket
+output "alb_dns" {
+  description = "ALB 컨트롤러가 만든 ALB의 주소. 비어 있으면 아직 ALB가 없다(펴기 8번에서 한 번 더 적용)"
+  value       = try(data.aws_lb.cluster[0].dns_name, "")
+}
+
+output "instance_id" {
+  description = "서버(펴기·접기 스크립트가 SSM으로 명령을 보냄)"
+  value       = aws_instance.k3s.id
 }
 
 output "oidc_issuer" {

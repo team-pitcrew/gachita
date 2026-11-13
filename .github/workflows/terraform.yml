@@ -3,7 +3,8 @@ name: terraform
 # Terraform 계획과 적용을 OIDC로 받은 AWS 역할로 돌린다. 저장소와 서버에 AWS 열쇠를 두지 않는다(ADR-0011).
 # 필수 검사(ci.yml)와 따로 돈다. 형식·정합성 검사는 ci.yml의 backend-infra가 그대로 맡는다.
 #   PR: backend/infra/terraform/ 이 바뀌면 계획 역할로 plan을 돌려 PR 댓글로 남긴다.
-#   수동 실행(develop에서만): 적용 역할로 plan을 돌리고, apply를 고르면 그 계획을 적용한다. 비용이 생기므로 지환님이 승인한 때에만 고른다.
+#   수동 실행(develop에서만): 적용 역할로 plan을 돌리고, apply를 고르면 그 계획을 묶음마다 적용한다(이미 펴 둔 환경을 고칠 때).
+#   처음 펴기와 접기는 순서가 있어(남는 묶음 → 접는 묶음 → 클러스터 → 레코드) infra 워크플로(backend/infra/infra.sh)로 한다.
 # 역할과 상태 버킷은 저장소 변수(AWS_PLAN_ROLE_ARN, AWS_APPLY_ROLE_ARN, TF_STATE_BUCKET)로 받는다. 비어 있으면 "역할이 없어 건너뜀"으로 끝난다.
 on:
   pull_request:
@@ -33,18 +34,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # main: 서비스 자원(backend/infra/terraform). account: OIDC 역할과 권한 경계(사람이 로컬에서만 적용)
-        stack: [main, account]
+        # main: 접는 묶음(backend/infra/terraform). persist: 접어도 남는 묶음(버킷, 인증서, T51).
+        # account: OIDC 역할과 권한 경계(사람이 로컬에서만 적용)
+        stack: [main, persist, account]
     env:
       STACK: ${{ matrix.stack }}
-      DIR: ${{ matrix.stack == 'account' && 'backend/infra/terraform/account' || 'backend/infra/terraform' }}
-      KEY: ${{ matrix.stack == 'account' && 'account/terraform.tfstate' || 'dev/terraform.tfstate' }}
+      DIR: backend/infra/terraform${{ matrix.stack != 'main' && format('/{0}', matrix.stack) || '' }}
+      KEY: ${{ matrix.stack == 'main' && 'dev' || matrix.stack }}/terraform.tfstate
       ROLE: ${{ github.event_name == 'pull_request' && vars.AWS_PLAN_ROLE_ARN || vars.AWS_APPLY_ROLE_ARN }}
       BUCKET: ${{ vars.TF_STATE_BUCKET }}
-      # Cloudflare(가장자리, ADR-0010). 계정·영역 번호는 저장소 변수, API 토큰은 저장소 비밀 값(OIDC로 못 바꾸는 예외, ADR-0011).
-      # 번호가 비어 있으면 Terraform은 Cloudflare 자원을 만들지 않는다.
+      # Cloudflare(가장자리, ADR-0010). 영역 번호는 저장소 변수, API 토큰(mangowhois.ai의 DNS 편집과 요청 수 제한 규칙 편집)은
+      # 저장소 비밀 값(OIDC로 못 바꾸는 예외, ADR-0011). 번호가 비어 있으면 Terraform은 Cloudflare 자원을 만들지 않는다.
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      TF_VAR_cloudflare_account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
       TF_VAR_cloudflare_zone_id: ${{ vars.CLOUDFLARE_ZONE_ID }}
     steps:
       - name: 역할 확인
@@ -121,5 +122,5 @@ jobs:
             gh pr comment "$PR" -R "$GITHUB_REPOSITORY" -F "$body"
           fi
       - name: 적용
-        if: steps.gate.outputs.skip != 'true' && github.event_name == 'workflow_dispatch' && inputs.apply && matrix.stack == 'main'
+        if: steps.gate.outputs.skip != 'true' && github.event_name == 'workflow_dispatch' && inputs.apply && matrix.stack != 'account'
         run: terraform -chdir="$DIR" apply -input=false tfplan

@@ -4,7 +4,7 @@ locals {
   ssm_prefix   = "arn:aws:ssm:${var.region}:${local.account}:parameter/gachita/${var.env}"
 }
 
-# ---- 서버: SSM 세션, 배포 키 읽기, 서비스 계정 발급자의 공개 키 올리기 ----
+# ---- 서버: SSM 세션, 배포 키 읽기, 서비스 계정 발급자의 공개 키 올리기, 백업이 있는지 보기 ----
 data "aws_iam_policy_document" "assume_ec2" {
   statement {
     actions = ["sts:AssumeRole"]
@@ -42,7 +42,17 @@ data "aws_iam_policy_document" "k3s" {
   }
   statement {
     actions   = ["s3:PutObject"]
-    resources = ["${aws_s3_bucket.oidc.arn}/.well-known/openid-configuration", "${aws_s3_bucket.oidc.arn}/openid/v1/jwks"]
+    resources = ["${data.aws_s3_bucket.oidc.arn}/.well-known/openid-configuration", "${data.aws_s3_bucket.oidc.arn}/openid/v1/jwks"]
+  }
+  # 구축 6단계가 Postgres 전체 백업이 있는지 보고 복구로 펼지 정한다(T52). 목록만, 내용은 못 읽는다
+  statement {
+    actions   = ["s3:ListBucket"]
+    resources = [data.aws_s3_bucket.data.arn]
+    condition {
+      test     = "StringLike"
+      variable = "s3:prefix"
+      values   = ["postgres/db/base/*"]
+    }
   }
 }
 
@@ -59,8 +69,8 @@ resource "aws_iam_instance_profile" "k3s" {
 
 # ---- 파드: 서비스 계정 OIDC. K3s 발급자의 공개 키가 S3(storage.tf)에 있다 ----
 locals {
-  oidc_issuer = "https://${aws_s3_bucket.oidc.bucket_regional_domain_name}"
-  oidc_host   = aws_s3_bucket.oidc.bucket_regional_domain_name
+  oidc_issuer = "https://${data.aws_s3_bucket.oidc.bucket_regional_domain_name}"
+  oidc_host   = data.aws_s3_bucket.oidc.bucket_regional_domain_name
   # 서비스 계정(네임스페이스/이름) → 그 계정만 받는 역할과 권한
   workloads = {
     ssm-reader = {
@@ -74,20 +84,28 @@ locals {
         via_ssm   = true # SecureString 복호화는 SSM을 거친 요청만
       }]
     }
-    pg-trips = {
-      sa         = "gachita-trips:db"
-      statements = local.backup_statements["trips"]
+    # Postgres 하나(ADR-0016): 백업 접두사 postgres/db/ 만 읽고 쓴다
+    pg = {
+      sa = "gachita-db:db"
+      statements = [
+        { actions = ["s3:ListBucket"], resources = [data.aws_s3_bucket.data.arn] },
+        { actions = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"], resources = ["${data.aws_s3_bucket.data.arn}/postgres/db/*"] },
+      ]
     }
-    pg-profiles = {
-      sa         = "gachita-profiles:db"
-      statements = local.backup_statements["profiles"]
+    # ALB 컨트롤러(ADR-0017): 공식 정책(v3.6.2 docs/install/iam_policy.json)의 동작에서 WAF·Shield·Cognito를 뺀 것.
+    # ponytail: 자원 범위는 여기서 다시 적지 않고 권한 경계(account/의 gachita-workload-boundary)가 우리 태그와
+    #           ALB 이름(gachita-*)으로 좁힌다. 이 역할의 실제 권한은 둘의 교집합이다.
+    alb-controller = {
+      sa = "kube-system:aws-load-balancer-controller"
+      statements = [{
+        actions = ["iam:CreateServiceLinkedRole", "ec2:Describe*", "ec2:GetSecurityGroupsForVpc", "ec2:CreateSecurityGroup",
+          "ec2:CreateTags", "ec2:DeleteTags", "ec2:AuthorizeSecurityGroupIngress", "ec2:RevokeSecurityGroupIngress",
+          "ec2:DeleteSecurityGroup", "elasticloadbalancing:*", "acm:ListCertificates", "acm:DescribeCertificate",
+        "iam:ListServerCertificates", "iam:GetServerCertificate"]
+        resources = ["*"]
+      }]
     }
   }
-  # Postgres 백업: 자기 접두사만 읽고 쓴다. 여행 DB가 프로필 백업을 읽지 못한다
-  backup_statements = { for db in ["trips", "profiles"] : db => [
-    { actions = ["s3:ListBucket"], resources = [aws_s3_bucket.data.arn] },
-    { actions = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"], resources = ["${aws_s3_bucket.data.arn}/postgres/${db}/*"] },
-  ] }
 }
 
 resource "aws_iam_openid_connect_provider" "cluster" {

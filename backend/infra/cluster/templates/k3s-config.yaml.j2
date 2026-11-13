@@ -9,7 +9,7 @@ flannel-backend: none
 disable-network-policy: true
 disable-kube-proxy: true
 
-# 인그레스는 Argo CD가 Traefik 공식 차트로 올린다. 서비스 LB는 쓰지 않는다(들어오는 길은 Cloudflare Tunnel).
+# 들어오는 길은 ALB(AWS Load Balancer Controller, Argo CD가 올림) → NodePort. K3s의 Traefik과 서비스 LB는 쓰지 않는다.
 disable:
   - traefik
   - servicelb
@@ -24,6 +24,9 @@ kube-apiserver-arg:
   - service-account-jwks-uri={{ oidc_issuer }}/openid/v1/jwks
 
 kubelet-arg:
+  # ALB 컨트롤러가 인스턴스 대상을 이 값에서 찾는다(K3s 기본값 k3s://<이름>으로는 대상에 넣지 못함). K3s의 내장
+  # 클라우드 컨트롤러는 이미 있는 providerID를 그대로 둔다.
+  - provider-id=aws:///{{ ec2_az }}/{{ ec2_instance_id }}
   # 노드 사양 표(ADR-0012)의 예약. 파드가 OS와 K3s의 몫을 넘보지 못한다.
   - system-reserved=cpu=100m,memory=512Mi
   # K3s 서버 프로세스(API 서버·컨트롤러·kine·containerd·kubelet이 한 프로세스)는 로컬 검증에서 RSS 1.6 GiB였다
