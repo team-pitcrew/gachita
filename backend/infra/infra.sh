@@ -117,6 +117,7 @@ server() { # 떠 있는 서버(Name 태그)의 인스턴스 번호. 없거나 SS
 }
 
 up() {
+  : "${TF_STATE_BUCKET:?상태 버킷 이름(TF_STATE_BUCKET)이 필요합니다}"
   log 1/6 "남는 묶음(버킷, 인증서): 보통 바뀔 것이 없다"
   tf "$TF/persist" apply -input=false -auto-approve
 
@@ -177,6 +178,7 @@ up() {
 }
 
 down() {
+  : "${TF_STATE_BUCKET:?상태 버킷 이름(TF_STATE_BUCKET)이 필요합니다}"
   local id="" up=""
   id=$(tf "$TF" output -raw instance_id 2>/dev/null || true)
   [[ $id == i-* ]] && ssm_online "$id" && up=1
@@ -364,7 +366,7 @@ spec:
     metadata:
       annotations: {eks.amazonaws.com/role-arn: "arn:aws:iam::$acct:role/gachita-$env-pg-restore"}
 YAML
-if ! k wait cluster/db-pitr --for=condition=Ready --timeout=2400s; then
+if ! k wait cluster/db-pitr --for=condition=Ready --timeout=1200s; then
   k get cluster db-pitr; k get pods -l cnpg.io/cluster=db-pitr
   k logs -l cnpg.io/cluster=db-pitr --all-containers --tail=30 || true
   exit 1

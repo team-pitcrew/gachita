@@ -32,6 +32,7 @@ backend/infra/infra.sh converge argocd,verify       # 고른 단계만(비우면
 backend/infra/infra.sh backup                       # 손 전체 백업
 backend/infra/infra.sh restore 2026-11-13T15:00:00+09:00        # 연습: 옆에 db-pitr을 세워 걸린 시간과 행 수 비교, db는 그대로
 backend/infra/infra.sh restore 2026-11-13T15:00:00+09:00 apply  # db를 먼저 백업하고 그 시점 데이터로 덮어씀
+# 덮어쓰기는 데이터베이스(trips, profiles)마다 따로다. 중간에 실패했거나 되돌리려면 출력의 before-restore 백업이 끝난 시각으로 다시 restore … apply
 # 서버 안에서(SSM 세션)
 sudo gachita-converge                  # 전부
 sudo gachita-converge --tags argocd    # 한 단계만(os, k3s, cilium, oidc, argocd, root, verify)
