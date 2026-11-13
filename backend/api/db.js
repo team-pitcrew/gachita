@@ -9,9 +9,12 @@ const pools = new Map();
 const poolOf = (store, url) => {
   if (!pools.has(store)) {
     const pool = new pg.Pool({ connectionString: url, connectionTimeoutMillis: 5000 });
-    // 쉬던 연결이 끊기면(Postgres 재시작·장애 조치·통신 끊김) 풀이 'error'를 낸다. 처리기가 없으면 프로세스가 죽는다.
-    // 풀은 그 연결을 버리고 다음 요청에서 새로 맺으므로 기록만 남긴다(node-postgres의 Pool 'error' 안내).
-    pool.on("error", (e) => console.error(`${store} DB 연결이 끊김(다음 요청에서 다시 맺음): ${e.message}`));
+    // 연결이 끊기면(Postgres 재시작·장애 조치·통신 끊김) 'error'가 나는데, 처리기가 없으면 프로세스가 죽는다.
+    // 쉬던 연결은 풀이, 빌려 간 연결(트랜잭션 중)은 그 연결이 낸다 — 둘 다 기록만 남긴다. 끊긴 연결은 풀이 버리고
+    // 다음 요청에서 새로 맺는다(node-postgres의 Pool·Client 'error' 안내).
+    const log = (e) => console.error(`${store} DB 연결이 끊김(다음 요청에서 다시 맺음): ${e.message}`);
+    pool.on("error", log);
+    pool.on("connect", (client) => client.on("error", log));
     pools.set(store, pool);
   }
   return pools.get(store);
