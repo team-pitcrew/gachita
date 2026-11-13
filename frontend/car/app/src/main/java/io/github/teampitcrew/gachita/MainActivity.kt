@@ -141,8 +141,12 @@ class MainActivity : ComponentActivity() {
     private var shortPaused by mutableStateOf(false)
     private var shortNote by mutableStateOf("")
     private var player: MediaPlayer? = null
+    private var shortGen = 0 // 장면을 열 때마다 하나씩. 늦게 끝난 받기가 닫힌 숏폼이나 다른 장면을 건드리지 않게
+    private var shortFile: File? = null // 지금 트는 장면의 클립(장면마다 다른 파일, 닫으면 지움)
     private val media = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build()
-    private val playFocus = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT).setAudioAttributes(media).build() // 사용자 음악은 듣는 동안만 멈춤
+    /** 사용자 음악은 듣는 동안만 멈춘다. 전화·Gleo 등이 포커스를 가져가면 닫는다(내비 안내처럼 줄여 달라는 것은 시스템이 줄임). */
+    private val playFocus = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT).setAudioAttributes(media)
+        .setOnAudioFocusChangeListener({ if (it == AudioManager.AUDIOFOCUS_LOSS || it == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT) stopShort() }, Handler(Looper.getMainLooper())).build()
     private val shortTick = object : Runnable { override fun run() { player?.let { shortPos = it.currentPosition / 1000.0; main.postDelayed(this, 200) } } }
     private lateinit var device: String // 보관함의 기기 값. 설치 단위(ADR-0014의 device)
     /** 이 차가 참가시킨 사람의 참가자 토큰(id → 토큰). 그 사람의 동의 켜기와 발화 올리기에 쓴다(T68). 참가할 때 한 번만 온다. */
@@ -586,11 +590,12 @@ class MainActivity : ComponentActivity() {
         val url = server
         shortNote = "숏폼을 받고 있어요"
         bg({ parseShort(Server(url).shortform(t.code, tok)) }) { r ->
+            if (isDestroyed) return@bg
             r.onSuccess { sh ->
                 if (sh.scenes.isEmpty()) { shortNote = "아직 숏폼으로 만들 장면 클립이 없어요"; return@bg }
-                if (carStatus.restricted) { shortNote = ""; return@bg }
+                if (carStatus.restricted || handoff.state != Handoff.State.OFF) { shortNote = ""; return@bg }
+                if (getSystemService(AudioManager::class.java).requestAudioFocus(playFocus) != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) { shortNote = "지금은 소리를 낼 수 없어요"; return@bg }
                 short = sh; shortNote = ""
-                getSystemService(AudioManager::class.java).requestAudioFocus(playFocus)
                 play(0)
             }.onFailure { shortNote = "숏폼을 받지 못했어요 · ${reason(it)}" }
         }
@@ -603,16 +608,20 @@ class MainActivity : ComponentActivity() {
         val url = server
         val clip = sh.scenes.getOrNull(i)?.let { clipUrl(url, it.clip) }
         if (clip == null || tok == null || carStatus.restricted) return stopShort()
+        player?.release(); player = null // 다음 장면을 받는 동안 지난 플레이어를 '멈춤'이 다시 틀지 않게
+        shortFile?.delete(); shortFile = null
         shortAt = i; shortPos = 0.0; shortPaused = false
         CaptureService.hold(true)
-        val f = File(cacheDir, "short.wav")
+        val gen = ++shortGen
+        val f = File(cacheDir, "short-$gen.wav")
         bg({ Server(url).download(clip, tok, f) }) { r ->
-            if (short !== sh || shortAt != i) return@bg // 그사이 닫힘
-            r.exceptionOrNull()?.let { shortNote = "클립을 받지 못했어요 · ${reason(it)}"; return@bg stopShort() }
-            player?.release()
-            player = runCatching {
-                MediaPlayer().apply { setAudioAttributes(media); setDataSource(f.path); prepare(); setOnCompletionListener { play(i + 1) }; start() }
-            }.onFailure { Log.w(TAG, "클립 재생 실패", it) }.getOrNull() ?: return@bg stopShort()
+            if (isDestroyed || gen != shortGen || short !== sh) { f.delete(); return@bg } // 그사이 닫혔거나 다른 장면
+            r.exceptionOrNull()?.let { f.delete(); shortNote = "클립을 받지 못했어요 · ${reason(it)}"; return@bg stopShort() }
+            shortFile = f
+            val mp = MediaPlayer()
+            runCatching { mp.setAudioAttributes(media); mp.setDataSource(f.path); mp.prepare(); mp.setOnCompletionListener { if (gen == shortGen) play(i + 1) }; mp.start() }
+                .onFailure { Log.w(TAG, "클립 재생 실패", it); mp.release(); shortNote = "클립을 틀지 못했어요"; return@bg stopShort() }
+            player = mp
             Log.i(TAG, "숏폼 장면 ${i + 1}/${sh.scenes.size} ${f.length()}바이트")
             main.removeCallbacks(shortTick); main.post(shortTick)
         }
@@ -620,6 +629,7 @@ class MainActivity : ComponentActivity() {
 
     private fun stopShort() {
         player?.release(); player = null
+        shortGen++ // 받는 중인 클립은 끝나면 스스로 지운다
         main.removeCallbacks(shortTick)
         if (short != null) { // 연 숏폼이 있으면(첫 장면을 열기 전에 실패해도) 포커스와 수음을 돌려준다. hold(false)는 멈추지 않았으면 아무것도 안 함
             getSystemService(AudioManager::class.java).abandonAudioFocusRequest(playFocus)
@@ -627,7 +637,7 @@ class MainActivity : ComponentActivity() {
             Log.i(TAG, "숏폼 닫음")
         }
         short = null; shortAt = -1
-        File(cacheDir, "short.wav").delete() // 받은 클립은 남기지 않는다
+        shortFile?.delete(); shortFile = null // 받은 클립은 남기지 않는다
     }
 
     private fun mute(on: Boolean) { prefs.edit().putBoolean("muted", on).commit(); muted = on; Log.i(TAG, "기록 멈추기 $on") }
@@ -813,7 +823,7 @@ class MainActivity : ComponentActivity() {
             if (sh == null || shortAt < 0) {
                 Text("숏폼", fontSize = 30.sp, fontWeight = FontWeight.Bold)
                 Text(shortNote.ifEmpty { "남긴 장면을 원래 목소리와 자막으로 들어요" }, color = c.onSurfaceVariant)
-                OutlinedButton(::showShort, Modifier.heightIn(min = 64.dp), enabled = shortNote != "숏폼을 받고 있어요") { Text("숏폼 보기") }
+                OutlinedButton(::showShort, Modifier.heightIn(min = 64.dp), enabled = shortNote != "숏폼을 받고 있어요" && handoff.state == Handoff.State.OFF) { Text("숏폼 보기") }
             } else {
                 val sc = sh.scenes[shortAt]
                 val cue = cueAt(sc.cues, shortPos)
