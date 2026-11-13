@@ -1,6 +1,6 @@
 # 가치타 차량 앱
 
-Pleos Connect용 Kotlin·Compose 앱입니다(`io.github.teampitcrew.gachita`). 차량에서 가족을 골라 여행을 만들고 '기록 중' 화면과 기록 동의를 보여 줍니다(T7). 기록 중이면 차량 마이크로 수음해 Pleos STT(ON_DEVICE)로 받아 적고, 발화를 순번과 함께 앱 안 보관함에 쌓습니다(T36). 주행 중에도 앞에 남는 화면이고, 주행 제한 중에는 설정과 진단을 가립니다(T11). 쉬어 가자는 부탁을 알아채 다음 휴게소를 제안하고, 수락하면 순정 내비에 경유지로 넣습니다(T9). 장소가 붙은 할 일을 모아 그곳에 주차하면 알립니다(T40). Gleo를 부르면 마이크를 넘기고, Gleo가 끝나면 다시 기록합니다(T41).
+Pleos Connect용 Kotlin·Compose 앱입니다(`io.github.teampitcrew.gachita`). 차량에서 가족을 골라 여행을 만들고 '기록 중' 화면과 기록 동의를 보여 줍니다(T7). 기록 중이면 차량 마이크로 수음해 Pleos STT(ON_DEVICE)로 받아 적고, 발화를 순번과 함께 앱 안 보관함에 쌓습니다(T36). 주행 중에도 앞에 남는 화면이고, 주행 제한 중에는 설정과 진단을 가립니다(T11). 쉬어 가자는 부탁을 알아채 다음 휴게소를 제안하고, 수락하면 순정 내비에 경유지로 넣습니다(T9). 장소가 붙은 할 일을 모아 그곳에 주차하면 알립니다(T40). Gleo를 부르면 마이크를 넘기고, Gleo가 끝나면 다시 기록합니다(T41). 주차 중에 탑승자 폰의 동승 QR을 카메라로 읽어 고른 자리에 넣습니다(T46).
 
 ## 빌드와 실행
 
@@ -62,6 +62,15 @@ adb shell am start --user 10 -n io.github.teampitcrew.gachita/.MainActivity --es
 - **시간:** 버튼을 15초 안에 누르지 않으면 저절로 다시 수음하고, Gleo가 60초 넘게 포커스를 돌려주지 않아도 다시 수음합니다. 호출어로 넘긴 수, 그중 Gleo가 들은 수, 버튼 없이 시간이 지난 수(잘못 알아챘거나 누르지 않음)를 로그 `GachitaGleo`에 남깁니다.
 - **Gleo 함수:** `GACHITA_PAUSE_RECORDING`(기록 멈추기), `GACHITA_RESUME_RECORDING`(기록 다시 시작). 멈추기는 동의를 끄지 않고 수음만 멈춥니다(동의를 끄면 서버가 그 여행의 글을 지움). 멈춘 동안 화면은 '기록 멈춤'과 '다시 기록' 단추이고, 앱을 다시 켜도 멋대로 다시 기록하지 않게 저장합니다. 기록이 끝나면(동의 끔, 새 여행) 풀립니다. 다시 시작은 우리 화면이 앞으로 나오면 수음을 엽니다. 실제 음성 호출과 Pleos 승인은 확인하지 않았습니다.
 
+## 동승 연결(T46)
+
+탑승자 폰(웹앱)이 1회용 '동승 QR'을 띄우면 주차 중인 차가 카메라로 읽고, 운전자가 고른 자리에 그 사람을 넣습니다(#71, #195 계약). 폰이 없는 아이는 여행을 만들 때 손님으로 넣습니다.
+
+- **언제:** 주행 제한이 풀린 때(주차)만 '동승자 연결' 카드가 보입니다. 제한이 걸리면 카메라를 닫고 카드를 가립니다(T11).
+- **읽기:** '폰 QR 읽기' → 카메라 권한(처음 한 번) → 뒤를 보는 카메라(없으면 첫 카메라)의 미리보기와 QR 읽기(Camera2 + zxing core, `Ride.kt`). 글자가 `{"type":"gachita-ride","version":1,"code":…}`인 우리 QR만 받습니다.
+- **자리:** 빈자리만 단추로 보이고, 고르면 `POST /api/trips/{코드}/ride-links {code, seat}`. 들어온 사람은 일행에 '동의 대기'로 보이고 동의는 그 사람의 폰에서만 켭니다(T68). 409(자리가 찼거나 이미 쓴 QR)면 다른 자리로 다시, 404(만료)면 폰에서 QR을 다시 띄웁니다.
+- 차 실내 카메라를 일반 앱이 열 수 있는지, 화면 밝기와 거리에서 읽히는지는 실차에서 봐야 합니다. 에뮬레이터는 가상 장면 카메라로 봤습니다.
+
 ## 로컬 E2E
 
 차량 앱에서 여행을 만들어 서버에 생기는 것까지 한 번에 확인합니다. 에뮬레이터를 다른 사람이 쓰는 중이면 먼저 물어봅니다.
@@ -77,6 +86,8 @@ adb shell am start --user 10 -n io.github.teampitcrew.gachita/.MainActivity --es
 
 Gleo와 마이크 주고받기(T41)는 `python3 frontend/car/gleo_e2e.py <APK> <저장소 밖 폴더>`입니다. 호출어 → 멈춤 → 운전대 버튼 대신 `cmd voiceinteraction show` → Gleo가 듣고 잠듦 → 다시 수음 → 이어 넣은 말이 받아 적힘, 버튼 없이 시간 초과, 'Gleo 쓰기', Gleo 함수 두 개를 봅니다. Gleo가 듣는 동안에는 소리를 넣지 않습니다(에뮬레이터가 멈춘 적이 있음). 준비는 `capture_e2e.py`와 같습니다.
 
+동승 연결(T46)은 `python3 frontend/car/ride_e2e.py <APK> <저장소 밖 폴더>`입니다. 에뮬레이터의 뒤 카메라를 가상 장면으로 켜 둡니다(`-camera-back virtualscene`). 스크립트가 폰 역할로 프로필과 동승 QR을 받아 PNG로 만들고 가상 장면의 벽 포스터로 넣으면(`adb emu virtualscene-image wall <png>`), 차가 그 QR을 읽어 조수석에 넣는지, 폰의 결과 조회가 linked인지, 같은 QR을 다시 읽히면 거절되는지, 기어 D에서 카메라를 놓는지 봅니다.
+
 수음과 받아쓰기는 `python3 frontend/car/capture_e2e.py <APK> <저장소 밖 폴더> [분]`입니다. 에뮬레이터를 `-grpc 8556 -grpc-use-token -audio none`으로 켜 두면 macOS 합성 음성으로 만든 가족 대화를 gRPC `injectAudio`로 가상 마이크에 넣고(호스트 마이크는 쓰지 않음), 내비를 앞에 둔 기어 D에서 보관함에 쌓인 발화를 넣은 문장과 맞춰 봅니다. 30초마다 CPU·메모리를 재고, 내비가 앞일 때 시스템 마이크 차단(`cmd sensor_privacy`) → '기록 멈춤', 동의 끄기 → 마이크 놓음, 앱 다시 켜기 → 순번 이어짐까지 확인합니다. 공용 DB를 다른 시험이 비울 수 있으면 따로 띄운 서버를 `GACHITA_PORT`로 줍니다. 넣은 문장과 받아 적은 문장은 `transcript.tsv`에 나란히 남습니다.
 
 `e2e.py`의 스크립트는 설치 → 기어 D에서 여행 만들기가 가려지고 앞 화면이 우리 앱(차단 화면 아님) → 여행 만들기(가족 4명) → 기어 D에서 동의 켜기(안 켜짐) → 기어 P에서 켜기(기록 중) → 기어 D에서 유지 → 끄기(바로 멈춤) → 반쪽 폭(841) 순서로 화면을 캡처하고, 단계마다 서버의 여행(`GET /api/trips/{코드}`)을 함께 적어 `results.json`에 판정을 남깁니다. 실패가 있으면 종료 코드 1입니다.
@@ -88,6 +99,7 @@ Gleo와 마이크 주고받기(T41)는 `python3 frontend/car/gleo_e2e.py <APK> <
 | `Car.kt` | Pleos SDK: 기어 읽기·알림, 순정 내비 경로·경유지 추가와 알림, 지금 위치·장소까지 거리, TTS. 차박지도 앱에서 옮김. AAOS 주행 제한 값(T11) |
 | `Asks.kt` | 부탁을 경유지로(T9)에서 화면·SDK와 무관한 규칙: 부탁·답 낱말, 휴게소 목록과 다음 후보, 제안 단계(단위 테스트 `AsksTest.kt`) |
 | `Todos.kt` | 도착 브리핑(T40)에서 화면·SDK와 무관한 것: 할 일 뽑기, 도착 판정, 차 안 저장(단위 테스트 `TodosTest.kt`) |
+| `Ride.kt` | 동승 연결(T46): 우리 QR 해석과 빈자리(단위 테스트 `RideTest.kt`), Camera2 미리보기와 zxing QR 읽기(`QrCamera`) |
 | `Gleo.kt` | Gleo와 마이크 주고받기(T41): 호출어 변형 목록과 찾기(단위 테스트 `GleoTest.kt`), 넘기고 오디오 포커스로 돌려받기(`Handoff`) |
 | `assets/schema.json` | Gleo 함수 목록(T40·T41). 이름을 바꾸면 `MainActivity`의 `GLEO_*`와 매니페스트의 intent-filter도 같이 |
 | `Trip.kt` | 여행 응답 해석과 기록 동의 규칙(단위 테스트 `TripTest.kt`) |
@@ -99,4 +111,5 @@ Gleo와 마이크 주고받기(T41)는 `python3 frontend/car/gleo_e2e.py <APK> <
 | `arrival_e2e.py` | 도착 브리핑 E2E(T40) |
 | `waypoint_e2e.py` | 부탁을 경유지로 E2E(T9). `e2e.py`·`capture_e2e.py`의 도구를 같이 씀 |
 | `capture_e2e.py` | 수음과 받아쓰기 E2E(T36). `e2e.py`의 도구를 같이 씀 |
+| `ride_e2e.py` | 동승 연결 E2E(T46). 폰 역할로 QR을 받아 가상 장면 카메라에 비춤 |
 | `gleo_e2e.py` | Gleo와 마이크 주고받기 E2E(T41). `capture_e2e.py`의 도구를 같이 씀 |

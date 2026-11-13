@@ -5,6 +5,9 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
+import android.graphics.SurfaceTexture
+import android.view.Surface
+import android.view.TextureView
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -23,6 +26,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -43,6 +47,8 @@ import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -54,6 +60,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.unit.sp
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -127,6 +134,13 @@ class MainActivity : ComponentActivity() {
     private lateinit var handoff: Handoff // Gleo와 마이크 주고받기(T41). ponytail: 화면이 다시 만들어지면(configChanges 밖, 글꼴·언어) 넘긴 상태는 옛 화면의 시간 초과로 풀린다
     /** Gleo로 '기록 멈추기'를 부름(T41). 동의는 그대로 두고 수음만 멈춘다. 앱이 다시 켜져도 멋대로 다시 기록하지 않게 저장한다. */
     private var muted by mutableStateOf(false)
+    // 동승 연결(T46): 주차 중 탑승자 폰의 QR을 읽고(scanning) 고른 자리에 넣는다(rideQr = 읽은 QR 글자)
+    private var scanning by mutableStateOf(false)
+    private var rideQr by mutableStateOf<String?>(null)
+    private var rideNote by mutableStateOf("")
+    private val askCamera = registerForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        if (ok) scanning = true else rideNote = "카메라 권한이 없어 QR을 읽을 수 없어요"
+    }
     private lateinit var device: String // 보관함의 기기 값. 설치 단위(ADR-0014 초안의 device_id)
     private val uplink: Uplink = KEEP // ponytail: 발화 저장 API(T39)가 생기면 그 호출로 바꾼다. 지금은 보관함에 쌓기만
 
@@ -177,6 +191,7 @@ class MainActivity : ComponentActivity() {
         s.trip?.let { Live.outbox(this, it.code) } // 앱을 다시 켜도 받아 적은 말과 순번을 이어 보여 준다
         car = Car(this) {
             carStatus = it; Live.gear = it.gear
+            if (it.restricted) scanning = false // 주행 중에는 카메라를 닫는다(T11). 카드도 그리지 않는다
             val was = s.gear
             s = s.withGear(it.gear)
             if (was != null && was != "P" && it.gear == "P") arrive() // 앱을 켤 때 처음 읽은 P는 도착이 아니다
@@ -492,6 +507,36 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // ---- 동승 연결(T46, #195 계약) ----
+
+    private fun scan() {
+        rideNote = ""
+        if (checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) scanning = true else askCamera.launch(Manifest.permission.CAMERA)
+    }
+
+    /** 읽은 QR의 사람을 고른 자리에 넣는다. 자리 충돌은 QR을 쓰지 않으므로 다른 자리로 다시 고를 수 있다. 동의는 그 사람의 폰에서만 켠다. */
+    private fun seatRider(seat: Seat) {
+        val t = s.trip ?: return
+        val code = rideQr?.let(::rideCode) ?: return
+        val url = server
+        rideNote = "연결하고 있어요"
+        bg({ Server(url).rideLink(t.code, code, seat) }) { r ->
+            r.onSuccess { name ->
+                rideQr = null; rideNote = "$name 님을 ${seat.label}에 넣었어요 · 폰에서 기록에 동의하면 함께 기록해요"
+                Log.i(TAG, "동승 연결 ${seat.name}")
+                refresh()
+            }.onFailure { e ->
+                Log.i(TAG, "동승 연결 못 함 ${(e as? ApiError)?.status ?: "연결"}")
+                rideNote = when ((e as? ApiError)?.status) {
+                    409 -> "자리가 찼거나 이미 연결한 QR이에요 · 다른 자리를 고르거나 폰에서 QR을 다시 띄워 주세요"
+                    404 -> { rideQr = null; "QR이 만료됐어요 · 폰에서 QR을 다시 띄워 주세요" }
+                    else -> "연결하지 못했어요 · ${reason(e)}"
+                }
+                refresh()
+            }
+        }
+    }
+
     private fun mute(on: Boolean) { prefs.edit().putBoolean("muted", on).commit(); muted = on; Log.i(TAG, "기록 멈추기 $on") }
 
     /** Gleo에 결과를 돌려준다(Callback Schema: message는 영어, 항목은 data). 말은 Gleo가 한다. ponytail: 실패 status 값은 Gleo 승인 뒤 확인. */
@@ -707,6 +752,7 @@ class MainActivity : ComponentActivity() {
             if (s.recording && !muted && Live.mic == Mic.ON && handoff.state == Handoff.State.OFF)
                 OutlinedButton({ handoff.give(wake = false) }, Modifier.heightIn(min = 72.dp)) { Text("Gleo 쓰기", fontSize = 26.sp) }
         }
+        if (!carStatus.restricted) RideCard(t) // 카메라·자리 고르기는 주차 중에만(T11)
         Card {
             if (s.online) Text("서버에 연결됐어요", color = c.tertiary)
             else Text("연결이 끊겼어요 · 마지막으로 확인한 정보예요", color = c.error)
@@ -716,6 +762,55 @@ class MainActivity : ComponentActivity() {
             }
         }
         if (!carStatus.restricted) OutlinedButton(::newTrip, Modifier.heightIn(min = 64.dp), enabled = !s.agreed && !s.busy) { Text("새 여행 만들기") }
+    }
+
+    /** 동승 연결(T46): 폰 QR 읽기 → 자리 고르기. 폰이 없는 아이는 여행 만들 때 손님으로 넣는다. */
+    @OptIn(ExperimentalLayoutApi::class)
+    @Composable
+    private fun RideCard(t: Trip) {
+        val c = MaterialTheme.colorScheme
+        val free = freeSeats(t)
+        Card {
+            Text("동승자 연결", fontSize = 30.sp, fontWeight = FontWeight.Bold)
+            when {
+                rideQr != null -> {
+                    Text("어느 자리에 앉았나요?")
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                        free.forEach { seat -> Button({ seatRider(seat) }, Modifier.heightIn(min = 64.dp), enabled = rideNote != "연결하고 있어요") { Text(seat.label) } }
+                        OutlinedButton({ rideQr = null; rideNote = "" }, Modifier.heightIn(min = 64.dp)) { Text("취소") }
+                    }
+                }
+                scanning -> {
+                    Text("폰의 동승 QR을 카메라에 보여 주세요", color = c.onSurfaceVariant)
+                    Scanner()
+                    OutlinedButton({ scanning = false }, Modifier.heightIn(min = 64.dp)) { Text("닫기") }
+                }
+                else -> {
+                    Text(if (free.isEmpty()) "빈자리가 없어요" else "탑승자 폰의 동승 QR을 읽어 자리에 넣어요", color = c.onSurfaceVariant)
+                    OutlinedButton(::scan, Modifier.heightIn(min = 64.dp), enabled = free.isNotEmpty()) { Text("폰 QR 읽기") }
+                }
+            }
+            if (rideNote.isNotEmpty()) Text(rideNote, fontSize = 20.sp)
+        }
+    }
+
+    /** 카메라 미리보기와 QR 읽기. 화면에서 빠지면(닫기, 주행 제한, 읽음) 카메라를 놓는다. */
+    @Composable
+    private fun Scanner() {
+        val cam = remember {
+            QrCamera(this, onCode = { rideQr = it; scanning = false }, onFail = { rideNote = it; scanning = false })
+        }
+        DisposableEffect(cam) { onDispose { cam.stop() } }
+        AndroidView({ ctx ->
+            TextureView(ctx).apply {
+                surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                    override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) { cam.size()?.let { st.setDefaultBufferSize(it.width, it.height) }; cam.start(Surface(st)) }
+                    override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {}
+                    override fun onSurfaceTextureDestroyed(st: SurfaceTexture) = true
+                    override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
+                }
+            }
+        }, Modifier.fillMaxWidth().height(360.dp))
     }
 
     @Composable
