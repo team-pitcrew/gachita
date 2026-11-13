@@ -45,9 +45,13 @@ spec:
                 secretKeyRef: { name: db-urls, key: PROFILES_DATABASE_URL }
             # 녹음 클립 버킷(T64·T76, Terraform persist/). 자격은 서비스 계정 역할: 웹훅이 AWS_ROLE_ARN·AWS_REGION·토큰 파일을 넣는다
             - { name: CLIPS_BUCKET, value: gachita-dev-clips-721622471953 }
-          # 구글 OAuth(GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET). 값이 없으면 Secret이 없고, 서버는 그대로 뜬다
+            # 고른 장면 클립의 재전사(T75, 상현님 Nemotron ASR). 토큰(ASR_TOKEN, 아래 asr Secret)이 있을 때만 보낸다.
+            # 주소의 호스트는 network.yaml의 나가는 길과 같아야 한다
+            - { name: ASR_URL, value: "https://llm.kikum.xyz/asr/v1" }
+          # 구글 OAuth(GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET)와 ASR 토큰(ASR_TOKEN). 값이 없으면 Secret이 없고, 서버는 그대로 뜬다
           envFrom:
             - secretRef: { name: google-oauth, optional: true }
+            - secretRef: { name: asr, optional: true }
           # 준비: 두 DB에 닿아야 요청을 받는다. 살아 있음: 프로세스만 본다(DB가 잠깐 멈췄다고 API를 다시 띄우지 않음)
           readinessProbe:
             httpGet: { path: /healthz, port: http }
