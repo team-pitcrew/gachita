@@ -799,11 +799,15 @@ class MainActivity : ComponentActivity() {
     /** 녹음에 동의한, 이 차가 참가시킨 사람의 토큰. 숏폼은 기록본처럼 동의한 참가자만 본다. */
     private fun viewer(): String? = s.trip?.people?.firstOrNull { it.consent && it.id in tokens }?.let { tokens[it.id] }
 
-    /** 숏폼을 요청할 때와 같은 여행·동의 세대이고, 아직 동의한 시청자가 있다. */
-    private fun shortValid(): Boolean = shortOf?.let { (code, gen) -> s.trip?.code == code && s.trip?.generation == gen && viewer() != null } == true
+    /**
+     * 숏폼을 요청할 때와 같은 여행·동의 세대이고, 아직 동의한 시청자가 있다. 차에서 동의를 끄면(offPending) 서버 답을 기다리지 않고 바로 무효다:
+     * 세대와 참가자 동의는 서버가 받아야 바뀌므로 망이 끊긴 동안에는 그것만 봐서는 계속 유효했다.
+     */
+    private fun shortValid(): Boolean = !s.offPending && shortOf?.let { (code, gen) -> s.trip?.code == code && s.trip?.generation == gen && viewer() != null } == true
 
     private fun showShort() {
         val t = s.trip ?: return
+        if (s.offPending) { shortNote = "기록을 끄는 중이라 볼 수 없어요"; return } // 철회가 서버에 닿기 전에는 새로 받지 않는다
         val tok = viewer() ?: run { shortNote = "기록에 동의한 사람만 볼 수 있어요"; return }
         val url = server
         shortNote = "숏폼을 받고 있어요"
@@ -828,12 +832,14 @@ class MainActivity : ComponentActivity() {
         val url = server
         val clip = sh.scenes.getOrNull(i)?.let { clipUrl(url, it.clip) }
         if (clip == null || tok == null || carStatus.restricted || !shortValid()) return stopShort()
+        // 요청마다 다른 파일(화면이 다시 만들어져도 겹치지 않게). 이 요청이 만든 것만 지운다. 저장 공간이 없으면 숏폼만 닫는다(포커스·수음은 stopShort가 되돌림)
+        val f = runCatching { File.createTempFile("short", ".wav", cacheDir) }
+            .getOrElse { Log.w(TAG, "클립 파일을 만들지 못함", it); shortNote = "클립을 저장하지 못했어요 · 저장 공간을 확인해 주세요"; return stopShort() }
         player?.release(); player = null // 다음 장면을 받는 동안 지난 플레이어를 '멈춤'이 다시 틀지 않게
         shortFile?.delete(); shortFile = null
         shortAt = i; shortPos = 0.0; shortPaused = false
         CaptureService.hold(true)
         val gen = ++shortGen
-        val f = File.createTempFile("short", ".wav", cacheDir) // 요청마다 다른 파일(화면이 다시 만들어져도 겹치지 않게). 이 요청이 만든 것만 지운다
         bg({ Server(url).download(clip, tok, f) }) { r ->
             if (isDestroyed || gen != shortGen || short !== sh) { f.delete(); return@bg } // 그사이 닫혔거나 다른 장면
             if (!shortValid()) { f.delete(); return@bg stopShort() } // 받는 사이 동의 철회·새 여행

@@ -9,7 +9,8 @@
   가짜 응답도 참가자 토큰(Bearer)이 없으면 401로 거절한다.
 - 클립 소리는 macOS say(Yuna) 합성 음성이다.
 순서: 여행 만들기 → P에서 동의 켬 → '숏폼 보기' → 장면 1 재생(자막·말한 사람, 우리 수음은 멈춤) → 기어 D(재생 멈춤·카드 가림)
-      → P → 다시 '숏폼 보기' → 끝까지(장면 2) → 수음 다시 → 결과 OUT/results.json
+      → P → 다시 '숏폼 보기' → 끝까지(장면 2) → 수음 다시 → Gleo로 멈춘 채 듣기 → 듣는 중 동의 끔
+      → 망을 끊고(가짜 프록시가 답하지 않음) 멈춘 채 동의 끔 → 결과 OUT/results.json
 """
 import http.server, json, os, re, subprocess, sys, tempfile, threading, time, urllib.request, wave
 import numpy as np
@@ -41,6 +42,7 @@ def clip(lines):
 
 class Proxy(http.server.BaseHTTPRequestHandler):
     clips = {}
+    down = False  # 참이면 답하지 않고 연결을 닫는다(차 쪽에서 보면 망이 끊김)
 
     def log_message(self, *a): pass
 
@@ -59,7 +61,7 @@ class Proxy(http.server.BaseHTTPRequestHandler):
             by_name = {p["name"]: p for p in trip["participants"]}
             scenes = []
             for i, (label, lines) in enumerate(SCENES):
-                wav, cues, secs = self.clips.setdefault(i, clip(lines))
+                wav, cues, secs = self.clips[i]  # main()에서 미리 만든 것(setdefault는 기본값을 매번 합성해 차의 5초 제한을 넘겼다)
                 scenes.append({"momentId": f"m{i + 1}", "label": label, "at": 0, "clip": f"/api/trips/{code}/recordings/m{i + 1}", "startAt": 0, "seconds": round(secs, 2),
                                "cues": [{"start": round(a, 2), "end": round(b, 2), "text": text, "participantId": by_name[who]["id"] if who in by_name else None, "seatArea": seat}
                                         for (a, b, text), (who, seat, _) in zip(cues, lines)]})
@@ -67,10 +69,11 @@ class Proxy(http.server.BaseHTTPRequestHandler):
             self.send(200, json.dumps(body, ensure_ascii=False).encode())
         else:
             i = int(m.group(3)[1:]) - 1
-            self.send(200, self.clips.setdefault(i, clip(SCENES[i][1]))[0], "audio/wav")
+            self.send(200, self.clips[i][0], "audio/wav")
         return True
 
     def forward(self):
+        if Proxy.down: return
         if self.fake(): return
         n = int(self.headers.get("Content-Length") or 0); data = self.rfile.read(n) if n else None
         req = urllib.request.Request(UP + self.path, data=data, method=self.command, headers={k: v for k, v in self.headers.items() if k.lower() in ("content-type", "authorization", "if-none-match")})
@@ -128,6 +131,19 @@ def main(apk):
     tap_switch(); time.sleep(3); ui = texts(); shot("5-consent-off"); note("ui", texts=ui)
     left = [f for f in adb("exec-out", "run-as", PKG, "--user", "10", "ls", "cache").split() if f.startswith("short")]
     check("듣는 동안 동의를 끄면 숏폼을 닫고 받은 클립이 남지 않음", cached and not left and not any(t[:5] in ("1 / 2", "2 / 2") for t in ui) and "기록 꺼짐" in ui, cached=cached, left=left)
+
+    # 망이 끊긴 채 차에서 동의를 꺼도 서버 답을 기다리지 않고 숏폼을 닫고 클립을 지운다. 철회가 서버에 닿기 전에는 새 숏폼도 받지 않는다
+    tap_switch(); cap.wait_texts(lambda u: "● 기록 중" in u, 15)
+    tap_text("숏폼 보기"); ui = cap.wait_texts(lambda u: any(t.startswith("1 / 2") for t in u), 15)
+    tap_text("멈춤"); time.sleep(1)  # 멈춘 채 끄면 클립이 캐시에 남던 경우(Astra #238)
+    cached = [f for f in adb("exec-out", "run-as", PKG, "--user", "10", "ls", "cache").split() if f.startswith("short")]
+    Proxy.down = True; note("net", down=True)
+    tap_switch(); time.sleep(3); ui = texts(); shot("6-offline-off"); note("ui", texts=ui)
+    left = [f for f in adb("exec-out", "run-as", PKG, "--user", "10", "ls", "cache").split() if f.startswith("short")]
+    check("망이 끊긴 채 동의를 꺼도 숏폼을 바로 닫고 받은 클립이 남지 않음", cached and not left and not any(t[:5] in ("1 / 2", "2 / 2") for t in ui), cached=cached, left=left)
+    n = len(served); tap_text("숏폼 보기"); time.sleep(3); ui = texts(); note("ui", texts=ui)
+    check("철회가 서버에 닿기 전에는 숏폼을 다시 받지 않음", len(served) == n and "기록을 끄는 중이라 볼 수 없어요" in ui and not any(t.startswith("1 / 2") for t in ui), served=served[n:])
+    Proxy.down = False; note("net", down=False)
 
     (OUT / "results.json").write_text(json.dumps(e2e.log, ensure_ascii=False, indent=1))
     fails = [x for x in e2e.log if x["step"] == "check" and not x["ok"]]
