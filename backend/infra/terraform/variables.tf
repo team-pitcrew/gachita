@@ -29,9 +29,9 @@ variable "admin_cidrs" {
 }
 
 variable "gitops_repo" {
-  description = "Argo CD와 구축 스크립트(ansible-pull)가 읽을 저장소(배포 키로 읽으므로 SSH 주소)"
+  description = "Argo CD와 구축 스크립트(ansible-pull)가 읽을 저장소(읽기 전용 토큰으로 읽으므로 HTTPS 주소)"
   type        = string
-  default     = "git@github.com:team-pitcrew/gachita.git"
+  default     = "https://github.com/team-pitcrew/gachita.git"
 }
 
 variable "gitops_revision" {

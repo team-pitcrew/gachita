@@ -12,7 +12,7 @@
 | 주체 | 하는 일 |
 |---|---|
 | GitHub Actions | PR에서 `terraform plan`, develop에서 `terraform apply`, GitHub 비밀 값을 SSM에 넣기 |
-| 서버(EC2) | SSM 세션 받기, 첫 부팅 때 배포 키 읽기, 서비스 계정 발급자의 공개 키 올리기 |
+| 서버(EC2) | SSM 세션 받기, 첫 부팅 때 저장소 읽기 토큰 읽기, 서비스 계정 발급자의 공개 키 올리기 |
 | 파드 | 외부 비밀 값 읽기(External Secrets), Postgres 백업을 S3에 쓰기(CloudNativePG) |
 
 ## 검토한 선택
@@ -44,7 +44,7 @@
   - `gachita-github-apply`: `repo:team-pitcrew@351326633/gachita@1455271774:ref:refs/heads/develop`. 본 설정이 만드는 서비스(EC2·VPC, S3 `gachita-*`, SSM `/gachita/*`, IAM `gachita-*`, 우리 서비스 계정 발급자 하나)만 허용한다. ALB는 클러스터의 AWS Load Balancer Controller가 만들므로(ADR-0016, ADR-0017) 적용 역할에는 접을 때 남은 것을 태그로 지우는 몫만 준다. CloudFront는 만들지 않는다.
   - **이 계정은 다른 프로젝트(railshot, bravo 등)와 같이 쓴다.** 그쪽 EC2·VPC·EKS와 EKS의 OIDC 제공자가 있다. 그래서 EC2는 **우리 태그(`Project=gachita`, provider의 `default_tags`)가 붙은 자원만** 만들고 고치고 지운다: 만들 때는 `aws:RequestTag/Project`, 그 뒤에는 `aws:ResourceTag/Project`가 `gachita`여야 한다. IAM 역할·인스턴스 프로필·서비스 계정 발급자도 이름(`gachita-*`)과 태그가 둘 다 맞아야 고치고 지울 수 있다. 읽기(`Describe*`)만 자원 단위로 좁힐 수 없어 리전으로 좁힌다. 다른 프로젝트 자원에는 `Project` 태그가 없는 것도 많아(11/13 확인: VPC 5, 인스턴스 9, 보안 그룹 18) '남의 태그면 거부'로는 막을 수 없어 허용 쪽을 좁혔다. OIDC 제공자 권한도 우리 발급자 주소 하나(`gachita-*-oidc-<계정>.s3.<리전>.amazonaws.com`)로 좁혔다. 계정을 따로 쓸지는 지환님께 묻는 중이다.
   - 사람이 넣은 비밀 값은 적용 역할이 **직접** 읽지 못한다(읽기·복호화 명시적 거부, 쓰기만 됨). 다만 적용 역할은 경계 안의 역할(서버·파드)을 만들 수 있고 그 역할은 비밀 값을 읽을 수 있다. 그래서 비밀 값의 신뢰 범위는 '적용 역할을 받는 코드', 곧 develop에 병합할 수 있는 사람과 같다.
-- 적용 역할이 만드는 IAM 역할에는 권한 경계 `gachita-workload-boundary`를 반드시 붙여야 한다(`iam:PermissionsBoundary` 조건). 그래서 적용 역할이 자기보다 넓은 역할을 만들어 우회할 수 없다. 적용 역할은 `gachita-github-*` 역할, 경계 정책, GitHub OIDC 제공자를 고치지 못한다. 경계에는 SSM을 거친 복호화(`kms:Decrypt`, `kms:ViaService = ssm.<리전>.amazonaws.com`)를 넣어, 서버의 배포 키 읽기와 External Secrets가 경계에 막히지 않게 한다. 이것들은 사람이 로컬 자격으로만 적용한다.
+- 적용 역할이 만드는 IAM 역할에는 권한 경계 `gachita-workload-boundary`를 반드시 붙여야 한다(`iam:PermissionsBoundary` 조건). 그래서 적용 역할이 자기보다 넓은 역할을 만들어 우회할 수 없다. 적용 역할은 `gachita-github-*` 역할, 경계 정책, GitHub OIDC 제공자를 고치지 못한다. 경계에는 SSM을 거친 복호화(`kms:Decrypt`, `kms:ViaService = ssm.<리전>.amazonaws.com`)를 넣어, 서버의 저장소 읽기 토큰 읽기와 External Secrets가 경계에 막히지 않게 한다. 이것들은 사람이 로컬 자격으로만 적용한다.
 - 적용은 develop의 수동 실행(`workflow_dispatch`)으로만 한다. 병합으로 저절로 적용하지 않는다. 비용이 생기는 명령은 지환님이 승인한 때에만 실행한다는 방침 때문이다. 무료 조직의 비공개 저장소라 GitHub 환경의 승인자 기능을 쓸 수 없어 이렇게 막는다.
 - 역할 ARN과 상태 버킷 이름은 비밀 값이 아니므로 저장소 변수(`AWS_PLAN_ROLE_ARN`, `AWS_APPLY_ROLE_ARN`, `TF_STATE_BUCKET`)에 둔다. 변수가 비어 있으면 워크플로는 "역할이 없어 건너뜀"으로 성공한다.
 
@@ -61,7 +61,7 @@
   | `kube-system/aws-load-balancer-controller` | `gachita-dev-alb-controller` | 공식 정책. 권한 경계가 우리 태그(`Project=gachita`)와 ALB 이름 `gachita-*`로 좁힘 |
 
 - 토큰은 AWS의 공개 웹훅([amazon-eks-pod-identity-webhook](https://github.com/aws/amazon-eks-pod-identity-webhook))이 서비스 계정 주석(`eks.amazonaws.com/role-arn`)을 보고 파드에 넣는다. EKS가 아니어도 쓰도록 만든 것이고, cert-manager가 웹훅 인증서를 만든다. External Secrets는 웹훅 없이 같은 주석을 읽어 스스로 토큰을 받는다.
-- 서버의 IMDS 홉 제한을 1로 내린다. 파드는 인스턴스 역할에 닿지 못한다. 인스턴스 역할은 SSM 세션, 배포 키 읽기, 발급자 공개 키 올리기만 한다.
+- 서버의 IMDS 홉 제한을 1로 내린다. 파드는 인스턴스 역할에 닿지 못한다. 인스턴스 역할은 SSM 세션, 저장소 읽기 토큰 읽기, 발급자 공개 키 올리기만 한다.
 - 구현은 클러스터 쪽 자원과 함께 T24에서 한다.
 - 발급자를 Cloudflare 이름(`gachita.mangowhois.ai`) 아래에 두는 길도 봤다. 그러면 IAM 인증이 터널과 서비스 주소에 묶여, 터널이 끊기면 백업까지 멈춘다. S3 버킷은 AWS 안에서 끝나 그 고리가 없다.
 
@@ -72,7 +72,7 @@ AWS 열쇠는 없다. 아래는 AWS가 아닌 곳의 자격이라 OIDC로 바꿀
 | 값 | 왜 남나 |
 |---|---|
 | 이미지 받기 토큰(`read:packages`) | GHCR 비공개 패키지는 개인 접근 토큰으로만 받는다 |
-| Argo CD 배포 키(읽기 전용 SSH) | 비공개 저장소를 읽는 자격. Argo CD가 올라오기 전에 필요 |
+| 저장소 읽기 토큰(이 저장소 하나 읽기만, HTTPS. 조직 설정으로 배포 키가 막혀 11/14에 바꿈) | 비공개 저장소를 읽는 자격. Argo CD가 올라오기 전에 필요 |
 | 구글 OAuth 클라이언트 비밀 값 | 구글이 발급하는 값 |
 | Cloudflare API 토큰 | Terraform이 `gachita` 레코드, ACM 검증 레코드, 요청 수 제한을 만들 때(ADR-0010, ADR-0016). 권한은 `mangowhois.ai` 영역의 DNS 편집과 영역 WAF 편집. Cloudflare 토큰은 레코드 하나로 좁힐 수 없어 영역의 다른 레코드(메일 전달)도 고칠 수 있다. 그래서 Terraform은 우리 레코드만 선언하고 다른 레코드를 가져오지 않는다 |
 
