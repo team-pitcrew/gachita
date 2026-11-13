@@ -5,9 +5,11 @@
 실행: python3 frontend/car/capture_e2e.py frontend/car/app/build/outputs/apk/debug/app-debug.apk <저장소 밖 폴더> [분]
       분은 주행 구간 길이(기본 10). 넣는 소리는 macOS say(Yuna)로 만든 합성 음성이다. 사람 목소리가 아니다.
 
-순서: 여행 만들기 → P에서 동의 켬(수음 시작) → 내비를 앞에, 기어 D → 가족 대화를 [분] 동안 넣음(왼쪽 채널 = 앞줄, 오른쪽 = 뒷줄)
-      → 30초마다 CPU·메모리 → P, 앱을 앞에 → 내비가 앞일 때 시스템 마이크 차단으로 '기록 멈춤' → 풀기 → 동의 끔(마이크 놓음)
-      → 앱 다시 켜기(보관함과 순번 이어짐).
+순서: 여행 만들기 → 폰 참가자 한 명이 API로 참가 → P에서 동의 켬(차 참가자만, 폰은 '동의 대기') → 폰이 자기 토큰으로 켬(수음 시작)
+      → 내비를 앞에, 기어 D → 가족 대화를 [분] 동안 넣음(왼쪽 채널 = 앞줄, 오른쪽 = 뒷줄) → 30초마다 CPU·메모리
+      → 서버에 올라간 발화(GET /utterances, 폰 참가자 토큰)를 보관함과 맞춰 봄 → P, 앱을 앞에
+      → 내비가 앞일 때 시스템 마이크 차단으로 '기록 멈춤' → 풀기 → 동의 끔(마이크 놓음, 보관함의 글이 빔)
+      → 앱 다시 켜기(보관함과 순번 이어짐, 새 동의 세대로 올라감).
 - 넣는 소리의 쉼에는 −77 dBFS 잡음을 깐다(막히지 않은 에뮬레이터 마이크의 무음 수준, T10). 디지털 0이면 막힘과 구별되지 않는다.
 - GACHITA_PORT=8797처럼 주면 그 포트의 서버를 쓴다. 공용 DB(gachita-pg)는 다른 시험(make api)이 비울 수 있다.
 - 소리는 우리 AudioRecord가 열려 있을 때만 넣는다(아무도 녹음하지 않을 때 넣으면 에뮬레이터가 멈춘 적이 있음, T10).
@@ -16,7 +18,7 @@
 import importlib, json, os, pathlib, random, re, subprocess, sys, tempfile, threading, time, urllib.request, wave
 import numpy as np
 import e2e  # 같은 폴더의 T7 E2E: adb, 캡처, 화면 트리, 기어, 판정 기록을 같이 쓴다
-from e2e import ADB, PKG, OUT, adb, shot, texts, tap_text, tap_switch, gear, check, note
+from e2e import ADB, PKG, OUT, adb, shot, texts, tap_text, tap_switch, gear, check, note, phone_join, phone_consent
 
 PORT = int(os.environ.get("GACHITA_PORT", "8787"))  # 공용 DB를 다른 시험이 비울 수 있어 따로 띄운 서버를 쓸 때(11/13 run2)
 NOISE_DBFS = -77  # 막히지 않은 에뮬레이터 마이크의 무음 수준(T10). 넣는 소리의 쉼이 디지털 0이면 막힘과 구별되지 않는다
@@ -155,6 +157,21 @@ def outbox(code):
     return [json.loads(l) for l in out.splitlines() if l.startswith("{")]
 
 
+def uploaded(code, phone):
+    """서버에 올라간 발화(GET /utterances). 동의한 참가자의 토큰으로만 읽힌다. 글을 비운 줄은 빠진다."""
+    req = urllib.request.Request(f"http://localhost:{PORT}/api/trips/{code}/utterances", headers={"Authorization": f"Bearer {phone[1]}"})
+    return json.load(urllib.request.urlopen(req, timeout=5))
+
+
+def wait_uploaded(code, phone, n, timeout=25):
+    """보관함의 발화 n건이 서버에 다 올라갈 때까지(10초 조회마다 올림)."""
+    end = time.time() + timeout
+    while True:
+        got = uploaded(code, phone)
+        if len(got["items"]) >= n or time.time() > end: return got
+        time.sleep(2)
+
+
 def mic_holders():
     """시스템이 보는 지금의 녹음(dumpsys audio의 녹음 목록) 가운데 우리 앱 줄."""
     out = adb("shell", "dumpsys", "audio")
@@ -238,13 +255,13 @@ def compare(meta, t_inj, offset, got):
     rows = []
     for u in meta["utterances"]:
         s = t_inj + u["start_s"] * 1000; e = t_inj + u["end_s"] * 1000
-        hit = [g for g in got if g["started_at"] - offset <= e + 1500 and g["ended_at"] - offset >= s]
+        hit = [g for g in got if g["at"] - offset <= e + 1500 and g["endedAt"] - offset >= s]
         text = " ".join(g["text"] for g in hit)
         n = norm(u["text"]); dist = edits(n, norm(text))
-        rows.append({**u, "got": text, "seq": [g["seq"] for g in hit], "gear": sorted({g["gear"] for g in hit if g["gear"]}),
+        rows.append({**u, "got": text, "seq": [g["seq"] for g in hit],
                      "char_acc": round(1 - dist / len(n), 3) if n else None,
-                     "start_err_ms": round(hit[0]["started_at"] - offset - s) if hit else None,
-                     "final_after_end_ms": round(hit[-1]["ended_at"] - offset - e) if hit else None})
+                     "start_err_ms": round(hit[0]["at"] - offset - s) if hit else None,
+                     "final_after_end_ms": round(hit[-1]["endedAt"] - offset - e) if hit else None})
     want = "".join(norm(u["text"]) for u in meta["utterances"]); have = "".join(norm(g["text"]) for g in got)
     total = round(1 - edits(want, have) / len(want), 4)
     with open(OUT / "transcript.tsv", "w") as f:
@@ -295,11 +312,22 @@ def main(apk, minutes):
     adb("shell", "pm", "clear", "--user", "10", PKG)
     for perm in ("RECORD_AUDIO", "POST_NOTIFICATIONS"): adb("shell", "pm", "grant", "--user", "10", PKG, f"android.permission.{perm}")
     adb("shell", "am", "start", "--user", "10", "-n", f"{PKG}/.MainActivity", "--es", "server", f"http://10.0.2.2:{PORT}")
-    time.sleep(4); tap_text("여행 만들기"); time.sleep(4)
+    wait_texts(lambda u: "서버 주소" in u, 30); tap_text("여행 만들기"); time.sleep(4)  # 설치 직후 첫 화면은 바쁜 기기에서 4초를 넘기기도 함
     ui = texts(); code = next((t.split()[-1] for t in ui if t.startswith("여행 코드")), None); note("trip", code=code)
-    # 1. 주차 중 동의 → 수음 시작
-    tap_switch()
-    ui = wait_texts(lambda u: "● 기록 중" in u, 10); shot("01-recording-park"); note("ui", texts=ui)
+    # 1. 폰 참가자가 들어오고, 주차 중 동의: 차는 자기가 참가시킨 사람만 켜고, 폰이 자기 토큰으로 켜면 수음 시작(T68)
+    phone = phone_join(code)
+    wait_texts(lambda u: "일행 5명" in u, 15); tap_switch()
+    mine = lambda t: [p["consent"] for p in t["participants"] if p["id"] != phone[0]]
+    for _ in range(10):  # 폰 참가자는 들어오자마자 '동의 대기'라 화면이 아니라 서버로 차의 켜기가 끝났는지 본다
+        t = server(code)
+        if all(mine(t)): break
+        time.sleep(1)
+    ui = texts(); shot("01a-phone-waits"); note("ui", texts=ui)
+    check("차의 기록 시작은 차가 참가시킨 4명만 켜고, 폰 참가자는 동의 대기(기록 안 함)",
+          all(mine(t)) and len(mine(t)) == 4 and not next(p for p in t["participants"] if p["id"] == phone[0])["consent"]
+          and "이모 · 뒷자리 가운데 · 동의 대기" in ui and "● 기록 중" not in ui)
+    phone_consent(code, phone, True)
+    ui = wait_texts(lambda u: "● 기록 중" in u, 15); shot("01-recording-park"); note("ui", texts=ui)
     held = mic_holders(); note("mic", holders=held)
     started = [c["line"] for c in capture_log if c["line"].startswith("녹음 시작")]
     if not check("P에서 동의를 켜면 기록 중, 마이크를 쥠(16 kHz 2채널)", "● 기록 중" in ui and held and any("16000 Hz 2채널" in l for l in started), log=started):
@@ -322,7 +350,14 @@ def main(apk, minutes):
     rows, total = compare(drive, t_inj, offset, got)
     first5 = rows[:5]
     note("compare", total_char_acc=total, utterances=len(got), lines=len(rows))
-    check("다섯 문장이 내비를 앞에 둔 기어 D에서 보관함에 남음", all(r["seq"] and "D" in r["gear"] for r in first5), rows=[(r["text"], r["got"], r["char_acc"]) for r in first5])
+    check("다섯 문장이 내비를 앞에 둔 기어 D에서 보관함에 남음", all(r["seq"] for r in first5), rows=[(r["text"], r["got"], r["char_acc"]) for r in first5])
+    # 서버 기록: 보관함의 발화가 같은 순번·글자·시각으로 올라갔는지. 위치는 내비가 알려 준 만큼(에뮬레이터는 판교에 머묾)
+    up = wait_uploaded(code, phone, len(got)); srv = {u["seq"]: u for u in up["items"]}
+    (OUT / "uploaded.json").write_text(json.dumps(up, ensure_ascii=False, indent=1))
+    same = [g["seq"] for g in got if g["seq"] in srv and srv[g["seq"]]["text"] == g["text"].strip() and srv[g["seq"]]["at"] == g["at"]]
+    check("다섯 문장이 서버 기록에도 남음(기기 D, 내비 앞)", all(set(r["seq"]) <= set(same) for r in first5), five=[r["seq"] for r in first5])
+    check("보관함의 발화가 모두 같은 순번·글자·시각으로 서버에 올라감", len(same) == len(got) == len(srv), local=len(got), server=len(srv), same=len(same),
+          generation=up["generation"], with_place=sum("lat" in u for u in up["items"]), devices=sorted({u["device"] for u in up["items"]}))
     check(f"{minutes}분 동안 막힘 없음(수음 상태 줄에 BLOCKED·녹음 끝 없음)", not any("BLOCKED" in c["line"] or "녹음 끝" in c["line"] for c in window), lines=[c["line"] for c in window][:20])
     check("주행 구간 내내 내비가 앞", all("navigation" in (s["top"] or "") for s in samples), tops=sorted({s["top"] or "" for s in samples}))
     use = usage(res.get("hz", 100), res.get("ncpu", 4)); (OUT / "resources.json").write_text(json.dumps({"samples": samples, "usage": use}, ensure_ascii=False, indent=1))
@@ -371,6 +406,12 @@ def main(apk, minutes):
     stops = [(round((c["device_ms"] - offset) / 1000 - t_off, 2), c["line"]) for c in capture_log[log2:]]
     check("동의를 끄면 바로 멈추고 마이크를 놓음", "기록 꺼짐" in ui and gone is not None and "CaptureService" not in svc, mic_gone_by_dumpsys_s=gone, log=stops)
     save(code, offset, t_inj, total, rows, minutes)
+    for _ in range(15):  # 끄기를 서버에 알린 뒤 받은 여행의 동의 세대로 옛 발화의 글을 지운다(ADR-0014 2절). 다음 조회까지 걸릴 수 있다
+        wiped = outbox(code)
+        if wiped and all(g["text"] == "" for g in wiped): break
+        time.sleep(1)
+    check("동의를 끄면 보관함의 글과 위치가 빔(순번과 세대는 남음)", wiped and all(g["text"] == "" and "lat" not in g for g in wiped) and len(wiped) >= len(got),
+          lines=len(wiped), generations=sorted({g["generation"] for g in wiped}))
     try:
         t = server(code)
         check("서버의 동의도 꺼짐", not any(p["consent"] for p in t["participants"]))
@@ -381,11 +422,16 @@ def main(apk, minutes):
     adb("shell", "am", "force-stop", "--user", "10", PKG)
     adb("shell", "am", "start", "--user", "10", "-n", f"{PKG}/.MainActivity"); time.sleep(5)
     ui = texts(); shot("08-restart"); note("ui", texts=ui)
-    check("앱을 다시 켜도 받아 적은 말의 수가 남음", f"받아 적은 말 {len(before)}건" in ui, count=len(before))
-    tap_switch(); wait_texts(lambda u: "● 기록 중" in u, 10)
+    check("앱을 다시 켜도 보관함(글을 지운 순번 포함)이 남음", len(outbox(code)) == len(before), count=len(before))
+    tap_switch(); wait_texts(lambda u: "동의 대기" in " ".join(u), 10)
+    phone_consent(code, phone, True); wait_texts(lambda u: "● 기록 중" in u, 15)
     inj.play("again"); time.sleep(3)
     after = outbox(code)
-    check("다시 켠 뒤의 발화는 순번이 이어짐", len(after) > len(before) and after[len(before)]["seq"] == before[-1]["seq"] + 1, seq=[g["seq"] for g in after[len(before) - 1:]])
+    check("다시 켠 뒤의 발화는 순번이 이어지고 새 동의 세대", len(after) > len(before) and after[len(before)]["seq"] == before[-1]["seq"] + 1
+          and after[len(before)]["generation"] > before[-1]["generation"], seq=[(g["seq"], g["generation"]) for g in after[len(before) - 1:]])
+    up = wait_uploaded(code, phone, len(after) - len(before))
+    check("새 세대의 발화만 서버에 남음(옛 세대는 서버가 지움)", sorted(u["seq"] for u in up["items"]) == [g["seq"] for g in after[len(before):]],
+          server=[u["seq"] for u in up["items"]], generation=up["generation"])
     tap_switch(); time.sleep(2)
     gear("Park")
     save(code, offset, t_inj, total, rows, minutes)

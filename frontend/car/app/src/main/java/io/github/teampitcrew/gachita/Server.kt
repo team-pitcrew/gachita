@@ -1,5 +1,6 @@
 package io.github.teampitcrew.gachita
 
+import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
@@ -19,14 +20,19 @@ class Server(base: String) {
 
     fun createTrip(title: String): Got = got(call("POST", "/api/trips", JSONObject().put("title", title))!!)
 
-    /** 손님으로 참가. 이름과 자리를 보내고 동의는 꺼짐으로 시작한다. */
-    fun join(code: String, m: Member) {
-        call("POST", "/api/trips/$code/participants", JSONObject().put("seat", m.seat.name).put("name", m.name).put("consent", false))
+    /** 손님으로 참가. 이름과 자리를 보내고 동의는 꺼짐으로 시작한다. 참가자 id와 참가자 토큰(이때 한 번만 옴). */
+    fun join(code: String, m: Member): Pair<String, String> =
+        JSONObject(call("POST", "/api/trips/$code/participants", JSONObject().put("seat", m.seat.name).put("name", m.name).put("consent", false))!!)
+            .let { it.getString("id") to it.getString("token") }
+
+    /** 동의 켜기는 그 사람의 참가자 토큰으로만 된다(T68). 끄기는 토큰 없이 누구나. */
+    fun consent(code: String, id: String, on: Boolean, token: String? = null) {
+        call("PATCH", "/api/trips/$code/participants/$id", JSONObject().put("consent", on), token)
     }
 
-    fun consent(code: String, id: String, on: Boolean) {
-        call("PATCH", "/api/trips/$code/participants/$id", JSONObject().put("consent", on))
-    }
+    /** 발화 묶음 올리기(ADR-0014). 서버가 빠짐없이 받은 마지막 순번. 동의하지 않은 사람이 있으면 403 ApiError. */
+    fun utterances(code: String, token: String, device: String, items: JSONArray): Long =
+        JSONObject(call("POST", "/api/trips/$code/utterances", JSONObject().put("device", device).put("items", items), token)!!).getLong("lastSeq")
 
     /** 부탁 남기기(T9). 새 부탁의 id. 처음 상태는 held. */
     fun request(code: String, by: String, text: String): String =
@@ -40,12 +46,13 @@ class Server(base: String) {
     /** 최신 여행. 보낸 version에서 바뀐 것이 없으면(304) null. */
     fun trip(code: String, version: Int? = null): Got? = call("GET", "/api/trips/$code" + (version?.let { "?v=$it" } ?: ""), null)?.let(::got)
 
-    private fun call(method: String, path: String, body: JSONObject?): String? {
+    private fun call(method: String, path: String, body: JSONObject?, token: String? = null): String? {
         val c = URL(base + path).openConnection() as HttpURLConnection
         try {
             c.requestMethod = method // 안드로이드의 HttpURLConnection은 PATCH를 받는다
             c.connectTimeout = 5000
             c.readTimeout = 5000
+            token?.let { c.setRequestProperty("Authorization", "Bearer $it") } // 토큰은 머리말로만(주소에 넣지 않음, Pleos 보안 가이드)
             if (body != null) {
                 c.doOutput = true
                 c.setRequestProperty("Content-Type", "application/json")

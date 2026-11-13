@@ -20,7 +20,11 @@ val FAMILY = listOf(
 
 data class Person(val id: String, val name: String, val seat: String, val consent: Boolean)
 
-data class Trip(val code: String, val title: String, val status: String, val people: List<Person>, val heldRequests: Int, val version: Int)
+/** generation은 동의 세대(동의 철회로 올라감), createdAt은 만든 시각(epoch ms, 보관 48시간의 기준). */
+data class Trip(
+    val code: String, val title: String, val status: String, val people: List<Person>, val heldRequests: Int, val version: Int,
+    val generation: Int = 1, val createdAt: Long = 0,
+)
 
 /** GET·POST /api/trips 응답(openapi.yaml의 Trip)을 읽는다. 보관한 부탁은 status가 held인 것만 센다. */
 fun parseTrip(json: String): Trip {
@@ -36,15 +40,18 @@ fun parseTrip(json: String): Trip {
         },
         heldRequests = (0 until rs.length()).count { rs.getJSONObject(it).getString("status") == "held" },
         version = o.getInt("version"),
+        generation = o.optInt("generation", 1),
+        createdAt = o.getLong("createdAt"),
     )
 }
 
 /**
  * 차량 앱이 보는 여행 하나의 상태. 화면은 이 값만 보고 그린다.
  *
- * 기록 동의 규칙(T7):
+ * 기록 동의 규칙(T7, T68):
  * - 기본값은 꺼짐. 참가자는 동의 꺼짐으로 만든다.
- * - 켜기는 기어 P이고 서버에 닿을 때만. 서버가 모두의 동의를 받아 준 뒤에야 '기록 중'이 된다.
+ * - 켜기는 기어 P이고 서버에 닿을 때만. 차가 켜는 것은 이 차가 참가시킨 사람(ours, 참가자 토큰을 가진 사람)의 동의뿐이다.
+ *   폰으로 들어온 사람은 자기 폰에서 켠다(그때까지 '동의 대기'). 서버에서 모두 동의한 뒤에야 '기록 중'이 된다.
  * - 기록은 주차(P) 중에만 시작한다(started). 주행 중에 모두의 동의가 다시 채워지면(폰에서 다시 켬) '기록 대기'로 두고 P가 되면 시작한다.
  * - 끄기는 바로 멈춘다. 서버에 아직 못 알렸으면 offPending으로 꺼 두고, 서버 값이 꺼짐이 될 때까지 다시 보낸다.
  *   offPending과 started는 앱이 다시 켜져도 이어지게 저장한다(restore).
@@ -58,8 +65,18 @@ data class Session(
     val started: Boolean = false,
     val busy: Boolean = false,
     val note: String = "",
+    val ours: Set<String> = emptySet(),
 ) {
     val consented: Boolean get() = trip != null && trip.people.isNotEmpty() && trip.people.all { it.consent }
+
+    /**
+     * 동의 스위치에 보일 값: 모두 동의했거나, 이 차가 참가시킨 사람이 모두 동의했고 끄기 대기가 없음.
+     * 폰 참가자를 기다리는 동안에도 켜짐으로 보여 끌 수 있고, 토큰을 잃었어도(앞 빌드에서 올림) 기록 중이면 끌 수 있다.
+     */
+    val switchOn: Boolean get() = agreed || !offPending && trip != null && trip.people.filter { it.id in ours }.let { it.isNotEmpty() && it.all { p -> p.consent } }
+
+    /** 자기 폰에서 동의를 켜야 하는 사람(차가 켤 수 없음). */
+    fun waitsFor(p: Person) = !p.consent && p.id !in ours
 
     /** 동의 스위치에 보일 값: 모두 동의했고 끄기 대기가 없음. */
     val agreed: Boolean get() = consented && !offPending
@@ -75,6 +92,7 @@ data class Session(
     fun blockOn(): String? = when {
         trip == null -> "여행이 없어요"
         busy -> "처리하고 있어요"
+        trip.people.none { it.id in ours } -> "이 차에서 참가시킨 사람이 없어 켤 수 없어요"
         !online -> "연결이 끊겨 기록을 시작할 수 없어요"
         gear == null -> "기어를 확인할 수 없어 기록을 시작하지 않았어요"
         gear != "P" -> "주차(P)한 뒤에 켤 수 있어요"
@@ -100,7 +118,7 @@ data class Session(
 
     companion object {
         /** 앱을 다시 켤 때: 저장한 마지막 여행과 두 표시로 되살린다. 연결은 아직 모르는 것으로 둔다. */
-        fun restore(tripJson: String?, offPending: Boolean, started: Boolean) =
-            Session(trip = tripJson?.let { runCatching { parseTrip(it) }.getOrNull() }, online = false, offPending = offPending, started = started).settle()
+        fun restore(tripJson: String?, offPending: Boolean, started: Boolean, ours: Set<String> = emptySet()) =
+            Session(trip = tripJson?.let { runCatching { parseTrip(it) }.getOrNull() }, online = false, offPending = offPending, started = started, ours = ours).settle()
     }
 }
