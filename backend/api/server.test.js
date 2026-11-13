@@ -17,6 +17,8 @@ let fakeProvider; // 가짜 구글(T21). code가 곧 사용자 번호다. 특수
 let tokenCalls = 0; // 가짜 구글이 받은 토큰 교환 수
 let fakeS3; // 가짜 클립 버킷(T76). SDK의 표준 설정(AWS_ENDPOINT_URL_S3)으로 꽂는다 — IP 주소라 SDK가 경로 방식으로 부른다.
 const s3 = { objects: new Map(), down: false, onPut: null, onDelete: null }; // onPut·onDelete: 올리거나 지우는 도중에 끼워 넣을 일(한 번)
+let fakeAsr; // 가짜 Nemotron(T75). 초안의 '서와'를 '서아'로 고치고 마침표를 붙인다. 초안 낱말로 장애를 낸다
+const asr = { calls: [] };
 captureLog(() => {}); // 서버의 구조화 로그는 시험 출력에 섞지 않는다(T71 시험은 따로 받아 본다)
 before(async () => {
   fakeProvider = createServer(async (req, res) => {
@@ -74,6 +76,20 @@ before(async () => {
     res.end(req.method === "GET" ? s3.objects.get(key) : undefined);
   });
   await new Promise((ok) => fakeS3.listen(0, "127.0.0.1", ok));
+  fakeAsr = createServer(async (req, res) => {
+    const chunks = [];
+    for await (const c of req) chunks.push(c);
+    const body = JSON.parse(Buffer.concat(chunks).toString());
+    const prompt = body.messages[0].content[0].text;
+    const draft = /draft from another recognizer \(may contain errors\): "(.*)"\. Context:/.exec(prompt)[1];
+    asr.calls.push({ path: req.url, auth: req.headers.authorization, body, prompt, draft });
+    const reply = (status, content) => (res.writeHead(status, { "content-type": "application/json" }), res.end(JSON.stringify(status === 200 ? { choices: [{ message: { content } }] } : { error: {} })));
+    if (draft.includes("고장")) return reply(500);
+    if (draft.includes("붐빔") && asr.calls.filter((c) => c.draft === draft).length === 1) return reply(429);
+    if (draft.includes("되풀이")) return reply(200, "되풀이 되풀이 되풀이 되풀이 되풀이 되풀이 되풀이 되풀이 ");
+    reply(200, `<spk:0> ${draft.replace(/서와/g, "서아")}.`);
+  });
+  await new Promise((ok) => fakeAsr.listen(0, "127.0.0.1", ok));
   Object.assign(process.env, { CLIPS_BUCKET: "clips", AWS_ENDPOINT_URL_S3: `http://127.0.0.1:${fakeS3.address().port}`, AWS_REGION: "ap-northeast-2", AWS_ACCESS_KEY_ID: "test", AWS_SECRET_ACCESS_KEY: "test" });
   process.env.GOOGLE_TOKEN_URL = `http://127.0.0.1:${fakeProvider.address().port}/token`;
   process.env.GOOGLE_USERINFO_URL = `http://127.0.0.1:${fakeProvider.address().port}/userinfo`;
@@ -97,6 +113,7 @@ after(async () => {
   server.close();
   fakeProvider.close();
   fakeS3.close();
+  fakeAsr.close();
   await endStores();
 });
 
@@ -992,6 +1009,63 @@ test("장면 규칙의 가장자리: 한 순간에 몰린 2만 줄, 같은 시�
   // 두 자리에서 같은 시각에 말하면 자막이 겹쳐 보인다(0초짜리로 사라지지 않음)
   const both = cues([{ at: t0, text: "와", seatArea: "ROW_1_LEFT" }, { at: t0, text: "우와", seatArea: "ROW_2_LEFT" }], t0 - 1000, 10);
   assert.deepEqual(both.map((c) => [c.start, c.end]), [[1, 2], [1, 2]]);
+});
+
+test("고른 장면 클립을 Nemotron으로 다시 받아 적고, 실패하면 원문 자막으로 남는다(T75)", async () => {
+  assert.equal(asr.calls.length, 0, "ASR_URL·ASR_TOKEN이 없으면 보내지 않음(앞 시험들의 클립)");
+  const [, trip] = await call("POST", "/api/trips", { title: "속초" });
+  const t = `/api/trips/${trip.code}`;
+  const t0 = Date.now() - 600_000;
+  await tripsDb().query("UPDATE trips SET doc = jsonb_set(doc, '{createdAt}', to_jsonb($2::bigint)) WHERE code = $1", [trip.code, t0 - 1000]);
+  const [, momProfile] = await call("POST", "/api/profiles", { name: "엄마" });
+  const [, mom] = await call("POST", `${t}/participants`, { seat: "ROW_1_LEFT", consent: true }, momProfile.token);
+  await join(trip.code, "서아", "ROW_2_LEFT");
+  const said = ["서와야 바다 봐", "되풀이 해 봐", "고장 난 줄", "붐빔 시험"];
+  const items = said.map((text, i) => ({ seq: i + 1, at: t0 + i * 3000, text, seatArea: i % 2 ? "ROW_2_LEFT" : "ROW_1_LEFT", generation: 1 }));
+  assert.equal((await call("POST", `${t}/utterances`, { device: "car", items }, mom.token))[0], 200);
+  await tripsDb().query("UPDATE utterances SET profile_id = $2 WHERE trip_code = $1 AND seat_area = 'ROW_1_LEFT'", [trip.code, momProfile.id]);
+  const [, moment] = await call("POST", `${t}/moments`, { at: t0, from: t0 - 1000, to: t0 + 11_000 });
+
+  Object.assign(process.env, { ASR_URL: `http://127.0.0.1:${fakeAsr.address().port}/asr/v1/`, ASR_TOKEN: "test-asr-token" });
+  const events = [];
+  const restore = captureLog((line) => events.push(JSON.parse(line)));
+  try {
+    const up = await fetch(`${base}${t}/recordings?moment=${moment.id}&generation=1&from=${t0 - 1000}`, { method: "POST", headers: { authorization: `Bearer ${mom.token}` }, body: wav(200, 12) });
+    assert.equal(up.status, 201, "응답은 재전사를 기다리지 않는다");
+    for (let i = 0; i < 300 && !events.some((e) => e.msg === "clip_retranscribed"); i++) await new Promise((ok) => setTimeout(ok, 20));
+  } finally {
+    restore();
+    delete process.env.ASR_URL;
+    delete process.env.ASR_TOKEN;
+  }
+
+  // 보낸 것: 연동 가이드의 공통 계약, 그 발화의 소리(16 kHz 모노 WAV)와 초안과 여행이 아는 낱말. 토큰은 머리말로만
+  const [first] = asr.calls;
+  assert.equal(first.path, "/asr/v1/chat/completions");
+  assert.equal(first.auth, "Bearer test-asr-token");
+  assert.deepEqual([first.body.model, first.body.temperature, first.body.chat_template_kwargs, first.body.skip_special_tokens], ["nemo_transcribe30", 0, { enable_thinking: false }, false]);
+  assert.match(first.prompt, /^Transcribe the following audio in Korean exactly as spoken\. Do not translate\./);
+  assert.match(first.prompt, /등장인물: 엄마, 서아\..*목적지: 속초\..*글레오/);
+  const sent = Buffer.from(first.body.messages[0].content[1].audio_url.url.replace("data:audio/wav;base64,", ""), "base64");
+  assert.deepEqual([sent.readUInt16LE(22), sent.readUInt32LE(24), sent.length - 44], [1, 16000, 3500 * 32], "0.5초 앞부터 다음 발화까지(3.5초) 모노 16 kHz");
+  assert.deepEqual(asr.calls.map((c) => c.draft), ["서와야 바다 봐", "되풀이 해 봐", "고장 난 줄", "붐빔 시험", "붐빔 시험"], "429면 다시");
+
+  // 고친 글은 원문 옆에 남고 숏폼 자막에 쓰인다. 되풀이·오류는 원문으로
+  const [, form] = await call("GET", `${t}/shortform`, null, mom.token);
+  assert.deepEqual(form.scenes[0].cues.map((c) => [c.text, c.raw]), [
+    ["서아야 바다 봐.", "서와야 바다 봐"],
+    ["되풀이 해 봐", "되풀이 해 봐"],
+    ["고장 난 줄", "고장 난 줄"],
+    ["붐빔 시험.", "붐빔 시험"],
+  ]);
+  const done = events.find((e) => e.msg === "clip_retranscribed");
+  assert.deepEqual([done.lines, done.fixed, done.fellBack, done.changed], [4, 2, 2, 1]);
+  assert.ok(!JSON.stringify(events).includes("서아야") && !JSON.stringify(events).includes("test-asr-token"), "로그에 글과 토큰을 남기지 않음");
+
+  // 자기 글 지우기는 고친 글도 함께 지운다
+  assert.equal((await call("DELETE", `${t}/utterances`, null, mom.token))[0], 200);
+  const { rows } = await tripsDb().query("SELECT count(*)::int AS n FROM utterances WHERE trip_code = $1 AND asr_text IS NOT NULL", [trip.code]);
+  assert.equal(rows[0].n, 1, "엄마의 줄(서아야…)은 지워지고 서아 쪽 '붐빔 시험.'만 남음");
 });
 
 test("쓰기가 몰려도 서버가 멈추지 않는다", async () => {

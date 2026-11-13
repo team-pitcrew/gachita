@@ -12,6 +12,7 @@ import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { profilesDb, tripsDb } from "./db.js";
 import { errFields, log } from "./log.js";
+import { asrReady, contextOf, retranscribe, toWav } from "./providers/asr.js";
 import { clipStore } from "./providers/clips.js";
 import { cues, momentSpan, suggest } from "./scenes.js";
 import { googleIdentity } from "./providers/google.js";
@@ -23,6 +24,7 @@ const PROFILES_SQL = fileURLToPath(new URL("profiles.sql", import.meta.url));
 const LINKS_SQL = fileURLToPath(new URL("profiles-2-links.sql", import.meta.url));
 const UTTERANCES_SQL = fileURLToPath(new URL("trips-2-utterances.sql", import.meta.url));
 const RECORDINGS_SQL = fileURLToPath(new URL("trips-3-recordings.sql", import.meta.url));
+const ASR_SQL = fileURLToPath(new URL("trips-4-asr.sql", import.meta.url));
 const ALBUM_SQL = fileURLToPath(new URL("profiles-3-moments.sql", import.meta.url));
 const GROUPS_SQL = fileURLToPath(new URL("profiles-4-groups.sql", import.meta.url));
 const VOICE_SQL = fileURLToPath(new URL("profiles-5-voice.sql", import.meta.url));
@@ -99,6 +101,7 @@ export async function migrate() {
   await tripsDb().query(await readFile(TRIPS_SQL, "utf8"));
   await tripsDb().query(await readFile(UTTERANCES_SQL, "utf8"));
   await tripsDb().query(await readFile(RECORDINGS_SQL, "utf8"));
+  await tripsDb().query(await readFile(ASR_SQL, "utf8"));
   await profilesDb().query(await readFile(PROFILES_SQL, "utf8"));
   await profilesDb().query(await readFile(LINKS_SQL, "utf8"));
   await profilesDb().query(await readFile(ALBUM_SQL, "utf8"));
@@ -182,6 +185,7 @@ const asUtterance = (r) => ({
   ...(r.profile_id ? { profileId: r.profile_id } : {}),
   ...(r.confidence !== null ? { confidence: r.confidence } : {}),
   ...(r.lat !== null ? { lat: r.lat, lng: r.lng } : {}),
+  ...(r.asr_text ? { asrText: r.asr_text } : {}), // 재전사(T75)한 글. 읽어 온 질의에 있을 때만
 });
 
 async function profileById(id) {
@@ -573,9 +577,11 @@ async function recordings(code, id, req, query) {
   const key = `${before.tripCode}/${before.momentId}-${randomUUID().slice(0, 8)}.wav`;
   try {
     await store.put(key, raw); // 늦게 실패해도(제한 시간 뒤에 저장됨) 아래에서 키를 버린다
+    let context = "";
     const result = await withTrip(code, true, async (trip, client) => {
       const now = await check(trip, client);
       if (now.existing) return [200, asRecording(now.existing)];
+      context = contextOf(trip.participants.map((p) => p.name), trip.title);
       await client.query(
         "INSERT INTO recordings (trip_code, moment_id, generation, participant_id, object_key, start_at, bytes, seconds) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
         [trip.code, now.momentId, now.current, now.caller.id, key, now.startAt, raw.length, seconds]
@@ -583,11 +589,45 @@ async function recordings(code, id, req, query) {
       return [201, asRecording({ moment_id: now.momentId, start_at: now.startAt, seconds, bytes: raw.length })];
     });
     if (result[0] === 200) await trashClips([key]); // 같은 장면을 동시에 올린 다른 요청이 먼저 남겼다 — 내 것은 버린다
+    // 새로 남긴 클립은 기다리지 않고 다시 받아 적는다(T75). 응답은 바로 간다.
+    else retranscribeClip({ code: before.tripCode, momentId: before.momentId, generation: before.current, startAt: before.startAt, samples, context }).catch((e) => log("warn", "clip_retranscribe_failed", { err: errFields(e) }));
     return result;
   } catch (e) {
     await trashClips([key]); // 남기지 못한 소리는 버킷에 두지 않는다
     throw e;
   }
+}
+
+// 재전사(T75): 클립 구간의 발화마다 그 소리와 Pleos 초안과 여행이 아는 낱말을 Nemotron에 보내(providers/asr.js)
+// 고친 글을 asr_text에 남긴다. 원문(text)은 그대로다. ASR_URL·ASR_TOKEN이 없으면 건너뛴다.
+// 실패·늦음·되풀이면 그 줄은 원문 자막으로 남는다. 사람이 고른 클립만 보낸다(동의 문구, docs/api/voice.md).
+// 줄마다 클립이 아직 있는지 보고, 지웠거나 동의가 철회됐으면 더 보내지 않는다.
+// 발화의 at을 말 시작으로 보고 0.5초 앞부터 다음 발화(또는 클립 끝, 최대 15초)까지 자른다.
+// ponytail: 올린 파드에서 기다리지 않고 돈다. 그 사이 파드가 죽으면 남은 줄은 원문 자막으로 남는다.
+async function retranscribeClip({ code, momentId, generation, startAt, samples, context }) {
+  if (!asrReady()) return;
+  const clipMs = samples.length / 16; // 16 kHz: 1 ms = 16 표본
+  const { rows } = await tripsDb().query(
+    "SELECT device, seq, at, text FROM utterances WHERE trip_code = $1 AND generation = $2 AND text <> '' AND at >= $3 AND at < $4 ORDER BY at",
+    [code, generation, startAt, startAt + Math.ceil(clipMs)]
+  );
+  const started = Date.now();
+  let fixed = 0;
+  let changed = 0;
+  for (const [i, u] of rows.entries()) {
+    const { rows: live } = await tripsDb().query("SELECT 1 FROM recordings WHERE trip_code = $1 AND moment_id = $2 AND generation = $3 AND deleted_at IS NULL", [code, momentId, generation]);
+    if (!live[0]) break;
+    const from = Math.max(0, Number(u.at) - startAt - 500);
+    const to = Math.min(clipMs, (rows[i + 1] ? Number(rows[i + 1].at) : startAt + clipMs) - startAt, Number(u.at) - startAt + 15_000);
+    const text = await retranscribe(toWav(samples.subarray(Math.round(from * 16), Math.round(to * 16))), u.text, context);
+    if (text === null) continue;
+    fixed++;
+    if (text.replace(/[\s\p{P}]/gu, "") !== u.text.replace(/[\s\p{P}]/gu, "")) changed++;
+    // 그 사이 지운 글(text = '')이나 바뀐 줄에는 붙이지 않는다
+    await tripsDb().query("UPDATE utterances SET asr_text = $5 WHERE trip_code = $1 AND device = $2 AND seq = $3 AND text = $4", [code, u.device, u.seq, u.text, text]);
+  }
+  // 관측(T75): 다시 받아 적은 줄, 원문으로 남은 줄, 원문과 글자가 달라진 줄, 걸린 시간. 글은 남기지 않는다.
+  log("info", "clip_retranscribed", { lines: rows.length, fixed, fellBack: rows.length - fixed, changed, ms: Date.now() - started });
 }
 
 // 지우기는 프로필 DB의 한 트랜잭션에서 한다 — 중간에 실패해도 토큰만 지워지고 프로필이 남는 일이 없게.
@@ -1091,7 +1131,7 @@ async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
       // 줄은 지우지 않고 내용만 비운다: 순번에 빈자리가 있던 기기가 같은 순번을 다시 보내도(멱등 키에 걸려) 되살아나지 않게.
       if (!caller.profileId) fail(403, "프로필로 참가한 사람의 글만 지울 수 있음");
       const { rowCount } = await client.query(
-        "UPDATE utterances SET text = '', seat_area = NULL, confidence = NULL, lat = NULL, lng = NULL WHERE trip_code = $1 AND profile_id = $2 AND text <> ''",
+        "UPDATE utterances SET text = '', asr_text = NULL, seat_area = NULL, confidence = NULL, lat = NULL, lng = NULL WHERE trip_code = $1 AND profile_id = $2 AND text <> ''",
         [trip.code, caller.profileId]
       );
       return [200, { deleted: rowCount }];
@@ -1102,7 +1142,7 @@ async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
   const lines = async () => {
     if (m !== "GET") fail(405, "GET만 됨");
     if (!participantOf(req, trip).consent) fail(403, "녹음에 동의한 참가자만 볼 수 있음");
-    const { rows } = await client.query("SELECT device, seq, at, text, seat_area, profile_id, confidence, lat, lng FROM utterances WHERE trip_code = $1 AND text <> '' ORDER BY at", [trip.code]);
+    const { rows } = await client.query("SELECT device, seq, at, text, asr_text, seat_area, profile_id, confidence, lat, lng FROM utterances WHERE trip_code = $1 AND text <> '' ORDER BY at", [trip.code]);
     return rows.map(asUtterance);
   };
 

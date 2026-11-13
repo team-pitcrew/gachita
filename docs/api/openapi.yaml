@@ -17,7 +17,7 @@ info:
 
     - 녹음 클립(`/recordings`)은 사람이 장면으로 고른 구간의 원음입니다. WAV(16 kHz·16비트·모노) 이진 본문을 5 MB까지 받아 클립 버킷(S3)에 두고, 받아 적은 글과 같은 참가자 토큰으로 듣고 지웁니다(T76).
 
-    이 서버가 부르는 외부 API는 구글 OAuth(계정 연결을 켰을 때)와 클립 버킷(S3, `CLIPS_BUCKET`이 있을 때)입니다. 예정과 결정 상태는 docs/api/external.md에 있습니다.
+    이 서버가 부르는 외부 API는 구글 OAuth(계정 연결을 켰을 때), 클립 버킷(S3, `CLIPS_BUCKET`이 있을 때), 고른 장면 클립의 재전사(Nemotron ASR, `ASR_URL`·`ASR_TOKEN`이 있을 때, T75)입니다. 예정과 결정 상태는 docs/api/external.md에 있습니다.
 servers:
   - url: http://localhost:8787
     description: 로컬(make run)
@@ -650,11 +650,12 @@ paths:
                           type: array
                           items:
                             type: object
-                            required: [start, end, text, participantId, seatArea]
+                            required: [start, end, text, raw, participantId, seatArea]
                             properties:
                               start: { type: number, description: 클립 안의 초 }
                               end: { type: number }
-                              text: { type: string }
+                              text: { type: string, description: 다시 받아 적은 글(T75), 없으면 Pleos 원문 }
+                              raw: { type: string, description: Pleos 원문 }
                               participantId: { type: [string, "null"], description: 화자 대조로 붙은 참가자. 모르면 null }
                               seatArea: { oneOf: [{ $ref: "#/components/schemas/Seat" }, { type: "null" }] }
                         lat: { type: number }
@@ -1050,6 +1051,7 @@ components:
           properties:
             device: { type: string }
             profileId: { type: string, format: uuid, description: 서버의 화자 대조(T38)가 붙인 프로필. 아직 없으면 생략 }
+            asrText: { type: string, description: "고른 장면 클립의 소리로 다시 받아 적은 글(T75). 있을 때만, 기록본에만. text(Pleos 원문)는 그대로" }
     Transcript:
       type: object
       required: [generation, utterances, requests, todos]

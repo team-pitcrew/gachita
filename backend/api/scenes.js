@@ -81,6 +81,7 @@ export function cues(lines, startAt, seconds) {
   return inside.map((u, i) => {
     const guess = u.at + Math.min(6000, Math.max(1000, [...u.text].length * 150));
     const stop = Math.min(end, Math.max(u.at + 1000, Math.min(guess, inside[i + 1]?.at ?? end)));
-    return { start: sec(u.at - startAt), end: sec(stop - startAt), text: u.text, profileId: u.profileId ?? null, seatArea: u.seatArea ?? null };
+    // text는 재전사(T75)한 글, 없으면 Pleos 원문. raw는 늘 Pleos 원문(원문과 고친 글을 가려 보이게)
+    return { start: sec(u.at - startAt), end: sec(stop - startAt), text: u.asrText ?? u.text, raw: u.text, profileId: u.profileId ?? null, seatArea: u.seatArea ?? null };
   });
 }
