@@ -173,7 +173,7 @@ resource "aws_s3_object" "oidc_jwks" {
   cache_control = "no-cache"
   content       = jsonencode({ keys = [] })
   lifecycle {
-    ignore_changes = [content, etag, metadata, tags_all, version_id]
+    ignore_changes = [content, etag]
   }
 }
 
