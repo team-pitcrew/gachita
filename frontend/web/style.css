@@ -413,6 +413,12 @@ dialog {
 dialog::backdrop {
   background: rgb(23 22 31 / 0.5);
 }
+.captions-dialog { max-height: 90dvh; overflow: auto; }
+.captions-heading { position: sticky; top: 0; background: var(--bg); padding-block: .4rem; z-index: 1; }
+.captions-dialog .card { margin-block: .6rem; }
+.captions-dialog textarea { box-sizing: border-box; width: 100%; padding: .75rem; border: 1px solid var(--line); border-radius: var(--r-ctl); font: inherit; color: var(--ink); background: var(--surface); resize: vertical; }
+.captions-dialog p { overflow-wrap: anywhere; }
+.captions-list { list-style: none; padding: 0; }
 dialog form {
   display: grid;
   gap: 18px;
@@ -553,6 +559,20 @@ input[type="file"] {
 }
 .short .row > button {
   flex: 1;
+}
+
+/* 동승 연결 QR(#71). 카메라가 읽게 테마와 관계없이 흰 바탕·검은 칸(T20 개편도 이 색을 유지) */
+.qr {
+  display: block;
+  width: min(100%, 300px);
+  margin: 0 auto;
+  border-radius: var(--r-ctl);
+}
+.qr.expired {
+  opacity: 0.2;
+}
+.center {
+  text-align: center;
 }
 
 /* 내 기록본과 후보는 긴 내용도 닫기 단추를 유지한다. 앱의 색·글자 토큰을 그대로 쓴다. */

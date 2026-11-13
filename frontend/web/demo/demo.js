@@ -87,7 +87,11 @@ function plain(e) {
     : e.status === 404 ? "여행을 찾지 못했어요. 없거나 만든 지 48시간이 지났어요."
     : e.status === 409 && m.includes("동의하지 않은") ? "동의하지 않은 탑승자가 있어 기록을 켤 수 없어요."
     : e.status === 409 && m.includes("주행 중에만") ? "주행 중에만 기록할 수 있어요."
-    : e.status === 409 && m.includes("자리") ? "운전석에 이미 다른 사람이 앉아 있어요."
+    : e.status === 404 && m.includes("동승 연결") ? "QR이 만료됐거나 없어요. 폰에서 새로 띄워 주세요."
+    : e.status === 409 && m.includes("이미 사용한") ? "이미 쓴 QR이에요. 폰에서 새로 띄워 주세요."
+    : e.status === 409 && m.includes("주차 중에만") ? "주차 중에만 동승자를 연결할 수 있어요."
+    : e.status === 409 && m.includes("이미 참가한") ? "그 폰은 이미 이 여행에 있어요."
+    : e.status === 409 && m.includes("자리") ? "그 자리에는 이미 다른 사람이 앉아 있어요."
     : e.status === 409 && m.includes("갈 수 있는 상태") ? "그사이 부탁 상태가 바뀌어 처리하지 못했어요."
     : e.status === 409 ? "지금 상태에서는 할 수 없어요."
     : e.status === 413 ? "글이 너무 길어요."
@@ -130,7 +134,7 @@ async function createTrip() {
     const p = await api("POST", `/${t.code}/participants`, { seat: "ROW_1_LEFT", name, consent: true });
     car = { code: t.code, id: p.id, token: p.token, seq: 0 };
     save();
-    speak("여행을 만들었어요. 폰에서 참가해 주세요");
+    speak("여행을 만들었어요. 폰에서 동승 연결 QR을 띄워 주세요");
   } catch (e) {
     els.setupErr.textContent = `여행을 만들지 못했어요 · ${plain(e)}`;
   }
@@ -289,16 +293,27 @@ const button = (label, onclick, className = "") => h("button", { type: "button",
 const card = (...kids) => h("section", { className: "card" }, kids);
 const hm = (ms) => new Date(ms).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false });
 
+// 동승자 연결(#71, 11/14): 탑승자 폰이 1회용 QR을 띄우면 주차 중인 차가 읽어 운전자가 고른 자리에 넣는다.
+// 실제 차는 카메라로 읽는다. 시연은 같은 출처인 오른쪽 폰 칸(iframe)의 QR 값을 읽어 같은 API를 부른다.
+let rideSeat = "";
 function joinCard() {
-  const url = `${location.origin}/#${trip.code}`;
-  const copy = () => navigator.clipboard?.writeText(url).then(() => toast("폰 주소를 복사했어요."), () => toast(url));
+  const free = SEATS.filter(([id]) => !trip.participants.some((p) => p.seat === id));
+  if (!free.some(([id]) => id === rideSeat)) rideSeat = free[0]?.[0] ?? "";
+  const seat = h("select", { onchange: (e) => (rideSeat = e.target.value) }, free.map(([id, label]) => h("option", { value: id, selected: id === rideSeat }, label)));
   return card(
-    h("div", { className: "between" }, h("h3", {}, trip.title || "가치타 여행"), h("span", { className: "pill" }, `일행 ${trip.participants.length}명`)),
-    h("p", { className: "code", title: "여행 코드" }, trip.code),
-    h("p", { className: "sub" }, "폰에서 이 주소를 열어 자리를 고르고 기록에 동의해요."),
-    h("p", { className: "link" }, h("a", { href: url, target: "_blank", rel: "noopener" }, url)),
-    h("div", { className: "row" }, button("주소 복사", copy)),
+    h("div", { className: "between" }, h("h3", {}, "동승자 연결"), h("span", { className: "pill sim" }, "QR 읽기는 시연(실제는 차량 카메라)")),
+    h("p", { className: "sub" }, "탑승자 폰에서 '동승 연결'을 누르면 QR이 떠요. 앉을 자리를 고르고 그 QR을 읽어요. 주차 중에만 돼요."),
+    free.length
+      ? h("div", { className: "row" }, h("label", { className: "field" }, h("span", {}, "앉을 자리"), seat), button("폰의 QR 읽기", () => act(() => redeem(rideSeat)), "primary"))
+      : h("p", { className: "meta" }, "빈자리가 없어요."),
   );
+}
+
+async function redeem(seat) {
+  const payload = els.phone.contentDocument?.querySelector(".qr")?.dataset.payload;
+  if (!payload) throw new Error("폰 화면에 동승 연결 QR이 없어요. 오른쪽 폰에서 '동승 연결'을 눌러 주세요.");
+  const r = await api("POST", path("/ride-links"), { code: JSON.parse(payload).code, seat });
+  speak(`${r.participant.name} 님이 ${SEAT[r.participant.seat]}에 탔어요`);
 }
 
 function recordCard() {
@@ -369,7 +384,7 @@ function peopleCard() {
         ),
       ),
     ),
-    trip.participants.length < 2 && h("p", { className: "sub" }, "오른쪽 폰 화면에서 일행이 참가하면 여기에 나와요."),
+    trip.participants.length < 2 && h("p", { className: "sub" }, "오른쪽 폰에서 '동승 연결' QR을 띄우고 '폰의 QR 읽기'를 누르면 여기에 나와요."),
   );
 }
 
@@ -477,8 +492,8 @@ function renderPhone() {
   els.phoneEmpty.hidden = !!code;
   if (code && code !== phoneCode) {
     phoneCode = code;
-    els.phone.src = `/#${code}`;
-    els.phoneOpen.href = `/#${code}`;
+    els.phone.src = "/"; // 폰은 여행 코드로 들어가지 않는다. 처음 화면에서 '동승 연결' QR을 띄운다
+    els.phoneOpen.href = "/";
   }
 }
 
@@ -508,7 +523,7 @@ function render() {
     );
   if (ready) {
     els.left.replaceChildren(
-      ...[trip.status === "boarding" && joinCard(), recordCard(), offerCard(), transcriptCard(), peopleCard(), trip.status !== "boarding" && joinCard()].filter(Boolean),
+      ...[trip.status === "boarding" && joinCard(), recordCard(), offerCard(), transcriptCard(), peopleCard(), trip.status === "parked" && joinCard()].filter(Boolean),
     );
     els.ops.replaceChildren(opsCard());
     els.right.replaceChildren(requestsCard(), momentCard(), connCard());

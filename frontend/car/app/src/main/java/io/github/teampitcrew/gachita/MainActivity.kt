@@ -294,9 +294,6 @@ class MainActivity : ComponentActivity() {
         val off = s.offTargets
         val v = s.pollVersion
         val url = server
-        val box = Live.box?.takeIf { it.trip == t.code }
-        val dev = device
-        val up = tokens.minByOrNull { it.key }?.value // 올리는 사람은 늘 같은 참가자(서버는 기기를 처음 올린 참가자에 묶는다)
         bg({
             val api = Server(url)
             off.forEach { api.consent(t.code, it, false) }
@@ -305,9 +302,18 @@ class MainActivity : ComponentActivity() {
             r.onSuccess { got ->
                 if (s.trip?.code != t.code) return@onSuccess // 그사이 지운 여행(48시간·404)이나 새 여행: 늦게 온 응답으로 되살리지 않는다
                 s = if (got == null) s.copy(online = true) else s.withTrip(keep(got))
+                upload(t, resync, prune) // 받은 여행의 동의 세대를 보관함에 반영한(철회면 글을 지운) 뒤에만 올린다
             }
-                .onFailure { if (it is Gone) forget(t.code) else s = s.copy(online = it is ApiError, note = if (it is ApiError) reason(it) else s.note) }
+                .onFailure { if (it is Gone) forget(t.code) else s = s.copy(online = it is ApiError, note = if (it is ApiError) reason(it) else s.note) } // 조회를 못 하면 이번에는 올리지 않는다
         }
+    }
+
+    /** 받아 적은 말을 올린다. 여행 조회가 성공해 그 응답을 반영한 뒤에만 부른다(끊긴 사이 철회됐으면 지운 뒤에 올리게). */
+    private fun upload(t: Trip, resync: Boolean, prune: Boolean) {
+        val url = server
+        val box = Live.box?.takeIf { it.trip == t.code }
+        val dev = device
+        val up = tokens.minByOrNull { it.key }?.value // 올리는 사람은 늘 같은 참가자(서버는 기기를 처음 올린 참가자에 묶는다)
         // 받아 적은 말은 동의와 따로 보낸다. 못 보내면(끊김, 동의 대기 403) 보관함에 두었다 다음 조회에 다시 보낸다.
         // 지운 글 맞추기는 같은 차례에 받은 lastSeq 안에서만 한다(빈 묶음이라도 먼저 보냄). 되살린 DB에서 잃은 순번을 지운 것으로 보지 않게
         val again = (resync || prune) && box != null && box.acked > 0
@@ -334,10 +340,10 @@ class MainActivity : ComponentActivity() {
 
     /** 서버가 모르는 여행(48시간이 지나 지워짐): 기록을 멈추고 이 차의 사본(보관함·할 일)을 지운 뒤 처음 화면으로. */
     private fun forget(code: String) {
-        if (s.trip?.code != code) return
-        newTrip()
-        dropTrip(filesDir, code); Live.forget(code)
-        error = "서버에 없는 여행이라 이 차에 남은 기록도 지웠어요"
+        val current = s.trip?.code == code
+        if (current) newTrip() // 기록을 멈추고 처음 화면으로
+        dropTrip(filesDir, code); Live.forget(code) // 새 여행을 만든 뒤 늦게 온 앞 여행의 404여도 그 사본은 지운다
+        if (current) error = "서버에 없는 여행이라 이 차에 남은 기록도 지웠어요"
     }
 
     /** 기록 중이면 내비에 지금 위치를 물어 둔다. 발화에 붙인다(FIX_MS). 휴게소를 찾는 중이면 그 물음을 끊지 않게 묻지 않는다. */
@@ -360,7 +366,12 @@ class MainActivity : ComponentActivity() {
                 t.people.forEach { p -> mine[p.id]?.let { api.consent(t.code, p.id, true, it) } } // 폰으로 들어온 사람은 자기 폰에서
                 api.trip(t.code)!!
             }) { r ->
-                r.onSuccess { s = s.copy(busy = false).turnedOn(keep(it)); if (s.recording) car.speak("기록을 시작했어요") }
+                if (s.trip?.code != t.code) return@bg // 그사이 지운 여행이나 새 여행: 늦게 온 응답은 지금 세션(새 여행 만들기의 busy 등)을 건드리지 않는다
+                r.onSuccess {
+                    // 같은 여행이어도 보관 기한(48시간)이 지났으면 되살리지 않고 이 요청의 busy만 푼다
+                    if (System.currentTimeMillis() - it.trip.createdAt > KEEP_MS) { s = s.copy(busy = false); return@onSuccess }
+                    s = s.copy(busy = false).turnedOn(keep(it)); if (s.recording) car.speak("기록을 시작했어요")
+                }
                     .onFailure { s = s.copy(busy = false, online = it is ApiError, note = "기록을 시작하지 못했어요 · ${reason(it)}") }
             }
         }

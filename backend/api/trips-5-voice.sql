@@ -22,6 +22,10 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'utterances' AND column_name = 'participant_id') THEN
     ALTER TABLE utterances ADD COLUMN participant_id text;
   END IF;
+  -- 사람이 차 화면에서 고친 화자(T37, 11/14). 고친 줄은 자동 대조가 다시 건드리지 않는다 — '모름'으로 고친 것도.
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'utterances' AND column_name = 'speaker_by_hand') THEN
+    ALTER TABLE utterances ADD COLUMN speaker_by_hand boolean NOT NULL DEFAULT false;
+  END IF;
 END $$;
 
 COMMIT;
