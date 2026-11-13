@@ -24,6 +24,8 @@ const INVITE_BASE = process.env.INVITE_BASE_URL ?? "https://gachita.mangowhois.a
 const PHOTO_MAX = 1_000_000; // 프로필 사진 상한. 형식은 매직 바이트로만 확인한다(다시 그리기는 T46 화면, ADR-0009 위험)
 const TTL_MS = 48 * 60 * 60 * 1000; // 기획서 v4가 초기 제안으로 적은 보관 기간
 const MAX_BODY = 10_000;
+// ponytail: 여행 하나의 발화는 2만 줄까지(3시간 여행 ≈ 2,500줄). 48시간 지우기 한 번이 2초 제한(T26) 안에 끝나게 묶는다.
+const MAX_TRIP_UTTERANCES = 20_000;
 const CODE_CHARS = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"; // 0·O·1·I·L은 헷갈려서 뺌
 
 // 좌석 이름은 Pleos Vehicle SDK의 SeatArea와 같게 둔다. 차량 앱이 그대로 넘긴다.
@@ -559,10 +561,13 @@ async function trips(req, [code, sub, id], b, query) {
     };
     // 48시간 지난 여행과 그 발화·확인 순번을 한 문장으로 지운다. 지운 여행의 코드로만 찾으니(기본 키 앞부분)
     // 발화 표 전체를 훑지 않는다 — 질의 하나는 2초에서 끊긴다(T26).
-    // ponytail: 한 번에 여행 20개까지. 여행을 만들 때마다 도니 밀린 것도 곧 따라잡는다. 여행 하나의 발화가 수십만 줄이 되면 따로 지우는 작업으로.
-    await tripsDb().query(`WITH gone AS (DELETE FROM trips WHERE code IN (SELECT code FROM trips WHERE created_at < now() - interval '48 hours' LIMIT 20) RETURNING code),
-      u AS (DELETE FROM utterances WHERE trip_code IN (SELECT code FROM gone))
-      DELETE FROM utterance_acks WHERE trip_code IN (SELECT code FROM gone)`);
+    // 한 번에 여행 5개(발화 최대 10만 줄)까지. 여행을 만들 때마다 도니 밀린 것도 곧 따라잡는다.
+    // 치우기는 여행 만들기를 막지 않는다 — 실패하면 다음 여행을 만들 때 다시 한다.
+    await tripsDb()
+      .query(`WITH gone AS (DELETE FROM trips WHERE code IN (SELECT code FROM trips WHERE created_at < now() - interval '48 hours' LIMIT 5) RETURNING code),
+        u AS (DELETE FROM utterances WHERE trip_code IN (SELECT code FROM gone))
+        DELETE FROM utterance_acks WHERE trip_code IN (SELECT code FROM gone)`)
+      .catch((e) => console.error("묵은 여행 치우기 실패(다음에 다시):", e.message));
     for (;;) {
       trip.code = newCode();
       const { rowCount } = await tripsDb().query("INSERT INTO trips (code, doc) VALUES ($1, $2) ON CONFLICT DO NOTHING", [trip.code, trip]);
@@ -749,6 +754,8 @@ async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
         ];
       });
       const fresh = rows.filter((r) => r[9] === current);
+      const { rows: count } = await client.query("SELECT count(*)::int AS n FROM utterances WHERE trip_code = $1", [trip.code]);
+      if (count[0].n + fresh.length > MAX_TRIP_UTTERANCES) fail(409, `이 여행의 발화가 한도(${MAX_TRIP_UTTERANCES}줄)에 닿음`);
       // 같은 (기기, 순번)은 다시 보내도 한 번만 남는다(멱등). 순서는 섞여도 좋다.
       for (let i = 0; i < fresh.length; i += 100) {
         const chunk = fresh.slice(i, i + 100);
