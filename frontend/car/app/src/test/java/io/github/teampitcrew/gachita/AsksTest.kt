@@ -6,7 +6,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AsksTest {
-    private fun u(text: String, zone: Int?) = Utterance(1, "T", 0, 0, text, 0, 0, "D", zone)
+    private fun u(text: String, zone: Int?) = Utterance(1, "T", 0, 0, text, 0, 0, 1, seatZone = zone)
 
     @Test fun restRequestWords() {
         assertTrue(isRestRequest("화장실 가고 싶어"))

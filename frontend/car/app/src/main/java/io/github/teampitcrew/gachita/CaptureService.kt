@@ -38,15 +38,26 @@ object Live {
     var recent by mutableStateOf(emptyList<Utterance>())
     var count by mutableStateOf(0)
     var pending by mutableStateOf(0)
-    @Volatile var gear: String? = null
+    /** 내비가 마지막으로 알려 준 위치. 기록 중에 화면이 10초마다 묻고, 서비스가 발화에 붙인다. */
+    @Volatile var fix: Fix? = null
     /** 받아 적은 말 한 건이 보관함에 들어갈 때마다(메인 스레드). 부탁을 알아채는 화면(T9)이 건다. */
     var onHeard: ((Utterance) -> Unit)? = null
     var box: Outbox? = null
         private set
 
+    /** 차 안 파일을 잠그는 키(Android Keystore로 감싼 데이터 키, T69). 보관함·할 일·저장한 여행·참가자 토큰이 같이 쓴다. 처음 부를 때 한 번 푼다. */
+    @Volatile private var key: Seal? = null
+    @Synchronized fun seal(ctx: Context): Seal = key ?: Seal.keystore(ctx.filesDir).also { key = it }
+
     /** 그 여행의 보관함. 앱을 다시 켜면 파일에서 이어 읽는다. */
     fun outbox(ctx: Context, trip: String): Outbox =
-        box?.takeIf { it.trip == trip } ?: Outbox(ctx.filesDir, trip).also { box = it; show(it) }
+        box?.takeIf { it.trip == trip } ?: Outbox(ctx.filesDir, trip, seal(ctx)).also { box = it; show(it) }
+
+    /** 여행의 차 안 파일을 지웠을 때(서버가 여행을 모름, 48시간). 그 여행의 보관함을 놓는다. */
+    fun forget(trip: String) {
+        if (box?.trip != trip) return
+        box = null; recent = emptyList(); count = 0; pending = 0
+    }
 
     fun show(o: Outbox) { recent = o.recent(2); count = o.size; pending = o.pending }
 
@@ -66,6 +77,7 @@ private const val TAG = "GachitaCapture"
 class CaptureService : Service() {
     private val main = Handler(Looper.getMainLooper())
     @Volatile private var stopping = false
+    @Volatile private var held = false // Gleo에게 마이크를 넘긴 동안(T41). AudioRecord만 멈추고 서비스·STT는 둔다
     @Volatile private var rec: AudioRecord? = null
     @Volatile private var frames = 0L
     private var worker: Thread? = null
@@ -136,10 +148,10 @@ class CaptureService : Service() {
                 val audio = frames * 1000 / RATE
                 if (!completed) asm.partial(now, audio)
                 else asm.final(text, now, audio)?.let { d ->
-                    val u = box.add(d, Live.gear)
+                    val u = box.add(d, Live.fix)
                     Live.show(box)
                     Log.i(TAG, "발화 ${u.seq} ${u.text.length}자 ${u.endedAt - u.startedAt}ms") // 글자는 보관함에만
-                    Live.onHeard?.invoke(u)
+                    if (u.text.isNotEmpty()) Live.onHeard?.invoke(u) // 동의 철회 사이의 말은 글 없이 남는다
                 }
             }
         }
@@ -173,6 +185,7 @@ class CaptureService : Service() {
             val buf = ShortArray(CHUNK_FRAMES * 2)
             var errors = 0
             while (!stopping) {
+                if (held) { errors = 0; SystemClock.sleep(50); continue }
                 val n = r.read(buf, 0, buf.size)
                 if (n < 0) { if (++errors > 50) break; SystemClock.sleep(20); continue }
                 if (n == 0) continue
@@ -201,7 +214,7 @@ class CaptureService : Service() {
     }
 
     private fun judge() {
-        if (stopping) return
+        if (stopping || held) return
         val why = block.reason(System.currentTimeMillis())
         if (why == null && frames == 0L) return // 첫 조각을 읽기 전에는 '기록 중'이라고 하지 않는다
         val m = if (why == null) Mic.ON else Mic.BLOCKED
@@ -228,6 +241,19 @@ class CaptureService : Service() {
             Live.set(Mic.STARTING)
             runCatching { ctx.startForegroundService(Intent(ctx, CaptureService::class.java).putExtra("trip", trip)) }
                 .onFailure { Log.w(TAG, "서비스를 시작하지 못함", it); Live.set(Mic.FAILED, "지금은 기록할 수 없어요 · 앱을 열어 주세요") }
+        }
+
+        /**
+         * Gleo에게 마이크를 넘기거나(true) 돌려받는다(false). AudioRecord만 멈추고 다시 시작한다(서비스·STT·순번은 그대로, T41).
+         * 넘긴 동안은 막힘을 판정하지 않고, 돌려받으면 막힘 시계를 새로 센다. 메인 스레드에서 부른다.
+         */
+        fun hold(on: Boolean) {
+            val s = current ?: return
+            if (on == s.held) return
+            if (on) { s.held = true; s.rec?.let { runCatching { it.stop() } } }
+            else { s.rec?.let { runCatching { it.startRecording() } }; s.block.chunk(false, System.currentTimeMillis()); s.held = false }
+            Log.i(TAG, if (on) "녹음 잠시 멈춤" else "녹음 다시 시작")
+            s.getSystemService(NotificationManager::class.java).notify(1, s.notice(if (on) "기록 잠시 멈춤 · Gleo 쓰는 중" else "기록 중"))
         }
 
         /** 동의가 꺼지면 바로 멈추고 마이크를 놓는다. 끝나지 않은 발화(중간 결과만 있는 것)는 남기지 않는다. */

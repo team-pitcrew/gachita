@@ -23,13 +23,13 @@ export const CLOSED = ["done", "cancelled"];
 
 // API 부르기. token이 있으면 Authorization: Bearer로 보낸다(프로필 토큰이나 참가자 토큰). Blob 본문(사진)은 그대로 보낸다.
 // 실패하면 Error에 status를 붙여 던진다. 서버에 닿지 않았으면 status 0.
-export async function api(method, path, body, token) {
+export async function api(method, path, body, token, signal) {
   const headers = {};
   if (token) headers.authorization = `Bearer ${token}`;
   if (body && !(body instanceof Blob)) headers["content-type"] = "application/json";
   let res;
   try {
-    res = await fetch(`/api${path}`, { method, headers, body: body instanceof Blob ? body : body && JSON.stringify(body) });
+    res = await fetch(`/api${path}`, { method, headers, body: body instanceof Blob ? body : body && JSON.stringify(body), signal });
   } catch {
     throw Object.assign(new Error("서버에 닿지 않아요. 연결을 확인해 주세요."), { status: 0 });
   }

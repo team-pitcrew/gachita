@@ -5,6 +5,8 @@
 !backend/api/server.js
 !backend/api/db.js
 !backend/api/log.js
+!backend/api/scenes.js
+!backend/api/ride-links.js
 !backend/api/providers
 !backend/api/*.sql
 !frontend/web

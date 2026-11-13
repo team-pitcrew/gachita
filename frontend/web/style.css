@@ -394,6 +394,10 @@ legend {
   display: grid;
   gap: 8px;
 }
+/* 단추가 둘 쌓이면 바닥 막대가 높아지니 마지막 글이 그 밑에 깔리지 않게 아래 여백을 늘린다 */
+main:has(.bar button + button) {
+  padding-bottom: calc(176px + env(safe-area-inset-bottom));
+}
 
 /* 부탁 남기기 시트 */
 dialog {
@@ -419,6 +423,7 @@ dialog input:not([type="radio"]) {
 
 #toast {
   position: fixed;
+  z-index: 20; /* 숏폼 재생(.short, 10) 위에서도 보이게 */
   left: var(--pad);
   right: var(--pad);
   bottom: calc(96px + env(safe-area-inset-bottom));
@@ -465,3 +470,95 @@ input[type="file"] {
   font: inherit;
   max-width: 100%;
 }
+
+/* 숏폼 9:16 재생(T43, 시안 P8). 영상처럼 늘 어두운 화면이라 어두운 토큰을 이 안에서만 쓴다. */
+.short {
+  --bg: #17161f;
+  --surface: #22202d;
+  --ink: #ece9f3;
+  --ink-2: #aaa5ba;
+  --line: #383549;
+  --accent: #b6a6ee;
+  --accent-soft: #2f2a47;
+  --on-accent: #17161f;
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  place-items: center;
+  background: #0d0c14;
+  color: var(--ink);
+}
+.short > div {
+  width: min(100vw, calc(100dvh * 9 / 16));
+  max-height: 100dvh;
+  aspect-ratio: 9 / 16;
+  display: grid;
+  grid-template-rows: auto auto 1fr auto auto;
+  gap: 16px;
+  padding: calc(16px + env(safe-area-inset-top)) var(--pad) calc(16px + env(safe-area-inset-bottom));
+  background: linear-gradient(#2a2640, #120f1c);
+}
+.segs {
+  display: flex;
+  gap: 6px;
+}
+.segs i {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(to right, var(--ink) calc(var(--p, 0) * 100%), var(--line) 0);
+}
+.speaker {
+  align-self: center;
+  display: grid;
+  justify-items: center;
+  gap: 16px;
+}
+.speaker .avatar {
+  width: 180px;
+  height: 180px;
+  font-size: 80px;
+  transition: box-shadow 0.2s;
+}
+.speaker.on .avatar {
+  box-shadow: 0 0 0 10px var(--accent);
+}
+.speaker.on .what {
+  color: var(--accent);
+}
+.short .cue {
+  min-height: 3.2em;
+  margin: 0;
+  padding: 16px;
+  border-radius: var(--r-card);
+  background: var(--surface);
+  text-align: center;
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+.short .row > button {
+  flex: 1;
+}
+
+/* 동승 연결 QR(#71). 카메라가 읽게 테마와 관계없이 흰 바탕·검은 칸(T20 개편도 이 색을 유지) */
+.qr {
+  display: block;
+  width: min(100%, 300px);
+  margin: 0 auto;
+  border-radius: var(--r-ctl);
+}
+.qr.expired {
+  opacity: 0.2;
+}
+.center {
+  text-align: center;
+}
+
+/* 내 기록본과 후보는 긴 내용도 닫기 단추를 유지한다. 앱의 색·글자 토큰을 그대로 쓴다. */
+.records-dialog { max-height: 90dvh; overflow-y: auto; }
+.records-heading { position: sticky; top: -24px; z-index: 1; background: var(--surface); padding-block: 8px; }
+.records-heading h1 { font-size: 24px; margin: 0; }
+.records-list { list-style: none; padding: 0; display: grid; gap: 16px; }
+.records-list .what { overflow-wrap: anywhere; }
