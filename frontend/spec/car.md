@@ -2,7 +2,7 @@
 
 [T17 차량 화면](https://github.com/team-pitcrew/gachita/issues/23) · [T42 문구정리본 반영](https://github.com/team-pitcrew/gachita/issues/60) · 기준 문서는 참가신청서 문구정리본(11/13)
 
-[피그마 기본 흐름](https://www.figma.com/design/Qc58INq2ECd1ODzzmM7Nja?node-id=2-73) · [추가 상태 84개](https://www.figma.com/design/Qc58INq2ECd1ODzzmM7Nja?node-id=22-248) · 기획서 v4 기준 시안입니다. 11/13 뒤에 정한 화면(목소리 등록, 말하는 사람 강조, 말로 하는 수락, 도착 브리핑, 기록 잠시 멈춤)은 v4 파일에 없고 [개편 시안(11/14)](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=0-1)의 C1~C6(1682 × 1210)과 C1n·C2n(841 × 1210)에 있습니다(T20). C5의 '참가 QR'은 11/14 결정 전 그림이라 흐름 1(동승자 QR 읽기)이 앞섭니다. 말로 하는 수락과 도착 브리핑은 만들었고, 나머지는 만드는 중입니다(항목마다 끝에 적은 상태).
+[피그마 기본 흐름](https://www.figma.com/design/Qc58INq2ECd1ODzzmM7Nja?node-id=2-73) · [추가 상태 84개](https://www.figma.com/design/Qc58INq2ECd1ODzzmM7Nja?node-id=22-248) · 기획서 v4 기준 시안입니다. 11/13 뒤에 정한 화면(목소리 등록, 말하는 사람 강조, 말로 하는 수락, 도착 브리핑, 기록 잠시 멈춤)은 v4 파일에 없고 [개편 시안(11/14)](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=0-1)의 C1~C7(1682 × 1210)과 C1n·C2n(841 × 1210)에 있습니다(T20). 흐름 1의 동승자 추가는 [C5](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=3-647)와 [C7 QR 읽은 뒤 자리 고르기](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=12-531)입니다. 시안과 이 문서가 다르면 이 문서를 따릅니다. 말로 하는 수락과 도착 브리핑은 만들었고, 나머지는 만드는 중입니다(항목마다 끝에 적은 상태).
 
 ## 목적
 

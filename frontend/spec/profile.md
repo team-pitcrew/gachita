@@ -2,7 +2,7 @@
 
 [T19](https://github.com/team-pitcrew/gachita/issues/25) · [T42 문구정리본 반영](https://github.com/team-pitcrew/gachita/issues/60) · 폰 웹앱의 프로필, 동승 연결 QR과 기록 동의, 구글 OAuth와 현대 계정을 구분하는 화면 명세
 
-[개편 시안(11/14)](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=0-1)의 폰 P1~P8(390 × 844)이 이 문서의 화면입니다. P2 '그룹 초대'와 P3 '자리 고르기'는 11/14 결정 전 그림이라 이 문서의 4절이 앞섭니다.
+[개편 시안(11/14)](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=0-1)의 폰 P1~P8(390 × 844)이 이 문서의 화면입니다. [P2 프로필 만들기](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=5-431)는 1절, [P3 동승 연결 QR](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=5-509)과 [P4 탔어요·기록 동의](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=5-571)는 4절의 화면입니다. 시안과 이 문서가 다르면 이 문서를 따릅니다.
 
 ## 목적
 
