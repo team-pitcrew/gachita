@@ -87,7 +87,7 @@ export function cues(lines, startAt, seconds) {
       device: u.device, seq: u.seq, editedText: u.editedText ?? null, editVersion: u.editVersion ?? 0,
       ...(u.asrText ? { asrText: u.asrText } : {}),
       ...(u.editedBy ? { editedBy: u.editedBy, editedAt: u.editedAt } : {}),
-      profileId: u.profileId ?? null, seatArea: u.seatArea ?? null,
+      participantId: u.participantId ?? null, profileId: u.profileId ?? null, seatArea: u.seatArea ?? null,
     };
   });
 }

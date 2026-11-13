@@ -1038,6 +1038,9 @@ test("장면 규칙의 가장자리: 한 순간에 몰린 2만 줄, 같은 시�
   // 두 자리에서 같은 시각에 말하면 자막이 겹쳐 보인다(0초짜리로 사라지지 않음)
   const both = cues([{ at: t0, text: "와", seatArea: "ROW_1_LEFT" }, { at: t0, text: "우와", seatArea: "ROW_2_LEFT" }], t0 - 1000, 10);
   assert.deepEqual(both.map((c) => [c.start, c.end]), [[1, 2], [1, 2]]);
+  const guest = cues([{ at: t0, text: "손님도 바다가 보여", participantId: "matched-guest", seatArea: "ROW_2_RIGHT" }], t0, 3)[0];
+  assert.equal(guest.participantId, "matched-guest", "T38이 대조한 손님 참가자 id를 프로필 없이도 숏폼에 보존");
+  assert.equal(both[0].participantId, null, "화자 id가 없으면 좌석만으로 만들지 않음");
 });
 
 test("고른 장면 클립을 Nemotron으로 다시 받아 적고, 실패하면 원문 자막으로 남는다(T75)", async () => {

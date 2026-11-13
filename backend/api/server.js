@@ -1366,7 +1366,7 @@ async function handle(trip, { req, m, sub, id, leaf, b, query, profile }, client
           clip: `/api/trips/${trip.code}/recordings/${r.moment_id}`, // 같은 주소, 참가자 토큰 머리말로 받는다(ADR-0021)
           startAt: Number(r.start_at),
           seconds: r.seconds,
-          cues: cues(all, Number(r.start_at), r.seconds).map(({ profileId, ...c }) => ({ ...c, participantId: byProfile.get(profileId) ?? null })),
+          cues: cues(all, Number(r.start_at), r.seconds).map(({ profileId, ...c }) => ({ ...c, participantId: c.participantId ?? byProfile.get(profileId) ?? null })),
           ...(moment.lat !== undefined ? { lat: moment.lat, lng: moment.lng } : {}),
         }];
       }),
