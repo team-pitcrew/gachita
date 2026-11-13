@@ -8,10 +8,12 @@ const hasLocation = (item) => Number.isFinite(item.lat) && Number.isFinite(item.
 const errorText = (e) => e.status === 0 ? "연결을 확인하지 못해 공유 내용을 닫았어요. 다시 연결한 뒤 확인해 주세요." : e.status === 401 ? "이 폰의 프로필 연결을 다시 확인해 주세요." : e.message;
 
 // 공개 여행의 장면 목록만으로는 소유권을 알 수 없다. 내 앨범과 같은 여행의 교집합만 표시한다.
+// 앨범은 GET /profiles/me/moments?trip=<코드>(#216)로 그 여행 것만 자르지 않고 받는다 — 발화와 섞어 100개로
+// 자르는 피드에서 고르면 장면 뒤에 발화가 쌓일 때 내 장면이 사라졌다(Astra #206).
 export function shareOptions(trip, items, profileId) {
   const ids = new Set(trip.moments.map((m) => m.id));
   return {
-    moments: items.filter((m) => m.kind === "moment" && m.tripCode === trip.code && ids.has(m.id)),
+    moments: items.filter((m) => m.tripCode === trip.code && ids.has(m.id)),
     recipients: trip.participants.filter((p) => p.profileId && p.profileId !== profileId && p.consent),
   };
 }
@@ -105,16 +107,16 @@ export function createShares({ getProfile, getProfileToken, getTrip, getParticip
         const snapshot = JSON.stringify(s.items);
         if (snapshot !== s.snapshot) { s.snapshot = snapshot; listView(s); }
       } else {
-        const [trip, feed] = await Promise.all([
+        const [trip, album] = await Promise.all([
           api("GET", `/trips/${encodeURIComponent(s.code)}`, null, undefined, controller.signal),
-          api("GET", "/profiles/me/feed", null, s.profileToken, controller.signal),
+          api("GET", `/profiles/me/moments?trip=${encodeURIComponent(s.code)}`, null, s.profileToken, controller.signal),
         ]);
         if (!valid(s)) return;
         if (trip.generation !== s.generation || Date.now() >= trip.createdAt + KEEP_MS || !trip.participants.some((p) => p.id === s.participantId && p.profileId === s.profileId && p.consent)) {
           close();
           return toast("기록 동의나 보관 기간이 바뀌어 공유할 수 없어요.");
         }
-        const options = shareOptions(trip, feed.items, s.profileId);
+        const options = shareOptions(trip, album.items, s.profileId);
         const snapshot = JSON.stringify(options);
         s.expiresAt = trip.createdAt + KEEP_MS;
         if (snapshot !== s.snapshot) {
