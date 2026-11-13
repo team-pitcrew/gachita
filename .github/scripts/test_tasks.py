@@ -41,6 +41,20 @@ class TasksTest(unittest.TestCase):
         with self.assertRaises(AssertionError):
             tasks.parse(ONE.replace("- [ ] 일", "환경: 실차\n\n- [ ] 일"), PARTS)
 
+    def test_design_lines_go_to_their_form_fields(self):
+        text = ONE.replace("완료 기준: 끝", "서비스 수준: 이름 정확도 60% 이상\n\n의존성: 모델 파일\n\n완료 기준: 끝")
+        made = tasks.body(tasks.parse(text, PARTS)[0], PARTS)
+        self.assertIn("### 서비스 수준\n\n이름 정확도 60% 이상", made)
+        self.assertIn("### 의존성과 장애 동작\n\n모델 파일", made)
+        self.assertIn("### 관측\n\n_No response_", made)
+
+    def test_body_has_the_form_fields_in_order(self):
+        """양식으로 만든 티켓과 작업 목록으로 만든 티켓이 같은 칸을 같은 순서로 가진다."""
+        form = (ROOT / ".github/ISSUE_TEMPLATE/ticket.yml").read_text()
+        labels = re.findall(r"^      label: (.+)$", form, flags=re.M)
+        made = re.findall(r"^### (.+)$", tasks.body(tasks.parse(ONE, PARTS)[0], PARTS), flags=re.M)
+        self.assertEqual(made, labels)
+
     def test_plan_creates_labels_and_assigns(self):
         text = ONE + "\n### T2 나 (P1) · frontend-app · 선행 T1\n\n- [ ] 일\n\n완료 기준: 끝\n"
         parsed = tasks.parse(text, PARTS)

@@ -1,8 +1,6 @@
 # ADR-0010: 주소는 gachita.mangowhois.ai, 가장자리는 Cloudflare
 
-* **상태:** 일부 채택, 2026-11-13
-  * 채택(지환, 11/13): 서비스 주소는 `gachita.mangowhois.ai` 하나, 가장자리는 Cloudflare. 클라우드 계정은 다른 프로젝트와 같이 쓰는 지금 계정.
-  * 제안(승인 전): 서버로 가는 길을 Tunnel로(설계는 [ADR-0013](0013-network-edge-and-isolation.md)), Cloudflare에 터널·레코드를 만드는 것, API 토큰의 범위.
+* **상태:** 제안, 2026-11-13 (T44. PR 병합으로 정함. '서버로 가는 길'은 [ADR-0015](0015-split-nodes-private-subnets-alb.md)가 대신함)
 * **관련:** T44, #68, T27, T24, T25, T46, ADR-0002, ADR-0009
 
 ## 배경
