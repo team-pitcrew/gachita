@@ -88,7 +88,6 @@ import java.util.concurrent.Executors
 import java.util.concurrent.CancellationException
 import java.util.concurrent.atomic.AtomicReference
 import java.net.HttpURLConnection
-import java.net.URI
 
 private const val DEFAULT_SERVER = "https://gachita.mangowhois.ai" // 실서비스(T27). 로컬 서버는 디버그 빌드에서 '서버 주소'나 --es server로
 private const val POLL_MS = 10_000L // 웹앱은 2초. 차에서는 주행 중 자원 기준(CPU 5% 미만)을 생각해 길게 둔다
@@ -105,6 +104,8 @@ private const val OFFER_MS = 30_000L // 제안에 답이 없으면 보관으로 
 class MainActivity : ComponentActivity() {
     private val io = Executors.newSingleThreadExecutor()
     private val clipIo = Executors.newSingleThreadExecutor() // 장면 클립 올리기(T63). 동의 끄기 요청이 클립 묶음 뒤에 서지 않게 따로
+    private val shortPreviewIo = Executors.newSingleThreadExecutor()
+    private val shortPreviewCloseIo = Executors.newSingleThreadExecutor() // disconnect가 읽기를 기다려도 동의 끄기·화면을 막지 않습니다.
     private val shortExportIo = Executors.newSingleThreadExecutor() // 인코딩이 동의 확인·일반 API를 막지 않게 분리합니다.
     private val shortExportCheckIo = Executors.newSingleThreadExecutor()
     @Volatile private var clipsAllowed = false // 모두 동의했고 끄기 대기가 없음. 클립을 하나 올릴 때마다 본다
@@ -204,6 +205,7 @@ class MainActivity : ComponentActivity() {
     private var shortGen = 0 // 장면을 열 때마다 하나씩. 늦게 끝난 받기가 닫힌 숏폼이나 다른 장면을 건드리지 않게
     private var shortOf: Pair<String, Int>? = null // 숏폼을 요청할 때의 여행 코드와 동의 세대. 바뀌면(철회·새 여행) 닫는다
     private var shortFile: File? = null // 지금 트는 장면의 클립(장면마다 다른 파일, 닫으면 지움)
+    private var shortPreviewDownload: ShortPreviewDownload? = null
     private class NativeShortExport(val scope: ContentScope, val url: String, val preview: Short, val short: Short, val people: List<Person>, val cache: File) {
         val control = ShortExportControl()
         val connection = AtomicReference<HttpURLConnection?>(null)
@@ -371,7 +373,7 @@ class MainActivity : ComponentActivity() {
         main.removeCallbacksAndMessages(null) // 조회, 제안 시간 초과, 결과 카드 닫기
         if (Live.onHeard == ::heard) Live.onHeard = null
         if (!isChangingConfigurations) { handoff.stop(); CaptureService.stop(this) } // 동의를 확인할 화면이 없어지면 수음도 멈춘다
-        car.stop(); io.shutdown(); clipIo.shutdownNow(); shortExportIo.shutdownNow(); shortExportCheckIo.shutdownNow(); super.onDestroy()
+        car.stop(); io.shutdown(); clipIo.shutdownNow(); shortPreviewIo.shutdownNow(); shortPreviewCloseIo.shutdown(); shortExportIo.shutdownNow(); shortExportCheckIo.shutdownNow(); super.onDestroy()
     }
 
     /** 통신은 한 줄로 차례대로 돌리고 결과만 메인 스레드로 돌려받는다. */
@@ -888,16 +890,6 @@ class MainActivity : ComponentActivity() {
         if (job.control.isCancelled) throw CancellationException()
     }
 
-    /** 이 여행의 같은 출처 클립만 받습니다. 헤더 토큰을 다른 호스트·다른 여행으로 보내지 않습니다. */
-    private fun exportClipAddress(job: NativeShortExport, scene: Scene): String {
-        val address = clipUrl(job.url, scene.clip) ?: throw IllegalArgumentException("장면 소리 주소를 확인하지 못했어요")
-        val base = URI(job.url.trim().trimEnd('/'))
-        val clip = URI(address)
-        require(clip.scheme == base.scheme && clip.host == base.host && clip.port == base.port && clip.rawQuery == null && clip.fragment == null &&
-            Regex("/api/trips/${Regex.escape(job.scope.code)}/recordings/[A-Za-z0-9-]+").matches(clip.path.orEmpty())) { "이 여행의 장면 소리가 아니에요" }
-        return address
-    }
-
     private fun discardUnshownVideo(job: NativeShortExport) {
         job.saved.getAndSet(null)?.let { runCatching { contentResolver.delete(it.uri, null, null) } }
     }
@@ -927,10 +919,10 @@ class MainActivity : ComponentActivity() {
         shortExport = job; shortExportBusy = true; shortExportProgress = 0f; shortExportNote = "장면 소리를 준비하고 있어요"
         savedShortVideo = null; savedShortScope = null; sharingShort = false
         shortPaused = true
+        cancelShortPreview()
         player?.release(); player = null
         shortFile?.delete(); shortFile = null
         shortPos = 0.0
-        shortGen++ // 아직 내려받는 미리듣기가 뒤늦게 다시 소리를 내지 않게 합니다.
         main.removeCallbacks(shortTick)
         CaptureService.hold(true)
         main.removeCallbacks(shortExportTick); main.postDelayed(shortExportTick, 2000)
@@ -941,7 +933,7 @@ class MainActivity : ComponentActivity() {
                 val clips = job.short.scenes.mapIndexed { index, scene ->
                     verifyShortExport(job)
                     val file = File(job.cache, "scene-$index.wav")
-                    api.downloadShort(exportClipAddress(job, scene), job.scope.token, file,
+                    api.downloadShort(shortClipAddress(job.url, job.scope.code, scene.clip), job.scope.token, file,
                         cancelled = { job.control.isCancelled }, connection = { active ->
                             job.connection.set(active)
                             if (job.control.isCancelled) active?.disconnect()
@@ -1065,36 +1057,57 @@ class MainActivity : ComponentActivity() {
     private fun play(i: Int) {
         if (shortExportBusy) return
         val sh = short ?: return
-        val tok = viewer()
+        val scope = contentScope()
         val url = server
-        val clip = sh.scenes.getOrNull(i)?.let { clipUrl(url, it.clip) }
-        if (clip == null || tok == null || carStatus.restricted || !shortValid()) return stopShort()
+        val clip = scope?.let { sh.scenes.getOrNull(i)?.let { scene -> runCatching { shortClipAddress(url, scope.code, scene.clip) }.getOrNull() } }
+        if (clip == null || !visible || carStatus.restricted || !shortValid() || shortPreviewIo.isShutdown) return stopShort()
+        cancelShortPreview()
         player?.release(); player = null // 다음 장면을 받는 동안 지난 플레이어를 '멈춤'이 다시 틀지 않게
         shortFile?.delete(); shortFile = null
         shortAt = i; shortPos = 0.0; shortPaused = false
         CaptureService.hold(true)
-        val gen = ++shortGen
+        val gen = shortGen
         val f = runCatching { File.createTempFile("short", ".wav", cacheDir) }.getOrElse { shortNote = "재생 공간을 준비하지 못했어요"; return stopShort() } // 요청마다 다른 파일(화면이 다시 만들어져도 겹치지 않게). 이 요청이 만든 것만 지운다
-        bg({ Server(url).download(clip, tok, f) }) { r ->
-            if (isDestroyed || gen != shortGen || short !== sh) { f.delete(); return@bg } // 그사이 닫혔거나 다른 장면
-            if (!shortValid()) { f.delete(); return@bg stopShort() } // 받는 사이 동의 철회·새 여행
-            r.exceptionOrNull()?.let { f.delete(); shortNote = "클립을 받지 못했어요 · ${reason(it)}"; return@bg stopShort() }
-            shortFile = f
-            val mp = MediaPlayer()
-            runCatching { mp.setAudioAttributes(media); mp.setDataSource(f.path); mp.prepare(); mp.setOnCompletionListener { if (gen == shortGen) { if (i + 1 < sh.scenes.size) play(i + 1) else { mp.seekTo(0); shortPos = 0.0; shortPaused = true } } }; mp.setVolume(if (shortMuted) 0f else 1f, if (shortMuted) 0f else 1f); if (!shortPaused) mp.start() }
-                .onFailure { Log.w(TAG, "클립 재생 실패", it); mp.release(); shortNote = "클립을 틀지 못했어요"; return@bg stopShort() }
-            player = mp
-            Log.i(TAG, "숏폼 장면 ${i + 1}/${sh.scenes.size} ${f.length()}바이트")
-            main.removeCallbacks(shortTick); main.post(shortTick)
+        val request = ShortPreviewDownload(f) { connection ->
+            // 종료 뒤 늦게 등록된 연결은 이미 취소된 worker가 직접 정리합니다.
+            if (runCatching { shortPreviewCloseIo.execute { runCatching { connection.disconnect() } } }.isFailure) connection.disconnect()
         }
+        shortPreviewDownload = request
+        shortPreviewIo.execute {
+            val result = runCatching {
+                Server(url).downloadShort(clip, scope.token, f, { request.isCancelled }, request::trackConnection, request::openOutput)
+                request.ready()
+            }
+            if (result.isFailure) request.cancel()
+            main.post {
+                if (isDestroyed || !visible || gen != shortGen || short !== sh || shortPreviewDownload !== request) { request.cancel(); return@post }
+                if (contentScope() != scope || server != url || carStatus.restricted || !shortValid()) { request.cancel(); return@post stopShort() }
+                result.exceptionOrNull()?.let { request.cancel(); shortNote = "클립을 받지 못했어요 · ${reason(it)}"; return@post stopShort() }
+                val received = request.takeFile() ?: return@post
+                shortPreviewDownload = null
+                shortFile = received
+                val mp = MediaPlayer()
+                runCatching { mp.setAudioAttributes(media); mp.setDataSource(received.path); mp.prepare(); mp.setOnCompletionListener { if (gen == shortGen) { if (i + 1 < sh.scenes.size) play(i + 1) else { mp.seekTo(0); shortPos = 0.0; shortPaused = true } } }; mp.setVolume(if (shortMuted) 0f else 1f, if (shortMuted) 0f else 1f); if (!shortPaused) mp.start() }
+                    .onFailure { Log.w(TAG, "클립 재생 실패", it); mp.release(); shortNote = "클립을 틀지 못했어요"; return@post stopShort() }
+                player = mp
+                Log.i(TAG, "숏폼 장면 ${i + 1}/${sh.scenes.size} ${received.length()}바이트")
+                main.removeCallbacks(shortTick); main.post(shortTick)
+            }
+        }
+    }
+
+    private fun cancelShortPreview() {
+        shortGen++
+        shortPreviewDownload?.cancel()
+        shortPreviewDownload = null
     }
 
     private fun stopShort() {
         cancelShortExport()
+        cancelShortPreview()
         shortRequest++
         if (shortNote == "숏폼을 받고 있어요") shortNote = ""
         player?.release(); player = null
-        shortGen++ // 받는 중인 클립은 끝나면 스스로 지운다
         main.removeCallbacks(shortTick)
         val open = short != null
         short = null; shortAt = -1; shortOf = null
@@ -1109,6 +1122,7 @@ class MainActivity : ComponentActivity() {
 
     private fun toggleShortPlayback() {
         if (shortExportBusy) return
+        if (shortPreviewDownload != null) { shortPaused = !shortPaused; return }
         val current = player
         if (current == null) { play(shortAt.coerceAtLeast(0)); return }
         shortPaused = !shortPaused
@@ -1430,6 +1444,7 @@ class MainActivity : ComponentActivity() {
                         canCreate -> Button(onClick = ::makeShortVideo, modifier = Modifier.heightIn(min = 56.dp), enabled = s.online && contentScope() != null && !carStatus.restricted) { Text("영상 만들기", fontSize = 22.sp) }
                     }
                 }
+                Text("저장한 영상은 동의를 꺼도 기기에 남아요.", fontSize = 16.sp, color = c.onSurfaceVariant, maxLines = 2)
                 if (shortExportBusy) LinearProgressIndicator(progress = { shortExportProgress }, modifier = Modifier.fillMaxWidth())
             }
         }

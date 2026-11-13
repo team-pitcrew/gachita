@@ -3,6 +3,7 @@ package io.github.teampitcrew.gachita
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.OutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -40,25 +41,12 @@ class Server(base: String) {
 
     fun shortform(code: String, token: String): String = call("GET", "/api/trips/$code/shortform", null, token)!!
 
-    /** 클립 소리를 file에 받는다(url은 clipUrl이 거른 것). 토큰은 머리말로만. */
-    fun download(url: String, token: String, file: File) {
-        val c = URL(url).openConnection() as HttpURLConnection
-        try {
-            c.connectTimeout = 5000
-            c.readTimeout = 10000
-            c.setRequestProperty("Authorization", "Bearer $token")
-            if (c.responseCode >= 400) throw ApiError(c.responseCode, c.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty())
-            c.inputStream.use { i -> file.outputStream().use { i.copyTo(it) } }
-        } finally {
-            c.disconnect()
-        }
-    }
-
-    /** 영상 만들기용 클립 받기. 호출자가 범위·주소를 확인하며, 취소 시 연결을 직접 끊을 수 있습니다. */
-    fun downloadShort(url: String, token: String, file: File, cancelled: () -> Boolean, connection: (HttpURLConnection?) -> Unit) {
+    /** 미리듣기·영상 만들기용 클립 받기. 주소는 shortClipAddress로 제한하고 요청이 연결·파일을 소유합니다. */
+    fun downloadShort(url: String, token: String, file: File, cancelled: () -> Boolean, connection: (HttpURLConnection?) -> Unit,
+        openOutput: () -> OutputStream = { file.outputStream() }) {
         val c = URL(url).openConnection() as HttpURLConnection
         var complete = false
-        fun checkCancelled() { if (cancelled() || Thread.currentThread().isInterrupted) throw java.util.concurrent.CancellationException("영상 만들기를 취소했어요") }
+        fun checkCancelled() { if (cancelled() || Thread.currentThread().isInterrupted) throw java.util.concurrent.CancellationException("장면 받기를 취소했어요") }
         try {
             checkCancelled()
             c.connectTimeout = 5000
@@ -68,12 +56,14 @@ class Server(base: String) {
             connection(c)
             checkCancelled()
             if (c.responseCode !in 200..299) throw ApiError(c.responseCode, "장면 소리를 받지 못했어요")
-            c.inputStream.use { input -> file.outputStream().use { output ->
+            checkCancelled()
+            c.inputStream.use { input -> checkCancelled(); openOutput().use { output ->
                 val bytes = ByteArray(8192)
                 var total = 0L
                 while (true) {
                     checkCancelled()
                     val read = input.read(bytes)
+                    checkCancelled()
                     if (read < 0) break
                     total += read
                     if (total > 5_000_000L) throw IllegalArgumentException("장면 소리가 너무 커요")
