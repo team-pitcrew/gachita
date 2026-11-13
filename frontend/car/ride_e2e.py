@@ -72,13 +72,13 @@ def read_qr(inj):
 
 
 def pick_all_but_mom():
-    """여행 만들기 칩을 아빠·서준·하은만 고른 상태로 맞춘다(칩 차례는 FAMILY 차례). 고른 상태는 화면 트리의 checked로 본다."""
+    """여행 만들기 가족 카드를 아빠·서준·하은만 고른 상태로 맞춘다(카드 차례는 FAMILY 차례). 고른 상태는 화면 트리의 checked로 본다."""
     want = [True, False, True, True]
     for _ in range(3):
         import re
         got = [c == "true" for c in re.findall(r'checkable="true" checked="(\w+)"', e2e.nodes()[1])[:4]]
         if got == want: return True
-        for name, g, w in zip(("아빠 · 운전석", "엄마 · 조수석", "서준 · 뒷자리 왼쪽", "하은 · 뒷자리 오른쪽"), got, want):
+        for name, g, w in zip(("아빠", "엄마", "서준", "하은"), got, want):  # 가족 카드(T83, 시안 C6)
             if g != w: tap_text(name); time.sleep(1)
     return False
 
@@ -98,7 +98,7 @@ def main(apk):
     adb("shell", "am", "force-stop", "--user", "10", PKG); adb("shell", "pm", "clear", "--user", "10", PKG)
     for perm in ("RECORD_AUDIO", "POST_NOTIFICATIONS", "CAMERA"): adb("shell", "pm", "grant", "--user", "10", PKG, f"android.permission.{perm}")
     adb("shell", "am", "start", "--user", "10", "-n", f"{PKG}/.MainActivity", "--es", "server", f"http://10.0.2.2:{cap.PORT}")
-    time.sleep(5); note("pick", ok=pick_all_but_mom()); tap_text("여행 만들기"); time.sleep(5)
+    time.sleep(5); note("pick", ok=pick_all_but_mom()); e2e.tap_make(); time.sleep(5)
     ui = texts(); code = next((t.split()[-1] for t in ui if t.startswith("여행 코드")), None); note("trip", code=code)
     check("엄마를 빼고 여행을 만듦(좌석 지도에 빈자리)", code and "엄마" not in ui and "빈자리" in ui)
 
@@ -121,6 +121,14 @@ def main(apk):
     check("이미 쓴 QR은 거절되고 안내", any("이미 연결한 QR" in t for t in ui))
     tap_text("취소")
 
+    # 카메라가 QR을 보는 채로 열고 바로 닫기를 되풀이한다: 닫는 순간 이미지 읽기·해석과 겹쳐도 앱이 죽지 않고, 닫은 뒤 늦은 결과가 오지 않아야 한다
+    aim(inj); pid = adb("shell", "pidof", PKG).strip(); adb("logcat", "-b", "crash", "-c")
+    for i in range(6):
+        tap_text("폰 QR 읽기"); time.sleep(0.3 * i)
+        ui = texts()
+        tap_text("닫기" if "닫기" in ui else "취소")
+    time.sleep(2); ui = texts()
+    check("QR을 보는 채로 열고 바로 닫기 6번: 앱이 살아 있고 죽은 기록이 없음", adb("shell", "pidof", PKG).strip() == pid and PKG not in adb("logcat", "-d", "-b", "crash") and "동승자 연결" in ui)
     def last_camera(): return next((l for l in adb("shell", "dumpsys", "media.camera").splitlines() if "client for package " + PKG in l), "").strip()  # 가장 최근 줄이 위
     aim(inj, on=False)  # QR에서 돌려 둔다. 다시 읽으면 읽어서 카메라를 닫으므로 기어 D가 닫는지 가릴 수 없다
     tap_text("폰 QR 읽기"); time.sleep(3); opened = last_camera()

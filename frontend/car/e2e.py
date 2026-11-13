@@ -52,6 +52,22 @@ def tap_text(text, last=True):
     note("tap", text=text); return True
 
 
+SETUP = "누구랑 같이 타나요?"  # 여행 만들기 화면의 제목(T83, 시안 C6). 주행 중 가린 화면에도 있다
+
+
+def tap_make():
+    """여행 만들기 화면의 'N명으로 여행 만들기'(T83). 고른 사람 수가 글에 들어가 끝말로 찾는다."""
+    t = next((t for t in texts() if t.endswith("명으로 여행 만들기")), None)
+    if t is None:
+        note("tap.miss", text="N명으로 여행 만들기"); return False
+    return tap_text(t)
+
+
+def making(ui):
+    """여행 만들기 단추가 보이는지(주차 중의 여행 만들기 화면)."""
+    return any(t.endswith("명으로 여행 만들기") for t in ui)
+
+
 def switch_enabled():
     m = re.search(r'checkable="true"[^>]*?enabled="(\w+)"', nodes()[1])
     return m and m.group(1) == "true"
@@ -154,14 +170,14 @@ def main(apk):
         adb("shell", "pm", "grant", "--user", "10", PKG, f"android.permission.{perm}")
     adb("shell", "am", "start", "--user", "10", "-n", f"{PKG}/.MainActivity", "--es", "server", f"http://10.0.2.2:{PORT}")
     time.sleep(4); shot("01-setup"); ui = texts(); note("ui", texts=ui)
-    check("첫 화면", "여행 만들기" in ui and "서버 주소" in ui)
-    # 주행 제한 중에는 여행 만들기(가족 고르기·서버 주소 입력)를 가린다(T11)
+    check("첫 화면(서버 주소 칸 없음)", SETUP in ui and making(ui) and "서버 주소" not in ui)
+    # 주행 제한 중에는 여행 만들기(가족 고르기)를 가린다(T11)
     gear("Drive"); time.sleep(1)
     shot("01b-setup-drive-locked"); ui = texts(); note("ui", texts=ui)
-    check("기어 D: 차단 화면 없이 우리 앱이 앞에 있고 여행 만들기는 가려짐", app_on_top() and "주차(P)한 뒤 여행을 만들 수 있어요" in ui and "서버 주소" not in ui)
+    check("기어 D: 차단 화면 없이 우리 앱이 앞에 있고 여행 만들기는 가려짐", app_on_top() and "주차(P)한 뒤 여행을 만들 수 있어요" in ui and not making(ui))
     gear("Park"); time.sleep(1); ui = texts()
-    check("기어 P로 돌아오면 여행 만들기가 다시 보임", "서버 주소" in ui)
-    tap_text("여행 만들기"); time.sleep(4)
+    check("기어 P로 돌아오면 여행 만들기가 다시 보임", making(ui))
+    tap_make(); time.sleep(4)
     ui = texts(); code = next((t.split()[-1] for t in ui if t.startswith("여행 코드")), None)
     shot("02-trip-consent-off"); note("ui", texts=ui)
     t = server(code)
@@ -214,7 +230,7 @@ def main(apk):
     t = server(code)
     check("서버가 돌아오면 끄기가 서버에 반영됨", not any(p["consent"] for p in t["participants"]))
     shot("11-synced"); ui = texts(); note("ui", texts=ui)
-    check("다시 연결됨, 앱을 다시 켠 뒤에도 P에서 주행 제한이 풀림", "서버에 연결됐어요" in ui and "기록 꺼짐" in ui and "새 여행 만들기" in ui)
+    check("다시 연결됨, 앱을 다시 켠 뒤에도 P에서 주행 제한이 풀림", "서버 연결됨" in ui and "기록 꺼짐" in ui and "새 여행 만들기" in ui)
     # 반쪽 창(약 841): 에뮬레이터가 창을 나누지 않아 앱 안에서 폭을 줄여 그린다(디버그 빌드)
     adb("shell", "am", "start", "--user", "10", "-S", "-n", f"{PKG}/.MainActivity", "--ei", "widthDp", "841")
     time.sleep(4); shot("12-half-width-841"); ui = texts(); note("ui", texts=ui)

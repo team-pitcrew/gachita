@@ -36,6 +36,8 @@ class Server(base: String) {
         JSONObject(call("POST", "/api/trips/$code/utterances", JSONObject().put("device", device).put("items", items), token)!!).getLong("lastSeq")
 
     /** 숏폼 구성(T43, #63 계약). 녹음에 동의한 참가자의 토큰으로. */
+    fun transcript(code: String, token: String): String = call("GET", "/api/trips/$code/transcript", null, token)!!
+
     fun shortform(code: String, token: String): String = call("GET", "/api/trips/$code/shortform", null, token)!!
 
     /**
@@ -60,6 +62,41 @@ class Server(base: String) {
             }
         } finally {
             c.disconnect()
+        }
+    }
+
+    /** 영상 만들기용 클립 받기. 호출자가 범위·주소를 확인하며, 취소 시 연결을 직접 끊을 수 있습니다. */
+    fun downloadShort(url: String, token: String, file: File, cancelled: () -> Boolean, connection: (HttpURLConnection?) -> Unit) {
+        val c = URL(url).openConnection() as HttpURLConnection
+        var complete = false
+        fun checkCancelled() { if (cancelled() || Thread.currentThread().isInterrupted) throw java.util.concurrent.CancellationException("영상 만들기를 취소했어요") }
+        try {
+            checkCancelled()
+            c.connectTimeout = 5000
+            c.readTimeout = 10000
+            c.instanceFollowRedirects = false // 참가자 토큰이 다른 주소로 따라가지 않게 합니다.
+            c.setRequestProperty("Authorization", "Bearer $token")
+            connection(c)
+            checkCancelled()
+            if (c.responseCode !in 200..299) throw ApiError(c.responseCode, "장면 소리를 받지 못했어요")
+            c.inputStream.use { input -> file.outputStream().use { output ->
+                val bytes = ByteArray(8192)
+                var total = 0L
+                while (true) {
+                    checkCancelled()
+                    val read = input.read(bytes)
+                    if (read < 0) break
+                    total += read
+                    if (total > 5_000_000L) throw IllegalArgumentException("장면 소리가 너무 커요")
+                    output.write(bytes, 0, read)
+                }
+            } }
+            checkCancelled()
+            complete = true
+        } finally {
+            connection(null)
+            c.disconnect()
+            if (!complete) file.delete()
         }
     }
 

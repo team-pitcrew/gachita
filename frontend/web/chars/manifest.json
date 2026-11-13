@@ -1,0 +1,362 @@
+[
+  {
+    "key": "basic",
+    "size": [
+      1254,
+      1254
+    ],
+    "alpha": [
+      0,
+      255
+    ],
+    "visibleBounds": [
+      158,
+      272,
+      1052,
+      1016
+    ],
+    "sha256": "7f2c74d467f806f1a21f09928de28e886e56a913ce7bdc5bf3778ab1ba964288"
+  },
+  {
+    "key": "basic-small",
+    "size": [
+      1254,
+      1254
+    ],
+    "alpha": [
+      0,
+      255
+    ],
+    "visibleBounds": [
+      232,
+      322,
+      1025,
+      959
+    ],
+    "sha256": "d49657f0bd13073c65c7a12c8a3dd965e81ea464fa1b18fa33c3795cdc7d48a7"
+  },
+  {
+    "key": "cap",
+    "size": [
+      1254,
+      1254
+    ],
+    "alpha": [
+      0,
+      255
+    ],
+    "visibleBounds": [
+      183,
+      221,
+      1053,
+      1044
+    ],
+    "sha256": "4abfc8e123cd3b2210ce92533c35c4ab263a87828f734312eb6cc233329de036"
+  },
+  {
+    "key": "glasses-small",
+    "size": [
+      1254,
+      1254
+    ],
+    "alpha": [
+      0,
+      255
+    ],
+    "visibleBounds": [
+      256,
+      295,
+      972,
+      985
+    ],
+    "sha256": "107c91e90e6640ed21f099ace67256ec007be8ef9a175e489ec5bc68d6885776"
+  },
+  {
+    "key": "glasses",
+    "size": [
+      1254,
+      1254
+    ],
+    "alpha": [
+      0,
+      255
+    ],
+    "visibleBounds": [
+      209,
+      250,
+      1021,
+      1052
+    ],
+    "sha256": "9524cc37a3b3a054622d6212b2755e4cba99aab620fb3d500e7acbf1503a6970"
+  },
+  {
+    "key": "travel",
+    "size": [
+      1254,
+      1254
+    ],
+    "alpha": [
+      0,
+      255
+    ],
+    "visibleBounds": [
+      147,
+      131,
+      1102,
+      1107
+    ],
+    "sha256": "b6b8b272520e80ded0a85b62fc2e04588456aceddd1ba1ae09d7807339fd30d2"
+  },
+  {
+    "key": "cap-small",
+    "size": [
+      1254,
+      1254
+    ],
+    "alpha": [
+      0,
+      255
+    ],
+    "visibleBounds": [
+      272,
+      283,
+      974,
+      965
+    ],
+    "sha256": "51d10d9e51e3cef6ce650ecece858066ebcd24a78abdde2d352a1f8c49863343"
+  },
+  {
+    "key": "game",
+    "size": [
+      1254,
+      1254
+    ],
+    "alpha": [
+      0,
+      255
+    ],
+    "visibleBounds": [
+      187,
+      182,
+      1016,
+      1080
+    ],
+    "sha256": "df8c4b84682da740d07daf6b413445dd6606b40a7dd0836f946b90f22abc4d56"
+  },
+  {
+    "key": "travel-small",
+    "size": [
+      1254,
+      1254
+    ],
+    "alpha": [
+      0,
+      255
+    ],
+    "visibleBounds": [
+      327,
+      358,
+      910,
+      931
+    ],
+    "sha256": "56f5b20cf0fbd6a836b4f6b935ed5f2bb8016ee31355168cfbaf6015216e4c34"
+  },
+  {
+    "key": "game-small",
+    "size": [
+      1254,
+      1254
+    ],
+    "alpha": [
+      0,
+      255
+    ],
+    "visibleBounds": [
+      279,
+      321,
+      949,
+      981
+    ],
+    "sha256": "04045618e961cd891d9f617e4bd71dd50f76b518a5d766d637bbc8212c141d81"
+  },
+  {
+    "key": "sport",
+    "size": [
+      1254,
+      1254
+    ],
+    "alpha": [
+      0,
+      255
+    ],
+    "visibleBounds": [
+      161,
+      269,
+      992,
+      991
+    ],
+    "sha256": "204d895a8ee6c98459b30f736233f6a2496a458de7ec371022d13bedef31906a"
+  },
+  {
+    "key": "sport-small",
+    "size": [
+      1254,
+      1254
+    ],
+    "alpha": [
+      0,
+      255
+    ],
+    "visibleBounds": [
+      128,
+      215,
+      1044,
+      1057
+    ],
+    "sha256": "1611adae969fffaa327a12f0321b6486ea0e62abca2ae5718d22d62b10a0d7d4"
+  },
+  {
+    "key": "pet",
+    "size": [
+      1254,
+      1254
+    ],
+    "alpha": [
+      0,
+      255
+    ],
+    "visibleBounds": [
+      191,
+      222,
+      1011,
+      1041
+    ],
+    "sha256": "fcd7de7a13d3bdba2856794d928712524df6361a0ac3c94a37d3beae3e5588c7"
+  },
+  {
+    "key": "pet-small",
+    "size": [
+      1254,
+      1254
+    ],
+    "alpha": [
+      0,
+      255
+    ],
+    "visibleBounds": [
+      289,
+      361,
+      950,
+      994
+    ],
+    "sha256": "aa5bfc1d163b1322d2250ee6322063aae70262eeaba45c387ea5aae3a55fbaf8"
+  },
+  {
+    "key": "camping",
+    "size": [
+      1254,
+      1254
+    ],
+    "alpha": [
+      0,
+      255
+    ],
+    "visibleBounds": [
+      235,
+      233,
+      960,
+      1057
+    ],
+    "sha256": "66d2badf25127ffaec8454814f53bb92382212f8346b2d5adc47c8fafe7397a4"
+  },
+  {
+    "key": "camping-small",
+    "size": [
+      1254,
+      1254
+    ],
+    "alpha": [
+      0,
+      255
+    ],
+    "visibleBounds": [
+      300,
+      366,
+      933,
+      899
+    ],
+    "sha256": "f54e57c325354457475936ed753ba050fccb498236de77e8428bcd191396b33a"
+  },
+  {
+    "key": "office",
+    "size": [
+      1254,
+      1254
+    ],
+    "alpha": [
+      0,
+      255
+    ],
+    "visibleBounds": [
+      156,
+      240,
+      1047,
+      1051
+    ],
+    "sha256": "59c4561b5871da2951d58345d2f3993894451a39f3a572bd9ecd59832dfcb1d2"
+  },
+  {
+    "key": "office-small",
+    "size": [
+      1254,
+      1254
+    ],
+    "alpha": [
+      0,
+      255
+    ],
+    "visibleBounds": [
+      273,
+      337,
+      968,
+      973
+    ],
+    "sha256": "b0e021577755691e342d933e6b625cbbc07aba2dfb075e1e4e6f76694f1b0179"
+  },
+  {
+    "key": "healing",
+    "size": [
+      1254,
+      1254
+    ],
+    "alpha": [
+      0,
+      255
+    ],
+    "visibleBounds": [
+      129,
+      189,
+      1024,
+      1097
+    ],
+    "sha256": "672d5549a42261ad176044d1f572f9b4274078f63a0ea6b536f90ffdc1755aa7"
+  },
+  {
+    "key": "healing-small",
+    "size": [
+      1254,
+      1254
+    ],
+    "alpha": [
+      0,
+      255
+    ],
+    "visibleBounds": [
+      246,
+      363,
+      998,
+      982
+    ],
+    "sha256": "859ee26b7bd3fc3197429cb15d913da2a41dcdec641cf3fbc763c4a0b2b1326f"
+  }
+]
