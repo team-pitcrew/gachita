@@ -92,6 +92,14 @@ locals {
         { actions = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"], resources = ["${data.aws_s3_bucket.data.arn}/postgres/db/*"] },
       ]
     }
+    # 지정 시점 복구(T57, infra.sh restore)가 옆에 세우는 db-pitr: 같은 접두사를 읽기만 한다(쓰기·WAL 보관 없음)
+    pg-restore = {
+      sa = "gachita-db:db-pitr"
+      statements = [
+        { actions = ["s3:ListBucket"], resources = [data.aws_s3_bucket.data.arn] },
+        { actions = ["s3:GetObject"], resources = ["${data.aws_s3_bucket.data.arn}/postgres/db/*"] },
+      ]
+    }
     # ALB 컨트롤러(ADR-0017): 공식 정책(v3.6.2 docs/install/iam_policy.json)의 동작에서 WAF·Shield·Cognito를 뺀 것.
     # ponytail: 자원 범위는 여기서 다시 적지 않고 권한 경계(account/의 gachita-workload-boundary)가 우리 태그와
     #           ALB 이름(gachita-*)으로 좁힌다. 이 역할의 실제 권한은 둘의 교집합이다.
