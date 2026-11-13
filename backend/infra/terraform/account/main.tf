@@ -99,3 +99,26 @@ resource "aws_iam_role" "github" {
   assume_role_policy   = each.value.json
   max_session_duration = 3600
 }
+
+# ---- 밖에서 도는 점검(ADR-0016 1절의 '사용자 쪽에서 보는 가용성', T62) ----
+# Route 53이 30초마다 세 지역에서 실제 주소의 /healthz(Cloudflare → ALB → API → Postgres 둘)를 부른다. 지표(HealthCheckStatus)는 us-east-1.
+# Route 53 상태 확인은 IAM에서 이름·태그로 좁힐 수 없어(같이 쓰는 계정의 남의 것까지 고칠 수 있음) 적용 역할에 주지 않고,
+# 사람이 로컬 자격으로 적용하는 이 폴더에 둔다. 접어도 남아 접힌 동안은 실패로 센다(그동안 서비스가 없으므로 맞는 값).
+# 주소가 Cloudflare에서 열린 뒤 채워 적용한다. 비용: 다른 곳 주소 $0.75 + HTTPS $2.00 = 월 $2.75(AWS 가격표, 11/13)
+variable "health_check_host" {
+  description = "밖에서 점검할 서비스 주소(예: gachita.mangowhois.ai). 비우면 만들지 않는다"
+  type        = string
+  default     = ""
+}
+
+resource "aws_route53_health_check" "service" {
+  count             = var.health_check_host == "" ? 0 : 1
+  fqdn              = var.health_check_host
+  type              = "HTTPS"
+  port              = 443
+  resource_path     = "/healthz"
+  request_interval  = 30
+  failure_threshold = 3
+  regions           = ["ap-northeast-1", "ap-southeast-1", "us-west-2"] # 가장 적은 셋
+  tags              = { Name = "gachita-healthz" }
+}
