@@ -150,6 +150,7 @@ class Car(ctx: Context, private val onChange: (CarStatus) -> Unit) {
         runCatching { vehicle?.release() }
         runCatching { ux?.unregisterListener() }
         runCatching { aaos?.disconnect() }
+        main.removeCallbacksAndMessages(null) // 기다리던 내비 답과 시간 초과를 버린다(화면이 없어진 뒤 불리지 않게)
         runCatching { navi.removeListener(naviListener); navi.release() }
         runCatching { tts?.release() }
     }
