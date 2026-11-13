@@ -109,7 +109,7 @@ before(async () => {
   await migrate(); // 여러 번 실행해도 같아야 한다
   // 예전에 한 DB에 같이 두던 표가 남았으면 치운다.
   await tripsDb().query("DROP TABLE IF EXISTS voice_prints, profiles"); // make run(한 DB)이면 목소리 값이 프로필을 가리킨다(외래 키째 다시 만들어짐)
-  await tripsDb().query("TRUNCATE trips");
+  await tripsDb().query("TRUNCATE trips CASCADE"); // 여행 목소리 값(trip_voice_prints)은 외래 키로 함께
   await profilesDb().query("TRUNCATE profiles CASCADE"); // 목소리 값(voice_prints)은 외래 키로 함께
   await new Promise((ok) => server.listen(0, () => ok((base = `http://localhost:${server.address().port}`))));
 });
@@ -1226,6 +1226,12 @@ test("손님 참가자도 여행에 목소리를 등록하면 화자가 붙는�
   await call("PATCH", `${t}/participants/${b.id}`, { consent: false });
   assert.equal(await prints(b.id), 0);
   assert.equal(await prints(c.id), 1, "다른 사람의 값은 그대로");
+  // 옛 파드가 끄기를 받아 값이 남았더라도, 다시 켜면 지운다(다시 등록해야 쓰임)
+  await tripsDb().query("INSERT INTO trip_voice_prints (trip_code, participant_id, vector, seconds) VALUES ($1, $2, '{1}', 3)", [trip.code, b.id]);
+  await call("PATCH", `${t}/participants/${b.id}`, { consent: true }, b.token);
+  assert.equal(await prints(b.id), 0, "꺼져 있다 켜지면 옛 값을 지움");
+  await call("PATCH", `${t}/participants/${c.id}`, { consent: true }, c.token);
+  assert.equal(await prints(c.id), 1, "켜진 채로 다시 켜면 그대로");
   const [, me] = await call("POST", "/api/profiles", { name: "삼촌" });
   await postRaw("/api/profiles/me/voice", wav(260, 3), me.token);
   const [, d] = await call("POST", `${t}/participants`, { seat: "ROW_1_RIGHT", consent: false }, me.token);
@@ -1235,8 +1241,9 @@ test("손님 참가자도 여행에 목소리를 등록하면 화자가 붙는�
   const r4 = await (await postRaw(`${t}/voice-match?row=1`, wav(260, 1.5), a.token)).json();
   assert.deepEqual([r4.participantId, r4.profileId], [d.id, me.id], "동의하면 프로필 등록값으로 찾음");
 
-  // 48시간이 지나 여행이 지워지면 값도 함께
+  // 48시간이 지나면 대조에 쓰이지 않고(여행이 읽히지 않음), 여행을 치울 때 함께 지워진다(외래 키 — 옛 판의 치우기도)
   await tripsDb().query("UPDATE trips SET created_at = now() - interval '49 hours' WHERE code = $1", [trip.code]);
+  assert.equal((await postRaw(`${t}/voice-match?row=1`, wav(210, 1.5), a.token)).status, 404);
   for (let i = 0; i < 3 && (await prints(a.id)); i++) await call("POST", "/api/trips", {});
   assert.deepEqual([await prints(a.id), await prints(c.id)], [0, 0]);
 });

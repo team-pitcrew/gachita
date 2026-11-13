@@ -1101,8 +1101,9 @@ async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
         const was = p.consent;
         p.consent = consent;
         if (!consent) trip.recording = false;
-        // 동의가 꺼지면 이 여행에 등록한 목소리 값도 바로 지운다(T38, ADR-0019).
-        if (!consent) await client.query("DELETE FROM trip_voice_prints WHERE trip_code = $1 AND participant_id = $2", [trip.code, p.id]);
+        // 동의가 꺼지면 이 여행에 등록한 목소리 값도 바로 지운다(T38, ADR-0019). 꺼져 있다 켜질 때도 지운다 —
+        // 배포 중 옛 파드가 끄기를 받아 남긴 값이 다시 켠 뒤에 쓰이지 않게(다시 켰으면 다시 등록한다).
+        if (!consent || !was) await client.query("DELETE FROM trip_voice_prints WHERE trip_code = $1 AND participant_id = $2", [trip.code, p.id]);
         // 켜져 있던 동의를 끊을 때만 세대를 올린다. 받아 둔 발화도 못 쓰게 한다(ADR-0007). 이미 꺼진 것을 다시 꺼도 그대로.
         if (was && !consent) await bumpGeneration(trip, client);
       }

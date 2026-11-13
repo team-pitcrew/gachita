@@ -41,13 +41,13 @@ try {
   const avg = (a) => a.reduce((s, x) => s + x, 0) / a.length;
   const pct = (a) => `${Math.round(avg(a.map(Number)) * 100)}%`;
 
-  console.log(`| 등록 | 발화 | 등록 길이 | 발화 길이 | 같은 목소리 유사도 | 다른 목소리 최고 유사도 | ${VOICES.length}명 중 1등이 맞음 | 두 명 후보 · 맞힘 | 두 명 후보 · 틀림 | 두 명 후보 · 모름 |`);
-  console.log("|---|---|---|---|---|---|---|---|---|---|");
+  console.log(`| 등록 | 발화 | 등록 길이 | 발화 길이 | 같은 목소리 유사도 | 다른 목소리 최고 유사도 | 기준을 넘은 발화 | ${VOICES.length}명 중 1등이 맞음 | 두 명 후보 · 맞힘 | 두 명 후보 · 틀림 | 두 명 후보 · 모름 | 말한 사람이 후보에 없음(두 명) · 잘못 붙임 |`);
+  console.log("|---|---|---|---|---|---|---|---|---|---|---|---|");
   for (const k of [1, 2, 3]) {
     const prints = Object.fromEntries(VOICES.map((v) => [v, embed(join2(enroll[v].slice(0, k)))]));
     const enrollSecs = avg(VOICES.map((v) => secs(join2(enroll[v].slice(0, k)))));
     for (const kind of ["짧은", "보통"]) {
-      const same = [], other = [], top = [], right = [], wrong = [], unknown = [];
+      const same = [], other = [], top = [], right = [], wrong = [], unknown = [], absent = [];
       const lens = [];
       for (const v of VOICES) {
         for (const s of tests[v][kind]) {
@@ -65,12 +65,15 @@ try {
             wrong.push(best >= THRESHOLD && x >= sims[v]);
             unknown.push(best < THRESHOLD);
           }
+          // 말한 사람이 후보에 없을 때(등록하지 않은 손님, 줄 판정이 틀림, 동의하지 않은 사람): 다른 두 사람 가운데 누가 기준을 넘으면 잘못 붙는다
+          for (let i = 0; i < others.length; i++) for (let j = i + 1; j < others.length; j++) absent.push(Math.max(others[i], others[j]) >= THRESHOLD);
         }
       }
-      console.log(`| ${k}문장 | ${kind} | ${enrollSecs.toFixed(1)}초 | ${avg(lens).toFixed(1)}초 | ${avg(same).toFixed(3)} | ${avg(other).toFixed(3)} | ${pct(top)} | ${pct(right)} | ${pct(wrong)} | ${pct(unknown)} |`);
+      const passed = same.filter((x) => x >= THRESHOLD).length;
+      console.log(`| ${k}문장 | ${kind} | ${enrollSecs.toFixed(1)}초 | ${avg(lens).toFixed(1)}초 | ${avg(same).toFixed(3)} | ${avg(other).toFixed(3)} | ${passed}/${same.length} | ${pct(top)} | ${pct(right)} | ${pct(wrong)} | ${pct(unknown)} | ${pct(absent)} |`);
     }
   }
-  console.log(`\n목소리 ${VOICES.length}개(${VOICES.join(", ")}), 발화 종류마다 목소리당 ${SHORT.length}개, 두 명 후보는 그 목소리와 다른 ${VOICES.length - 1}개 각각의 쌍. 기준 ${THRESHOLD}.`);
+  console.log(`\n목소리 ${VOICES.length}개(${VOICES.join(", ")}), 발화 종류마다 목소리당 ${SHORT.length}개. 두 명 후보는 그 목소리와 다른 ${VOICES.length - 1}개 각각의 쌍, 말한 사람이 없는 두 명 후보는 다른 목소리 둘의 조합(${((VOICES.length - 1) * (VOICES.length - 2)) / 2}개). 기준 ${THRESHOLD}.`);
 } finally {
   rmSync(dir, { recursive: true, force: true });
 }

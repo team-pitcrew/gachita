@@ -17,7 +17,7 @@
 | `GET /utterances` | 녹음에 동의한 참가자(동기화 목적 포함) |
 | `DELETE /utterances` | 프로필로 참가한 참가자(자기 이름이 붙은 발화만) |
 | `GET /transcript` | 녹음에 동의한 참가자 |
-| `POST /participants/:id/voice` | 그 참가자 본인의 토큰 + 그 참가자가 녹음에 동의함(T38). 값은 동의가 꺼지면 바로, 아니면 48시간에 지운다 |
+| `POST /participants/:id/voice` | 그 참가자 본인의 토큰 + 그 참가자가 녹음에 동의함(T38). 값은 동의가 꺼지거나 다시 켜지면 바로 지우고, 48시간이 지나면 쓰이지 않다가 여행을 치울 때 함께 지운다 |
 | `POST /voice-match` | 녹음에 동의한 참가자. 발화 줄에 화자를 채우는 것은 그 발화를 올린 참가자만 |
 | `POST /moments` | 토큰은 없어도 된다. 있으면 고른 사람의 프로필 앨범에 복사한다 |
 | `GET /scene-suggestions`, `GET /shortform` | 녹음에 동의한 참가자(기록본과 같음, T43) |
