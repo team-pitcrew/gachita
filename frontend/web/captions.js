@@ -86,13 +86,14 @@ export function createCaptions({ getTrip, getParticipant, request, refreshTrip }
     if (s.busy || s.reading) return pollLater(s);
     const revision = s.revision;
     const controller = s.readController = new AbortController();
+    const interrupted = new Promise((resolve, reject) => controller.signal.addEventListener("abort", () => reject(Object.assign(new Error("자막 읽기를 멈췄어요."), { status: 0 })), { once: true }));
     const timeout = setTimeout(() => controller.abort(), 10000);
     s.reading = true;
     if (!background) s.busy = true;
     if (!background && s.selected) editor(s);
     let repaint = !background;
     try {
-      const data = await request(s.code, "GET", "/transcript", null, controller.signal);
+      const data = await Promise.race([request(s.code, "GET", "/transcript", null, controller.signal), interrupted]);
       if (!valid(s)) return sync();
       if (revision !== s.revision) return;
       if (data.generation !== s.generation) { close(true); return toast("기록 동의가 바뀌었어요. 여행 화면에서 다시 확인해 주세요."); }
