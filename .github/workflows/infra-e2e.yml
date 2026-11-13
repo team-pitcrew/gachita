@@ -60,6 +60,7 @@ jobs:
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq ansible-core
           if ! lsmod | grep -q '^br_netfilter'; then echo "br_netfilter가 없어 올립니다"; sudo modprobe br_netfilter; fi
+          df -h / # K3s 이미지 정리는 디스크 사용률을 본다
       - name: 물결 E2E
         run: E2E_OUT="$RUNNER_TEMP/e2e" backend/infra/cluster/e2e-local.sh
       - name: 요약

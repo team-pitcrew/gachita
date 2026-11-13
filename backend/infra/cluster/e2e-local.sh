@@ -61,6 +61,8 @@ diagnose() {
        | "  \(.kind)/\(.namespace)/\(.name): \(.health.status) \(.health.message // "")")' || true
   echo "--- 돌지 않는 파드"
   kubectl get pods -A --no-headers | awk '$4 != "Running" && $4 != "Completed"' || true
+  echo "--- 경고 이벤트(마지막 20개)"
+  kubectl get events -A --field-selector type=Warning --sort-by=.lastTimestamp 2>/dev/null | tail -20 || true
   echo "--- API 로그"
   kubectl -n gachita logs deploy/gachita-api --tail=30 2>/dev/null || true
 }
@@ -155,6 +157,8 @@ docker exec "$id-k3s" cat /etc/rancher/k3s/k3s.yaml | sed "s#https://127.0.0.1:6
 retry 60 kubectl wait --for=condition=Ready node --all --timeout=5s
 retry 60 kubectl -n kube-system rollout status deploy/coredns --timeout=5s
 docker save "$image" | docker exec -i "$id-k3s" ctr -n k8s.io images import - >/dev/null
+# 물결 4까지 쓰이지 않는 이미지라 kubelet의 이미지 정리(디스크 85% 넘으면 안 쓰는 것부터 지움)가 먼저 지우지 않게 고정한다
+docker exec "$id-k3s" ctr -n k8s.io images label "docker.io/library/$image" io.cri-containerd.pinned=pinned >/dev/null
 docker cp -q "$OUT/gachita.git" "$id-k3s:/var/lib/rancher/gachita.git"
 
 # ---------------------------------------------------------------- 4 구축 5단계
