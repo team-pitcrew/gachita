@@ -35,7 +35,7 @@ backend/infra/gitops/
 backend/infra/gitops/fill-account.sh          # 지금 aws 자격의 계정 번호로. 다시 돌려도 같은 결과
 ```
 
-API 이미지 태그(`apps/api/overlays/dev`)도 GHCR에 올라간 태그여야 합니다. 지금 값은 `c71304da7098`(11/13 develop)입니다.
+API 이미지 태그(`apps/api/overlays/dev`)도 GHCR에 올라간 태그여야 합니다. 지금 값은 `c74a82915936`(11/13, 병합 때 `ci.yml`의 `publish`가 올림)입니다.
 
 ## 새 판 내보내기
 

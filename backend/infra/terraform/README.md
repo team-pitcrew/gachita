@@ -86,7 +86,7 @@ gh workflow run infra-secrets -R team-pitcrew/gachita --ref develop   # GitHub �
 # 1. 계정 번호 자리 표시(000000000000)를 이 계정 번호로. 역할 ARN과 버킷 이름에 쓰인다
 backend/infra/gitops/fill-account.sh                 # 지금 aws 자격의 계정. 번호를 직접 줄 수도 있음
 # 2. 클러스터가 받을 API 이미지 태그(GHCR에 올라가 있어야 함)
-make push && make deploy-tag TAG=<올린 태그>          # 지금 값은 c71304da7098(11/13 develop)
+make push && make deploy-tag TAG=<올린 태그>          # 지금 값은 c74a82915936(11/13, 병합 때 자동으로 올라감)
 # 3. 이 변경을 PR로 develop에 병합
 ```
 
