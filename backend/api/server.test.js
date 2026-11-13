@@ -1306,6 +1306,17 @@ test("차 화면에서 고친 화자를 발화 줄에 남긴다(T37)", async () 
   assert.equal((await call("PATCH", `${t}/utterances/phone/1`, { participantId: b.id }, a.token))[0], 404, "올린 적 없는 기기");
   assert.equal((await call("PATCH", `${t}/utterances/car`, { participantId: b.id }, a.token))[0], 405);
 
+  // 사람이 '모름'으로 고친 줄은 뒤늦게 끝난 대조가 다시 채우지 않는다(Astra 지적)
+  assert.equal((await postRaw(`${t}/participants/${a.id}/voice`, wav(210, 3), a.token)).status, 200);
+  const late = await (await postRaw(`${t}/voice-match?row=1&device=car&seq=1`, wav(210, 1.5), a.token)).json();
+  assert.deepEqual([late.participantId, late.applied], [a.id, false], "찾기는 하지만 고친 줄에는 붙이지 않음");
+  assert.equal((await call("GET", `${t}/transcript`, null, a.token))[1].utterances[0].participantId, undefined);
+
+  // 기기 이름에 공백·한글이 있어도 주소의 마디를 풀어 찾는다. 잘못된 인코딩은 400
+  await call("POST", `${t}/utterances`, { device: "차 1", generation: 1, items: [{ seq: 1, at: trip.createdAt + 2000, text: "물 줘" }] }, a.token);
+  assert.equal((await call("PATCH", `${t}/utterances/${encodeURIComponent("차 1")}/1`, { participantId: b.id }, a.token))[1].participantId, b.id);
+  assert.equal((await call("PATCH", `${t}/utterances/%E0%A4%A/1`, { participantId: b.id }, a.token))[0], 400);
+
   // 프로필 참가자로 고치면 피드에도 나오도록 profile_id가 같이 붙고, 동의하지 않은 사람의 이름은 붙이지 않는다
   const [, me] = await call("POST", "/api/profiles", { name: "엄마" });
   const [, m] = await call("POST", `${t}/participants`, { seat: "ROW_1_RIGHT", consent: true }, me.token);
