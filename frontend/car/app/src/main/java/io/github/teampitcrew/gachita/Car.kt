@@ -1,11 +1,15 @@
 package io.github.teampitcrew.gachita
 
 import ai.pleos.playground.navi.constants.NaviErrorCode
+import ai.pleos.playground.navi.constants.WaypointCmdType
 import ai.pleos.playground.navi.constants.WaypointIndex
+import ai.pleos.playground.navi.data.CurrentLocationInfo
 import ai.pleos.playground.navi.data.RequestWaypointInfo
 import ai.pleos.playground.navi.data.RouteInfo
 import ai.pleos.playground.navi.data.RouteStartInfo
 import ai.pleos.playground.navi.data.RouteWithWaypointsRequest
+import ai.pleos.playground.navi.data.TripInfo
+import ai.pleos.playground.navi.data.TripRequest
 import ai.pleos.playground.navi.data.WaypointChangedInfo
 import ai.pleos.playground.navi.helper.NaviHelper
 import ai.pleos.playground.navi.helper.listener.NaviHelperEventListener
@@ -57,11 +61,40 @@ class Car(ctx: Context, private val onChange: (CarStatus) -> Unit) {
         override fun onFailed(e: Exception) { Log.w(TAG, "기어 알림 실패", e); update { it.copy(gear = null) } }
     }
 
+    /**
+     * 내비에 묻고 답 알림을 한 번 기다린다(메인 스레드). ms 안에 오지 않으면 null. 같은 물음이 겹치면 앞의 것은 null로 끝낸다.
+     * NaviHelper는 물음의 답을 리스너 알림으로 돌려준다(경유지 추가는 약 6초 뒤 onWaypointChanged, 11/12).
+     */
+    private inner class Wait<T>(private val ms: Long) {
+        private var done: ((T?) -> Unit)? = null
+        private var n = 0
+
+        fun start(done: (T?) -> Unit, call: () -> Unit) {
+            answer(null)
+            if (!status.navi) return done(null)
+            this.done = done
+            val my = ++n
+            main.postDelayed({ if (n == my) answer(null) }, ms)
+            runCatching(call).onFailure { Log.w(TAG, "내비 호출 실패", it); answer(null) }
+        }
+
+        fun answer(v: T?) { val d = done ?: return; done = null; d(v) }
+    }
+
+    private val here = Wait<CurrentLocationInfo>(2_000)
+    private val trip = Wait<TripInfo>(3_000)
+    private val stop = Wait<Boolean>(20_000) // 11/13: 수락 뒤 onWaypointChanged까지 7.6초
+
     private val naviListener = object : NaviHelperEventListener {
         override fun onRouteStarted(routeStartInfo: RouteStartInfo) = naviEvent("경로 시작 ${routeStartInfo.name ?: ""}")
-        override fun onWaypointChanged(waypointChangedInfo: WaypointChangedInfo) = naviEvent("경유지 바뀜") // T9가 이 알림을 보고 '경유 반영'으로 바꾼다
-        override fun onRouteCancelled() = naviEvent("안내 취소")
-        override fun onError(errorCode: NaviErrorCode) = naviEvent("내비 오류 ${errorCode.name}")
+        override fun onWaypointChanged(waypointChangedInfo: WaypointChangedInfo) {
+            naviEvent("경유지 ${waypointChangedInfo.cmdType} ${waypointChangedInfo.routeStartInfo?.name ?: ""}")
+            if (waypointChangedInfo.cmdType == WaypointCmdType.ADD) main.post { stop.answer(true) }
+        }
+        override fun onRouteCancelled() = naviEvent("안내 취소") // 경유지를 더하면 안내가 한 번 끊겼다 다시 시작한다(11/13). 실패로 보지 않는다
+        override fun onError(errorCode: NaviErrorCode) { naviEvent("내비 오류 ${errorCode.name}"); main.post { stop.answer(false) } }
+        override fun onCurrentLocationInfo(currentLocationInfo: CurrentLocationInfo) { main.post { here.answer(currentLocationInfo) } }
+        override fun onTripInfo(tripInfo: TripInfo) { main.post { trip.answer(tripInfo) } }
     }
 
     /**
@@ -123,6 +156,18 @@ class Car(ctx: Context, private val onChange: (CarStatus) -> Unit) {
     }
 
     fun speak(text: String) { if (status.voice) runCatching { tts?.speak(text, true) } }
+
+    /** 내비가 아는 지금 위치. 화면은 넘어가지 않는다(0.1~0.2초, 11/12). 모르면 null, null. */
+    fun here(done: (Double?, Double?) -> Unit) = here.start({ done(it?.latitude, it?.longitude) }) { navi.getCurrentLocationInfo() }
+
+    /** 그곳까지의 거리(m)와 시간(초). 들르면 늘어나는 시간이 아니다. 화면은 넘어가지 않는다. */
+    fun distanceTo(p: Place, done: (Int?, Int?) -> Unit) =
+        trip.start({ done(it?.distance, it?.eta) }) { navi.requestTrip(TripRequest(latitude = p.lat, longitude = p.lng, poiId = "", poiName = p.name, poiSubId = "0")) }
+
+    /** 지금 경로에 들를 곳을 더한다. 내비가 앞으로 나오고, 반영 알림(onWaypointChanged ADD)이 오면 true. 오류나 20초 넘으면 false. */
+    fun addStop(p: Place, done: (Boolean) -> Unit) = stop.start({ done(it == true) }) {
+        navi.addWaypoint(RequestWaypointInfo(latitude = p.lat, longitude = p.lng, poiName = p.name, waypointIndex = WaypointIndex.FIRST, poiId = "", address = p.address, poiSubId = "0"))
+    }
 
     /** 순정 내비에 목적지와 들를 곳(둘까지)을 보낸다. 반영은 onWaypointChanged로 온다(T9). */
     fun route(dest: Place, stops: List<Place>): Boolean {
