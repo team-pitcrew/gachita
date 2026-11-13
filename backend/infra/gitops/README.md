@@ -56,17 +56,17 @@ kubectl -n gachita create service nodeport probe --tcp=80:80
 
 - `kubectl kustomize` + `kubeconform -strict`(쿠버네티스 기본 + 공개 CRD 모음): `bootstrap` 12, `platform` 14, `apps/api/overlays/dev` 15(여기까지 `ci.yml`), `apps/db` 14, `apps/db/recover` 14, `apps/edge` 6, `cluster/argocd` 58(여기까지 `infra-e2e`. Argo CD 원본의 CRD 3개는 스키마 모음에 CRD 스키마가 없어 건너뜀)개 모두 통과(11/13).
 - 차트 다섯(cert-manager, cnpg, external-secrets, traefik, barman-cloud)을 이 값으로 `helm template --kube-version 1.36.6`해 그려짐을 확인. 컨트롤러마다 우선순위, 컨트롤 플레인 노드 선택자, 요청값이 들어감.
-- **로컬 물결 E2E(11/13, [`backend/infra/cluster/e2e-local.sh`](../cluster/e2e-local.sh). 인프라가 바뀐 PR마다 `infra-e2e` 워크플로가 같은 스크립트를 돎)**: Docker 위 K3s `rancher/k3s:v1.36.6-k3s1` 한 노드에 구축 5~7단계와 같은 일(우선순위 클래스, `backend/infra/cluster/argocd`로 Argo CD v3.6.1, `templates/root-app.yaml.j2`로 그린 뿌리 앱)을 하고, 이 폴더를 클러스터 안 git 서버에서 읽게 해 뿌리 앱부터 끝까지 돌렸습니다. 대상은 develop `db53cba`. 11개 앱 모두 Synced·Healthy, 뿌리 앱을 넣고 2분 33초(스크립트 전체 5분 30초. 이 맥의 Docker Desktop이고 K3s 이미지와 API 빌드 캐시가 있던 상태).
+- **로컬 물결 E2E(11/13, [`backend/infra/cluster/e2e-local.sh`](../cluster/e2e-local.sh). 인프라가 바뀐 PR마다 `infra-e2e` 워크플로가 같은 스크립트를 돎)**: Docker 위 K3s `rancher/k3s:v1.36.6-k3s1` 한 노드에 구축 5~7단계와 같은 일(우선순위 클래스, `backend/infra/cluster/argocd`로 Argo CD v3.6.1, `templates/root-app.yaml.j2`로 그린 뿌리 앱)을 하고, 이 폴더를 클러스터 안 git 서버에서 읽게 해 뿌리 앱부터 끝까지 돌렸습니다. 표는 `infra-e2e` 워크플로의 GitHub 실행기 기록(11/13 run 43385923741, 이 PR 머리 `1285626`)입니다. 11개 앱 모두 Synced·Healthy, 뿌리 앱을 넣고 575초(스크립트 전체 671초). 이 맥의 Docker Desktop에서는 같은 일이 2분 24초였습니다(이미지 캐시가 있던 상태).
 
-  | 물결 | 앱 | 처음 보임(UTC) | 그 물결의 마지막 앱이 Healthy |
+  | 물결 | 앱 | 처음 보임(UTC) | 그 물결의 마지막 앱이 Synced·Healthy |
   |---|---|---|---|
-  | 0 | `cluster-base`, `gateway-api` | 05:30:35 | 05:30:43(gateway-api) |
-  | 1 | `cert-manager`, `cnpg`, `external-secrets` | 05:30:43 | 05:31:37(external-secrets) |
-  | 2 | `barman-cloud`, `pod-identity-webhook`, `secret-stores` | 05:31:37 | 05:31:58(barman-cloud) |
-  | 3 | `db` | 05:32:00 | 05:33:03 |
-  | 4 | `api` | 05:33:03 | 05:33:05 |
+  | 0 | `cluster-base`, `gateway-api` | 07:31:27 | 07:35:08(gateway-api, CRD 건강 반영이 늦음) |
+  | 1 | `cert-manager`, `cnpg`, `external-secrets` | 07:35:08 | 07:39:25(cert-manager) |
+  | 2 | `barman-cloud`, `pod-identity-webhook`, `secret-stores` | 07:39:27 | 07:39:46(barman-cloud) |
+  | 3 | `db` | 07:39:46 | 07:40:35 |
+  | 4 | `api` | 07:40:35 | 07:40:57 |
 
-  - 다음 물결은 앞 물결의 마지막 앱이 Healthy로 기록된 뒤에 처음 보임(스크립트가 기록 순서로 확인하고, 어긋나면 실패).
+  - 다음 물결은 앞 물결의 마지막 앱이 Synced·Healthy로 기록된 뒤에 처음 보임(스크립트가 기록 순서로 확인하고, 어긋나면 실패).
   - 쿠버네티스 DNS 이름으로 `http://gachita-api.gachita.svc.cluster.local/healthz` 200 `{"ok":true}`(일회용 파드에서). `/healthz`는 Postgres 하나의 두 데이터베이스(trips, profiles)에 모두 닿아야 200.
   - **로컬에서 대신하거나 뺀 것**(전체는 스크립트 머리): `aws-load-balancer-controller`(물결 3)와 `edge`(물결 5) 앱은 빼고 스키마만 봄, SSM 대신 External Secrets의 가짜 공급자, Postgres 백업 플러그인·ObjectStore·정기 백업 뺌, API 이미지는 HEAD에서 로컬로 만들어 K3s에 넣음, Cilium 대신 K3s 기본 flannel에 네트워크 정책을 끄고 Cilium 정책 CRD만 넣음.
   - **로컬에서 확인하지 못한 것**: 네트워크 정책이 실제로 막는지(Cilium이 있어야 함), SSM·STS·S3에 닿는지, WAL 보관과 백업·복구(`recover/`는 스키마만), ALB와 Cloudflare, 노드 예약값. 모두 실제 계정에서 봅니다(T24·T26·T53).
