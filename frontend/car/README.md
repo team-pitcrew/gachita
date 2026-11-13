@@ -1,6 +1,6 @@
 # 같이타 차량 앱
 
-Pleos Connect용 Kotlin·Compose 앱입니다(`io.github.teampitcrew.gachita`). 차량에서 가족을 골라 여행을 만들고 '기록 중' 화면과 기록 동의를 보여 줍니다(T7). 기록 중이면 차량 마이크로 수음해 Pleos STT(ON_DEVICE)로 받아 적고, 발화를 순번과 함께 앱 안 보관함에 쌓습니다(T36). 주행 중에도 앞에 남는 화면이고, 주행 제한 중에는 설정과 진단을 가립니다(T11). 쉬어 가자는 부탁을 알아채 다음 휴게소를 제안하고, 수락하면 순정 내비에 경유지로 넣습니다(T9).
+Pleos Connect용 Kotlin·Compose 앱입니다(`io.github.teampitcrew.gachita`). 차량에서 가족을 골라 여행을 만들고 '기록 중' 화면과 기록 동의를 보여 줍니다(T7). 기록 중이면 차량 마이크로 수음해 Pleos STT(ON_DEVICE)로 받아 적고, 발화를 순번과 함께 앱 안 보관함에 쌓습니다(T36). 주행 중에도 앞에 남는 화면이고, 주행 제한 중에는 설정과 진단을 가립니다(T11). 쉬어 가자는 부탁을 알아채 다음 휴게소를 제안하고, 수락하면 순정 내비에 경유지로 넣습니다(T9). 장소가 붙은 할 일을 모아 그곳에 주차하면 알립니다(T40).
 
 ## 빌드와 실행
 
@@ -37,6 +37,13 @@ adb shell am start --user 10 -n io.github.teampitcrew.gachita/.MainActivity --es
 - 연결이 끊겨 부탁을 `accepted`로 바꾸지 못하면 경유지를 넣지 않고 실패로 알립니다(확인되지 않은 동작을 하지 않음). 그 부탁은 서버에 `proposed`로 남습니다.
 - 경로 요청과 경유지 추가에는 `pleos.car.permission.NAVI_ROUTE_SEARCH`가 필요합니다(없으면 `SecurityException`).
 
+## 도착 브리핑(T40)
+
+- **모으기:** 받아 적은 말이 "○○에서 …자/…야 돼(되)/…야지" 꼴이면 ○○을 장소로, 말 그대로를 할 일로 여행마다 차 안 파일(`files/todos-<여행 코드>.json`)에 둡니다. 서버의 부탁에는 장소 칸이 없어 서버로 보내지 않습니다(T39 쪽에서 정하면 옮김). 쉬어 가자는 부탁(T9)과 열린 제안의 답이 먼저입니다.
+- **도착:** 기어가 P가 아니다가 P로 바뀐 순간, 내비의 목적지·경유지 이름(`getDestinationInfo`, `getWaypointInfo`)에 장소 낱말이 들어 있으면("마트" ⊂ "이마트 강릉점") 그곳에 도착한 것으로 봅니다. 차 위치는 보지 않습니다(에뮬레이터는 차를 옮기지 않고 경유지 좌표를 0.0으로 줌). 앱을 켤 때 처음 읽은 P는 도착이 아닙니다.
+- **알림:** 그 장소의 미완료 할 일을 TTS로 읽고("마트에 도착했어요. 할 일 2건. …"), 주행 제한이 풀렸을 때만 카드로 보입니다(항목마다 '완료', '닫기'). 완료한 것은 다음 알림에서 빠집니다. 주행 중에는 '도착해서 할 일 N건'만 보입니다.
+- **Gleo:** `assets/schema.json`에 함수 하나 `GACHITA_ARRIVAL_TASKS`(activity). 부르면 미완료 할 일 전체를 띄우고(주행 중이면 주차한 뒤 보임), `APP_ACTION_RESPONSE`로 영어 message와 항목(data)을 돌려줍니다. 말은 Gleo가 하므로 우리 TTS는 쓰지 않습니다. Gleo는 설치 때 schema를 읽었고(로그 `[Schema] Loaded schema.json from io.github.teampitcrew.gachita`), 실제 음성 호출과 Pleos 검토·승인은 확인하지 않았습니다.
+
 ## 수음과 받아쓰기(T36)
 
 - **언제:** 기록 상태가 '기록 중'(모두 동의, 주차 중 시작)이고 우리 화면이 앞일 때 마이크 포그라운드 서비스(`CaptureService`)를 시작합니다. 화면 뒤에서는 서비스를 시작할 수 없어(T10) 앱을 열 때 시작합니다. 동의가 빠지면 그 자리에서 `AudioRecord`를 멈추고 마이크를 놓습니다. 수음 중에는 화면이 뒤에 있어도 10초마다 서버의 동의를 확인합니다.
@@ -56,6 +63,8 @@ adb shell am start --user 10 -n io.github.teampitcrew.gachita/.MainActivity --es
 
 부탁을 경유지로(T9)는 `python3 frontend/car/waypoint_e2e.py <APK> <저장소 밖 폴더> [시도 수]`입니다. 앱이 내비에 강릉역 경로를 넣고(디버그 빌드의 `--es route "위도,경도,이름"`), 기어 D에서 "화장실 가고 싶어" 류 → 제안 → "아니, 나중에 갈게"를 [시도 수]번 돌려 부탁하는 말 끝에서 제안까지의 시간을 재고, 부탁 둘 중 하나를 폰처럼 취소한 뒤 "응, 다음 휴게소 가자"로 남은 하나만 경유지에 들어가는지 봅니다. 준비는 아래 `capture_e2e.py`와 같습니다.
 
+도착 브리핑(T40)은 `python3 frontend/car/arrival_e2e.py <APK> <저장소 밖 폴더>`입니다. 내비 목적지를 이마트 강릉점으로 두고 기어 D에서 할 일 두 건을 넣은 뒤 P에서 두 건, 하나 완료, 다시 P에서 한 건, Gleo와 같은 인텐트로 함수를 부르는 것까지 봅니다.
+
 수음과 받아쓰기는 `python3 frontend/car/capture_e2e.py <APK> <저장소 밖 폴더> [분]`입니다. 에뮬레이터를 `-grpc 8556 -grpc-use-token -audio none`으로 켜 두면 macOS 합성 음성으로 만든 가족 대화를 gRPC `injectAudio`로 가상 마이크에 넣고(호스트 마이크는 쓰지 않음), 내비를 앞에 둔 기어 D에서 보관함에 쌓인 발화를 넣은 문장과 맞춰 봅니다. 30초마다 CPU·메모리를 재고, 내비가 앞일 때 시스템 마이크 차단(`cmd sensor_privacy`) → '기록 멈춤', 동의 끄기 → 마이크 놓음, 앱 다시 켜기 → 순번 이어짐까지 확인합니다. 공용 DB를 다른 시험이 비울 수 있으면 따로 띄운 서버를 `GACHITA_PORT`로 줍니다. 넣은 문장과 받아 적은 문장은 `transcript.tsv`에 나란히 남습니다.
 
 `e2e.py`의 스크립트는 설치 → 기어 D에서 여행 만들기가 가려지고 앞 화면이 우리 앱(차단 화면 아님) → 여행 만들기(가족 4명) → 기어 D에서 동의 켜기(안 켜짐) → 기어 P에서 켜기(기록 중) → 기어 D에서 유지 → 끄기(바로 멈춤) → 반쪽 폭(841) 순서로 화면을 캡처하고, 단계마다 서버의 여행(`GET /api/trips/{코드}`)을 함께 적어 `results.json`에 판정을 남깁니다. 실패가 있으면 종료 코드 1입니다.
@@ -66,11 +75,14 @@ adb shell am start --user 10 -n io.github.teampitcrew.gachita/.MainActivity --es
 |---|---|
 | `Car.kt` | Pleos SDK: 기어 읽기·알림, 순정 내비 경로·경유지 추가와 알림, 지금 위치·장소까지 거리, TTS, 공조 적용·확인·복원(T8에서 부름). 차박지도 앱에서 옮김. AAOS 주행 제한 값(T11) |
 | `Asks.kt` | 부탁을 경유지로(T9)에서 화면·SDK와 무관한 규칙: 부탁·답 낱말, 휴게소 목록과 다음 후보, 제안 단계(단위 테스트 `AsksTest.kt`) |
+| `Todos.kt` | 도착 브리핑(T40)에서 화면·SDK와 무관한 것: 할 일 뽑기, 도착 판정, 차 안 저장(단위 테스트 `TodosTest.kt`) |
+| `assets/schema.json` | Gleo 함수 목록(T40). 이름을 바꾸면 `MainActivity`의 `GLEO_ARRIVAL`과 매니페스트의 intent-filter도 같이 |
 | `Trip.kt` | 여행 응답 해석과 기록 동의 규칙(단위 테스트 `TripTest.kt`) |
 | `Server.kt` | 같이타 API 호출(`docs/api/openapi.yaml`) |
 | `Capture.kt` | 수음에서 화면·SDK와 무관한 것: 모노 합치기, 발화 묶기, 막힘 판정, 보관함과 보내는 쪽 이음매(단위 테스트 `CaptureTest.kt`) |
 | `CaptureService.kt` | 마이크 포그라운드 서비스: `AudioRecord` → Pleos STT `sendAudio()` → 보관함. 화면이 읽는 수음 상태(`Live`) |
-| `MainActivity.kt` | 여행 만들기 화면과 '기록 중' 화면, 경유지 제안 흐름과 카드(T9). 기록 상태에 맞춰 수음을 켜고 끔. 창 너비 1200dp 이상이면 두 칸. `--ei widthDp 841`이면 그 폭으로 그림(에뮬레이터는 창을 나누지 않음) |
+| `MainActivity.kt` | 여행 만들기 화면과 '기록 중' 화면, 경유지 제안 흐름과 카드(T9), 도착 브리핑과 Gleo 함수(T40). 기록 상태에 맞춰 수음을 켜고 끔. 창 너비 1200dp 이상이면 두 칸. `--ei widthDp 841`이면 그 폭으로 그림(에뮬레이터는 창을 나누지 않음) |
 | `e2e.py` | 위의 로컬 E2E(여행과 기록 동의) |
+| `arrival_e2e.py` | 도착 브리핑 E2E(T40) |
 | `waypoint_e2e.py` | 부탁을 경유지로 E2E(T9). `e2e.py`·`capture_e2e.py`의 도구를 같이 씀 |
 | `capture_e2e.py` | 수음과 받아쓰기 E2E(T36). `e2e.py`의 도구를 같이 씀 |
