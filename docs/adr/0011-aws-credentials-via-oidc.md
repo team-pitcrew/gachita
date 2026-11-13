@@ -57,6 +57,7 @@
   |---|---|---|
   | `external-secrets/ssm-reader` | `gachita-dev-ssm-reader` | `/gachita/dev/app/*`, `/gachita/dev/tf/*` 읽기 |
   | `gachita-db/db` | `gachita-dev-pg` | 데이터 버킷의 `postgres/db/` 읽기·쓰기(Postgres 하나, ADR-0016) |
+  | `gachita-db/db-pitr` | `gachita-dev-pg-restore` | 같은 접두사 읽기만(지정 시점 복구가 잠깐 세우는 옆 클러스터, T57) |
   | `kube-system/aws-load-balancer-controller` | `gachita-dev-alb-controller` | 공식 정책. 권한 경계가 우리 태그(`Project=gachita`)와 ALB 이름 `gachita-*`로 좁힘 |
 
 - 토큰은 AWS의 공개 웹훅([amazon-eks-pod-identity-webhook](https://github.com/aws/amazon-eks-pod-identity-webhook))이 서비스 계정 주석(`eks.amazonaws.com/role-arn`)을 보고 파드에 넣는다. EKS가 아니어도 쓰도록 만든 것이고, cert-manager가 웹훅 인증서를 만든다. External Secrets는 웹훅 없이 같은 주석을 읽어 스스로 토큰을 받는다.

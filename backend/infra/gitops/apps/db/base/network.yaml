@@ -1,5 +1,6 @@
 # DB 네임스페이스의 허용 목록. 나머지는 components/data-plane의 기본 차단에 걸린다.
 # 들어오는 길: API 파드(gachita)의 접속, 운영자(cnpg-system)의 상태 확인. 그 밖에서는 닿지 않는다.
+# db-pitr은 지정 시점 복구(T57, infra.sh restore)가 잠깐 세우는 옆 클러스터다. 운영자와 나가는 길만 db와 같고, API는 닿지 않는다.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -23,7 +24,8 @@ metadata:
   name: allow-operator
 spec:
   podSelector:
-    matchLabels: { cnpg.io/cluster: db }
+    matchExpressions:
+      - { key: cnpg.io/cluster, operator: In, values: [db, db-pitr] }
   policyTypes: [Ingress]
   ingress:
     - from:
@@ -40,7 +42,8 @@ metadata:
   name: db-egress
 spec:
   endpointSelector:
-    matchLabels: { cnpg.io/cluster: db }
+    matchExpressions:
+      - { key: cnpg.io/cluster, operator: In, values: [db, db-pitr] }
   egress:
     - toEntities: [kube-apiserver]
     - toEndpoints:
