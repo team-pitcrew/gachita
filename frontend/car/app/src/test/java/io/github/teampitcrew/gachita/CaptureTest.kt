@@ -199,6 +199,22 @@ class CaptureTest {
         assertEquals(setOf("seq", "generation"), up2.sent[0][0].keys().asSequence().toSet()); assertEquals(1, up2.sent[0][0].getInt("generation"))
     }
 
+    @Test fun 철회를_안_때까지의_순번을_지우고_세대가_오르내려도_그_경계로만() { // 세대 3 → 2(서버 DB 되살림) → 3(철회)
+        val dir = tmp.root
+        val o = Outbox(dir, "ABC123")
+        o.see(3)
+        val t = System.currentTimeMillis() + 1_000
+        fun say(n: Int) = o.add(Draft(t + n, t + n + 500, "말 $n", 0, 0), null)
+        say(1); say(2) // 세대 3
+        o.see(2); say(3) // 되살아난 세대 2
+        assertTrue(o.see(3)) // 철회: 그때까지의 1~3을 모두 지움(세대로 견주면 1·2가 남았음)
+        assertEquals(0, o.size)
+        val later = System.currentTimeMillis() + 2_000
+        o.add(Draft(later, later + 500, "철회 뒤 말", 0, 0), null) // 순번 4
+        val again = Outbox(dir, "ABC123") // 다시 켜도 경계(3)로만 지움: 철회 뒤 말은 남음
+        assertEquals(listOf("철회 뒤 말"), again.recent(5).map { it.text })
+    }
+
     @Test fun 지운_발화가_묶음보다_많아도_세대_1로_되살아난_뒤_새_발화가_나감() { // 철회로 120건을 지움 → 서버가 세대 1, lastSeq 0으로 되살아남
         val o = Outbox(tmp.root, "ABC123")
         repeat(120) { o.add(d(it + 1), null) }

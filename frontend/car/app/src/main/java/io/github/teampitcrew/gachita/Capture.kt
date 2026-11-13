@@ -141,13 +141,17 @@ fun interface Uplink {
  * 보관함: 여행 하나의 발화를 순번(1부터)과 함께 앱 저장소에 한 줄씩(JSON lines) 쌓는다. 앱을 다시 켜면 파일에서 이어 읽는다.
  * acked는 서버가 1부터 빠짐없이 받았다고 한 마지막 순번(lastSeq)이고, 그 뒤의 것만 보낸다.
  * 서버가 돌려준 값이 acked보다 작으면(DB를 백업에서 되살림) 그 값으로 내리고 그 뒤부터 다시 보낸다(ADR-0014 2절).
- * 동의 세대가 바뀌면(동의 철회) 옛 세대 발화의 글과 위치를 지우고 순번과 세대만 남긴다. 서버에도 그것만 보내 확인받는다.
+ * 동의 철회(서버 여행의 세대가 오름)를 알게 되면 그때까지 쌓인 순번의 글과 위치를 모두 지우고 그 경계 순번을 파일(.wiped)에 남긴다.
+ * 다시 켜도 그 경계로만 지운다(세대를 견주지 않음: 서버 DB가 되살아나 세대가 오르내려도 철회 전 글은 남지 않고, 철회 뒤 글은 지워지지 않게).
+ * 서버에는 지운 순번을 글 없이 순번과 세대만 보내 확인받는다.
  * 쓰기(수음 서비스, 메인 스레드)와 보내기(통신 스레드)가 갈라져 있어 목록은 잠금 안에서만 만진다. 보내는 동안은 잠그지 않는다.
  * ponytail: 여행마다 파일 하나, 지우지 않는다. 암호화와 48시간 뒤 지우기는 T69.
  */
 class Outbox(dir: File, val trip: String) {
     private val file = File(dir, "utterances-$trip.jsonl")
     private val ackFile = File(dir, "utterances-$trip.acked")
+    private val wipedFile = File(dir, "utterances-$trip.wiped")
+    private var wiped = 0L // 동의 철회로 글을 지운 마지막 순번
     private val items = mutableListOf<Utterance>()
     var acked = 0L
         private set
@@ -166,14 +170,17 @@ class Outbox(dir: File, val trip: String) {
             if (file.length() > 0 && !file.readText().endsWith("\n")) file.appendText("\n") // 끊긴 줄 뒤에 붙여 쓰지 않게
         }
         acked = runCatching { ackFile.readText().trim().toLong() }.getOrDefault(0L)
-        generation = items.maxOfOrNull { it.generation } ?: 1
-        // 지난번에 지우다 파일을 바꾸지 못했으면 여기서 다시: 가장 새 세대보다 옛 세대의 글은 늘 비어 있어야 한다
-        if (items.any { it.generation < generation && it.text.isNotEmpty() }) blankBelow(generation)
+        wiped = runCatching { wipedFile.readText().trim().toLong() }.getOrDefault(0L)
+        generation = items.maxOfOrNull { it.generation } ?: 1 // 새 발화에 붙일 값. 서버 여행을 받으면 see()가 맞춘다
+        wipe() // 지난번에 지우다 파일을 바꾸지 못했으면 여기서 다시
     }
 
-    private fun blankBelow(g: Int) {
-        for (i in items.indices) if (items[i].generation < g && items[i].text.isNotEmpty()) items[i] = items[i].copy(text = "", lat = null, lng = null)
+    /** 경계 순번까지의 글과 위치를 지우고 파일을 바꾼다. 바꾸지 못하면 표시를 남겨 다음 see()에서 다시. 지운 것이 있으면 true. */
+    private fun wipe(): Boolean {
+        if (items.none { it.seq <= wiped && it.text.isNotEmpty() }) return false
+        for (i in items.indices) if (items[i].seq <= wiped) items[i] = items[i].copy(text = "", lat = null, lng = null)
         dirty = !rewrite()
+        return true
     }
 
     /** 임시 파일에 다 쓴 뒤 이름을 바꾼다. 둘 중 하나라도 실패하면 false(앞의 파일이 남음). */
@@ -209,9 +216,9 @@ class Outbox(dir: File, val trip: String) {
         if (g < generation) generation = g // 서버 DB를 백업에서 되살림: 서버의 세대를 따른다(넘는 세대로 보내면 400)
         if (g <= generation) return false
         before = generation; generation = g; bumpedAt = System.currentTimeMillis()
-        if (items.none { it.generation < g && it.text.isNotEmpty() }) return false
-        blankBelow(g)
-        return true
+        val last = items.lastOrNull()?.seq ?: 0
+        if (last > wiped) { wiped = last; runCatching { wipedFile.writeText(last.toString()) } }
+        return wipe()
     }
 
     /**
