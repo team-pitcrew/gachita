@@ -46,9 +46,10 @@ jobs:
       # Cloudflare(가장자리, ADR-0010). 영역 번호는 저장소 변수, API 토큰(mangowhois.ai의 DNS 편집과 요청 수 제한 규칙 편집)은
       # 저장소 비밀 값(OIDC로 못 바꾸는 예외, ADR-0011). 번호가 비어 있으면 Terraform은 Cloudflare 자원을 만들지 않는다.
       # PR 계획에는 쓰기 토큰을 주지 않는다: PR의 코드(브랜치를 올릴 수 있는 누구나)가 그 토큰으로 영역의 다른 레코드(메일)를
-      # 고칠 수 있다. PR에는 읽기 전용 토큰(Zone·DNS Read, CLOUDFLARE_API_TOKEN_READ)을 준다. 영역 번호는 그대로 둬야
+      # 고칠 수 있다. PR에는 읽기 전용 토큰(Zone·DNS·Zone WAF Read, CLOUDFLARE_API_TOKEN_READ)을 준다. 영역 번호는 그대로 둬야
       # 계획이 Cloudflare 자원을 '지움'으로 잘못 보이지 않는다. 읽기 토큰이 없으면 Cloudflare 자원이 생긴 뒤 PR 계획이 실패한다.
-      CLOUDFLARE_API_TOKEN: ${{ github.event_name == 'pull_request' && secrets.CLOUDFLARE_API_TOKEN_READ || secrets.CLOUDFLARE_API_TOKEN }}
+      # 식의 순서가 중요하다: `a && b || c`는 b가 비면 c를 낸다. PR을 앞에 두면 읽기 토큰이 없을 때 쓰기 토큰이 PR로 간다
+      CLOUDFLARE_API_TOKEN: ${{ github.event_name != 'pull_request' && secrets.CLOUDFLARE_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN_READ }}
       TF_VAR_cloudflare_zone_id: ${{ vars.CLOUDFLARE_ZONE_ID }}
     steps:
       - name: 역할 확인
