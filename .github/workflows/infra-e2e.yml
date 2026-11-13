@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   static:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, gachita]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
@@ -50,12 +50,14 @@ jobs:
           /usr/bin/ansible-playbook -i localhost, --syntax-check backend/infra/cluster/site.yml
 
   waves:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, gachita]
     timeout-minutes: 40
     steps:
-      # 실행기 디스크는 83%쯤 찬 채로 온다(11/13). K3s의 kubelet은 85%를 넘으면 이미지를 지우기 시작하고 물결이 멈췄다.
-      # 이 잡에서 쓰지 않는 미리 깔린 도구와 Docker 이미지를 지운다(서드파티 액션 없이)
+      # GitHub 호스트 러너는 디스크가 83%쯤 찬 채로 온다(11/13). K3s의 kubelet은 85%를 넘으면 이미지를 지우기 시작하고 물결이 멈췄다.
+      # 그 러너에서만 쓰지 않는 미리 깔린 도구와 Docker 이미지를 지운다. 자체 러너(.github/runner, T65)는 호스트를 지우지 않고,
+      # 잡마다 남은 컨테이너를 지우는 훅과 디스크 80%에서 이미지를 지우는 훅이 맡는다
       - name: 디스크 비우기
+        if: runner.environment == 'github-hosted'
         run: |
           before=$(df -h / | tail -1)
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL

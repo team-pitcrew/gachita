@@ -27,7 +27,7 @@ concurrency:
 
 jobs:
   sync:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, gachita]
     timeout-minutes: 5
     # 포크에서 온 PR은 토큰이 읽기 전용이라 건너뛴다
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository

@@ -45,7 +45,7 @@ jobs:
       pull-requests: write
       actions: write
       packages: read
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, gachita]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
@@ -117,7 +117,7 @@ jobs:
   # ponytail: API가 판을 알려 주지 않아 '새 이미지로 바뀐 것'은 확인하지 못하고 시간만 기다린다. /healthz에 판을 싣게 되면 그것을 기다린다.
   wait-rollout:
     if: github.event_name == 'push'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, gachita]
     timeout-minutes: 15
     steps:
       - name: Argo CD가 반영할 시간(자동 동기화 주기 약 3분 + 순차 교체)
