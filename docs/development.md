@@ -138,6 +138,7 @@ PR 양식의 다섯 칸은 Google SRE의 변경 관리에서 가져왔습니다(
 | `package` | `backend/api/`·`frontend/web/`·`.dockerignore`가 바뀜 | 이미지를 만들어 띄우고 그 이미지에 대고 E2E([`e2e.mjs`](../.github/scripts/e2e.mjs). 로컬 `make e2e`와 같은 스크립트) |
 
 - `backend/infra/`가 바뀐 PR에서는 [`infra-e2e`](../.github/workflows/infra-e2e.yml)가 따로 돕니다. 필수 검사가 아니고, `backend-infra`가 보지 않는 폴더의 조립·스키마, Terraform `account/`·`persist/` 정합성, Ansible 구문과 로컬 K3s의 물결 E2E([`e2e-local.sh`](../backend/infra/cluster/e2e-local.sh))를 봅니다(T55).
+- **모든 잡은 자체 러너에서 돕니다(T65, 11/13부터).** GitHub 호스트 러너가 결제 문제로 잡을 시작하지 않아, 지환님의 Mac에 Lima Linux VM 셋(`gachita-runner-1..3`)을 두고 VM마다 러너 하나(라벨 `gachita`)를 붙였습니다. VM은 Mac 폴더를 보지 않고, 잡을 시작할 때마다 앞 잡이 남긴 컨테이너를 지웁니다. Mac이 잠들면 잡이 대기합니다. 다시 만들기와 지우기는 [`.github/runner/up.sh`](../.github/runner/up.sh)입니다. 호스트 러너로 돌아가려면 `runs-on`을 `ubuntu-latest`로 바꿉니다.
 - 일곱 개 뒤에 `publish` 잡이 있습니다. 필수 검사가 아니고 PR에서는 건너뜀으로 보입니다. `develop`에 병합된 뒤, 이미지에 들어가는 파일이 바뀌었고 같은 실행의 일곱 개가 모두 통과했으면 ARM64 이미지를 GHCR에 올립니다(아래 '백엔드를 내보내는 법').
 - 문서(`.md`)와 협업 설정(양식, 티켓 자동화, 훅)만 바뀌면 `scope`와 `policy`만 실제로 돕니다. 화면 문서(`frontend/spec/`)는 `frontend-spec`이 봅니다.
 - 검사 자체를 정하는 파일(`ci.yml`, `scope.py`, `spec_check.py`, `parts.json`, `Makefile`)이 바뀌면 전부 돕니다.
