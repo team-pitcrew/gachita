@@ -106,8 +106,8 @@ class MainActivity : ComponentActivity() {
             if (v.offPending != state.offPending || v.started != state.started)
                 prefs.edit().putBoolean("offPending", v.offPending).putBoolean("started", v.started).commit()
             state = v
+            syncCapture() // 동의가 빠졌으면 수음을 먼저 멈춘다
             v.trip?.let { t -> Live.outbox(this, t.code).let { if (it.see(t.generation)) Live.show(it) } } // 동의 세대가 오르면 옛 세대 발화의 글을 지운다
-            syncCapture()
         }
     private var carStatus by mutableStateOf(CarStatus())
     private var server by mutableStateOf(DEFAULT_SERVER)
@@ -131,6 +131,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var device: String // 보관함의 기기 값. 설치 단위(ADR-0014의 device)
     /** 이 차가 참가시킨 사람의 참가자 토큰(id → 토큰). 그 사람의 동의 켜기와 발화 올리기에 쓴다(T68). 참가할 때 한 번만 온다. */
     private var tokens: Map<String, String> = emptyMap()
+    private var uploading = false // 올리기가 통신 줄에 있음. 느린 길에서 조회마다 쌓여 동의 확인을 밀어내지 않게
 
     /** 화면이 보이는 동안, 그리고 수음 중이면 화면 뒤에서도 조회해 폰에서 끈 동의를 반영한다. */
     private val tick = object : Runnable {
@@ -286,8 +287,11 @@ class MainActivity : ComponentActivity() {
                 .onFailure { s = s.copy(online = it is ApiError, note = if (it is ApiError) reason(it) else s.note) }
         }
         // 받아 적은 말은 동의와 따로 보낸다. 못 보내면(끊김, 동의 대기 403) 보관함에 두었다 다음 조회에 다시 보낸다
-        if (box != null && up != null && box.pending > 0) bg({ box.flush({ d, items -> Server(url).utterances(t.code, up, d, items) }, dev) }) { r ->
-            r.exceptionOrNull()?.let { Log.i(TAG, "발화 올리기 못 함 ${if (it is ApiError) it.status else "연결"}") }
+        if (box == null || up == null || box.pending == 0 || uploading || s.offPending) return
+        uploading = true
+        bg({ box.flush({ d, items -> Server(url).utterances(t.code, up, d, items) }, dev) }) { r ->
+            uploading = false
+            r.exceptionOrNull()?.let { Log.w(TAG, "발화 올리기 못 함 ${if (it is ApiError) it.message else "연결"}") } // 서버 거절(400 등)의 글에는 받아 적은 말이 없다
             Live.show(box)
         }
     }

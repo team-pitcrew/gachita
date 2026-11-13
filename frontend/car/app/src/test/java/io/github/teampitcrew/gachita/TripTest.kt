@@ -61,6 +61,7 @@ class TripTest {
         assertFalse(all.waitsFor(all.trip!!.people[1]))
         assertFalse(all.turnOff().switchOn)
         assertFalse(Session(ours = setOf("p0")).withTrip(trip(false, true)).switchOn) // 폰만 켰고 차는 아직
+        assertTrue(Session(gear = "P").turnedOn(trip(true, true)).switchOn) // 토큰이 없어도(앞 빌드) 기록 중이면 끌 수 있게 켜짐
     }
 
     @Test fun `서버가 모두의 동의를 저장하면 기록 중`() {

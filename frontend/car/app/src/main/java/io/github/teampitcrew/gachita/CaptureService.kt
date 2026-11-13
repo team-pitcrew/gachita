@@ -141,7 +141,7 @@ class CaptureService : Service() {
                     val u = box.add(d, Live.fix)
                     Live.show(box)
                     Log.i(TAG, "발화 ${u.seq} ${u.text.length}자 ${u.endedAt - u.startedAt}ms") // 글자는 보관함에만
-                    Live.onHeard?.invoke(u)
+                    if (u.text.isNotEmpty()) Live.onHeard?.invoke(u) // 동의 철회 사이의 말은 글 없이 남는다
                 }
             }
         }

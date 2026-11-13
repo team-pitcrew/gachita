@@ -150,7 +150,8 @@ class CaptureTest {
         assertTrue(o.see(3)) // 동의 철회
         assertEquals(0, o.size); assertTrue(o.recent(5).isEmpty())
         assertFalse(java.io.File(dir, "utterances-ABC123.jsonl").readText().contains("말 ")) // 파일에서도 지워짐
-        assertEquals(3, o.add(d(3), null).generation) // 새 발화는 새 세대
+        val later = System.currentTimeMillis() + 1_000 // 세대가 오른 것을 안 뒤에 시작한 말
+        assertEquals(3, o.add(Draft(later, later + 500, "말 3", 0, 0), null).generation) // 새 발화는 새 세대
         val up = Fake { 3 }
         o.flush(up, "dev-1")
         assertEquals(setOf("seq", "generation"), up.sent[0][0].keys().asSequence().toSet())
@@ -158,6 +159,32 @@ class CaptureTest {
         assertEquals("말 3", up.sent[0][1].getString("text"))
         val again = Outbox(dir, "ABC123") // 다시 켜도 세대와 지운 것이 남음
         assertEquals(3, again.generation); assertEquals(1, again.size); assertEquals(3, again.acked)
+    }
+
+    @Test fun 세대가_오른_것을_알기_전에_시작한_말은_앞_세대로_글_없이() { // 폰에서 끄고 10초 안에 다시 켜 기록이 이어진 경우
+        val o = Outbox(tmp.root, "ABC123")
+        o.see(2)
+        val u = o.add(Draft(System.currentTimeMillis() - 5_000, System.currentTimeMillis(), "철회 사이에 한 말", 0, 0), Fix(37.5, 127.0, System.currentTimeMillis()))
+        assertEquals(1, u.generation); assertEquals("", u.text); assertNull(u.lat)
+        assertEquals(setOf("seq", "generation"), u.wire(2).keys().asSequence().toSet())
+    }
+
+    @Test fun 서버_세대가_내려가면_따르고_넘는_세대로_보내지_않음() { // DB를 백업에서 되살린 경우
+        val o = Outbox(tmp.root, "ABC123")
+        o.see(3)
+        val later = System.currentTimeMillis() + 1_000
+        val u = o.add(Draft(later, later + 500, "말", 0, 0), null)
+        assertFalse(o.see(2))
+        assertEquals(2, o.generation)
+        assertEquals(2, u.wire(2).getInt("generation")); assertEquals("말", u.wire(2).getString("text"))
+    }
+
+    @Test fun 올리는_글은_다듬고_500자에서_이모지를_가르지_않음() {
+        val long = "가".repeat(499) + "😀" + "끝"
+        val w = Utterance(1, "T", 0, 0, " $long ", 0, 0, 1).wire(1).getString("text")
+        assertEquals(499, w.length); assertFalse(w.last().isHighSurrogate())
+        assertEquals("바다", Utterance(1, "T", 0, 0, " 바다 ", 0, 0, 1).wire(1).getString("text"))
+        assertEquals(" $long ", Utterance.parse(Utterance(1, "T", 0, 0, " $long ", 0, 0, 1).json().toString()).text) // 차 안 사본은 그대로
     }
 
     @Test fun 쓰다_끊긴_줄은_건너뛰고_다음_줄을_붙여_쓰지_않음() {

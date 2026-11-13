@@ -28,14 +28,24 @@ data class Utterance(
     val audioFromMs: Long, val audioToMs: Long, val generation: Int,
     val lat: Double? = null, val lng: Double? = null, val seatZone: Int? = null,
 ) {
-    fun json(): JSONObject = wire(generation).put("trip", trip).put("endedAt", endedAt).put("audioFromMs", audioFromMs).put("audioToMs", audioToMs)
-        .also { o -> seatZone?.let { o.put("seatZone", it) } }
+    /** 보관함의 한 줄(차 안). */
+    fun json(): JSONObject = JSONObject().put("seq", seq).put("trip", trip).put("at", startedAt).put("endedAt", endedAt).put("text", text)
+        .put("audioFromMs", audioFromMs).put("audioToMs", audioToMs).put("generation", generation).apply {
+            if (lat != null && lng != null) put("lat", lat).put("lng", lng)
+            seatZone?.let { put("seatZone", it) }
+        }
 
-    /** 서버에 올리는 모양. 지금 세대(current)보다 옛 세대면 내용 없이 순번과 세대만(ADR-0014 2절). */
+    /**
+     * 서버에 올리는 모양. 지금 세대(current)보다 옛 세대면 내용 없이 순번과 세대만(ADR-0014 2절).
+     * 서버가 묶음 전체를 400으로 거절하면 확인 순번이 그 앞에서 멈추므로, 서버 검사에 걸리지 않게 다듬는다:
+     * 글은 500자에서 자르되 이모지를 반으로 가르지 않고, 세대는 서버의 지금 세대를 넘지 않는다(DB를 되살려 세대가 내려간 경우).
+     */
     fun wire(current: Int): JSONObject {
-        val o = JSONObject().put("seq", seq).put("generation", generation)
-        if (generation < current) return o
-        o.put("at", startedAt).put("text", text.take(500))
+        val g = minOf(generation, current)
+        val o = JSONObject().put("seq", seq).put("generation", g)
+        if (g < current) return o
+        val t = text.trim()
+        o.put("at", startedAt).put("text", if (t.length <= 500) t else t.take(if (t[499].isHighSurrogate()) 499 else 500))
         if (lat != null && lng != null) o.put("lat", lat).put("lng", lng)
         return o
     }
@@ -139,9 +149,11 @@ class Outbox(dir: File, val trip: String) {
     var acked = 0L
         private set
 
-    /** 지금 동의 세대. 새 발화에 붙인다. 화면이 서버 여행을 받을 때마다 see()로 올린다. */
+    /** 지금 동의 세대. 새 발화에 붙인다. 화면이 서버 여행을 받을 때마다 see()로 맞춘다. */
     @Volatile var generation = 1
         private set
+    private var before = 1 // 바로 앞 세대
+    private var bumpedAt = 0L // 세대가 오른 것을 안 시각
 
     init {
         if (file.exists()) {
@@ -158,10 +170,15 @@ class Outbox(dir: File, val trip: String) {
 
     @Synchronized fun recent(n: Int): List<Utterance> = said.takeLast(n)
 
-    /** 위치는 발화 끝에서 FIX_MS 안에 받은 것만 붙인다. */
+    /**
+     * 위치는 발화 끝에서 FIX_MS 안에 받은 것만 붙인다. 세대가 오른 것을 알기 전에 시작한 말(동의 철회 사이에 한 말일 수 있음)은
+     * 앞 세대로, 글 없이 남긴다(폰에서 끄고 10초 조회 안에 다시 켜 기록이 이어진 경우).
+     */
     @Synchronized fun add(d: Draft, fix: Fix?): Utterance {
-        val f = fix?.takeIf { kotlin.math.abs(d.endedAt - it.at) <= FIX_MS }
-        val u = Utterance((items.lastOrNull()?.seq ?: 0) + 1, trip, d.startedAt, d.endedAt, d.text, d.audioFromMs, d.audioToMs, generation, f?.lat, f?.lng)
+        val old = d.startedAt < bumpedAt
+        val f = fix?.takeIf { !old && kotlin.math.abs(d.endedAt - it.at) <= FIX_MS }
+        val u = Utterance((items.lastOrNull()?.seq ?: 0) + 1, trip, d.startedAt, d.endedAt, if (old) "" else d.text, d.audioFromMs, d.audioToMs,
+            if (old) before else generation, f?.lat, f?.lng)
         file.appendText(u.json().toString() + "\n")
         items += u
         return u
@@ -169,8 +186,9 @@ class Outbox(dir: File, val trip: String) {
 
     /** 서버 여행의 동의 세대. 올라갔으면 옛 세대 발화의 내용을 지운다(임시 파일에 다 쓴 뒤 이름을 바꿈). 지운 것이 있으면 true. */
     @Synchronized fun see(g: Int): Boolean {
+        if (g < generation) generation = g // 서버 DB를 백업에서 되살림: 서버의 세대를 따른다(넘는 세대로 보내면 400)
         if (g <= generation) return false
-        generation = g
+        before = generation; generation = g; bumpedAt = System.currentTimeMillis()
         if (items.none { it.generation < g && it.text.isNotEmpty() }) return false
         for (i in items.indices) if (items[i].generation < g) items[i] = items[i].copy(text = "", lat = null, lng = null)
         val tmp = File(file.path + ".tmp") // 바꾸지 못하면 앞의 파일이 남는다. 다시 켜면 세대를 다시 받아 또 지운다

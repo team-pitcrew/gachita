@@ -69,8 +69,11 @@ data class Session(
 ) {
     val consented: Boolean get() = trip != null && trip.people.isNotEmpty() && trip.people.all { it.consent }
 
-    /** 동의 스위치에 보일 값: 이 차가 참가시킨 사람이 모두 동의했고 끄기 대기가 없음. 폰 참가자를 기다리는 동안에도 켜짐으로 보여 끌 수 있다. */
-    val switchOn: Boolean get() = !offPending && trip != null && trip.people.filter { it.id in ours }.let { it.isNotEmpty() && it.all { p -> p.consent } }
+    /**
+     * 동의 스위치에 보일 값: 모두 동의했거나, 이 차가 참가시킨 사람이 모두 동의했고 끄기 대기가 없음.
+     * 폰 참가자를 기다리는 동안에도 켜짐으로 보여 끌 수 있고, 토큰을 잃었어도(앞 빌드에서 올림) 기록 중이면 끌 수 있다.
+     */
+    val switchOn: Boolean get() = agreed || !offPending && trip != null && trip.people.filter { it.id in ours }.let { it.isNotEmpty() && it.all { p -> p.consent } }
 
     /** 자기 폰에서 동의를 켜야 하는 사람(차가 켤 수 없음). */
     fun waitsFor(p: Person) = !p.consent && p.id !in ours
