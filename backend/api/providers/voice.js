@@ -21,6 +21,8 @@ export function wavMono(buf) {
     const id = buf.toString("latin1", pos, pos + 4);
     const size = buf.readUInt32LE(pos + 4);
     if (id === "fmt ") {
+      // 형식 태그 1(PCM)만, 머리가 잘린 파일은 거절한다(읽다가 범위를 넘으면 500이 된다).
+      if (size < 16 || pos + 24 > buf.length || buf.readUInt16LE(pos + 8) !== 1) fail("16비트 PCM WAV만 됨");
       channels = buf.readUInt16LE(pos + 10);
       rate = buf.readUInt32LE(pos + 12);
       bits = buf.readUInt16LE(pos + 22);

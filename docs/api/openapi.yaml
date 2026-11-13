@@ -488,7 +488,7 @@ paths:
       tags: [프로필]
       summary: 목소리 등록
       description: |
-        이진 본문(WAV 16 kHz PCM, 모노·스테레오 모두 — 스테레오는 합쳐 모노로). 1~60초.
+        이진 본문(WAV 16 kHz 16비트 PCM, 모노·스테레오 모두 — 스테레오는 합쳐 모노로). 1~60초, 5 MB까지.
         **원본 음성은 어디에도 저장하지 않고** 대조용 값(벡터)만 남깁니다(ADR-0019). 다시 등록하면 값을 바꿉니다.
       security: [{ profileToken: [] }]
       requestBody:
@@ -521,7 +521,8 @@ paths:
         이진 본문(발화 음성 WAV)과 `seatArea`를 받아, 그 자리에 앉은 참가자 가운데 목소리를 등록한 사람과 비교해
         프로필과 확신도를 돌려줍니다(ADR-0008·0019). 가장 높은 확신이 기준을 넘어야 하고, 아니면 `profileId: null`('모름').
         `seatArea`를 모르면(T37 판정이 '모름') 빼고 부릅니다. 그러면 이 여행의 프로필 참가자 모두가 후보입니다.
-        `device`와 `seq`를 함께 주면 찾았을 때 그 발화 줄의 화자를 채웁니다(기록본·피드에 나옴). 발화를 먼저 올린 뒤 부릅니다. 발화 음성은 저장하지 않습니다.
+        발화 음성은 0.5~10초, 1 MB까지이고 저장하지 않습니다. 녹음에 동의한 참가자만 부릅니다(아니면 403).
+        `device`와 `seq`를 함께 주면 찾았을 때 그 발화 줄의 화자를 채웁니다(기록본·피드에 나옴). 발화를 먼저 올린 뒤, 그 발화를 올린 기기(참가자)가 부릅니다. 이미 화자가 있는 줄은 바꾸지 않습니다.
         여행 줄을 잠그지 않으므로 업로드가 느려도 같은 여행의 동의 바꾸기를 막지 않습니다.
       security: [{ participantToken: [] }]
       parameters:
@@ -547,7 +548,9 @@ paths:
                   applied: { type: boolean, description: 발화 줄에 화자를 채웠는지 }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
   /api/groups:
     post:
       tags: [그룹]

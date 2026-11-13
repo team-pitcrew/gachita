@@ -379,11 +379,14 @@ async function voicePrint(req, m, profileId) {
   const seconds = samples.length / 16000;
   if (seconds < 1 || seconds > 60) fail(400, "등록 음성은 1~60초");
   const vector = embed(samples);
-  await profilesDb().query(
-    `INSERT INTO voice_prints (profile_id, vector, seconds) VALUES ($1, $2, $3)
-     ON CONFLICT (profile_id) DO UPDATE SET vector = $2, seconds = $3, updated_at = now()`,
-    [profileId, vector, seconds]
-  );
+  // 본문을 받는 사이 프로필이 지워졌으면 외래 키가 막는다(23503) — 지워진 프로필의 값이 남지 않게.
+  await profilesDb()
+    .query(
+      `INSERT INTO voice_prints (profile_id, vector, seconds) VALUES ($1, $2, $3)
+       ON CONFLICT (profile_id) DO UPDATE SET vector = $2, seconds = $3, updated_at = now()`,
+      [profileId, vector, seconds]
+    )
+    .catch((e) => (e?.code === "23503" ? fail(404, "없는 프로필") : Promise.reject(e)));
   return [200, { seconds: Math.round(seconds * 10) / 10, dims: vector.length }];
 }
 
@@ -394,10 +397,13 @@ async function voicePrint(req, m, profileId) {
 // 같은 여행의 동의 바꾸기를 막으면, 업로드가 느릴 때 동의 철회가 2초 제한(T26)에 걸려 실패한다.
 async function voiceMatch(trip, req, query) {
   if (req.method !== "POST") fail(405, "POST만 됨");
-  participantOf(req, trip); // 이 여행의 참가자만
-  const { samples } = wavMono(await readRaw(req, 5_000_000));
+  // 녹음에 동의한 참가자만 — 동의하지 않은 사람이 목소리로 남을 찾아보는 길이 되지 않게.
+  const caller = participantOf(req, trip);
+  if (!caller.consent) fail(403, "녹음에 동의한 참가자만 대조할 수 있음");
+  const { samples } = wavMono(await readRaw(req, 1_000_000));
   const seconds = samples.length / 16000;
-  if (seconds < 0.5 || seconds > 60) fail(400, "발화 음성은 0.5~60초");
+  // ponytail: 임베딩은 이벤트 루프에서 동기로 돈다(10초 ≈ 30 ms, 60초 ≈ 185 ms). 발화는 보통 2~4초라 10초로 묶는다.
+  if (seconds < 0.5 || seconds > 10) fail(400, "발화 음성은 0.5~10초");
   // 후보: 그 좌석 구역에 앉은 프로필 참가자. 구역을 모르면(T37) 이 여행의 프로필 참가자 모두.
   const seatArea = query.get("seatArea") ? oneOf(query.get("seatArea"), SEATS, "seatArea") : null;
   const candidates = trip.participants.filter((p) => p.profileId && (!seatArea || p.seat === seatArea)).map((p) => p.profileId);
@@ -420,25 +426,27 @@ async function voiceMatch(trip, req, query) {
   let applied = false;
   if (matched && query.get("device") && query.get("seq")) {
     // 찾았으면 그 발화 줄의 profile_id를 채운다(ADR-0014). 발화가 아직 안 왔다면 채우지 않고 결과만 돌려준다.
+    // 그 발화를 올린 기기(참가자)만, 아직 화자가 없는 줄에만 붙인다 — 남의 줄에 이름을 붙이거나 바꿔 지우지 못하게.
     const device = text(query.get("device"), 40, "device");
     const seq = int(Number(query.get("seq")), 1, 1_000_000_000, "seq");
     const { rowCount } = await tripsDb().query(
-      "UPDATE utterances SET profile_id = $2 WHERE trip_code = $1 AND device = $3 AND seq = $4",
-      [trip.code, matched, device, seq]
+      `UPDATE utterances u SET profile_id = $2 FROM utterance_acks a
+       WHERE u.trip_code = $1 AND u.device = $3 AND u.seq = $4 AND u.profile_id IS NULL
+         AND a.trip_code = u.trip_code AND a.device = u.device AND a.participant_id = $5`,
+      [trip.code, matched, device, seq, caller.id]
     );
     applied = rowCount > 0;
   }
   return [200, { profileId: matched, confidence: Math.round(bestSim * 1000) / 1000, threshold, applied }];
 }
 
-// 프로필과 거기 딸린 것(앨범, 기기 토큰, 그룹 자리)을 지운다. 그 프로필이 만든 아이 프로필도 함께 —
+// 프로필과 거기 딸린 것(앨범, 기기 토큰, 그룹 자리)을 지운다. 목소리 값은 외래 키로 함께 지워진다(ADR-0019). 그 프로필이 만든 아이 프로필도 함께 —
 // 아이 프로필은 토큰이 없어 대표가 아니면 지울 사람이 없다(ADR-0009). 두 DB라 여행 쪽 발화는 48시간 시계로 지워진다.
 async function deleteProfiles(ids) {
   const db = profilesDb();
   const { rows } = await db.query("SELECT id FROM profiles WHERE managed_by = ANY($1::uuid[])", [ids]);
   const all = [...ids, ...rows.map((r) => r.id)];
   await db.query("DELETE FROM profile_moments WHERE profile_id = ANY($1::uuid[])", [all]);
-  await db.query("DELETE FROM voice_prints WHERE profile_id = ANY($1::uuid[])", [all]); // 생체 정보로 다룰 수 있는 값(ADR-0019)
   await db.query("DELETE FROM tokens WHERE profile_id = ANY($1::uuid[])", [all]);
   await db.query("DELETE FROM group_members WHERE profile_id = ANY($1::uuid[])", [all]);
   await db.query("DELETE FROM profiles WHERE id = ANY($1::uuid[])", [all]);

@@ -59,7 +59,7 @@ before(async () => {
   // 예전에 한 DB에 같이 두던 표가 남았으면 치운다.
   await tripsDb().query("DROP TABLE IF EXISTS profiles");
   await tripsDb().query("TRUNCATE trips");
-  await profilesDb().query("TRUNCATE profiles");
+  await profilesDb().query("TRUNCATE profiles CASCADE"); // 목소리 값(voice_prints)은 외래 키로 함께
   await new Promise((ok) => server.listen(0, () => ok((base = `http://localhost:${server.address().port}`))));
 });
 after(async () => {
@@ -611,6 +611,17 @@ test("목소리 등록으로 발화의 화자를 프로필에 붙인다(T38)", a
   assert.deepEqual([r3.profileId, r3.confidence], [null, 0], "등록이 없으면 모름");
   assert.equal((await postRaw(`${t}/voice-match?seatArea=ROW_1_LEFT`, wav(210, 1.5))).status, 401, "참가자 토큰이 필요함");
   assert.equal((await fetch(`${base}${t}/voice-match?seatArea=TRUNK`, { method: "POST", headers: { authorization: `Bearer ${pm.token}` }, body: wav(210, 1) })).status, 400, "없는 좌석은 거절");
+
+  // 화자는 그 발화를 올린 기기(참가자)만, 아직 화자가 없는 줄에만 붙인다
+  await call("POST", `${t}/utterances`, { device: "car", generation: 1, items: [{ seq: 2, at: trip.createdAt + 2000, text: "응" }] }, pm.token);
+  const notMine = await (await postRaw(`${t}/voice-match?device=car&seq=2`, wav(210, 1.5), pd.token)).json();
+  assert.deepEqual([notMine.profileId, notMine.applied], [mom.id, false], "남이 올린 줄에는 붙이지 못함");
+  const relabel = await (await postRaw(`${t}/voice-match?device=car&seq=1`, wav(210, 1.5), pm.token)).json();
+  assert.equal(relabel.applied, false, "이미 화자가 있는 줄은 바꾸지 않음");
+  assert.equal((await postRaw(`${t}/voice-match`, wav(210, 11), pm.token)).status, 400, "대조 음성은 10초까지");
+  const [, guest] = await call("POST", `${t}/participants`, { seat: "ROW_2_LEFT", name: "손님", consent: false });
+  assert.equal((await postRaw(`${t}/voice-match`, wav(210, 1.5), guest.token)).status, 403, "동의하지 않은 참가자는 대조 못 함");
+  await call("PATCH", `${t}/participants/${guest.id}`, { consent: true });
 
   // 좌석 구역을 모르면 이 여행의 프로필 참가자 모두가 후보다
   const m4 = await (await postRaw(`${t}/voice-match`, wav(210, 1.5), pd.token)).json();

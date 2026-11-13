@@ -4,7 +4,7 @@ BEGIN;
 SELECT pg_advisory_xact_lock(74624); -- 서버 여러 대가 동시에 시작해도 한 번에 하나만 실행
 
 CREATE TABLE IF NOT EXISTS voice_prints (
-  profile_id uuid PRIMARY KEY,
+  profile_id uuid PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE, -- 프로필이 지워지면 함께(올리는 도중에 지워져도)
   vector double precision[] NOT NULL,         -- 대조용 값(L2 정규화). 임베더는 providers/voice.js
   seconds real NOT NULL,                      -- 등록 음성 길이(등록 길이별 정확도 비교용)
   updated_at timestamptz NOT NULL DEFAULT now()
