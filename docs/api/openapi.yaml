@@ -609,8 +609,8 @@ paths:
       tags: [장면]
       summary: 숏폼 구성 데이터
       description: |
-        영상 파일을 만들지 않고(ADR-0020), 클립이 올라온 장면마다 소리 주소·자막 큐·말한 사람을 줍니다(T43). 웹은 9:16 화면에, 차는 그 자리에서 이 데이터로 재생합니다.
-        소리는 `clip`(media 하위 도메인의 `/media/` 주소)에서 받습니다: 차는 참가자 토큰 머리말, 폰의 `<audio>`는 `media-cookie`가 준 쿠키(ADR-0020). 자막 큐의 시각은 클립 첫 표본에서 잰 초입니다.
+        영상 파일을 만들지 않고(ADR-0021), 클립이 올라온 장면마다 소리 주소·자막 큐·말한 사람을 줍니다(T43). 웹은 9:16 화면에, 차는 그 자리에서 이 데이터로 재생합니다.
+        소리는 `clip`(같은 출처의 `/api/trips/{code}/recordings/{id}`)을 참가자 토큰 머리말로 받습니다 — 웹은 `fetch` → blob → `<audio>`. 자막 큐의 시각은 클립 첫 표본에서 잰 초입니다.
         발화의 `at`을 말 시작으로 보고, 끝은 글자 수로 어림합니다(글자당 0.15초, 1~6초). 다음 자막에서 자르되 1초는 남기고(겹칠 수 있음) 클립 끝은 넘지 않습니다.
         말한 사람은 화자 대조(T38)로 붙은 프로필의 참가자만 채우고, 아니면 `participantId: null`과 좌석 구역만 줍니다(자리만으로 이름을 붙이지 않음). 녹음에 동의한 참가자만 읽습니다.
       security: [{ participantToken: [] }]
@@ -643,7 +643,7 @@ paths:
                         momentId: { type: string }
                         label: { type: string }
                         at: { type: integer }
-                        clip: { type: string, description: "소리 주소(media 하위 도메인, ADR-0020). 예: https://media.gachita.mangowhois.ai/media/trips/{code}/recordings/{momentId}" }
+                        clip: { type: string, description: "소리 주소(같은 출처). 예: /api/trips/{code}/recordings/{momentId}" }
                         startAt: { type: integer, description: 클립 첫 표본의 시각(epoch 밀리초) }
                         seconds: { type: number }
                         cues:
@@ -702,7 +702,7 @@ paths:
       summary: 클립 듣기
       description: |
         받은 WAV 바이트를 그대로, `Cache-Control: private, no-store`로 줍니다. 기록본처럼 녹음에 동의한 참가자만 듣습니다(`403`).
-        토큰은 머리말로만 보냅니다 — 웹은 `fetch` → blob → `<audio>`로 재생합니다(클립 하나 약 0.5~1.1 MB). 서명한 S3 주소를 주지 않고, 별도 media 주소도 두지 않습니다(ADR-0020은 11/14 대체됨: 영상 파일이 없음).
+        토큰은 머리말로만 보냅니다 — 웹은 `fetch` → blob → `<audio>`로 재생합니다(클립 하나 약 0.5~1.1 MB). 서명한 S3 주소를 주지 않고, 별도 media 주소도 두지 않습니다(ADR-0021, 영상 파일이 없어 ADR-0020은 대체됨).
       security: [{ participantToken: [] }]
       responses:
         "200": { description: WAV 바이트, content: { audio/wav: { schema: { type: string, format: binary } } } }

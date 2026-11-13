@@ -513,7 +513,7 @@ async function recordings(code, id, req, query) {
 
   if (m === "GET") {
     // 기록본과 같은 규칙: 녹음에 동의한 참가자만. 소리는 잠금 밖에서 받는다. 토큰은 머리말로만 —
-    // 웹은 fetch → blob → <audio>로 튼다(클립 하나 약 0.5~1.1 MB). 서명한 S3 주소는 주지 않는다(ADR-0020은 대체됨).
+    // 웹은 fetch → blob → <audio>로 튼다(클립 하나 약 0.5~1.1 MB). 서명한 S3 주소는 주지 않는다(ADR-0021).
     const { object_key } = await withTrip(code, false, (trip, client) =>
       participantOf(req, trip).consent ? live(client, trip) : fail(403, "녹음에 동의한 참가자만 들을 수 있음")
     );
@@ -1111,7 +1111,7 @@ async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
   }
 
   if (sub === "shortform") {
-    // 숏폼 구성(T43, ADR-0020): 영상 파일을 만들지 않고, 클립이 올라온 장면마다 소리 주소와 자막 큐와 말한 사람을 준다.
+    // 숏폼 구성(T43, ADR-0021): 영상 파일을 만들지 않고, 클립이 올라온 장면마다 소리 주소와 자막 큐와 말한 사람을 준다.
     // 웹은 9:16 화면에, 차는 그 자리에서 이 데이터로 재생한다. 말한 사람은 화자 대조(T38)로 붙은 프로필만 — 자리만으로 이름을 붙이지 않는다.
     const all = await lines();
     const { rows: clips } = await client.query("SELECT moment_id, start_at, seconds FROM recordings WHERE trip_code = $1 AND deleted_at IS NULL ORDER BY start_at", [trip.code]);
@@ -1128,7 +1128,7 @@ async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
           momentId: r.moment_id,
           label: moment.label ?? "",
           at: moment.at,
-          clip: `${MEDIA_BASE}/media/trips/${trip.code}/recordings/${r.moment_id}`, // ADR-0020: media 하위 도메인
+          clip: `/api/trips/${trip.code}/recordings/${r.moment_id}`, // 같은 주소, 참가자 토큰 머리말로 받는다(ADR-0021)
           startAt: Number(r.start_at),
           seconds: r.seconds,
           cues: cues(all, Number(r.start_at), r.seconds).map(({ profileId, ...c }) => ({ ...c, participantId: byProfile.get(profileId) ?? null })),

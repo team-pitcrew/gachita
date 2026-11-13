@@ -953,7 +953,7 @@ test("장면 후보는 말이 몰린 구간을 규칙으로 고르고, 숏폼은
   assert.equal(form.title, "속초");
   assert.deepEqual(form.cast.map((c) => [c.participantId, c.name, c.character]), [[mom.id, "엄마", "토끼"], [son.id, "아들", ""]]);
   const [scene] = form.scenes;
-  assert.deepEqual([form.scenes.length, scene.momentId, scene.label, scene.clip, scene.startAt, scene.seconds], [1, moment.id, "바다", `https://media.gachita.mangowhois.ai/media/trips/${trip.code}/recordings/${moment.id}`, a.from, 25]);
+  assert.deepEqual([form.scenes.length, scene.momentId, scene.label, scene.clip, scene.startAt, scene.seconds], [1, moment.id, "바다", `${t}/recordings/${moment.id}`, a.from, 25]);
   assert.deepEqual(scene.cues.map((c) => [c.start, c.participantId, c.seatArea]), [
     [1, mom.id, "ROW_1_LEFT"], [5, null, "ROW_2_LEFT"], [9, mom.id, "ROW_1_LEFT"], [13, null, "ROW_2_LEFT"], [17, mom.id, "ROW_1_LEFT"], [21, null, "ROW_2_LEFT"],
   ]);

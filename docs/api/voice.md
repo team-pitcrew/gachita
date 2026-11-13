@@ -62,12 +62,12 @@
 |---|---|
 | `GET /api/trips/:code/scene-suggestions` | 각 발화에서 시작하는 30초 창의 발화 수 + 2 × (말한 사람 수 − 1)로 점수를 매기고(말한 사람은 좌석 구역으로 셈, 발화 4개 미만 제외), 이미 남긴 장면과 겹치지 않는 창을 서로 겹치지 않게 최대 5개, 시각 순으로: `{ items: [{ at, from, to, why, score, lines(30줄까지), lat?, lng? }] }`. 구간 15~35초. 요청할 때만 계산 |
 | `POST /api/trips/:code/moments` | 고른 후보의 `at`·`from`·`to`를 남긴다. `from`·`to`는 선택 칸(`from ≤ at ≤ to`, 1~60초)이고 차(T63)가 이 구간을 잘라 클립으로 올린다. **구간이 없는 장면(차에서 바로 표시한 것)은 `at` 앞 20초~뒤 10초로 본다 — 차도 이 기본 구간으로 자른다** |
-| `GET /api/trips/:code/shortform` | 클립이 올라온 장면마다 소리 주소(`https://media.gachita.mangowhois.ai/media/trips/:code/recordings/:id`, ADR-0020)·자막 큐(클립 안의 초, 글, 말한 참가자, 좌석 구역)·출연(이름, 캐릭터, 자리). 영상 파일은 만들지 않는다(ADR-0020) |
+| `GET /api/trips/:code/shortform` | 클립이 올라온 장면마다 소리 주소(`/api/trips/:code/recordings/:id`, 같은 출처, ADR-0021)·자막 큐(클립 안의 초, 글, 말한 참가자, 좌석 구역)·출연(이름, 캐릭터, 자리). 영상 파일은 만들지 않는다(ADR-0020) |
 
 - 셋 다 녹음에 동의한 참가자만 읽는다(기록본과 같은 규칙, 받아 적은 글이 들어감).
 - 자막 큐는 발화의 `at`을 말 시작으로 보고, 끝은 글자 수로 어림한다(글자당 0.15초, 1~6초). 다음 자막에서 자르되 1초는 남기고(두 자리에서 같이 말하면 겹쳐 보임), 클립 끝은 넘지 않는다. 차가 발화 끝 시각을 올리면 그것으로 바꾼다.
 - 말한 사람은 화자 대조(T38)로 붙은 프로필의 참가자만 채운다. 못 붙였으면 좌석 구역만 준다 — 자리만으로 이름을 붙이지 않는다(`frontend/spec/after-trip.md`).
-- 웹은 9:16 재생 페이지(`media-cookie`를 한 번 부른 뒤 `<audio src=clip>`, 자막·캐릭터를 그 위에), 차는 같은 데이터로 그 자리에서 재생한다(머리말 인증, web·car-ui).
+- 웹은 9:16 재생 페이지(`clip`을 참가자 토큰 머리말로 `fetch` → blob → `<audio>`, 자막·캐릭터를 그 위에), 차는 같은 데이터로 그 자리에서 재생한다(머리말 인증, web·car-ui). 영상 파일·media 하위 도메인은 없다(ADR-0021).
 
 **위치 없는 장면의 저장.** 후보에 좌표가 없어도 확정할 수 있게 moments 계약을 확장한다(ADR-0007): `lat`·`lng`는 둘 다 있거나 둘 다 없음만 허용. 위치 없는 장면은 목록에 저장·재조회되고 지도에는 나오지 않는다. 좌표가 없다고 0,0을 채우거나 다른 장면의 좌표를 옮겨 적지 않는다. 이 확장은 구현 PR에서 openapi·서버·테스트·T18에 함께 반영한다.
 
@@ -78,7 +78,7 @@
 | 요청 | 본문 | 하는 일 |
 |---|---|---|
 | `POST /api/trips/:code/recordings?moment=<장면 id>&generation=<세대>&from=<클립 시작 epoch ms>` | `audio/wav`(16 kHz·16비트 PCM·모노, 5,000,000 B까지) | 차가 자른 WAV를 다시 자르지 않고 클립 버킷에 둔다. 장면 하나에 클립 하나라 클립 id는 장면 id다. 같은 장면을 다시 보내면 저장하지 않고 200. 옛 세대(철회 전 소리)와 사람이 지운 클립은 409 |
-| `GET /api/trips/:code/recordings/:id` | | 받은 WAV를 그대로, `Cache-Control: private, no-store`. 토큰은 머리말로만 — 웹은 `fetch` → blob → `<audio>`(클립 하나 약 0.5~1.1 MB, 15~35초). 서명한 S3 주소를 주지 않고, 별도 media 주소도 두지 않는다(ADR-0020 대체됨, 11/14) |
+| `GET /api/trips/:code/recordings/:id` | | 받은 WAV를 그대로, `Cache-Control: private, no-store`. 토큰은 머리말로만 — 웹은 `fetch` → blob → `<audio>`(클립 하나 약 0.5~1.1 MB, 15~35초). 서명한 S3 주소를 주지 않고, 별도 media 주소도 두지 않는다(ADR-0021, ADR-0020은 대체됨) |
 | `DELETE /api/trips/:code/recordings/:id` | | 버킷에서 바로 지우고 지운 표시를 남긴다(차가 다시 올려도 409). 받아 적은 글과 장면은 남는다(지우려면 각자의 삭제 경로) |
 
 - **저장.** 클립 전용 S3 버킷(`CLIPS_BUCKET`, 서울, 버전 관리 끔, SSE-S3, 공개 차단 — 버킷과 역할은 T64가 만듦)에 `<여행 코드>/<장면 id>-<임의>.wav`로 둔다. 정보(장면·세대·크기·길이·지운 표시)는 trips DB의 `recordings` 표. 서버는 AWS SDK의 기본 자격 체인(서비스 계정 역할)으로 쓰고 손으로 서명하지 않는다(`providers/clips.js`). 버킷이 없는 환경은 클립 API가 503이다.
