@@ -161,9 +161,13 @@ const participantOf = (req, trip) => {
 async function bumpGeneration(trip, client) {
   trip.generation = (trip.generation ?? 1) + 1;
   await client.query("DELETE FROM utterances WHERE trip_code = $1 AND generation < $2", [trip.code, trip.generation]);
-  // 그 여행의 클립도 모두 지운다(T76). 늦게 올라오는 옛 세대 클립은 세대 확인이 막는다.
-  const { rows } = await client.query("DELETE FROM recordings WHERE trip_code = $1 RETURNING object_key, deleted_at", [trip.code]);
-  dropClips(rows);
+  // 그 여행의 클립도 모두 지운다(T76). 같은 트랜잭션에서 지울 키를 적고 버킷은 커밋 뒤에 비운다(sweepClips) —
+  // 잠금을 쥔 채 S3를 기다리지 않고, 되돌려지면 적은 것도 되돌려진다. 늦게 올라오는 옛 세대 클립은 세대 확인이 막는다.
+  await client.query(
+    `WITH r AS (DELETE FROM recordings WHERE trip_code = $1 RETURNING object_key, deleted_at)
+     INSERT INTO clip_trash (object_key) SELECT object_key FROM r WHERE deleted_at IS NULL ON CONFLICT DO NOTHING`,
+    [trip.code]
+  );
 }
 
 // utterances 표의 한 줄을 API가 돌려주는 발화 모양으로 바꾼다. 비어 있는 칸은 아예 안 넣는다.
@@ -475,12 +479,27 @@ async function voiceMatch(trip, req, query) {
 const CLIP_MAX = 5_000_000;
 const asRecording = (r) => ({ id: r.moment_id, momentId: r.moment_id, startAt: Number(r.start_at), seconds: r.seconds, bytes: r.bytes });
 
-// 버킷에서 지운다. 기다리지 않는다 — 여행 줄을 잠근 채 S3를 기다리면 같은 여행의 동의 바꾸기가 2초 제한(T26)에 걸린다.
-// 실패하면 남기기만 하고, 남은 것은 버킷 수명 규칙(2일, T64)이 치운다. 사람이 이미 지운 것(deleted_at)은 버킷에 없다.
-function dropClips(rows) {
-  const keys = rows.filter((r) => !r.deleted_at).map((r) => r.object_key);
-  if (keys.length) clipStore()?.remove(keys).catch((e) => log("warn", "clip_remove_failed", { err: errFields(e) }));
+// 지울 키(clip_trash)를 버킷에서 지운다. 커밋 뒤와 치우기(10분마다)에서 돈다. 실패하면 키가 남아 다음에 다시 한다.
+// 던지지 않는다 — 부르는 쪽은 기다리지 않는다. 그래도 남는 것(DB에도 못 적은 것)은 버킷 수명 규칙(2일, T64)이 치운다.
+async function sweepClips() {
+  const store = clipStore();
+  if (!store) return;
+  try {
+    const { rows } = await tripsDb().query("SELECT object_key FROM clip_trash ORDER BY since LIMIT 1000");
+    if (!rows.length) return;
+    const keys = rows.map((r) => r.object_key);
+    await store.remove(keys);
+    await tripsDb().query("DELETE FROM clip_trash WHERE object_key = ANY($1::text[])", [keys]);
+  } catch (e) {
+    log("warn", "clip_sweep_failed", { err: errFields(e) });
+  }
 }
+// 남기지 못한 소리의 키를 적고 바로 한 번 비운다. 던지지 않는다.
+const trashClips = (keys) =>
+  tripsDb()
+    .query("INSERT INTO clip_trash (object_key) SELECT unnest($1::text[]) ON CONFLICT DO NOTHING", [keys])
+    .then(() => void sweepClips())
+    .catch((e) => log("warn", "clip_trash_failed", { err: errFields(e) }));
 
 async function recordings(code, id, req, query) {
   const m = req.method;
@@ -511,14 +530,15 @@ async function recordings(code, id, req, query) {
   // 그 사이 동의가 철회됐거나 누가 지웠으면 둔 것을 지우고 거절한다.
   const check = async (trip, client) => {
     const caller = participantOf(req, trip);
-    if (!caller.consent) fail(403, "녹음에 동의한 참가자만 올릴 수 있음");
     const momentId = text(query.get("moment") ?? undefined, 40, "moment");
     if (!trip.moments.some((x) => x.id === momentId)) fail(404, "없는 장면");
     const current = trip.generation ?? 1;
     // 녹음할 때의 동의 세대. 옛 세대는 철회 전의 소리라 받지 않는다 — 차는 버린다(ADR-0007).
+    // 동의 확인보다 먼저 본다: 철회한 본인의 토큰으로 올려도 '나중에 다시'(403)가 아니라 '버림'(409)이 되게.
     if (int(Number(query.get("generation")), 1, current, "generation") < current) fail(409, "동의가 바뀌기 전의 소리라 받지 않음");
     // 클립 첫 표본의 시각. 자막(발화 시각)을 소리에 맞추는 기준이다(T43).
     const startAt = int(Number(query.get("from")), trip.createdAt - 60_000, Date.now() + 60_000, "from");
+    if (!caller.consent) fail(403, "녹음에 동의한 참가자만 올릴 수 있음");
     if (!everyoneConsents(trip)) fail(403, "동의하지 않은 탑승자가 있어 올릴 수 없음"); // 발화 올리기와 같은 규칙
     const { rows } = await client.query("SELECT moment_id, start_at, bytes, seconds, deleted_at FROM recordings WHERE trip_code = $1 AND moment_id = $2", [trip.code, momentId]);
     if (rows[0]?.deleted_at) fail(409, "지운 클립은 다시 받지 않음");
@@ -532,22 +552,21 @@ async function recordings(code, id, req, query) {
   if (!samples.length) fail(400, "소리가 비어 있음");
   const seconds = Math.round(samples.length / 16) / 1000;
   const key = `${before.tripCode}/${before.momentId}-${randomUUID().slice(0, 8)}.wav`;
-  await store.put(key, raw);
   try {
-    return await withTrip(code, true, async (trip, client) => {
+    await store.put(key, raw); // 늦게 실패해도(제한 시간 뒤에 저장됨) 아래에서 키를 버린다
+    const result = await withTrip(code, true, async (trip, client) => {
       const now = await check(trip, client);
-      if (now.existing) {
-        dropClips([{ object_key: key }]); // 같은 장면을 동시에 올린 다른 요청이 먼저 남겼다
-        return [200, asRecording(now.existing)];
-      }
+      if (now.existing) return [200, asRecording(now.existing)];
       await client.query(
         "INSERT INTO recordings (trip_code, moment_id, generation, participant_id, object_key, start_at, bytes, seconds) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
         [trip.code, now.momentId, now.current, now.caller.id, key, now.startAt, raw.length, seconds]
       );
       return [201, asRecording({ moment_id: now.momentId, start_at: now.startAt, seconds, bytes: raw.length })];
     });
+    if (result[0] === 200) await trashClips([key]); // 같은 장면을 동시에 올린 다른 요청이 먼저 남겼다 — 내 것은 버린다
+    return result;
   } catch (e) {
-    dropClips([{ object_key: key }]); // 남기지 못한 소리는 버킷에 두지 않는다
+    await trashClips([key]); // 남기지 못한 소리는 버킷에 두지 않는다
     throw e;
   }
 }
@@ -787,17 +806,7 @@ async function trips(req, [code, sub, id], b, query) {
       createdAt: Date.now(),
       ...(groupId ? { groupId } : {}),
     };
-    // 48시간 지난 여행과 그 발화·확인 순번을 한 문장으로 지운다. 지운 여행의 코드로만 찾으니(기본 키 앞부분)
-    // 발화 표 전체를 훑지 않는다 — 질의 하나는 2초에서 끊긴다(T26).
-    // 한 번에 여행 5개(발화 최대 10만 줄)까지. 여행을 만들 때마다 도니 밀린 것도 곧 따라잡는다.
-    // 치우기는 여행 만들기를 막지 않는다 — 실패하면 다음 여행을 만들 때 다시 한다.
-    await tripsDb()
-      .query(`WITH gone AS (DELETE FROM trips WHERE code IN (SELECT code FROM trips WHERE created_at < now() - interval '48 hours' LIMIT 5) RETURNING code),
-        u AS (DELETE FROM utterances WHERE trip_code IN (SELECT code FROM gone)),
-        a AS (DELETE FROM utterance_acks WHERE trip_code IN (SELECT code FROM gone))
-        DELETE FROM recordings WHERE trip_code IN (SELECT code FROM gone) RETURNING object_key, deleted_at`)
-      .then(({ rows }) => dropClips(rows)) // 그 여행들의 클립도 버킷에서(T76)
-      .catch((e) => log("warn", "trip_cleanup_failed", { err: errFields(e) })); // 다음 여행을 만들 때 다시 한다
+    await sweep(); // 여행을 만들 때마다 묵은 여행을 치운다(10분마다도 돈다)
     for (;;) {
       trip.code = newCode();
       const { rowCount } = await tripsDb().query("INSERT INTO trips (code, doc) VALUES ($1, $2) ON CONFLICT DO NOTHING", [trip.code, trip]);
@@ -807,7 +816,25 @@ async function trips(req, [code, sub, id], b, query) {
   if (sub === "voice-match" && !id) return voiceMatch(await withTrip(code, false, (trip) => trip), req, query);
   if (sub === "recordings") return recordings(code, id, req, query);
   const profile = sub === "participants" && m === "POST" && !id ? await profileOf(req) : null;
-  return withTrip(code, m !== "GET", (trip, client) => handle(trip, { req, m, sub, id, b, query, profile }, client));
+  const result = await withTrip(code, m !== "GET", (trip, client) => handle(trip, { req, m, sub, id, b, query, profile }, client));
+  if (sub === "participants" && m === "PATCH") void sweepClips(); // 동의 철회가 적은 클립을 커밋 뒤에 버킷에서 지운다
+  return result;
+}
+
+// 48시간 지난 여행과 그 발화·확인 순번·클립을 한 문장으로 지운다. 지운 여행의 코드로만 찾으니(기본 키 앞부분)
+// 발화 표 전체를 훑지 않는다 — 질의 하나는 2초에서 끊긴다(T26).
+// 한 번에 여행 5개(발화 최대 10만 줄)까지. 여행을 만들 때와 10분마다 도니 밀린 것도 곧 따라잡는다.
+// 잠긴 여행(올리는 중)은 건너뛴다 — 기다리지 않고, 그 사이 남긴 클립 줄을 놓치지 않게.
+// 클립은 지울 키만 적고 버킷은 기다리지 않고 비운다(sweepClips). 실패해도 던지지 않는다 — 다음에 다시 한다.
+export async function sweep() {
+  await tripsDb()
+    .query(`WITH gone AS (DELETE FROM trips WHERE code IN (SELECT code FROM trips WHERE created_at < now() - interval '48 hours' LIMIT 5 FOR UPDATE SKIP LOCKED) RETURNING code),
+      u AS (DELETE FROM utterances WHERE trip_code IN (SELECT code FROM gone)),
+      a AS (DELETE FROM utterance_acks WHERE trip_code IN (SELECT code FROM gone)),
+      r AS (DELETE FROM recordings WHERE trip_code IN (SELECT code FROM gone) RETURNING object_key, deleted_at)
+      INSERT INTO clip_trash (object_key) SELECT object_key FROM r WHERE deleted_at IS NULL ON CONFLICT DO NOTHING`)
+    .catch((e) => log("warn", "trip_cleanup_failed", { err: errFields(e) }));
+  void sweepClips();
 }
 
 async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
@@ -1161,4 +1188,5 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   process.on("uncaughtException", crash("uncaught_exception"));
   process.on("unhandledRejection", crash("unhandled_rejection"));
   server.listen(port, () => log("info", "listening", { port }));
+  setInterval(sweep, 10 * 60_000).unref(); // 여행을 아무도 만들지 않아도 묵은 여행과 클립을 치운다
 }

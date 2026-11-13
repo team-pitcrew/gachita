@@ -7,7 +7,7 @@ import { createConnection } from "node:net";
 import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
-import { classify, migrate, server, verifyGoogleLink } from "./server.js";
+import { classify, migrate, server, sweep, verifyGoogleLink } from "./server.js";
 import { captureLog } from "./log.js";
 import { endStores, profilesDb, tripsDb } from "./db.js";
 
@@ -15,7 +15,7 @@ let base;
 let fakeProvider; // 가짜 구글(T21). code가 곧 사용자 번호다. 특수 code로 장애 상황도 낸다.
 let tokenCalls = 0; // 가짜 구글이 받은 토큰 교환 수
 let fakeS3; // 가짜 클립 버킷(T76). SDK의 표준 설정(AWS_ENDPOINT_URL_S3)으로 꽂는다 — IP 주소라 SDK가 경로 방식으로 부른다.
-const s3 = { objects: new Map(), down: false };
+const s3 = { objects: new Map(), down: false, onPut: null }; // onPut: 올리는 도중에 끼워 넣을 일(시험이 정함)
 captureLog(() => {}); // 서버의 구조화 로그는 시험 출력에 섞지 않는다(T71 시험은 따로 받아 본다)
 before(async () => {
   fakeProvider = createServer(async (req, res) => {
@@ -56,10 +56,17 @@ before(async () => {
     for await (const c of req) chunks.push(c);
     const key = decodeURIComponent(new URL(req.url, "http://localhost").pathname).replace(/^\/clips\//, "");
     if (s3.down) return void (res.writeHead(503), res.end());
-    if (req.method === "PUT") s3.objects.set(key, Buffer.concat(chunks));
-    if (req.method === "DELETE") s3.objects.delete(key);
+    if (req.method === "PUT") {
+      s3.objects.set(key, Buffer.concat(chunks));
+      await s3.onPut?.();
+    }
+    if (req.method === "POST" && req.url.includes("delete")) {
+      // DeleteObjects: 본문의 <Key>들을 지운다
+      for (const [, k] of Buffer.concat(chunks).toString().matchAll(/<Key>(.*?)<\/Key>/g)) s3.objects.delete(k);
+      return void (res.writeHead(200, { "content-type": "application/xml" }), res.end("<DeleteResult></DeleteResult>"));
+    }
     if (req.method === "GET" && !s3.objects.has(key)) return void (res.writeHead(404, { "content-type": "application/xml" }), res.end("<Error><Code>NoSuchKey</Code></Error>"));
-    res.writeHead(req.method === "DELETE" ? 204 : 200);
+    res.writeHead(200);
     res.end(req.method === "GET" ? s3.objects.get(key) : undefined);
   });
   await new Promise((ok) => fakeS3.listen(0, "127.0.0.1", ok));
@@ -742,9 +749,10 @@ test("녹음 클립: 고른 장면의 원음을 받고, 재생하고, 바로 지
   const up = (moment, body, token, generation = 1) => fetch(`${base}${t}/recordings?moment=${moment}&generation=${generation}&from=${from}`, { method: "POST", headers: auth(token), body });
   const play = (id, token) => fetch(`${base}${t}/recordings/${id}`, { headers: auth(token) });
   const del = (id, token) => fetch(`${base}${t}/recordings/${id}`, { method: "DELETE", headers: auth(token) });
-  const gone = async () => {
-    for (let i = 0; i < 100 && s3.objects.size; i++) await new Promise((ok) => setTimeout(ok, 10)); // 버킷 지우기는 기다리지 않고 돈다
-    return s3.objects.size === 0;
+  // 버킷 지우기는 기다리지 않고 돈다. 남은 객체가 left개가 될 때까지 잠깐 기다린다
+  const gone = async (left = 0) => {
+    for (let i = 0; i < 100 && s3.objects.size > left; i++) await new Promise((ok) => setTimeout(ok, 10));
+    return s3.objects.size === left;
   };
   const clip = wav(200, 2);
 
@@ -795,24 +803,62 @@ test("녹음 클립: 고른 장면의 원음을 받고, 재생하고, 바로 지
   assert.deepEqual([(await up(m2.id, clip, mom.token)).status, (await play(m2.id, mom.token)).status], [503, 503]);
   process.env.CLIPS_BUCKET = "clips";
 
-  // 동의하지 않은 사람은 올리지도 듣지도 못하고, 그런 탑승자가 있는 동안은 아무도 올리지 못한다
-  const [, guest] = await join(trip.code, "손님", "ROW_2_RIGHT", false);
-  assert.deepEqual([(await up(m2.id, clip, guest.token)).status, (await play(m2.id, guest.token)).status, (await up(m2.id, clip, mom.token)).status], [403, 403, 403]);
+  // 같은 장면을 동시에 두 번 올려도 하나만 남고, 진 쪽은 제 소리를 버린다
+  const [, m3] = await call("POST", `${t}/moments`, {});
+  const both = await Promise.all([up(m3.id, clip, mom.token), up(m3.id, clip, son.token)]);
+  assert.deepEqual(both.map((r) => r.status).sort(), [200, 201]);
+  await gone(2);
+  assert.equal(s3.objects.size, 2, "m2와 m3 하나씩");
 
-  // 동의 철회: 그 여행의 클립을 모두 지우고, 철회 전의 소리(옛 세대)는 받지 않는다
+  // 버킷에 둘 수 없으면 503이고 줄도 생기지 않는다
+  const [, m4] = await call("POST", `${t}/moments`, {});
+  s3.down = true;
+  assert.equal((await up(m4.id, clip, mom.token)).status, 503);
+  s3.down = false;
+  assert.equal((await play(m4.id, mom.token)).status, 404);
+
+  // 동의하지 않은 사람은 올리지도 듣지도 못하고, 그런 탑승자가 있는 동안은 아무도 올리지 못한다. 지우기는 참가자 누구나
+  const [, guest] = await join(trip.code, "손님", "ROW_2_RIGHT", false);
+  assert.deepEqual([(await up(m4.id, clip, guest.token)).status, (await play(m2.id, guest.token)).status, (await up(m4.id, clip, mom.token)).status], [403, 403, 403]);
+  assert.equal((await del(m3.id, guest.token)).status, 204);
+  assert.equal(s3.objects.size, 1);
+
+  // 동의 철회: 그 여행의 클립을 모두 지우고, 철회 전의 소리(옛 세대)는 받지 않는다 — 철회한 본인이 올려도 '버림'(409)
   assert.equal((await call("PATCH", `${t}/participants/${son.id}`, { consent: false }))[0], 200);
   assert.ok(await gone(), "철회하면 버킷에서 지움");
   assert.equal((await play(m2.id, mom.token)).status, 404);
+  assert.equal((await up(m4.id, clip, son.token, 1)).status, 409, "철회한 본인의 옛 세대도 409");
   await call("PATCH", `${t}/participants/${son.id}`, { consent: true });
   await call("PATCH", `${t}/participants/${guest.id}`, { consent: true });
-  assert.equal((await up(m2.id, clip, mom.token, 1)).status, 409, "철회 전 세대");
-  assert.equal((await up(m2.id, clip, mom.token, 2)).status, 201);
+  assert.equal((await up(m4.id, clip, mom.token, 1)).status, 409, "철회 전 세대");
+  assert.equal((await up(m4.id, clip, mom.token, 2)).status, 201);
+
+  // 올리는 도중에 동의를 철회하면 둔 소리를 지우고 409
+  const [, m5] = await call("POST", `${t}/moments`, {});
+  s3.onPut = () => call("PATCH", `${t}/participants/${son.id}`, { consent: false });
+  assert.equal((await up(m5.id, clip, mom.token, 2)).status, 409);
+  s3.onPut = null;
+  assert.ok(await gone(), "철회가 지운 m4와, 올리다 거절된 m5 모두 버킷에 없음");
+
+  // 철회 때 버킷에 닿지 못해도 지울 키가 남아 다음 치우기가 지운다
+  await call("PATCH", `${t}/participants/${son.id}`, { consent: true });
+  assert.equal((await up(m5.id, clip, mom.token, 3)).status, 201);
+  s3.down = true;
+  await call("PATCH", `${t}/participants/${son.id}`, { consent: false });
+  await new Promise((ok) => setTimeout(ok, 300));
+  s3.down = false;
+  assert.equal(s3.objects.size, 1, "아직 남음");
+  await sweep();
+  assert.ok(await gone(), "다음 치우기가 지움");
 
   // 48시간: 여행을 치울 때 그 여행의 클립도 버킷에서 지운다
+  await call("PATCH", `${t}/participants/${son.id}`, { consent: true });
+  const [, m6] = await call("POST", `${t}/moments`, {});
+  assert.equal((await up(m6.id, clip, mom.token, 4)).status, 201);
   await tripsDb().query("UPDATE trips SET created_at = now() - interval '49 hours' WHERE code = $1", [trip.code]);
-  await call("POST", "/api/trips", {});
+  await sweep();
   assert.ok(await gone(), "치운 여행의 클립이 버킷에 남지 않음");
-  assert.equal((await tripsDb().query("SELECT count(*)::int AS n FROM recordings WHERE trip_code = $1", [trip.code])).rows[0].n, 0);
+  assert.equal((await tripsDb().query("SELECT (SELECT count(*) FROM recordings WHERE trip_code = $1) + (SELECT count(*) FROM clip_trash) AS n", [trip.code])).rows[0].n, "0");
 });
 
 test("쓰기가 몰려도 서버가 멈추지 않는다", async () => {

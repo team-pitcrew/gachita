@@ -4,7 +4,7 @@
 -- 사람이 지운 클립은 줄을 남기고 deleted_at만 채운다: 차가 늦게 다시 올려도 되살아나지 않게(voice.md).
 -- 동의 철회와 48시간 치우기는 줄째 지운다(세대 확인이 늦은 올리기를 막는다).
 BEGIN;
-SELECT pg_advisory_xact_lock(74622); -- 서버 여러 대가 동시에 시작해도 한 번에 하나만 실행
+SELECT pg_advisory_xact_lock(74625); -- 서버 여러 대가 동시에 시작해도 한 번에 하나만 실행
 
 CREATE TABLE IF NOT EXISTS recordings (
   trip_code text NOT NULL,
@@ -18,6 +18,13 @@ CREATE TABLE IF NOT EXISTS recordings (
   deleted_at timestamptz,                    -- 사람이 지움. 소리는 버킷에서 이미 지웠다
   created_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (trip_code, moment_id)
+);
+
+-- 버킷에서 지울 소리의 키. 동의 철회·48시간 치우기가 클립 줄을 지우는 같은 트랜잭션에서 적고(되돌려지면 함께 되돌려짐),
+-- 커밋 뒤와 10분마다 버킷에서 지운 것만 뺀다. 버킷 지우기가 실패하면 남아 다음에 다시 한다.
+CREATE TABLE IF NOT EXISTS clip_trash (
+  object_key text PRIMARY KEY,
+  since timestamptz NOT NULL DEFAULT now()
 );
 
 COMMIT;
