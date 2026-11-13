@@ -721,6 +721,16 @@ test("DB가 연결을 끊어도 서버가 살아 있고 다음 요청에서 다�
   assert.equal((await fetch(`${base}/healthz`)).status, 200, "처리기가 없으면 여기 오기 전에 프로세스가 죽는다");
 });
 
+test("글자 칸의 NUL 문자는 400으로 거른다(저장할 때 500이 되지 않게)", async () => {
+  assert.equal((await call("POST", "/api/trips", { title: "a\u0000b" }))[0], 400);
+  assert.equal((await call("POST", "/api/profiles", { name: "x\u0000" }))[0], 400);
+  const [, trip] = await call("POST", "/api/trips", {});
+  assert.equal((await join(trip.code, "민\u0000준", "ROW_1_LEFT"))[0], 400);
+  assert.equal((await call("POST", "/api/trips", { title: "a\ud800b" }))[0], 400, "짝 없는 서로게이트도");
+  const [, p] = await join(trip.code, "민준", "ROW_1_LEFT");
+  assert.equal((await call("GET", `/api/trips/${trip.code}/utterances?device=%00`, null, p.token))[0], 400, "질의 문자열의 기기 이름도");
+});
+
 test("오류 종류와 요청 로그(T71)", async () => {
   // 오류 응답에는 사람이 읽는 문장과 함께 종류(type)가 붙는다
   const [s404, b404] = await call("GET", "/api/trips/ZZZZZZ");

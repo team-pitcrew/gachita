@@ -76,8 +76,11 @@ const requestIdOf = (req) => {
   const v = req.headers["x-amzn-trace-id"];
   return typeof v === "string" && /^[\w=;.-]{1,200}$/.test(v) ? v : randomUUID();
 };
+// NUL 문자와 짝 없는 서로게이트는 Postgres의 text·jsonb가 받지 않아(22021·22P05·22P02) 저장할 때 500이 된다.
+// 받을 때 400으로 거른다.
 const text = (v, max, name) =>
-  typeof v === "string" && v.trim() && v.trim().length <= max ? v.trim() : fail(400, `${name}: 글자 1~${max}자`);
+  typeof v === "string" && (v.includes("\0") || !v.isWellFormed()) ? fail(400, `${name}: 쓸 수 없는 문자(NUL, 짝 없는 서로게이트)`)
+  : typeof v === "string" && v.trim() && v.trim().length <= max ? v.trim() : fail(400, `${name}: 글자 1~${max}자`);
 const num = (v, min, max, name) =>
   typeof v === "number" && v >= min && v <= max ? v : fail(400, `${name}: ${min}~${max} 사이 숫자`);
 const int = (v, min, max, name) => (Number.isInteger(v) ? num(v, min, max, name) : fail(400, `${name}: 정수`));
@@ -937,7 +940,7 @@ async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
     }
     if (m === "GET") {
       if (!caller.consent) fail(403, "녹음에 동의한 참가자만 볼 수 있음");
-      const device = query.get("device");
+      const device = query.get("device") ? text(query.get("device"), 40, "device") : null; // 비면 모든 기기
       const params = [trip.code];
       let where = "trip_code = $1 AND text <> ''"; // 내용을 비운 줄(지운 글)은 빼고
       if (device) {
