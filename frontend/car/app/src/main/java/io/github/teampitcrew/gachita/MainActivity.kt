@@ -5,6 +5,10 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
+import android.media.MediaPlayer
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -51,6 +55,7 @@ import java.util.Date
 import java.util.Locale
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import java.util.UUID
 import java.util.concurrent.Executors
 
@@ -131,6 +136,20 @@ class MainActivity : ComponentActivity() {
     private lateinit var handoff: Handoff // Gleo와 마이크 주고받기(T41). ponytail: 화면이 다시 만들어지면(configChanges 밖, 글꼴·언어) 넘긴 상태는 옛 화면의 시간 초과로 풀린다
     /** Gleo로 '기록 멈추기'를 부름(T41). 동의는 그대로 두고 수음만 멈춘다. 앱이 다시 켜져도 멋대로 다시 기록하지 않게 저장한다. */
     private var muted by mutableStateOf(false)
+    // 숏폼 그 자리 재생(T43). 장면 클립을 차례로 틀고 자막과 말한 사람을 보인다. 주차 중에만
+    private var short by mutableStateOf<Short?>(null)
+    private var shortAt by mutableStateOf(-1) // 재생 중인 장면. -1이면 틀지 않음
+    private var shortPos by mutableStateOf(0.0) // 그 장면의 초
+    private var shortPaused by mutableStateOf(false)
+    private var shortNote by mutableStateOf("")
+    private var player: MediaPlayer? = null
+    private var shortGen = 0 // 장면을 열 때마다 하나씩. 늦게 끝난 받기가 닫힌 숏폼이나 다른 장면을 건드리지 않게
+    private var shortFile: File? = null // 지금 트는 장면의 클립(장면마다 다른 파일, 닫으면 지움)
+    private val media = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build()
+    /** 사용자 음악은 듣는 동안만 멈춘다. 전화·Gleo 등이 포커스를 가져가면 닫는다(내비 안내처럼 줄여 달라는 것은 시스템이 줄임). */
+    private val playFocus = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT).setAudioAttributes(media)
+        .setOnAudioFocusChangeListener({ if (it == AudioManager.AUDIOFOCUS_LOSS || it == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT) stopShort() }, Handler(Looper.getMainLooper())).build()
+    private val shortTick = object : Runnable { override fun run() { player?.let { shortPos = it.currentPosition / 1000.0; main.postDelayed(this, 200) } } }
     private lateinit var device: String // 보관함의 기기 값. 설치 단위(ADR-0014의 device)
     /** 이 차가 참가시킨 사람의 참가자 토큰(id → 토큰). 그 사람의 동의 켜기와 발화 올리기에 쓴다(T68). 참가할 때 한 번만 온다. */
     private var tokens: Map<String, String> = emptyMap()
@@ -198,6 +217,7 @@ class MainActivity : ComponentActivity() {
         if (s.offPending) s.trip?.let { dropRawAll(it.code) } // 끈 뒤 지우기 전에 앱이 꺼졌으면 마저 지운다
         car = Car(this) {
             carStatus = it
+            if (it.restricted && shortAt >= 0) stopShort() // 주행 중에는 숏폼을 틀지 않는다(T11)
             val was = s.gear
             s = s.withGear(it.gear)
             if (was != null && was != "P" && it.gear == "P") arrive() // 앱을 켤 때 처음 읽은 P는 도착이 아니다
@@ -251,6 +271,7 @@ class MainActivity : ComponentActivity() {
     override fun onPause() { resumed = false; super.onPause() }
 
     override fun onDestroy() {
+        stopShort()
         main.removeCallbacksAndMessages(null) // 조회, 제안 시간 초과, 결과 카드 닫기
         if (Live.onHeard == ::heard) Live.onHeard = null
         if (!isChangingConfigurations) { handoff.stop(); CaptureService.stop(this) } // 동의를 확인할 화면이 없어지면 수음도 멈춘다
@@ -719,6 +740,67 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // ---- 숏폼 그 자리 재생(T43, #63 계약: GET /shortform, 클립은 참가자 토큰 머리말) ----
+
+    /** 녹음에 동의한, 이 차가 참가시킨 사람의 토큰. 숏폼은 기록본처럼 동의한 참가자만 본다. */
+    private fun viewer(): String? = s.trip?.people?.firstOrNull { it.consent && it.id in tokens }?.let { tokens[it.id] }
+
+    private fun showShort() {
+        val t = s.trip ?: return
+        val tok = viewer() ?: run { shortNote = "기록에 동의한 사람만 볼 수 있어요"; return }
+        val url = server
+        shortNote = "숏폼을 받고 있어요"
+        bg({ parseShort(Server(url).shortform(t.code, tok)) }) { r ->
+            if (isDestroyed) return@bg
+            r.onSuccess { sh ->
+                if (sh.scenes.isEmpty()) { shortNote = "아직 숏폼으로 만들 장면 클립이 없어요"; return@bg }
+                if (carStatus.restricted || handoff.state != Handoff.State.OFF) { shortNote = ""; return@bg }
+                if (getSystemService(AudioManager::class.java).requestAudioFocus(playFocus) != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) { shortNote = "지금은 소리를 낼 수 없어요"; return@bg }
+                short = sh; shortNote = ""
+                play(0)
+            }.onFailure { shortNote = "숏폼을 받지 못했어요 · ${reason(it)}" }
+        }
+    }
+
+    /** 장면 i의 클립을 받아 튼다. 끝나면 다음 장면, 마지막이면 닫는다. 트는 동안은 수음을 멈춰 재생 소리가 기록에 다시 들어가지 않게 한다. */
+    private fun play(i: Int) {
+        val sh = short ?: return
+        val tok = viewer()
+        val url = server
+        val clip = sh.scenes.getOrNull(i)?.let { clipUrl(url, it.clip) }
+        if (clip == null || tok == null || carStatus.restricted) return stopShort()
+        player?.release(); player = null // 다음 장면을 받는 동안 지난 플레이어를 '멈춤'이 다시 틀지 않게
+        shortFile?.delete(); shortFile = null
+        shortAt = i; shortPos = 0.0; shortPaused = false
+        CaptureService.hold(true)
+        val gen = ++shortGen
+        val f = File(cacheDir, "short-$gen.wav")
+        bg({ Server(url).download(clip, tok, f) }) { r ->
+            if (isDestroyed || gen != shortGen || short !== sh) { f.delete(); return@bg } // 그사이 닫혔거나 다른 장면
+            r.exceptionOrNull()?.let { f.delete(); shortNote = "클립을 받지 못했어요 · ${reason(it)}"; return@bg stopShort() }
+            shortFile = f
+            val mp = MediaPlayer()
+            runCatching { mp.setAudioAttributes(media); mp.setDataSource(f.path); mp.prepare(); mp.setOnCompletionListener { if (gen == shortGen) play(i + 1) }; mp.start() }
+                .onFailure { Log.w(TAG, "클립 재생 실패", it); mp.release(); shortNote = "클립을 틀지 못했어요"; return@bg stopShort() }
+            player = mp
+            Log.i(TAG, "숏폼 장면 ${i + 1}/${sh.scenes.size} ${f.length()}바이트")
+            main.removeCallbacks(shortTick); main.post(shortTick)
+        }
+    }
+
+    private fun stopShort() {
+        player?.release(); player = null
+        shortGen++ // 받는 중인 클립은 끝나면 스스로 지운다
+        main.removeCallbacks(shortTick)
+        if (short != null) { // 연 숏폼이 있으면(첫 장면을 열기 전에 실패해도) 포커스와 수음을 돌려준다. hold(false)는 멈추지 않았으면 아무것도 안 함
+            getSystemService(AudioManager::class.java).abandonAudioFocusRequest(playFocus)
+            if (handoff.state == Handoff.State.OFF) CaptureService.hold(false)
+            Log.i(TAG, "숏폼 닫음")
+        }
+        short = null; shortAt = -1
+        shortFile?.delete(); shortFile = null // 받은 클립은 남기지 않는다
+    }
+
     private fun mute(on: Boolean) { prefs.edit().putBoolean("muted", on).commit(); muted = on; Log.i(TAG, "기록 멈추기 $on") }
 
     /** Gleo에 결과를 돌려준다(Callback Schema: message는 영어, 항목은 data). 말은 Gleo가 한다. ponytail: 실패 status 값은 Gleo 승인 뒤 확인. */
@@ -814,6 +896,9 @@ class MainActivity : ComponentActivity() {
                 Text("기록 멈춤", fontSize = 48.sp, fontWeight = FontWeight.Bold)
                 Text("Gleo로 멈췄어요 · 동의는 그대로예요", color = c.onSurfaceVariant)
                 Button({ mute(false); syncCapture() }, Modifier.heightIn(min = 72.dp)) { Text("다시 기록", fontSize = 26.sp) }
+            } else if (s.recording && shortAt >= 0) {
+                Text("기록 잠시 멈춤", fontSize = 48.sp, fontWeight = FontWeight.Bold)
+                Text("숏폼을 듣는 동안은 기록하지 않아요", color = c.onSurfaceVariant)
             } else if (s.recording && handoff.state != Handoff.State.OFF) {
                 Text("기록 잠시 멈춤", fontSize = 48.sp, fontWeight = FontWeight.Bold)
                 Text(if (handoff.state == Handoff.State.WAITING) "운전대 버튼을 누르세요" else "Gleo가 끝나면 다시 기록해요", fontSize = 30.sp, fontWeight = FontWeight.Bold)
@@ -848,6 +933,7 @@ class MainActivity : ComponentActivity() {
             }
         }
         brief?.takeIf { !carStatus.restricted }?.let { BriefCard(it) } // 주행 중에는 목록을 띄우지 않는다(T40)
+        if (!carStatus.restricted) ShortCard() // 숏폼은 주차 중에만(T11)
         offer?.takeIf { it.stage != Offer.Stage.FINDING }?.let { OfferCard(it) }
         EnrollCard(t)
         if (s.recording || Live.count > 0) Heard(t)
@@ -955,6 +1041,32 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** 숏폼(T43): 장면 진행, 지금 자막의 말한 사람과 글. 말한 사람을 못 붙인 줄은 자리 이름만. */
+    @Composable
+    private fun ShortCard() {
+        val c = MaterialTheme.colorScheme
+        val sh = short
+        Card {
+            if (sh == null || shortAt < 0) {
+                Text("숏폼", fontSize = 30.sp, fontWeight = FontWeight.Bold)
+                Text(shortNote.ifEmpty { "남긴 장면을 원래 목소리와 자막으로 들어요" }, color = c.onSurfaceVariant)
+                OutlinedButton(::showShort, Modifier.heightIn(min = 64.dp), enabled = shortNote != "숏폼을 받고 있어요" && handoff.state == Handoff.State.OFF) { Text("숏폼 보기") }
+            } else {
+                val sc = sh.scenes[shortAt]
+                val cue = cueAt(sc.cues, shortPos)
+                Text("${shortAt + 1} / ${sh.scenes.size} · ${sc.label}", color = c.onSurfaceVariant)
+                if (!cue?.who.isNullOrEmpty()) Text(cue!!.who, fontSize = 30.sp, fontWeight = FontWeight.Bold, color = c.primary)
+                Text(cue?.text ?: "", fontSize = 36.sp, fontWeight = FontWeight.Bold)
+                Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    OutlinedButton({ player?.let { if (it.isPlaying) it.pause() else it.start(); shortPaused = !it.isPlaying } }, Modifier.heightIn(min = 64.dp)) {
+                        Text(if (shortPaused) "이어 듣기" else "멈춤")
+                    }
+                    OutlinedButton(::stopShort, Modifier.heightIn(min = 64.dp)) { Text("닫기") }
+                }
+            }
+        }
+    }
+
     /** 경유지 제안(T9). 주행 중에도 한 번 누르는 단추 둘만. 거리·시간은 그곳까지이고 들르면 늘어나는 시간이 아니다. */
     @Composable
     private fun OfferCard(o: Offer) {
@@ -997,7 +1109,7 @@ class MainActivity : ComponentActivity() {
             }
             if (s.note.isNotEmpty()) Text(s.note, color = c.error)
             // 우리가 수음하는 동안 Gleo는 운전대 버튼을 무시한다. 한 번 눌러 마이크를 넘긴다(T41). 주행 중에도 한 번 누름이라 둔다
-            if (s.recording && !muted && Live.mic == Mic.ON && handoff.state == Handoff.State.OFF)
+            if (s.recording && !muted && Live.mic == Mic.ON && handoff.state == Handoff.State.OFF && shortAt < 0)
                 OutlinedButton({ handoff.give(wake = false) }, Modifier.heightIn(min = 72.dp)) { Text("Gleo 쓰기", fontSize = 26.sp) }
         }
     }

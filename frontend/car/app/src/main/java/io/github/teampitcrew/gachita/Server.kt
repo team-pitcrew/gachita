@@ -2,6 +2,7 @@ package io.github.teampitcrew.gachita
 
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -33,6 +34,23 @@ class Server(base: String) {
     /** 발화 묶음 올리기(ADR-0014). 서버가 빠짐없이 받은 마지막 순번. 동의하지 않은 사람이 있으면 403 ApiError. */
     fun utterances(code: String, token: String, device: String, items: JSONArray): Long =
         JSONObject(call("POST", "/api/trips/$code/utterances", JSONObject().put("device", device).put("items", items), token)!!).getLong("lastSeq")
+
+    /** 숏폼 구성(T43, #63 계약). 녹음에 동의한 참가자의 토큰으로. */
+    fun shortform(code: String, token: String): String = call("GET", "/api/trips/$code/shortform", null, token)!!
+
+    /** 클립 소리를 file에 받는다(url은 clipUrl이 거른 것). 토큰은 머리말로만. */
+    fun download(url: String, token: String, file: File) {
+        val c = URL(url).openConnection() as HttpURLConnection
+        try {
+            c.connectTimeout = 5000
+            c.readTimeout = 10000
+            c.setRequestProperty("Authorization", "Bearer $token")
+            if (c.responseCode >= 400) throw ApiError(c.responseCode, c.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty())
+            c.inputStream.use { i -> file.outputStream().use { i.copyTo(it) } }
+        } finally {
+            c.disconnect()
+        }
+    }
 
     /** 부탁 남기기(T9). 새 부탁의 id. 처음 상태는 held. */
     fun request(code: String, by: String, text: String): String =
