@@ -30,21 +30,18 @@ flowchart LR
     Car["차량 앱 (frontend/car)\nAndroid · Compose · Pleos SDK"]
     Phone["웹앱 (frontend/web)\n폰 브라우저 · 홈 화면 설치"]
   end
-  CF["Cloudflare 엣지\ngachita.mangowhois.ai · TLS · 캐시"]
+  CF["Cloudflare 엣지\ngachita.mangowhois.ai · TLS · 캐시 · 요청 수 제한"]
   subgraph AWS["AWS · EC2 한 대 · K3s"]
-    Edge["edge: cloudflared · Traefik(Gateway API)"]
-    API["gachita: API 서버 (backend/api)\nNode 22"]
-    PGT[("gachita-trips\nPostgres")]
-    PGP[("gachita-profiles\nPostgres")]
+    ALB["ALB gachita-dev\n(AWS Load Balancer Controller가 Gateway로 만듦)"]
+    API["gachita: API 서버 (backend/api)\nNode 22 · NodePort"]
+    PG[("gachita-db: Postgres 하나\ntrips · profiles")]
     S3[("S3\n백업 · 클립")]
   end
   Car -->|HTTPS| CF
   Phone -->|HTTPS| CF
-  CF -->|Tunnel| Edge --> API
-  API --> PGT
-  API --> PGP
-  PGT -.->|백업| S3
-  PGP -.->|백업| S3
+  CF -->|HTTPS 443| ALB --> API
+  API --> PG
+  PG -.->|백업| S3
   Car -->|같은 기기 안| Pleos["순정 내비 · 공조 · 좌석 · TTS"]
 ```
 

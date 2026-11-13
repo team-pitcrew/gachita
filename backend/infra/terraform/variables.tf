@@ -11,43 +11,44 @@ variable "env" {
 }
 
 variable "instance_type" {
-  description = "K3s 서버 한 대의 크기. ARM(Graviton)이어야 한다"
+  description = "K3s 서버 한 대의 크기. ARM(Graviton)이어야 한다. 근거는 ADR-0012의 노드 사양 표(4 GiB로는 요청 합계가 넘침)"
   type        = string
-  default     = "t4g.medium"
+  default     = "t4g.large"
 }
 
 variable "root_volume_gb" {
-  description = "루트 디스크 크기(GB). Postgres 데이터도 여기에 둔다"
+  description = "루트 디스크 크기(GB). 이미지, K3s, Postgres 볼륨(local-path)이 여기에 든다"
   type        = number
-  default     = 30
+  default     = 40
 }
 
 variable "admin_cidrs" {
-  description = "쿠버네티스 API(6443)에 닿을 수 있는 주소 범위. 비우면 밖에서 못 닿고 SSM으로만 들어간다"
+  description = "쿠버네티스 API(6443)에 직접 닿을 주소 범위. 비워 두고 SSM 포트 포워딩(output ssm_kube_api)으로 들어가는 것이 기본"
   type        = list(string)
   default     = []
 }
 
-variable "k3s_version" {
-  description = "설치할 K3s 판. 2026-11-12의 stable 채널 값"
-  type        = string
-  default     = "v1.37.2+k3s1"
-}
-
-variable "argocd_version" {
-  description = "설치할 Argo CD 판"
-  type        = string
-  default     = "v3.6.1"
-}
-
 variable "gitops_repo" {
-  description = "Argo CD가 읽을 저장소(배포 키로 읽으므로 SSH 주소)"
+  description = "Argo CD와 구축 스크립트(ansible-pull)가 읽을 저장소(배포 키로 읽으므로 SSH 주소)"
   type        = string
   default     = "git@github.com:team-pitcrew/gachita.git"
 }
 
 variable "gitops_revision" {
-  description = "Argo CD가 따라갈 브랜치"
+  description = "Argo CD와 구축 스크립트가 따라갈 브랜치"
   type        = string
   default     = "develop"
+}
+
+# ---- Cloudflare(가장자리, ADR-0010). 영역 번호는 비밀 값이 아니다 ----
+variable "cloudflare_zone_id" {
+  description = "mangowhois.ai 영역 번호. 이 영역에서 service_host 레코드 하나만 다룬다. 비우면 레코드를 만들지 않는다"
+  type        = string
+  default     = ""
+}
+
+variable "service_host" {
+  description = "서비스 주소. 웹앱과 API가 같은 이름에서 나간다(API는 /api/)"
+  type        = string
+  default     = "gachita.mangowhois.ai"
 }

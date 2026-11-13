@@ -1,9 +1,10 @@
-# 물결 3. 프로필 Postgres(gachita-profiles 네임스페이스, T26). 다른 DB와 파드·네트워크로 나뉜다.
+# 물결 3. Postgres 하나(gachita-db 네임스페이스, ADR-0016). 데이터베이스 둘(trips, profiles)과 소유 역할 둘.
+# 데이터 버킷에 전체 백업이 있으면 구축 6단계가 뿌리 앱을 통해 경로를 apps/db/recover로 바꿔 복구로 편다(T52).
 # 앱을 지워도 DB가 지워지지 않게 finalizer를 두지 않는다(데이터 보호).
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: db-profiles
+  name: db
   namespace: argocd
   annotations:
     argocd.argoproj.io/sync-wave: "3"
@@ -12,10 +13,10 @@ spec:
   source:
     repoURL: git@github.com:team-pitcrew/gachita.git
     targetRevision: develop
-    path: backend/infra/gitops/apps/db/profiles
+    path: backend/infra/gitops/apps/db
   destination:
     server: https://kubernetes.default.svc
-    namespace: gachita-profiles
+    namespace: gachita-db
   syncPolicy:
     automated:
       prune: true
