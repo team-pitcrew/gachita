@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>같이타 웹 시연</title>
+    <!-- /demo(끝에 / 없음)로 열리므로 파일은 절대 경로로 부른다. 빌드 없음, 의존성 없음. -->
+    <link rel="stylesheet" href="/demo/demo.css" />
+  </head>
+  <body>
+    <header class="page">
+      <h1>같이타 <span>웹 시연</span></h1>
+      <p class="warn" role="note">웹 시연 · 실제 차량·에뮬레이터 화면 아님</p>
+      <ol class="steps" aria-label="시연 순서">
+        <li>여행 만들기</li>
+        <li>폰에서 참가·동의</li>
+        <li>출발</li>
+        <li>받아쓰기 시연</li>
+        <li>부탁 처리</li>
+        <li>장면 남기기 · 주차</li>
+      </ol>
+    </header>
+
+    <main class="stage">
+      <section class="car-col" aria-label="차량 화면 (웹 시연, 에뮬레이터 배치를 줄여 그림)">
+        <div id="fit" class="fit">
+          <!-- 2560 × 1440 에뮬레이터 화면(docs/emulator/README.md)을 그대로 좌표로 쓰고 통째로 줄인다. -->
+          <div id="screen" class="screen">
+            <section class="drive" aria-label="Driving view (시연 값)">
+              <p class="badge">웹 시연 · 실제 차량·에뮬레이터 화면 아님</p>
+              <div class="speed"><output id="speed">0</output><span>km/h</span></div>
+              <ol class="gears" aria-label="기어" id="gears">
+                <li data-g="P">P</li>
+                <li data-g="R">R</li>
+                <li data-g="N">N</li>
+                <li data-g="D">D</li>
+              </ol>
+              <p class="range">주행 가능 <b id="range">412</b> km</p>
+              <div class="body" aria-label="좌석" id="seats"></div>
+              <p class="sys-note">속도·기어·주행 가능 거리는 여행 상태로 정한 시연 값이에요.</p>
+            </section>
+
+            <header class="status" aria-label="상태 바">
+              <span class="app-name">같이타</span>
+              <span id="net" class="net">연결 확인 중</span>
+              <time id="clock"></time>
+            </header>
+
+            <section class="appwin" aria-label="같이타 앱 창">
+              <!-- 여행이 없을 때: 여행 만들기 -->
+              <form id="setup" class="setup" hidden>
+                <h2>여행 만들기</h2>
+                <p class="sub">차가 여행을 만들고 운전석 참가자로 들어가요. 일행은 오른쪽 폰 화면에서 참가해요.</p>
+                <label class="field">
+                  <span>여행 이름</span>
+                  <input id="setup-title" maxlength="40" required autocomplete="off" value="강릉 가족 여행" />
+                </label>
+                <label class="field">
+                  <span>운전자 이름</span>
+                  <input id="setup-name" maxlength="20" required autocomplete="off" value="아빠" />
+                </label>
+                <button class="primary" id="setup-go">여행 만들기</button>
+                <p class="err" id="setup-err" role="alert"></p>
+              </form>
+
+              <!-- 여행 중: 1682 창은 두 칸(차량 앱 TripScreen과 같은 순서) -->
+              <div id="tripwin" class="cols" hidden>
+                <div class="col" id="left"></div>
+                <div class="col">
+                  <div id="ops"></div>
+
+                  <!-- 받아쓰기 시연. 다시 그리지 않아 입력 중인 글이 지워지지 않는다. -->
+                  <form id="stt" class="card stt">
+                    <div class="between">
+                      <h3>받아쓰기 시연</h3>
+                      <span class="pill">실제는 차량 Pleos STT</span>
+                    </div>
+                    <p class="sub" id="stt-state"></p>
+                    <p class="sub">대사를 누르면 그 자리의 말로 받아 적어 서버에 올려요. 마이크는 쓰지 않아요.</p>
+                    <div class="lines" id="stt-lines"></div>
+                    <div class="free">
+                      <label class="field">
+                        <span>말한 자리</span>
+                        <select id="stt-seat"></select>
+                      </label>
+                      <label class="field grow">
+                        <span>직접 쓰기</span>
+                        <input id="stt-text" maxlength="500" autocomplete="off" placeholder="예: 휴게소에서 핫바 먹자" />
+                      </label>
+                    </div>
+                    <button id="stt-send">받아 적기</button>
+                    <p class="err" id="stt-err" role="alert"></p>
+                  </form>
+
+                  <div id="right"></div>
+                </div>
+              </div>
+            </section>
+
+            <div class="strip" aria-hidden="true"><i></i><i></i><i></i></div>
+
+            <footer class="gnb" aria-label="GNB (공조는 시연)">
+              <p class="hvac"><span>운전석</span><b id="t-driver">—</b><small>시연</small></p>
+              <p class="dock" aria-hidden="true"><i></i><i class="on">같이타</i><i></i><i></i></p>
+              <p class="hvac"><span>조수석</span><b id="t-passenger">—</b><small>시연</small></p>
+            </footer>
+          </div>
+        </div>
+      </section>
+
+      <aside class="phone-col" aria-label="탑승자 폰 화면">
+        <div class="between">
+          <h2>탑승자 폰 <span>웹앱</span></h2>
+          <a id="phone-open" target="_blank" rel="noopener" hidden>다른 폰으로 열기 ↗</a>
+        </div>
+        <div class="phone">
+          <iframe id="phone" title="탑승자 폰 화면(같이타 웹앱)" hidden></iframe>
+          <p id="phone-empty" class="phone-empty">여행을 만들면 탑승자 폰 화면이 여기에 열려요.</p>
+        </div>
+        <p class="note">같은 브라우저의 새 탭은 이 폰과 같은 참가자로 열릴 수 있어요. 다른 사람으로 참가하려면 시크릿 창이나 다른 기기에서 여세요.</p>
+      </aside>
+    </main>
+
+    <p id="toast" role="status" hidden></p>
+    <script type="module" src="/demo/demo.js"></script>
+  </body>
+</html>
