@@ -677,9 +677,9 @@ const wav = (freq, seconds) => {
   head.writeUInt32LE(data.length, 40);
   return Buffer.concat([head, data]);
 };
+const postRaw = (path, buf, token) => fetch(base + path, { method: "POST", headers: token ? { authorization: `Bearer ${token}` } : {}, body: buf });
 
 test("목소리 등록으로 발화의 화자를 프로필에 붙인다(T38)", async () => {
-  const postRaw = (path, buf, token) => fetch(base + path, { method: "POST", headers: token ? { authorization: `Bearer ${token}` } : {}, body: buf });
 
   // 등록: 원본은 어디에도 남기지 않고 대조용 값만
   const [, mom] = await call("POST", "/api/profiles", { name: "엄마" });
@@ -699,33 +699,33 @@ test("목소리 등록으로 발화의 화자를 프로필에 붙인다(T38)", a
   const [, trip] = await call("POST", "/api/trips", {});
   const t = `/api/trips/${trip.code}`;
   const [, pm] = await call("POST", `${t}/participants`, { seat: "ROW_1_LEFT", consent: true }, mom.token);
-  const [, pd] = await call("POST", `${t}/participants`, { seat: "ROW_1_RIGHT", consent: true }, dad.token);
+  const [, pd] = await call("POST", `${t}/participants`, { seat: "ROW_2_LEFT", consent: true }, dad.token);
   await call("POST", `${t}/utterances`, { device: "car", generation: 1, items: [{ seq: 1, at: trip.createdAt + 1000, text: "바다 보인다", seatArea: "ROW_1_LEFT" }] }, pm.token);
 
-  // 대조: 엄마 자리의 발화 음성은 엄마로, 아빠 소리는 '모름'
-  const m1 = await postRaw(`${t}/voice-match?seatArea=ROW_1_LEFT&device=car&seq=1`, wav(210, 1.5), pm.token);
+  // 대조: 앞줄(row=1)의 발화 음성은 엄마로, 뒷줄에 앉은 아빠의 소리는 앞줄 후보에 없어 '모름'
+  const m1 = await postRaw(`${t}/voice-match?row=1&device=car&seq=1`, wav(210, 1.5), pm.token);
   assert.equal(m1.status, 200);
   const r1 = await m1.json();
-  assert.deepEqual([r1.profileId, r1.applied], [mom.id, true], "엄마 목소리는 엄마 프로필로");
-  const m2 = await postRaw(`${t}/voice-match?seatArea=ROW_1_LEFT&device=car&seq=1`, wav(340, 1.5), pm.token);
+  assert.deepEqual([r1.participantId, r1.profileId, r1.applied], [pm.id, mom.id, true], "엄마 목소리는 엄마로");
+  const m2 = await postRaw(`${t}/voice-match?row=1&device=car&seq=1`, wav(340, 1.5), pm.token);
   const r2 = await m2.json();
-  assert.deepEqual([r2.profileId, r2.applied], [null, false], "다른 목소리는 모름");
+  assert.deepEqual([r2.participantId, r2.profileId, r2.applied], [null, null, false], "다른 줄의 목소리는 모름");
   assert.ok(r1.confidence > r2.confidence, "같은 목소리의 확신이 더 높다");
   assert.ok(r1.confidence >= r1.threshold, "같은 목소리는 기준을 넘는다");
 
   // 발화 줄에 화자가 붙는다(기록본·피드에 나온다)
   const [, tr] = await call("GET", `${t}/transcript`, null, pm.token);
-  assert.equal(tr.utterances[0].profileId, mom.id);
+  assert.deepEqual([tr.utterances[0].participantId, tr.utterances[0].profileId], [pm.id, mom.id]);
   const [, feed] = await call("GET", "/api/profiles/me/feed", null, mom.token);
   assert.equal(feed.items.filter((i) => i.kind === "utterance").length, 1, "화자가 붙은 발화는 피드에 나옴");
 
   // 등록을 지우면 그 자리는 후보가 없어 모름
   assert.equal((await call("DELETE", "/api/profiles/me/voice", null, dad.token))[0], 204);
-  const m3 = await postRaw(`${t}/voice-match?seatArea=ROW_1_RIGHT`, wav(340, 1.5), pd.token);
+  const m3 = await postRaw(`${t}/voice-match?row=2`, wav(340, 1.5), pd.token);
   const r3 = await m3.json();
   assert.deepEqual([r3.profileId, r3.confidence], [null, 0], "등록이 없으면 모름");
-  assert.equal((await postRaw(`${t}/voice-match?seatArea=ROW_1_LEFT`, wav(210, 1.5))).status, 401, "참가자 토큰이 필요함");
-  assert.equal((await fetch(`${base}${t}/voice-match?seatArea=TRUNK`, { method: "POST", headers: { authorization: `Bearer ${pm.token}` }, body: wav(210, 1) })).status, 400, "없는 좌석은 거절");
+  assert.equal((await postRaw(`${t}/voice-match?row=1`, wav(210, 1.5))).status, 401, "참가자 토큰이 필요함");
+  assert.equal((await postRaw(`${t}/voice-match?row=3`, wav(210, 1), pm.token)).status, 400, "없는 줄은 거절");
 
   // 화자는 그 발화를 올린 기기(참가자)만, 아직 화자가 없는 줄에만 붙인다
   await call("POST", `${t}/utterances`, { device: "car", generation: 1, items: [{ seq: 2, at: trip.createdAt + 2000, text: "응" }] }, pm.token);
@@ -734,16 +734,16 @@ test("목소리 등록으로 발화의 화자를 프로필에 붙인다(T38)", a
   const relabel = await (await postRaw(`${t}/voice-match?device=car&seq=1`, wav(210, 1.5), pm.token)).json();
   assert.equal(relabel.applied, false, "이미 화자가 있는 줄은 바꾸지 않음");
   assert.equal((await postRaw(`${t}/voice-match`, wav(210, 11), pm.token)).status, 400, "대조 음성은 10초까지");
-  const [, guest] = await call("POST", `${t}/participants`, { seat: "ROW_2_LEFT", name: "손님", consent: false });
+  const [, guest] = await call("POST", `${t}/participants`, { seat: "ROW_2_RIGHT", name: "손님", consent: false });
   assert.equal((await postRaw(`${t}/voice-match`, wav(210, 1.5), guest.token)).status, 403, "동의하지 않은 참가자는 대조 못 함");
   await call("PATCH", `${t}/participants/${guest.id}`, { consent: true }, guest.token);
 
-  // 좌석 구역을 모르면 이 여행의 프로필 참가자 모두가 후보다
+  // 좌석 구역을 모르면 이 여행의 참가자 모두가 후보다
   const m4 = await (await postRaw(`${t}/voice-match`, wav(210, 1.5), pd.token)).json();
   assert.equal(m4.profileId, mom.id, "구역 없이도 엄마를 찾음");
 
   // 대조는 여행 줄을 잠그지 않는다: 같은 여행에 대조가 몰려도, 그사이 동의를 바꿔도 모두 응답한다(리뷰 재현)
-  const jobs = Array.from({ length: 15 }, () => postRaw(`${t}/voice-match?seatArea=ROW_1_LEFT&device=car&seq=1`, wav(210, 1.5), pm.token));
+  const jobs = Array.from({ length: 15 }, () => postRaw(`${t}/voice-match?row=1&device=car&seq=1`, wav(210, 1.5), pm.token));
   const [consent] = await call("PATCH", `${t}/participants/${pd.id}`, { consent: true }, pd.token);
   assert.deepEqual([consent, ...(await Promise.all(jobs)).map((r) => r.status)], Array(16).fill(200));
 
@@ -1188,6 +1188,49 @@ test("짧은 말도 초안과 글자가 절반 넘게 다르면 원문으로 남
     delete process.env.ASR_GAP_MS;
   }
   assert.deepEqual(events.find((e) => e.msg === "clip_retranscribed").reasons, { suspicious: 1 }, "'가자' → '싫어'는 받지 않음");
+});
+
+test("손님 참가자도 여행에 목소리를 등록하면 화자가 붙는다(T38·T37)", async () => {
+  // 차의 가족은 손님 참가자다(프로필 없음). 등록값은 여행에 두고, 동의를 끄거나 48시간이 지나면 지운다.
+  const [, trip] = await call("POST", "/api/trips", {});
+  const t = `/api/trips/${trip.code}`;
+  const [, a] = await join(trip.code, "아빠", "ROW_1_LEFT", true);
+  const [, b] = await join(trip.code, "누나", "ROW_2_LEFT", true);
+  const [, c] = await join(trip.code, "동생", "ROW_2_RIGHT", false);
+  const enroll = (p, freq, token) => postRaw(`${t}/participants/${p.id}/voice`, wav(freq, 3), token).then(async (r) => [r.status, await r.json()]);
+  const prints = async (id) => (await tripsDb().query("SELECT count(*)::int AS n FROM trip_voice_prints WHERE trip_code = $1 AND participant_id = $2", [trip.code, id])).rows[0].n;
+
+  assert.deepEqual(await enroll(a, 210, a.token), [200, { seconds: 3, dims: 112 }]);
+  assert.equal((await enroll(a, 210))[0], 401, "토큰 없이는 등록 못 함");
+  assert.equal((await enroll(a, 300, b.token))[0], 403, "남의 목소리를 등록하지 못함");
+  assert.equal((await enroll(c, 340, c.token))[0], 409, "녹음에 동의한 뒤 등록");
+  assert.equal((await postRaw(`${t}/participants/nobody/voice`, wav(210, 3), a.token)).status, 404);
+  assert.equal((await postRaw(`${t}/participants/${a.id}/voice`, wav(210, 0.5), a.token)).status, 400, "등록은 1초부터");
+  assert.equal((await call("POST", `${t}/participants/${a.id}/voice/x`, {}, a.token))[0], 404, "없는 경로");
+  assert.equal((await enroll(b, 300, b.token))[0], 200);
+  await call("PATCH", `${t}/participants/${c.id}`, { consent: true }, c.token);
+  assert.equal((await enroll(c, 340, c.token))[0], 200);
+  assert.equal(await prints(a.id), 1, "원본 음성이 아니라 대조용 값 한 줄");
+
+  // 뒷줄(row=2) 발화는 뒷줄 두 사람 가운데서 찾고, 그 발화 줄에 참가자를 붙인다(프로필 없음)
+  await call("POST", `${t}/utterances`, { device: "car", generation: 1, items: [{ seq: 1, at: trip.createdAt + 1000, text: "언제 도착해?" }] }, a.token);
+  const r1 = await (await postRaw(`${t}/voice-match?row=2&device=car&seq=1`, wav(300, 1.5), a.token)).json();
+  assert.deepEqual([r1.participantId, r1.profileId, r1.applied], [b.id, null, true]);
+  const [, tr] = await call("GET", `${t}/transcript`, null, a.token);
+  assert.deepEqual([tr.utterances[0].participantId, tr.utterances[0].profileId], [b.id, undefined]);
+  const r2 = await (await postRaw(`${t}/voice-match?row=2`, wav(210, 1.5), a.token)).json();
+  assert.equal(r2.participantId, null, "앞줄 아빠의 목소리는 뒷줄 후보에서 모름");
+  assert.equal((await (await postRaw(`${t}/voice-match?row=1`, wav(210, 1.5), a.token)).json()).participantId, a.id);
+
+  // 동의를 끄면(누가 끄든) 그 참가자의 값은 바로 지운다
+  await call("PATCH", `${t}/participants/${b.id}`, { consent: false });
+  assert.equal(await prints(b.id), 0);
+  assert.equal(await prints(c.id), 1, "다른 사람의 값은 그대로");
+
+  // 48시간이 지나 여행이 지워지면 값도 함께
+  await tripsDb().query("UPDATE trips SET created_at = now() - interval '49 hours' WHERE code = $1", [trip.code]);
+  for (let i = 0; i < 3 && (await prints(a.id)); i++) await call("POST", "/api/trips", {});
+  assert.deepEqual([await prints(a.id), await prints(c.id)], [0, 0]);
 });
 
 test("쓰기가 몰려도 서버가 멈추지 않는다", async () => {
