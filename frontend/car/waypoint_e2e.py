@@ -107,7 +107,7 @@ def main(apk):
         note("propose", try_=i + 1, said=meta["utterances"][0]["text"], heard=got, line=e and e["line"], after_speech_end_s=lat[-1] if e else None)
         if not e and not is_req: continue
         if i == 0:
-            check("제안을 말(TTS)로도 알림", e and wait_log(r"^말함 ", app_log.index(e), 2))
+            check("제안을 말(TTS)로도 알림", e and wait_log(r"^말함 \d+자$", app_log.index(e), 2))
             shot("01-offer-drive"); note("ui", texts=texts())
         if i < TRIES - 1:
             k = len(app_log); inj.play("no")
@@ -115,7 +115,7 @@ def main(apk):
         else:  # 모호한 말에는 한 번 다시 묻고, 화면 단추로도 답한다
             k = len(app_log); inj.play("unclear")
             u = wait_log(r"^발화 ", k, 12)  # 모호한 말이 받아 적힌 뒤에 나온 '말함'만 센다
-            check(f"시도 {i + 1}: 모호한 말에는 다시 물음(보관하지 않음)", u and wait_log(r"^말함 ", app_log.index(u), 3) and not wait_log(r"held", k, 0.1))
+            check(f"시도 {i + 1}: 모호한 말에는 다시 물음(보관하지 않음)", u and wait_log(r"^말함 \d+자$", app_log.index(u), 3) and not wait_log(r"held", k, 0.1))
             k = len(app_log); tap_text("나중에")
             check(f"시도 {i + 1}: 화면의 '나중에' → 보관", wait_log(r"부탁 1/1건 held", k, 10))
     p95 = sorted(lat)[max(0, round(0.95 * len(lat)) - 1)] if lat else None
@@ -143,7 +143,7 @@ def main(apk):
     note("waypoint", accepted=acc and acc["line"], request=req and req["line"], navi=added and added["line"], done=done and done["line"],
          yes_to_callback_s=round((added["device_ms"] - offset - t_yes) / 1000, 2) if added else None)
     check("수락: 취소된 A는 빠지고 B만 accepted", acc and "1/2건" in acc["line"])
-    check("onWaypointChanged(ADD)를 받고 반영, 반영 뒤 말로 알림", added and done and "반영" in done["line"] and wait_log(r"^말함 ", app_log.index(done), 2))
+    check("onWaypointChanged(ADD)를 받고 반영, 반영 뒤 말로 알림", added and done and "반영" in done["line"] and wait_log(r"^말함 \d+자$", app_log.index(done), 2))
     time.sleep(4)
     rs = trip(code)["requests"]; final = {r["id"]: r["status"] for r in rs}
     c = next((r for r in rs if r["id"] not in (reqs[0]["id"], reqs[1]["id"]) and r["createdAt"] > reqs[1]["createdAt"]), None)

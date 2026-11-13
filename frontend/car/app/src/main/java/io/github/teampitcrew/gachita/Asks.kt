@@ -53,8 +53,10 @@ fun isRestRequest(text: String): Boolean {
 
 enum class Answer { YES, NO, UNCLEAR }
 
-private val NO_WORDS = setOf("아니", "아니야", "아니요", "아뇨", "나중에", "괜찮아", "괜찮아요", "싫어", "됐어", "안")
-private val YES_WORDS = setOf("응", "네", "예", "그래", "그래요", "좋아", "좋아요", "가자", "들르자", "들렀다")
+// "안"·"네"처럼 흔한 낱말은 넣지 않는다("나 안 졸려", "네 동생은?"). '안'은 "안 가", "안 들러"로만 본다
+private val NO_WORDS = setOf("아니", "아니야", "아니요", "아뇨", "나중에", "괜찮아", "괜찮아요", "싫어", "됐어")
+private val NO_PHRASE = Regex("안 ?(가|들러)")
+private val YES_WORDS = setOf("응", "그래", "그래요", "좋아", "좋아요", "가자", "들르자", "들렀다")
 
 /**
  * 제안("…에 들를까요?")에 대한 답. 띄어쓰기로 나눈 낱말이 통째로 같아야 한다("그래서", "좋아하는", "반응"은 답이 아니다).
@@ -63,7 +65,7 @@ private val YES_WORDS = setOf("응", "네", "예", "그래", "그래요", "좋�
 fun answerOf(text: String): Answer {
     val words = text.split(Regex("[^가-힣A-Za-z0-9]+")).toSet()
     return when {
-        words.any { it in NO_WORDS } -> Answer.NO
+        words.any { it in NO_WORDS } || NO_PHRASE.containsMatchIn(text) -> Answer.NO
         words.any { it in YES_WORDS } -> Answer.YES
         else -> Answer.UNCLEAR
     }

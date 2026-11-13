@@ -28,6 +28,8 @@ class AsksTest {
         assertEquals(Answer.UNCLEAR, answerOf("그래서 언제 도착해?"))
         assertEquals(Answer.UNCLEAR, answerOf("나 바다 좋아하는데"))
         assertEquals(Answer.UNCLEAR, answerOf("반응이 빠르네"))
+        assertEquals(Answer.UNCLEAR, answerOf("나 안 졸려"))
+        assertEquals(Answer.UNCLEAR, answerOf("네 동생은?"))
         assertEquals(Answer.UNCLEAR, answerOf("용인휴게소에 들를지 다시 말해 주세요")) // 다시 묻는 말이 마이크로 돌아와도 답이 아니다
     }
 
