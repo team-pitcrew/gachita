@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import { profilesDb, tripsDb } from "./db.js";
 import { errFields, log } from "./log.js";
 import { clipStore } from "./providers/clips.js";
+import { cues, suggest } from "./scenes.js";
 import { googleIdentity } from "./providers/google.js";
 import { embed, matchThreshold, similarity, wavMono } from "./providers/voice.js";
 
@@ -68,7 +69,7 @@ export function classify(e) {
 }
 
 // 로그의 경로 틀: 정한 낱말이 아닌 마디(여행 코드, id, 초대 코드)는 :p로 가린다. 웹 파일은 /(web) 하나로.
-const ROUTE_WORDS = new Set(["api", "trips", "participants", "requests", "moments", "utterances", "transcript", "voice-match", "recordings", "profiles", "me", "links", "google", "feed", "tokens", "photo", "voice", "groups", "members", "invites", "j"]);
+const ROUTE_WORDS = new Set(["api", "trips", "participants", "requests", "moments", "utterances", "transcript", "voice-match", "recordings", "scene-suggestions", "shortform", "profiles", "me", "links", "google", "feed", "tokens", "photo", "voice", "groups", "members", "invites", "j"]);
 const routeOf = (pathname) =>
   pathname === "/healthz" ? pathname : pathname.startsWith("/api/") ? `/${pathname.split("/").filter(Boolean).map((s) => (ROUTE_WORDS.has(s) ? s : ":p")).join("/")}` : "/(web)";
 // ALB가 붙이는 추적 id(X-Amzn-Trace-Id)를 그대로 쓴다. 없거나 모양이 이상하면 새로.
@@ -970,12 +971,18 @@ async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
     if (trip.moments.length >= 500) fail(409, "장면이 너무 많음");
     const hasLat = b.lat !== undefined;
     if (hasLat !== (b.lng !== undefined)) fail(400, "lat, lng: 둘 다 있거나 둘 다 없음");
+    const hasSpan = b.from !== undefined;
+    if (hasSpan !== (b.to !== undefined)) fail(400, "from, to: 둘 다 있거나 둘 다 없음");
     // 고른 사람은 본문이 아니라 요청의 참가자 토큰으로 정한다. 토큰 없이 남긴 장면은 여행에만 남는다.
     const picker = req.headers.authorization ? participantOf(req, trip) : null;
     const now = Date.now();
+    const at = b.at === undefined ? now : int(b.at, trip.createdAt, now + 60_000, "at"); // 통신이 끊겼다가 나중에 올리는 경우
+    // 장면 구간(T43): 차가 이 구간을 잘라 클립으로 올린다(T63). from ≤ at ≤ to, 60초 안. 없으면 차의 기본 구간.
+    const from = hasSpan ? int(b.from, at - 60_000, at, "from") : null;
     const moment = {
       id: randomUUID().slice(0, 8),
-      at: b.at === undefined ? now : int(b.at, trip.createdAt, now + 60_000, "at"), // 통신이 끊겼다가 나중에 올리는 경우
+      at,
+      ...(hasSpan ? { from, to: int(b.to, at, from + 60_000, "to") } : {}),
       ...(hasLat ? { lat: num(b.lat, -90, 90, "lat"), lng: num(b.lng, -180, 180, "lng") } : {}),
       label: b.label === undefined ? "" : text(b.label, 60, "label"),
     };
@@ -1082,13 +1089,51 @@ async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
     }
   }
 
+  // 기록본에서 읽는 것(기록본, 장면 후보, 숏폼)은 모두 녹음에 동의한 참가자만 — 받아 적은 글이 들어간다.
+  const lines = async () => {
+    if (m !== "GET") fail(405, "GET만 됨");
+    if (!participantOf(req, trip).consent) fail(403, "녹음에 동의한 참가자만 볼 수 있음");
+    const { rows } = await client.query("SELECT device, seq, at, text, seat_area, profile_id, confidence, lat, lng FROM utterances WHERE trip_code = $1 AND text <> '' ORDER BY at", [trip.code]);
+    return rows.map(asUtterance);
+  };
+
   if (sub === "transcript") {
     // 기록본: 발화를 시간순으로, 부탁과 도착 할 일과 함께(T39).
-    if (m !== "GET") fail(405, "GET만 됨");
-    if (!participantOf(req, trip).consent) fail(403, "녹음에 동의한 참가자만 볼 수 있음"); // 이 여행의 허용된 참가자만 본다
-    const { rows } = await client.query("SELECT device, seq, at, text, seat_area, profile_id, confidence, lat, lng FROM utterances WHERE trip_code = $1 AND text <> '' ORDER BY at", [trip.code]);
     // 도착 할 일 뽑기(LLM)는 아직 구현 전이다. 기록본 모양을 미리 맞춰 둔다(ADR-0007).
-    return [200, { generation: trip.generation ?? 1, utterances: rows.map(asUtterance), requests: trip.requests, todos: [] }];
+    return [200, { generation: trip.generation ?? 1, utterances: await lines(), requests: trip.requests, todos: [] }];
+  }
+
+  if (sub === "scene-suggestions") {
+    // 장면 후보(T43): 규칙으로 고르고(scenes.js), 사람이 골라 POST /moments로 남긴다. 요청할 때만 계산하고 저장하지 않는다.
+    return [200, { items: suggest(await lines(), trip.moments) }];
+  }
+
+  if (sub === "shortform") {
+    // 숏폼 구성(T43, ADR-0020): 영상 파일을 만들지 않고, 클립이 올라온 장면마다 소리 주소와 자막 큐와 말한 사람을 준다.
+    // 웹은 9:16 화면에, 차는 그 자리에서 이 데이터로 재생한다. 말한 사람은 화자 대조(T38)로 붙은 프로필만 — 자리만으로 이름을 붙이지 않는다.
+    const all = await lines();
+    const { rows: clips } = await client.query("SELECT moment_id, start_at, seconds FROM recordings WHERE trip_code = $1 AND deleted_at IS NULL ORDER BY start_at", [trip.code]);
+    const ids = trip.participants.map((p) => p.profileId).filter(Boolean);
+    const { rows: chars } = ids.length ? await profilesDb().query("SELECT id, character FROM profiles WHERE id = ANY($1::uuid[])", [ids]) : { rows: [] };
+    const character = new Map(chars.map((r) => [r.id, r.character]));
+    const byProfile = new Map(trip.participants.filter((p) => p.profileId).map((p) => [p.profileId, p.id]));
+    return [200, {
+      title: trip.title,
+      cast: trip.participants.map((p) => ({ participantId: p.id, name: p.name, character: character.get(p.profileId) ?? "", seat: p.seat })),
+      scenes: clips.map((r) => {
+        const moment = trip.moments.find((x) => x.id === r.moment_id) ?? {};
+        return {
+          momentId: r.moment_id,
+          label: moment.label ?? "",
+          at: moment.at,
+          clip: `/api/trips/${trip.code}/recordings/${r.moment_id}`,
+          startAt: Number(r.start_at),
+          seconds: r.seconds,
+          cues: cues(all, Number(r.start_at), r.seconds).map(({ profileId, ...c }) => ({ ...c, participantId: byProfile.get(profileId) ?? null })),
+          ...(moment.lat !== undefined ? { lat: moment.lat, lng: moment.lng } : {}),
+        };
+      }),
+    }];
   }
 
   fail(404, "없는 경로");

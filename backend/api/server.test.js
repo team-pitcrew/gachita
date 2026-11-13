@@ -898,6 +898,68 @@ test("사람이 지운 클립은 철회·다시 동의 뒤에도 받지 않고, 
   assert.equal((await del(m2)).status, 204, "다시 지우면 됨");
 });
 
+test("장면 후보는 말이 몰린 구간을 규칙으로 고르고, 숏폼은 클립과 자막 큐로 내준다(T43)", async () => {
+  const [, trip] = await call("POST", "/api/trips", { title: "속초" });
+  const t = `/api/trips/${trip.code}`;
+  const [, momProfile] = await call("POST", "/api/profiles", { name: "엄마", character: "토끼" });
+  const [, mom] = await call("POST", `${t}/participants`, { seat: "ROW_1_LEFT", consent: true }, momProfile.token);
+  const [, son] = await join(trip.code, "아들", "ROW_2_LEFT");
+  // 여행을 10분 전에 만든 셈으로 둔다(장면 시각은 여행을 만든 뒤 ~ 지금+1분만 받는다)
+  const t0 = Date.now() - 600_000; // 시험 대화의 0초
+  await tripsDb().query("UPDATE trips SET doc = jsonb_set(doc, '{createdAt}', to_jsonb($2::bigint)) WHERE code = $1", [trip.code, t0 - 1000]);
+  const said = [
+    // A: 20초에 6번, 두 사람이 번갈아
+    ...[0, 4, 8, 12, 16, 20].map((s, i) => [s, i % 2 ? "ROW_2_LEFT" : "ROW_1_LEFT", i % 2 ? "엄마 저기 바다 보여" : "그래 정말 예쁘다"]),
+    [60, "ROW_1_LEFT", "휴게소 들를까"], // 띄엄띄엄한 말은 후보가 아니다
+    [100, "ROW_2_LEFT", "응"],
+    // B: 25초에 5번, 한 사람
+    ...[200, 206, 212, 218, 224].map((s) => [s, "ROW_2_LEFT", "노래 틀어 주세요"]),
+    // C: 말은 몰렸지만 차에서 이미 장면으로 표시한 구간
+    ...[300, 303, 306, 309].map((s, i) => [s, i % 2 ? "ROW_2_LEFT" : "ROW_1_LEFT", "하하하"]),
+  ];
+  const items = said.map(([s, seatArea, text], i) => ({ seq: i + 1, at: t0 + s * 1000, text, seatArea, generation: 1 }));
+  assert.equal((await call("POST", `${t}/utterances`, { device: "car", items }, mom.token))[0], 200);
+  await tripsDb().query("UPDATE utterances SET profile_id = $2 WHERE trip_code = $1 AND seat_area = 'ROW_1_LEFT'", [trip.code, momProfile.id]); // 화자 대조(T38)가 붙인 셈
+  await call("POST", `${t}/moments`, { at: t0 + 305_000, label: "웃음" });
+
+  assert.equal((await call("GET", `${t}/scene-suggestions`))[0], 401);
+  const [status, { items: found }] = await call("GET", `${t}/scene-suggestions`, null, son.token);
+  assert.equal(status, 200);
+  assert.deepEqual(
+    found.map((c) => [c.from - t0, c.to - t0, c.why, c.lines.length]),
+    [
+      [-1000, 24_000, "30초에 말이 6번, 2명이 말함", 6],
+      [199_000, 228_000, "30초에 말이 5번", 5],
+    ],
+    "말이 몰린 구간만, 이미 남긴 장면과 겹치는 구간은 빼고, 시각 순"
+  );
+
+  // 사람이 후보를 고르면 구간째 장면으로 남는다. 구간은 at을 품고 60초 안
+  const [a] = found;
+  assert.equal((await call("POST", `${t}/moments`, { at: a.at, from: a.from }))[0], 400, "from, to는 함께");
+  assert.equal((await call("POST", `${t}/moments`, { at: a.at, from: a.at + 1, to: a.at + 2 }))[0], 400, "from ≤ at");
+  assert.equal((await call("POST", `${t}/moments`, { at: a.at, from: a.from, to: a.from + 60_001 }))[0], 400, "60초 안");
+  const [made, moment] = await call("POST", `${t}/moments`, { at: a.at, from: a.from, to: a.to, label: "바다" });
+  assert.deepEqual([made, moment.from, moment.to], [201, a.from, a.to]);
+  assert.deepEqual((await call("GET", `${t}/scene-suggestions`, null, son.token))[1].items.map((c) => c.from - t0), [199_000], "남긴 장면은 다시 추천하지 않음");
+
+  // 숏폼: 클립이 올라온 장면만. 자막 큐는 클립 첫 표본에서 잰 초, 말한 사람은 화자 대조로 붙은 참가자만
+  const clip = wav(200, 25);
+  assert.equal((await fetch(`${base}${t}/recordings?moment=${moment.id}&generation=1&from=${a.from}`, { method: "POST", headers: { authorization: `Bearer ${son.token}` }, body: clip })).status, 201);
+  const [ok, form] = await call("GET", `${t}/shortform`, null, mom.token);
+  assert.equal(ok, 200);
+  assert.equal(form.title, "속초");
+  assert.deepEqual(form.cast.map((c) => [c.participantId, c.name, c.character]), [[mom.id, "엄마", "토끼"], [son.id, "아들", ""]]);
+  const [scene] = form.scenes;
+  assert.deepEqual([form.scenes.length, scene.momentId, scene.label, scene.clip, scene.startAt, scene.seconds], [1, moment.id, "바다", `${t}/recordings/${moment.id}`, a.from, 25]);
+  assert.deepEqual(scene.cues.map((c) => [c.start, c.participantId, c.seatArea]), [
+    [1, mom.id, "ROW_1_LEFT"], [5, null, "ROW_2_LEFT"], [9, mom.id, "ROW_1_LEFT"], [13, null, "ROW_2_LEFT"], [17, mom.id, "ROW_1_LEFT"], [21, null, "ROW_2_LEFT"],
+  ]);
+  assert.deepEqual(scene.cues.slice(0, 2).map((c) => c.end), [2.35, 6.65], "끝은 글자 수로 어림(글자당 0.15초, 1~6초): 9자·11자");
+  assert.ok(scene.cues.every((c, i) => c.end <= (scene.cues[i + 1]?.start ?? scene.seconds)), "다음 자막·클립 끝을 넘지 않음");
+  assert.equal((await call("GET", `${t}/shortform`))[0], 401);
+});
+
 test("쓰기가 몰려도 서버가 멈추지 않는다", async () => {
   // 같은 여행에 쓰기 15개가 동시에 닥쳐도 모두 응답해야 한다(리뷰 재현).
   const [, me] = await call("POST", "/api/profiles", { name: "지우", consentDefault: true });
