@@ -309,7 +309,8 @@ paths:
         응답의 `lastSeq`는 빠짐없이 받은 마지막 순번입니다 — 차량은 재동기화 뒤 그 뒤만 다시 보냅니다.
         `lastSeq`는 발화 줄과 따로 적어 두어 뒤로 가지 않습니다(동의 철회·글 지우기로 줄이 지워져도).
         발화마다 만들 때의 동의 세대(`generation`, 없으면 본문의 `generation`)를 적습니다. 지금 세대보다 옛 세대의 발화는 저장하지 않되 받은 것으로 쳐서 `lastSeq`에 넣습니다(ADR-0007).
-        그러니 차량은 동의가 바뀌어도 옛 세대 발화를 큐에서 지우지 말고 순서대로 그대로 올립니다 — 지우면 그 순번이 비어 `lastSeq`가 멈춥니다.
+        동의가 꺼지면 차량은 못 보낸 옛 세대 발화의 내용을 버리고, 그 순번은 `{seq, generation}`만 담아 올려 확인받습니다 — 순번을 아예 빼면 그 앞에서 `lastSeq`가 멈춥니다.
+        동의하지 않은 탑승자가 있는 동안은 403이고 `lastSeq`도 오르지 않습니다. 모두 동의한 뒤 다시 보냅니다.
         기기 이름(`device`)은 처음 올린 참가자의 것입니다. 다른 참가자가 같은 이름으로 올리면 403입니다.
         여행 하나의 발화는 2만 줄까지입니다(넘으면 409).
         화자(`profileId`)는 받지 않습니다. 서버의 화자 대조(T38)가 붙입니다.
@@ -374,7 +375,7 @@ paths:
       summary: 자기 발화 지우기
       description: |
         참가자 토큰의 주인이 프로필로 참가했을 때만, 그 프로필의 발화를 이 여행에서 지웁니다(손님은 403). 다른 사람의 발화는 남습니다.
-        동의 세대는 오르지 않습니다. 지운 발화의 순번은 이미 `lastSeq` 안이라 차량이 다시 보내지 않습니다.
+        동의 세대는 오르지 않습니다. 지운 줄은 내용만 비우고 순번은 남겨, 같은 순번이 늦게 다시 올라와도 되살아나지 않습니다(읽기에는 나오지 않음).
       security: [{ participantToken: [] }]
       responses:
         "200":
@@ -750,11 +751,11 @@ components:
         label: { type: string }
     UtteranceInput:
       type: object
-      required: [seq, at, text]
+      required: [seq]
       properties:
         seq: { type: integer, minimum: 1, maximum: 1000000000, description: 기기가 매기는 순번 }
-        at: { type: integer, description: epoch 밀리초 }
-        text: { type: string, minLength: 1, maxLength: 500 }
+        at: { type: integer, description: epoch 밀리초. 지금 세대 발화에는 꼭 있음(옛 세대는 seq·generation만) }
+        text: { type: string, minLength: 1, maxLength: 500, description: 지금 세대 발화에는 꼭 있음 }
         seatArea: { anyOf: [{ $ref: "#/components/schemas/Seat" }, { type: "null" }], description: 좌석 구역(T37). 모르면 null이나 생략 }
         generation: { type: integer, minimum: 1, description: 발화를 만들 때의 동의 세대(올릴 때만). 없으면 본문의 generation }
         confidence: { type: number, minimum: 0, maximum: 1, description: 받아쓰기 확신도. 제공자가 주면 }

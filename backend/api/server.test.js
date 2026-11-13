@@ -374,10 +374,14 @@ test("발화를 기록본으로 저장하고 프로필 피드로 읽는다(T39)"
   assert.equal((await call("GET", t))[1].generation, 2, "이미 꺼진 동의를 다시 꺼도 세대는 그대로");
   assert.equal((await call("GET", `${t}/transcript`, null, pb.token))[0], 403, "녹음에 동의한 참가자만 읽음");
   const late = [
-    { seq: 4, at: at(4), text: "철회 전에 받아 적음", generation: 1 },
+    { seq: 4, generation: 1 }, // 철회 전에 받아 적은 것: 차량은 내용을 버리고 순번만 보낸다
     { seq: 5, at: at(11), text: "다시 시작", generation: 2 },
     { seq: 6, at: at(12), text: "응 좋아", generation: 2 },
   ];
+  const [s403] = await call("POST", `${t}/utterances`, { device: "car", items: late }, freshA);
+  assert.equal(s403, 403, "동의하지 않은 탑승자가 있는 동안은 받지 않는다");
+  await call("PATCH", `${t}/participants/${pb.id}`, { consent: true });
+  assert.equal((await call("GET", t))[1].generation, 2, "동의를 다시 켜도 세대는 그대로");
   const [s3, r3] = await call("POST", `${t}/utterances`, { device: "car", items: late }, freshA);
   assert.deepEqual([s3, r3.lastSeq, r3.generation], [200, 6, 2], "확인 순번은 지워진 줄을 넘어 앞으로만 간다");
   const [, kept] = await call("GET", `${t}/utterances?device=car&after=0`, null, freshA);
@@ -395,6 +399,9 @@ test("발화를 기록본으로 저장하고 프로필 피드로 읽는다(T39)"
   assert.equal(feedA4.items.filter((i) => i.kind === "utterance").length, 0);
   const [, r4] = await call("POST", `${t}/utterances`, { device: "car", generation: 2, items: [{ seq: 7, at: at(13), text: "다음" }] }, freshA);
   assert.equal(r4.lastSeq, 7, "지운 뒤에도 확인 순번은 뒤로 가지 않는다");
+  // 지운 글은 같은 순번이 늦게 다시 올라와도 되살아나지 않는다(순번에 빈자리가 있던 기기의 재전송)
+  await call("POST", `${t}/utterances`, { device: "car", generation: 2, items: [{ seq: 5, at: at(11), text: "다시 시작" }] }, freshA);
+  assert.deepEqual((await call("GET", `${t}/transcript`, null, freshA))[1].utterances.map((u) => u.text), ["응 좋아", "다음"]);
   // 여행 하나의 발화는 2만 줄까지(48시간 지우기가 2초 안에 끝나게)
   await tripsDb().query(
     "INSERT INTO utterances (trip_code, device, seq, at, text, generation) SELECT $1, 'bulk', g, g, 'x', 2 FROM generate_series(1, 19999) g",
