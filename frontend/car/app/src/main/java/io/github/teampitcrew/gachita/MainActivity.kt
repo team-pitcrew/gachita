@@ -366,9 +366,10 @@ class MainActivity : ComponentActivity() {
                 t.people.forEach { p -> mine[p.id]?.let { api.consent(t.code, p.id, true, it) } } // 폰으로 들어온 사람은 자기 폰에서
                 api.trip(t.code)!!
             }) { r ->
+                if (s.trip?.code != t.code) return@bg // 그사이 지운 여행이나 새 여행: 늦게 온 응답은 지금 세션(새 여행 만들기의 busy 등)을 건드리지 않는다
                 r.onSuccess {
-                    // 그사이 지운 여행(48시간이 지나 expire, 404)이나 새 여행이면 늦게 온 성공으로 되살리지 않는다
-                    if (s.trip?.code != t.code || System.currentTimeMillis() - it.trip.createdAt > KEEP_MS) { s = s.copy(busy = false); return@onSuccess }
+                    // 같은 여행이어도 보관 기한(48시간)이 지났으면 되살리지 않고 이 요청의 busy만 푼다
+                    if (System.currentTimeMillis() - it.trip.createdAt > KEEP_MS) { s = s.copy(busy = false); return@onSuccess }
                     s = s.copy(busy = false).turnedOn(keep(it)); if (s.recording) car.speak("기록을 시작했어요")
                 }
                     .onFailure { s = s.copy(busy = false, online = it is ApiError, note = "기록을 시작하지 못했어요 · ${reason(it)}") }
