@@ -38,6 +38,7 @@ ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
 aws s3api create-bucket --bucket gachita-tfstate-$ACCOUNT --region ap-northeast-2 \
   --create-bucket-configuration LocationConstraint=ap-northeast-2
 aws s3api put-bucket-versioning --bucket gachita-tfstate-$ACCOUNT --versioning-configuration Status=Enabled
+aws s3api put-bucket-tagging --bucket gachita-tfstate-$ACCOUNT --tagging 'TagSet=[{Key=Project,Value=gachita},{Key=ManagedBy,Value=cli}]'   # 같이 쓰는 계정이라 우리 것임을 태그로
 sed "s/<계정 ID>/$ACCOUNT/" backend.hcl.example > backend.hcl     # 커밋하지 않는다(.gitignore)
 
 # 2. GitHub OIDC 역할(account/). 자원 6개, 모두 IAM이라 비용 없음. GitHub OIDC 제공자는 이 계정에 이미 있어(다른 프로젝트 관리) 읽기만 한다

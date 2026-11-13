@@ -21,10 +21,51 @@ locals {
   cluster_oidc_arn = "arn:aws:iam::${local.account}:oidc-provider/gachita-*-oidc-${local.account}.s3.${var.region}.amazonaws.com"
 }
 
-# ---- 계획(PR): 읽기만. 계정 전체 읽기에서 데이터와 비밀 값 읽기를 뺀다 ----
-resource "aws_iam_role_policy_attachment" "plan_read" {
-  role       = aws_iam_role.github["plan"].name
-  policy_arn = "arn:aws:iam::aws:policy/ReadOnlyAccess"
+# ---- 계획(PR): 읽기만. 계정 전체 읽기(ReadOnlyAccess)는 같이 쓰는 계정의 다른 프로젝트 SSM 값·로그·DB 내용까지
+# 읽을 수 있어 쓰지 않는다. Terraform이 우리 자원을 다시 읽는(refresh) 데 필요한 것만 준다 ----
+data "aws_iam_policy_document" "plan_read" {
+  # 네트워크·서버 설정 읽기(자원 단위로 좁힐 수 없다). 이 리전만
+  statement {
+    actions   = ["ec2:Describe*", "ec2:Get*"]
+    resources = ["*"]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestedRegion"
+      values   = [var.region]
+    }
+  }
+  # IAM 설정 읽기(역할·정책·제공자의 설정. 비밀 값이 아니다)
+  statement {
+    actions   = ["iam:Get*", "iam:List*", "sts:GetCallerIdentity"]
+    resources = ["*"]
+  }
+  # 우리 버킷의 설정 읽기(버킷 ARN만. 객체는 아래 상태 파일만)
+  statement {
+    actions   = ["s3:Get*", "s3:List*"]
+    resources = ["arn:aws:s3:::gachita-*"]
+  }
+  statement {
+    actions   = ["s3:GetObject"]
+    resources = ["arn:aws:s3:::gachita-tfstate-${local.account}/*"]
+  }
+  # Terraform이 쓴 값과 공개 AMI 번호만
+  statement {
+    actions = ["ssm:GetParameter", "ssm:GetParameters", "ssm:ListTagsForResource"]
+    resources = [
+      "arn:aws:ssm:${var.region}:${local.account}:parameter/gachita/*/tf/*",
+      "arn:aws:ssm:${var.region}::parameter/aws/service/*",
+    ]
+  }
+  statement {
+    actions   = ["ssm:DescribeParameters"]
+    resources = ["*"]
+  }
+}
+
+resource "aws_iam_role_policy" "plan_read" {
+  name   = "read-gachita-stack"
+  role   = aws_iam_role.github["plan"].id
+  policy = data.aws_iam_policy_document.plan_read.json
 }
 
 data "aws_iam_policy_document" "plan_deny" {
@@ -110,16 +151,12 @@ data "aws_iam_policy_document" "apply" {
       values   = [local.project]
     }
   }
-  # 부모 없이는 쓸 수 없는 것: 서버와 함께 생기는 디스크·네트워크 카드, 보안 그룹의 기본 규칙(AWS가 태그 없이 만듦).
-  # 부모(우리 서버, 우리 보안 그룹)가 위의 태그 조건을 통과해야 해서 남의 자원에는 닿지 않는다.
+  # 서버와 함께 생기는 디스크·네트워크 카드와 공개 AMI. 서버(instance)는 위의 태그 조건을 통과해야 한다.
+  # ponytail: 네트워크 카드는 태그 조건이 없어, 다른 프로젝트의 기존 카드를 지정해 우리 서버를 띄우는 것은 막지 못한다
+  #           (그 카드를 고치거나 지우지는 못함). 막으려면 aws_network_interface를 따로 만들어 태그를 단다.
   statement {
     actions   = ["ec2:RunInstances"]
     resources = ["${local.ec2_arn}:volume/*", "${local.ec2_arn}:network-interface/*", "arn:aws:ec2:${var.region}::image/*"]
-  }
-  statement {
-    actions = ["ec2:RevokeSecurityGroupEgress", "ec2:RevokeSecurityGroupIngress", "ec2:ModifySecurityGroupRules",
-    "ec2:AuthorizeSecurityGroupEgress", "ec2:AuthorizeSecurityGroupIngress"]
-    resources = ["${local.ec2_arn}:security-group-rule/*"]
   }
   # 상태, 데이터, 발급자 버킷
   statement {
@@ -139,21 +176,64 @@ data "aws_iam_policy_document" "apply" {
     actions   = ["ssm:DescribeParameters", "sts:GetCallerIdentity", "iam:ListOpenIDConnectProviders", "iam:GetPolicy", "iam:GetPolicyVersion"]
     resources = ["*"]
   }
-  # 역할 만들기는 권한 경계를 붙일 때만 된다. 경계보다 넓은 역할을 만들 수 없다
+  # ---- IAM: 이름(gachita-*)과 태그(Project=gachita)가 둘 다 맞는 것만 ----
+  # 역할 만들기는 권한 경계와 우리 태그를 붙일 때만 된다. 경계보다 넓은 역할을 만들 수 없다
   statement {
-    actions   = ["iam:CreateRole", "iam:PutRolePolicy", "iam:AttachRolePolicy", "iam:PutRolePermissionsBoundary"]
+    actions   = ["iam:CreateRole"]
     resources = ["arn:aws:iam::${local.account}:role/gachita-*"]
     condition {
       test     = "StringEquals"
       variable = "iam:PermissionsBoundary"
       values   = [local.boundary_arn]
     }
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestTag/Project"
+      values   = [local.project]
+    }
+  }
+  statement {
+    actions   = ["iam:PutRolePolicy", "iam:AttachRolePolicy", "iam:PutRolePermissionsBoundary"]
+    resources = ["arn:aws:iam::${local.account}:role/gachita-*"]
+    condition {
+      test     = "StringEquals"
+      variable = "iam:PermissionsBoundary"
+      values   = [local.boundary_arn]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "aws:ResourceTag/Project"
+      values   = [local.project]
+    }
   }
   statement {
     actions = ["iam:GetRole", "iam:GetRolePolicy", "iam:ListRolePolicies", "iam:ListAttachedRolePolicies",
-      "iam:ListInstanceProfilesForRole", "iam:DeleteRole", "iam:DeleteRolePolicy", "iam:DetachRolePolicy",
-    "iam:TagRole", "iam:UntagRole", "iam:UpdateRole", "iam:UpdateRoleDescription", "iam:UpdateAssumeRolePolicy"]
+    "iam:ListInstanceProfilesForRole", "iam:ListRoleTags"]
     resources = ["arn:aws:iam::${local.account}:role/gachita-*"]
+  }
+  statement {
+    actions = ["iam:DeleteRole", "iam:DeleteRolePolicy", "iam:DetachRolePolicy", "iam:UpdateRole",
+    "iam:UpdateRoleDescription", "iam:UpdateAssumeRolePolicy", "iam:TagRole", "iam:UntagRole"]
+    resources = ["arn:aws:iam::${local.account}:role/gachita-*"]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:ResourceTag/Project"
+      values   = [local.project]
+    }
+  }
+  # 태그를 달며 만들 때(CreateRole 등에 태그가 들어 있으면 Tag* 권한도 따로 판정된다)
+  statement {
+    actions = ["iam:TagRole", "iam:TagInstanceProfile", "iam:TagOpenIDConnectProvider"]
+    resources = [
+      "arn:aws:iam::${local.account}:role/gachita-*",
+      "arn:aws:iam::${local.account}:instance-profile/gachita-*",
+      local.cluster_oidc_arn,
+    ]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestTag/Project"
+      values   = [local.project]
+    }
   }
   statement {
     actions   = ["iam:PassRole"]
@@ -164,18 +244,31 @@ data "aws_iam_policy_document" "apply" {
       values   = ["ec2.amazonaws.com"]
     }
   }
+  # 인스턴스 프로필과 클러스터의 서비스 계정 OIDC 발급자(파드가 받는 역할, ADR-0011): 만들 때 태그, 그 뒤 태그
   statement {
-    actions = ["iam:CreateInstanceProfile", "iam:DeleteInstanceProfile", "iam:GetInstanceProfile",
-      "iam:AddRoleToInstanceProfile", "iam:RemoveRoleFromInstanceProfile", "iam:TagInstanceProfile",
-    "iam:UntagInstanceProfile"]
-    resources = ["arn:aws:iam::${local.account}:instance-profile/gachita-*"]
+    actions   = ["iam:CreateInstanceProfile", "iam:CreateOpenIDConnectProvider"]
+    resources = ["arn:aws:iam::${local.account}:instance-profile/gachita-*", local.cluster_oidc_arn]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestTag/Project"
+      values   = [local.project]
+    }
   }
-  # 클러스터의 서비스 계정 OIDC 발급자(파드가 받는 역할, ADR-0011)
   statement {
-    actions = ["iam:CreateOpenIDConnectProvider", "iam:DeleteOpenIDConnectProvider", "iam:GetOpenIDConnectProvider",
-      "iam:TagOpenIDConnectProvider", "iam:UntagOpenIDConnectProvider", "iam:UpdateOpenIDConnectProviderThumbprint",
+    actions   = ["iam:GetInstanceProfile", "iam:ListInstanceProfileTags", "iam:GetOpenIDConnectProvider", "iam:ListOpenIDConnectProviderTags"]
+    resources = ["arn:aws:iam::${local.account}:instance-profile/gachita-*", local.cluster_oidc_arn]
+  }
+  statement {
+    actions = ["iam:DeleteInstanceProfile", "iam:AddRoleToInstanceProfile", "iam:RemoveRoleFromInstanceProfile",
+      "iam:UntagInstanceProfile", "iam:TagInstanceProfile", "iam:DeleteOpenIDConnectProvider",
+      "iam:UntagOpenIDConnectProvider", "iam:TagOpenIDConnectProvider", "iam:UpdateOpenIDConnectProviderThumbprint",
     "iam:AddClientIDToOpenIDConnectProvider", "iam:RemoveClientIDFromOpenIDConnectProvider"]
-    resources = [local.cluster_oidc_arn]
+    resources = ["arn:aws:iam::${local.account}:instance-profile/gachita-*", local.cluster_oidc_arn]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:ResourceTag/Project"
+      values   = [local.project]
+    }
   }
   # 자기 자신과 이 폴더가 만든 것은 고치지 못한다. 고치려면 사람이 로컬 자격으로 이 폴더를 적용한다
   statement {
