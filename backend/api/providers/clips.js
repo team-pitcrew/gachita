@@ -17,12 +17,14 @@ export function clipStore() {
   client ??= new S3Client({ maxAttempts: 2, requestHandler: { connectionTimeout: 2000, requestTimeout: 5000 } });
   return {
     put: (key, body) => client.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: body, ContentType: "audio/wav" })).catch(unavailable),
-    // 없는 키면 null. 버킷의 ListBucket 권한이 있어야 S3가 403 대신 NoSuchKey로 답한다(T64).
-    get: (key) =>
+    // 범위 요청(Range)은 그대로 S3에 넘긴다(ADR-0020). 없는 키면 null. 버킷의 ListBucket 권한이 있어야
+    // S3가 403 대신 NoSuchKey로 답한다(T64). 범위가 크기를 벗어나면 416.
+    // ponytail: 받은 바이트를 모아서 보낸다(클립은 5 MB까지). 커지면 Body를 응답으로 흘려보낸다.
+    get: (key, range) =>
       client
-        .send(new GetObjectCommand({ Bucket: bucket, Key: key }))
-        .then(async (r) => Buffer.from(await r.Body.transformToByteArray()))
-        .catch((e) => (e?.name === "NoSuchKey" ? null : unavailable(e))),
+        .send(new GetObjectCommand({ Bucket: bucket, Key: key, Range: range }))
+        .then(async (r) => ({ body: Buffer.from(await r.Body.transformToByteArray()), range: r.ContentRange }))
+        .catch((e) => (e?.name === "NoSuchKey" ? null : e?.name === "InvalidRange" ? Promise.reject({ status: 416, error: "범위가 맞지 않음" }) : unavailable(e))),
     // 버전 관리를 끈 버킷이라 한 번 지우면 남는 버전이 없다. 없는 키를 지워도 S3는 성공으로 답한다.
     // 한 요청에 1000개까지 묶는다(DeleteObjects). 키 하나라도 못 지웠으면 503.
     remove: async (keys) => {

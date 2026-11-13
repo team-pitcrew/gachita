@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { createServer } from "node:http";
+import { createServer, request } from "node:http";
 import { createConnection } from "node:net";
 import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -66,6 +66,13 @@ before(async () => {
       return void (res.writeHead(200, { "content-type": "application/xml" }), res.end("<DeleteResult></DeleteResult>"));
     }
     if (req.method === "GET" && !s3.objects.has(key)) return void (res.writeHead(404, { "content-type": "application/xml" }), res.end("<Error><Code>NoSuchKey</Code></Error>"));
+    const range = /^bytes=(\d+)-(\d+)$/.exec(req.headers.range ?? "");
+    if (req.method === "GET" && range) {
+      const all = s3.objects.get(key);
+      const [a, b] = [Number(range[1]), Math.min(Number(range[2]), all.length - 1)];
+      res.writeHead(206, { "content-range": `bytes ${a}-${b}/${all.length}` });
+      return void res.end(all.subarray(a, b + 1));
+    }
     res.writeHead(200);
     res.end(req.method === "GET" ? s3.objects.get(key) : undefined);
   });
@@ -747,7 +754,7 @@ test("녹음 클립: 고른 장면의 원음을 받고, 재생하고, 바로 지
   const auth = (token) => (token ? { authorization: `Bearer ${token}` } : {});
   const from = Date.now() - 30_000; // 클립 첫 표본의 시각
   const up = (moment, body, token, generation = 1) => fetch(`${base}${t}/recordings?moment=${moment}&generation=${generation}&from=${from}`, { method: "POST", headers: auth(token), body });
-  const play = (id, token) => fetch(`${base}${t}/recordings/${id}`, { headers: auth(token) });
+  const play = (id, token, headers = {}) => fetch(`${base}/media/trips/${trip.code}/recordings/${id}`, { headers: { ...auth(token), ...headers } });
   const del = (id, token) => fetch(`${base}${t}/recordings/${id}`, { method: "DELETE", headers: auth(token) });
   // 버킷 지우기는 기다리지 않고 돈다. 남은 객체가 left개가 될 때까지 잠깐 기다린다
   const gone = async (left = 0) => {
@@ -765,8 +772,38 @@ test("녹음 클립: 고른 장면의 원음을 받고, 재생하고, 바로 지
 
   // 재생: 받은 그대로, 캐시하지 않게
   const heard = await play(m1.id, son.token);
-  assert.deepEqual([heard.status, heard.headers.get("content-type"), heard.headers.get("cache-control")], [200, "audio/wav", "no-store"]);
+  assert.deepEqual([heard.status, heard.headers.get("content-type"), heard.headers.get("cache-control"), heard.headers.get("accept-ranges")], [200, "audio/wav", "private, no-store", "bytes"]);
   assert.deepEqual(Buffer.from(await heard.arrayBuffer()), clip);
+  const part = await play(m1.id, son.token, { range: "bytes=0-99" });
+  assert.deepEqual([part.status, part.headers.get("content-range"), (await part.arrayBuffer()).byteLength], [206, `bytes 0-99/${clip.length}`, 100], "범위 요청을 S3에 그대로");
+  assert.equal((await fetch(`${base}${t}/recordings/${m1.id}`, { headers: auth(son.token) })).status, 405, "듣기는 /api가 아니라 /media 주소에서");
+
+  // 폰의 <audio>는 머리말을 못 붙인다: 쿠키를 받아 그 여행의 /media/ 경로에서만 쓴다
+  const cookieRes = await fetch(`${base}${t}/media-cookie`, { method: "POST", headers: auth(son.token) });
+  const setCookie = cookieRes.headers.get("set-cookie");
+  assert.equal(cookieRes.status, 204);
+  assert.match(setCookie, new RegExp(`^gachita_media=${son.token}; Path=/media/trips/${trip.code}/; Max-Age=\\d+; HttpOnly; Secure; SameSite=Lax$`), "로컬 주소에는 Domain을 붙이지 않음");
+  assert.equal((await play(m1.id, null, { cookie: `other=1; gachita_media=${son.token}` })).status, 200);
+  assert.equal((await play(m1.id, null, { cookie: "gachita_media=" + "x".repeat(43) })).status, 401);
+  assert.equal((await fetch(`${base}${t}/media-cookie`, { method: "POST" })).status, 401);
+  const viaApp = await new Promise((ok) =>
+    request(`${base}${t}/media-cookie`, { method: "POST", headers: { host: "gachita.mangowhois.ai", authorization: `Bearer ${son.token}` } }, (r) => ok(r.headers["set-cookie"][0])).end()
+  );
+  assert.match(viaApp, /; Domain=gachita\.mangowhois\.ai$/, "실제 주소에서는 media 하위 도메인에도 실리게");
+
+  // media 하위 도메인에서는 /media/만, /media/는 그 이름에서만. 경로 정리 전의 원래 경로로 본다(ADR-0020)
+  const hostCall = (host, path) =>
+    new Promise((ok) => request(`${base}${path}`, { headers: { host, authorization: `Bearer ${son.token}` } }, (r) => (r.resume(), ok(r.statusCode))).end());
+  assert.deepEqual(
+    [
+      await hostCall("media.gachita.mangowhois.ai", `/media/trips/${trip.code}/recordings/${m1.id}`),
+      await hostCall("media.gachita.mangowhois.ai", `/api/trips/${trip.code}`),
+      await hostCall("media.gachita.mangowhois.ai", `/media/%2e%2e/api/trips/${trip.code}`),
+      await hostCall("media.gachita.mangowhois.ai", "/healthz"),
+      await hostCall("gachita.mangowhois.ai", `/media/trips/${trip.code}/recordings/${m1.id}`),
+    ],
+    [200, 404, 404, 404, 404]
+  );
 
   // 인증: 토큰이 없거나 다른 여행의 토큰이면 401(참가자 토큰은 여행에 묶임)
   const [, other] = await call("POST", "/api/trips", {});
@@ -859,6 +896,29 @@ test("녹음 클립: 고른 장면의 원음을 받고, 재생하고, 바로 지
   await sweep();
   assert.ok(await gone(), "치운 여행의 클립이 버킷에 남지 않음");
   assert.equal((await tripsDb().query("SELECT (SELECT count(*) FROM recordings WHERE trip_code = $1) + (SELECT count(*) FROM clip_trash) AS n", [trip.code])).rows[0].n, "0");
+});
+
+test("클립 듣기의 요청 수 제한: 인증 전에는 요청 주소(X-Forwarded-For 마지막 값)마다, 인증 뒤에는 참가자마다(T76)", async () => {
+  const [, trip] = await call("POST", "/api/trips", {});
+  const t = `/api/trips/${trip.code}`;
+  const [, mom] = await join(trip.code, "엄마", "ROW_1_LEFT");
+  const [, m] = await call("POST", `${t}/moments`, {});
+  const up = await fetch(`${base}${t}/recordings?moment=${m.id}&generation=1&from=${Date.now() - 5000}`, { method: "POST", headers: { authorization: `Bearer ${mom.token}` }, body: wav(200, 1) });
+  assert.equal(up.status, 201);
+  const path = `/media/trips/${trip.code}/recordings/${m.id}`;
+  const get = (headers) => fetch(base + path, { headers }).then((r) => (r.body?.cancel(), r.status));
+  const many = async (n, headersOf) => {
+    const out = [];
+    for (let i = 0; i < n; i += 10) out.push(...(await Promise.all(Array.from({ length: Math.min(10, n - i) }, (_, k) => get(headersOf(i + k))))));
+    return out;
+  };
+  // 참가자마다 1분에 300번
+  const mine = await many(301, () => ({ authorization: `Bearer ${mom.token}`, "x-forwarded-for": "198.51.100.1" }));
+  assert.deepEqual([mine.filter((s) => s === 200).length, mine.filter((s) => s === 429).length], [300, 1]);
+  // 요청 주소마다 1분에 600번(인증 전에 센다). ALB가 붙인 마지막 값으로 세고, 앞의 값은 꾸밀 수 있어 보지 않는다
+  const anon = await many(601, (i) => ({ "x-forwarded-for": `10.0.0.${i % 250}, 203.0.113.9` }));
+  assert.deepEqual([anon.filter((s) => s === 401).length, anon.filter((s) => s === 429).length], [600, 1]);
+  assert.equal(await get({ "x-forwarded-for": "203.0.113.10" }), 401, "다른 주소는 그대로");
 });
 
 test("쓰기가 몰려도 서버가 멈추지 않는다", async () => {
