@@ -13,6 +13,8 @@ const TRIP = {
 };
 const NEXT_TRIP = { boarding: ["출발", "driving"], driving: ["주차", "parked"], parked: ["여행 끝내기", "ended"] };
 const ONLY_HERE = "이 폰에서 참가한 사람만 켤 수 있어요.";
+// 켜져 있던 동의를 끄면 서버가 동의 세대를 올려 그 여행의 받아 적은 글을 모두 지운다(ADR-0007). 누르기 전에 알린다.
+const OFF_WIPES = "동의를 끄면 기록이 멈추고, 이 여행에서 지금까지 받아 적은 글이 모두 지워져요. 끌까요?";
 // 프로필 캐릭터. 사진이 없을 때 이 그림으로 보인다(목록 고정은 T46).
 const CHARACTERS = [
   ["bunny", "🐰", "토끼"],
@@ -525,7 +527,7 @@ function tripView(me) {
         "div",
         { className: "between" },
         h("div", {}, h("p", { className: "what" }, "대화 기록 동의"), h("p", { className: "meta" }, me.consent ? "동의했어요." : "동의하지 않았어요.")),
-        me.consent ? button("동의 끄기", patch(`/participants/${me.id}`, { consent: false })) : myToken() ? button("동의 켜기", consentOn) : h("p", { className: "meta" }, ONLY_HERE),
+        me.consent ? button("동의 끄기", () => confirm(OFF_WIPES) && patch(`/participants/${me.id}`, { consent: false })()) : myToken() ? button("동의 켜기", consentOn) : h("p", { className: "meta" }, ONLY_HERE),
       ),
     ),
     trip.moments.length > 0 &&
