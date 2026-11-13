@@ -66,6 +66,11 @@ data "aws_iam_policy_document" "plan_read" {
     actions   = ["cloudwatch:DescribeAlarms"]
     resources = ["*"]
   }
+  # 밖에서 도는 점검(account/main.tf). Route 53 상태 확인은 이름·태그로 좁힐 수 없어 읽기만 준다
+  statement {
+    actions   = ["route53:GetHealthCheck", "route53:ListTagsForResource"]
+    resources = ["arn:aws:route53:::healthcheck/*"]
+  }
   statement {
     actions   = ["cloudwatch:ListTagsForResource", "cloudwatch:GetDashboard"]
     resources = local.cloudwatch_ours
@@ -91,11 +96,11 @@ resource "aws_iam_role_policy" "plan_read" {
 }
 
 data "aws_iam_policy_document" "plan_deny" {
-  # 상태 파일 말고는 버킷 안의 내용(백업, 클립)을 읽지 않는다
+  # 상태 파일과 발급자 공개 키(공개 객체, persist가 관리) 말고는 버킷 안의 내용(백업, 클립)을 읽지 않는다
   statement {
     effect        = "Deny"
     actions       = ["s3:GetObject", "s3:GetObjectVersion"]
-    not_resources = ["arn:aws:s3:::gachita-tfstate-${local.account}/*"]
+    not_resources = ["arn:aws:s3:::gachita-tfstate-${local.account}/*", "arn:aws:s3:::gachita-*-oidc-${local.account}/*"]
   }
   statement {
     effect    = "Deny"

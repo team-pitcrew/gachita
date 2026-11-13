@@ -4,7 +4,7 @@ locals {
   ssm_prefix   = "arn:aws:ssm:${var.region}:${local.account}:parameter/gachita/${var.env}"
 }
 
-# ---- 서버: SSM 세션, 배포 키 읽기, 서비스 계정 발급자의 공개 키 올리기, 백업이 있는지 보기 ----
+# ---- 서버: SSM 세션, 저장소 읽기 토큰 읽기, 서비스 계정 발급자의 공개 키 올리기, 백업이 있는지 보기 ----
 data "aws_iam_policy_document" "assume_ec2" {
   statement {
     actions = ["sts:AssumeRole"]
@@ -98,6 +98,15 @@ locals {
       statements = [
         { actions = ["s3:ListBucket"], resources = [data.aws_s3_bucket.data.arn] },
         { actions = ["s3:GetObject"], resources = ["${data.aws_s3_bucket.data.arn}/postgres/db/*"] },
+      ]
+    }
+    # API(T64): 클립 버킷만 읽고 쓰고 지운다. 버전 관리가 꺼져 있어 버전 권한은 없다.
+    # ListBucket은 없는 키를 읽을 때 403 대신 404(NoSuchKey)를 받으려고
+    api = {
+      sa = "gachita:gachita-api"
+      statements = [
+        { actions = ["s3:ListBucket"], resources = [local.clips_arn] },
+        { actions = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"], resources = ["${local.clips_arn}/*"] },
       ]
     }
     # ALB 컨트롤러(ADR-0017): 공식 정책(v3.6.2 docs/install/iam_policy.json)의 동작에서 WAF·Shield·Cognito를 뺀 것.

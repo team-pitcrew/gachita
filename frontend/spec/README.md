@@ -27,6 +27,8 @@
 
 폰 웹앱의 참가 4단계와 여행 화면은 문서 없이 먼저 만들었습니다([기록](https://github.com/team-pitcrew/gachita/pull/21)). 이후 화면의 자료는 아래 티켓으로 관리합니다.
 
-- [T17 차량 화면과 피그마 120개 프레임](https://github.com/team-pitcrew/gachita/pull/54)
-- [T18 도착 후 클립·주행 기억 지도·공유](https://github.com/team-pitcrew/gachita/issues/24)
-- [T19 프로필 만들기와 계정 연결](profile.md)
+- [차량 화면](car.md): T17, T42. 출발 전(동승자 QR 읽기), 말하는 사람 강조, 말로 하는 수락, 도착 브리핑, 기록 잠시 멈춤. 피그마 120개 프레임은 v4 시안
+- [도착 후 화면](after-trip.md): T18, T42. 장면 고르기, 주행 기억 지도, 공유, 피드와 숏폼 재생
+- [프로필과 동승 연결](profile.md): T19, T42. 프로필과 캐릭터, 동승 연결 QR(차가 읽음)과 기록 동의. 그룹과 초대 코드는 두지 않음(11/14)
+
+11/13 뒤 화면의 시안은 [개편 파일(11/14)](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=0-1)에 있고, 시안과 화면 문서가 다르면 화면 문서를 따릅니다. 만든 것과 만드는 중인 것은 각 문서의 흐름 끝에 '목표 동작 + 구현 상태'로 적습니다.

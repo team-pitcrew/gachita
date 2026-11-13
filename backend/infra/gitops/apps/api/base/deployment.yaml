@@ -43,6 +43,8 @@ spec:
             - name: PROFILES_DATABASE_URL
               valueFrom:
                 secretKeyRef: { name: db-urls, key: PROFILES_DATABASE_URL }
+            # 녹음 클립 버킷(T64·T76, Terraform persist/). 자격은 서비스 계정 역할: 웹훅이 AWS_ROLE_ARN·AWS_REGION·토큰 파일을 넣는다
+            - { name: CLIPS_BUCKET, value: gachita-dev-clips-721622471953 }
           # 구글 OAuth(GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET). 값이 없으면 Secret이 없고, 서버는 그대로 뜬다
           envFrom:
             - secretRef: { name: google-oauth, optional: true }
@@ -75,4 +77,8 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: gachita-api
+  annotations:
+    # 클립 버킷을 읽고 쓰는 AWS 역할(Terraform iam.tf의 api, ADR-0011). 쿠버네티스 API 토큰은 여전히 넣지 않는다:
+    # 웹훅은 STS용 토큰(audience sts.amazonaws.com)만 따로 붙인다(automountServiceAccountToken과 무관)
+    eks.amazonaws.com/role-arn: arn:aws:iam::721622471953:role/gachita-dev-api
 automountServiceAccountToken: false

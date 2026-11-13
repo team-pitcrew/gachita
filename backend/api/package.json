@@ -3,13 +3,14 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.1"
   },
   "scripts": {
     "start": "node server.js",
     "test": "node --test"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1168.0",
     "pg": "^8.23.1"
   }
 }
