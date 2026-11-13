@@ -76,9 +76,8 @@ step("서버가 뜰 때까지 기다림", async () => {
 let me, trip, t, rider, driver, ask;
 
 step("프로필 발급과 조회", async () => {
-  me = status(await call("POST", "/api/profiles", { body: { name: "지우", prefs: { passenger: { tempC: 23, heat: 1 } }, consentDefault: true } }), 201);
+  me = status(await call("POST", "/api/profiles", { body: { name: "지우", consentDefault: true } }), 201);
   matches("발급한 토큰", me.token, /^[A-Za-z0-9_-]{43}$/);
-  same("안 적은 자리의 선호(기본값)", me.prefs.driver, { tempC: 22, heat: 0, vent: 0 });
   const seen = status(await call("GET", "/api/profiles/me", { token: me.token }), 200);
   same("조회한 이름과 토큰", [seen.id, seen.name, seen.token], [me.id, "지우", undefined]);
   status(await call("GET", "/api/profiles/me"), 401);
@@ -94,14 +93,14 @@ step("여행 만들기", async () => {
 
 step("프로필로 참가", async () => {
   rider = status(await call("POST", `${t}/participants`, { body: { seat: "ROW_1_RIGHT" }, token: me.token }), 201);
-  same("프로필에서 가져온 이름·조수석 선호·동의", [rider.name, rider.prefs, rider.consent], ["지우", { tempC: 23, heat: 1, vent: 0 }, true]);
+  same("프로필에서 가져온 이름·동의", [rider.name, rider.consent], ["지우", true]);
   const again = status(await call("POST", `${t}/participants`, { body: { seat: "ROW_2_LEFT" }, token: me.token }), 200);
   same("다시 참가하면 있던 참가자", [again.id, again.seat], [rider.id, "ROW_1_RIGHT"]);
 });
 
 step("이름으로 참가", async () => {
-  driver = status(await call("POST", `${t}/participants`, { body: { name: "민준", seat: "ROW_1_LEFT", consent: false, prefs: { tempC: 21 } } }), 201);
-  same("이름·자리·선호·동의", [driver.name, driver.seat, driver.prefs, driver.consent], ["민준", "ROW_1_LEFT", { tempC: 21, heat: 0, vent: 0 }, false]);
+  driver = status(await call("POST", `${t}/participants`, { body: { name: "민준", seat: "ROW_1_LEFT", consent: false } }), 201);
+  same("이름·자리·동의", [driver.name, driver.seat, driver.consent], ["민준", "ROW_1_LEFT", false]);
   status(await call("POST", `${t}/participants`, { body: { name: "하늘", seat: "ROW_1_LEFT", consent: true } }), 409);
 });
 
@@ -109,12 +108,15 @@ step("동의와 기록 상태", async () => {
   const driving = status(await call("PATCH", t, { body: { status: "driving" } }), 200);
   same("동의하지 않은 사람이 있을 때 주행 중 기록", driving.recording, false);
   status(await call("PATCH", t, { body: { recording: true } }), 409);
-  status(await call("PATCH", `${t}/participants/${driver.id}`, { body: { consent: true } }), 200);
+  // 명세: 동의는 본인의 참가자 토큰으로만 켠다(T68). 토큰이 없으면 401, 남의 토큰이면 403
+  status(await call("PATCH", `${t}/participants/${driver.id}`, { body: { consent: true } }), 401);
+  status(await call("PATCH", `${t}/participants/${driver.id}`, { body: { consent: true }, token: rider.token }), 403);
+  status(await call("PATCH", `${t}/participants/${driver.id}`, { body: { consent: true }, token: driver.token }), 200);
   same("모두 동의한 뒤 기록", status(await call("PATCH", t, { body: { recording: true } }), 200).recording, true);
-  // 명세: 동의를 끄면 기록이 멈춘다
+  // 명세: 동의 끄기는 토큰 없이 누구나 하고, 끄면 기록이 멈춘다
   status(await call("PATCH", `${t}/participants/${rider.id}`, { body: { consent: false } }), 200);
   same("한 명이 동의를 끈 뒤 기록", status(await call("GET", t), 200).recording, false);
-  status(await call("PATCH", `${t}/participants/${rider.id}`, { body: { consent: true } }), 200);
+  status(await call("PATCH", `${t}/participants/${rider.id}`, { body: { consent: true }, token: rider.token }), 200);
   same("다시 동의하고 켠 기록", status(await call("PATCH", t, { body: { recording: true } }), 200).recording, true);
 });
 
