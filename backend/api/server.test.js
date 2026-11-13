@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { classify, migrate, server, sweep, verifyGoogleLink } from "./server.js";
 import { captureLog } from "./log.js";
+import { cues, suggest } from "./scenes.js";
 import { endStores, profilesDb, tripsDb } from "./db.js";
 
 let base;
@@ -16,6 +17,8 @@ let fakeProvider; // 가짜 구글(T21). code가 곧 사용자 번호다. 특수
 let tokenCalls = 0; // 가짜 구글이 받은 토큰 교환 수
 let fakeS3; // 가짜 클립 버킷(T76). SDK의 표준 설정(AWS_ENDPOINT_URL_S3)으로 꽂는다 — IP 주소라 SDK가 경로 방식으로 부른다.
 const s3 = { objects: new Map(), down: false, onPut: null, onDelete: null }; // onPut·onDelete: 올리거나 지우는 도중에 끼워 넣을 일(한 번)
+let fakeAsr; // 가짜 Nemotron(T75). 초안의 '서와'를 '서아'로 고치고 마침표를 붙인다. 초안 낱말로 장애를 낸다
+const asr = { calls: [], onCall: null }; // onCall: 첫 요청을 받은 뒤 답하기 전에 끼워 넣을 일(시험이 정함)
 captureLog(() => {}); // 서버의 구조화 로그는 시험 출력에 섞지 않는다(T71 시험은 따로 받아 본다)
 before(async () => {
   fakeProvider = createServer(async (req, res) => {
@@ -73,6 +76,24 @@ before(async () => {
     res.end(req.method === "GET" ? s3.objects.get(key) : undefined);
   });
   await new Promise((ok) => fakeS3.listen(0, "127.0.0.1", ok));
+  fakeAsr = createServer(async (req, res) => {
+    const chunks = [];
+    for await (const c of req) chunks.push(c);
+    const body = JSON.parse(Buffer.concat(chunks).toString());
+    const prompt = body.messages[0].content[0].text;
+    const draft = /draft from another recognizer \(may contain errors\): "(.*)"\. Context:/.exec(prompt)[1];
+    asr.calls.push({ path: req.url, auth: req.headers.authorization, body, prompt, draft });
+    const hook = asr.onCall;
+    asr.onCall = null;
+    await hook?.();
+    const reply = (status, content) => (res.writeHead(status, { "content-type": "application/json" }), res.end(JSON.stringify(status === 200 ? { choices: [{ message: { content } }] } : { error: {} })));
+    if (draft.includes("고장")) return reply(500);
+    if (draft.includes("붐빔") && asr.calls.filter((c) => c.draft === draft).length === 1) return reply(429);
+    if (draft.includes("되풀이")) return reply(200, "되풀이 되풀이 되풀이 되풀이 되풀이 되풀이 되풀이 되풀이 ");
+    if (draft === "가자") return reply(200, "싫어"); // 짧은 말인데 글자가 다 다름
+    reply(200, `<spk:0> ${draft.replace(/서와/g, "서아")}.`);
+  });
+  await new Promise((ok) => fakeAsr.listen(0, "127.0.0.1", ok));
   Object.assign(process.env, { CLIPS_BUCKET: "clips", AWS_ENDPOINT_URL_S3: `http://127.0.0.1:${fakeS3.address().port}`, AWS_REGION: "ap-northeast-2", AWS_ACCESS_KEY_ID: "test", AWS_SECRET_ACCESS_KEY: "test" });
   process.env.GOOGLE_TOKEN_URL = `http://127.0.0.1:${fakeProvider.address().port}/token`;
   process.env.GOOGLE_USERINFO_URL = `http://127.0.0.1:${fakeProvider.address().port}/userinfo`;
@@ -96,6 +117,7 @@ after(async () => {
   server.close();
   fakeProvider.close();
   fakeS3.close();
+  fakeAsr.close();
   await endStores();
 });
 
@@ -748,7 +770,7 @@ test("녹음 클립: 고른 장면의 원음을 받고, 재생하고, 바로 지
   const [, m1] = await call("POST", `${t}/moments`, { label: "웃음" });
   const [, m2] = await call("POST", `${t}/moments`, {});
   const auth = (token) => (token ? { authorization: `Bearer ${token}` } : {});
-  const from = Date.now() - 30_000; // 클립 첫 표본의 시각
+  const from = Date.now() - 5000; // 클립 첫 표본의 시각(구간 없는 장면은 at 앞 20초~뒤 10초 안이어야 함)
   const up = (moment, body, token, generation = 1) => fetch(`${base}${t}/recordings?moment=${moment}&generation=${generation}&from=${from}`, { method: "POST", headers: auth(token), body });
   const play = (id, token) => fetch(`${base}${t}/recordings/${id}`, { headers: auth(token) });
   const del = (id, token) => fetch(`${base}${t}/recordings/${id}`, { method: "DELETE", headers: auth(token) });
@@ -786,6 +808,10 @@ test("녹음 클립: 고른 장면의 원음을 받고, 재생하고, 바로 지
   assert.equal((await fetch(`${base}${t}/recordings?moment=${m2.id}&from=${from}`, { method: "POST", headers: auth(mom.token), body: clip })).status, 400, "세대가 필요");
   assert.equal((await fetch(`${base}${t}/recordings?moment=${m2.id}&generation=1`, { method: "POST", headers: auth(mom.token), body: clip })).status, 400, "클립 시작 시각이 필요");
   assert.equal((await up(m2.id, clip, mom.token, 2)).status, 400, "아직 없는 세대");
+  // 사람이 확정한 장면 구간의 소리만(구간 없는 장면은 at 앞 20초~뒤 10초, 앞뒤 1초 여유)
+  const outside = (start, body) => fetch(`${base}${t}/recordings?moment=${m2.id}&generation=1&from=${start}`, { method: "POST", headers: auth(mom.token), body });
+  assert.equal((await outside(m2.at - 25_000, clip)).status, 400, "구간 앞의 소리");
+  assert.equal((await outside(m2.at - 20_000, wav(200, 40))).status, 400, "구간보다 긴 소리");
   assert.equal(s3.objects.size, 1, "거절한 소리는 버킷에 남지 않음");
 
   // 지우기: 버킷에서 바로, 다시 올려도 되살아나지 않음. 장면은 그대로
@@ -896,6 +922,272 @@ test("사람이 지운 클립은 철회·다시 동의 뒤에도 받지 않고, 
   const heard = await fetch(`${base}${t}/recordings/${m2.id}`, { headers: { authorization: `Bearer ${mom.token}` } });
   assert.equal(heard.status, 200, "새 클립은 지운 표시 없이 들린다");
   assert.equal((await del(m2)).status, 204, "다시 지우면 됨");
+
+  // 지우는 사이(버킷을 기다리는 동안) 동의 철회가 줄을 먼저 지워도 지운 표시는 남는다 — 다시 동의해도 그 장면은 409
+  const [, m3] = await call("POST", `${t}/moments`, {});
+  assert.equal((await up(m3, 3)).status, 201);
+  s3.onDelete = () => consent(false);
+  assert.equal((await del(m3)).status, 204);
+  await consent(true);
+  assert.equal((await up(m3, 4)).status, 409, "철회와 겹친 지우기도 표시를 남김");
+});
+
+test("장면 후보는 말이 몰린 구간을 규칙으로 고르고, 숏폼은 클립과 자막 큐로 내준다(T43)", async () => {
+  const [, trip] = await call("POST", "/api/trips", { title: "속초" });
+  const t = `/api/trips/${trip.code}`;
+  const [, momProfile] = await call("POST", "/api/profiles", { name: "엄마", character: "토끼" });
+  const [, mom] = await call("POST", `${t}/participants`, { seat: "ROW_1_LEFT", consent: true }, momProfile.token);
+  const [, son] = await join(trip.code, "아들", "ROW_2_LEFT");
+  // 여행을 10분 전에 만든 셈으로 둔다(장면 시각은 여행을 만든 뒤 ~ 지금+1분만 받는다)
+  const t0 = Date.now() - 600_000; // 시험 대화의 0초
+  await tripsDb().query("UPDATE trips SET doc = jsonb_set(doc, '{createdAt}', to_jsonb($2::bigint)) WHERE code = $1", [trip.code, t0 - 1000]);
+  const said = [
+    // A: 20초에 6번, 두 사람이 번갈아
+    ...[0, 4, 8, 12, 16, 20].map((s, i) => [s, i % 2 ? "ROW_2_LEFT" : "ROW_1_LEFT", i % 2 ? "엄마 저기 바다 보여" : "그래 정말 예쁘다"]),
+    [60, "ROW_1_LEFT", "휴게소 들를까"], // 띄엄띄엄한 말은 후보가 아니다
+    [100, "ROW_2_LEFT", "응"],
+    // B: 25초에 5번, 한 사람
+    ...[200, 206, 212, 218, 224].map((s) => [s, "ROW_2_LEFT", "노래 틀어 주세요"]),
+    // C: 말은 몰렸지만 차에서 이미 장면으로 표시한 구간
+    ...[300, 303, 306, 309].map((s, i) => [s, i % 2 ? "ROW_2_LEFT" : "ROW_1_LEFT", "하하하"]),
+  ];
+  const items = said.map(([s, seatArea, text], i) => ({ seq: i + 1, at: t0 + s * 1000, text, seatArea, generation: 1 }));
+  assert.equal((await call("POST", `${t}/utterances`, { device: "car", items }, mom.token))[0], 200);
+  await tripsDb().query("UPDATE utterances SET profile_id = $2 WHERE trip_code = $1 AND seat_area = 'ROW_1_LEFT'", [trip.code, momProfile.id]); // 화자 대조(T38)가 붙인 셈
+  await call("POST", `${t}/moments`, { at: t0 + 305_000, label: "웃음" });
+
+  assert.equal((await call("GET", `${t}/scene-suggestions`))[0], 401);
+  const [status, { items: found }] = await call("GET", `${t}/scene-suggestions`, null, son.token);
+  assert.equal(status, 200);
+  assert.deepEqual(
+    found.map((c) => [c.from - t0, c.to - t0, c.why, c.lines.length]),
+    [
+      [-1000, 24_000, "30초에 말이 6번, 2명이 말함", 6],
+      [199_000, 228_000, "30초에 말이 5번", 5],
+    ],
+    "말이 몰린 구간만, 이미 남긴 장면과 겹치는 구간은 빼고, 시각 순"
+  );
+
+  // 사람이 후보를 고르면 구간째 장면으로 남는다. 구간은 at을 품고 60초 안
+  const [a] = found;
+  assert.equal((await call("POST", `${t}/moments`, { at: a.at, from: a.from }))[0], 400, "from, to는 함께");
+  assert.equal((await call("POST", `${t}/moments`, { at: a.at, from: a.at + 1, to: a.at + 2 }))[0], 400, "from ≤ at");
+  assert.equal((await call("POST", `${t}/moments`, { at: a.at, from: a.from, to: a.from + 60_001 }))[0], 400, "60초 안");
+  assert.equal((await call("POST", `${t}/moments`, { at: a.at, from: a.at, to: a.at }))[0], 400, "1초 이상");
+  const [made, moment] = await call("POST", `${t}/moments`, { at: a.at, from: a.from, to: a.to, label: "바다" });
+  assert.deepEqual([made, moment.from, moment.to], [201, a.from, a.to]);
+  assert.deepEqual((await call("GET", `${t}/scene-suggestions`, null, son.token))[1].items.map((c) => c.from - t0), [199_000], "남긴 장면은 다시 추천하지 않음");
+
+  // 숏폼: 클립이 올라온 장면만. 자막 큐는 클립 첫 표본에서 잰 초, 말한 사람은 화자 대조로 붙은 참가자만
+  const clip = wav(200, 25);
+  assert.equal((await fetch(`${base}${t}/recordings?moment=${moment.id}&generation=1&from=${a.from}`, { method: "POST", headers: { authorization: `Bearer ${son.token}` }, body: clip })).status, 201);
+  const [ok, form] = await call("GET", `${t}/shortform`, null, mom.token);
+  assert.equal(ok, 200);
+  assert.equal(form.title, "속초");
+  assert.deepEqual(form.cast.map((c) => [c.participantId, c.name, c.character]), [[mom.id, "엄마", "토끼"], [son.id, "아들", ""]]);
+  const [scene] = form.scenes;
+  assert.deepEqual([form.scenes.length, scene.momentId, scene.label, scene.clip, scene.startAt, scene.seconds], [1, moment.id, "바다", `${t}/recordings/${moment.id}`, a.from, 25]);
+  assert.deepEqual(scene.cues.map((c) => [c.start, c.participantId, c.seatArea]), [
+    [1, mom.id, "ROW_1_LEFT"], [5, null, "ROW_2_LEFT"], [9, mom.id, "ROW_1_LEFT"], [13, null, "ROW_2_LEFT"], [17, mom.id, "ROW_1_LEFT"], [21, null, "ROW_2_LEFT"],
+  ]);
+  assert.deepEqual(scene.cues.slice(0, 2).map((c) => c.end), [2.35, 6.65], "끝은 글자 수로 어림(글자당 0.15초, 1~6초): 9자·11자");
+  assert.ok(scene.cues.every((c, i) => c.end <= (scene.cues[i + 1]?.start ?? scene.seconds)), "다음 자막·클립 끝을 넘지 않음(4초 간격)");
+  assert.equal((await call("GET", `${t}/shortform`))[0], 401);
+});
+
+test("장면 규칙의 가장자리: 한 순간에 몰린 2만 줄, 같은 시각의 두 말, 일부만 붙은 화자(T43)", () => {
+  // 차 시계가 멈춰 2만 줄이 한 시각에 몰려도 창을 복사하지 않고 끝난다(여행 한도, 파드 메모리 256 MiB)
+  const t0 = 1_000_000;
+  const flood = Array.from({ length: 20_000 }, (_, i) => ({ at: t0, text: "아", seatArea: i % 2 ? "ROW_1_LEFT" : "ROW_2_LEFT" }));
+  const started = performance.now();
+  const [one, ...rest] = suggest(flood, []);
+  assert.ok(performance.now() - started < 1000, "1초 안");
+  assert.deepEqual([rest.length, one.lines.length, one.to - one.from, one.why], [0, 30, 15_000, "30초에 말이 20000번, 2명이 말함"], "보여 줄 발화는 30줄, 구간은 15초 이상");
+  // 한 사람의 말에 화자 대조가 일부만 붙어도 한 사람이다(좌석 구역으로 센다). 구역을 모르면 세지 않는다
+  const solo = [0, 3, 6, 9].map((s, i) => ({ at: t0 + s * 1000, text: "응", seatArea: "ROW_1_LEFT", ...(i % 2 ? { profileId: "p1" } : {}) }));
+  assert.equal(suggest([...solo, { at: t0 + 10_000, text: "?" }], [])[0].why, "30초에 말이 5번");
+  // 점수는 명세 그대로(발화 수 + 2 × (말한 사람 수 − 1)): 말한 사람을 모르는 5줄(3점)보다 한 사람의 4줄(4점)이 먼저
+  const unknown = [0, 1, 2, 3, 4].map((s) => ({ at: t0 + s * 1000, text: "?" }));
+  const known = [0, 1, 2, 3].map((s) => ({ at: t0 + 100_000 + s * 1000, text: "응", seatArea: "ROW_1_LEFT" }));
+  assert.deepEqual(suggest([...unknown, ...known], []).map((c) => c.score), [3, 4]);
+  // 두 자리에서 같은 시각에 말하면 자막이 겹쳐 보인다(0초짜리로 사라지지 않음)
+  const both = cues([{ at: t0, text: "와", seatArea: "ROW_1_LEFT" }, { at: t0, text: "우와", seatArea: "ROW_2_LEFT" }], t0 - 1000, 10);
+  assert.deepEqual(both.map((c) => [c.start, c.end]), [[1, 2], [1, 2]]);
+});
+
+test("고른 장면 클립을 Nemotron으로 다시 받아 적고, 실패하면 원문 자막으로 남는다(T75)", async () => {
+  assert.equal(asr.calls.length, 0, "ASR_URL·ASR_TOKEN이 없으면 보내지 않음(앞 시험들의 클립)");
+  const [, trip] = await call("POST", "/api/trips", { title: "속초" });
+  const t = `/api/trips/${trip.code}`;
+  const t0 = Date.now() - 600_000;
+  await tripsDb().query("UPDATE trips SET doc = jsonb_set(doc, '{createdAt}', to_jsonb($2::bigint)) WHERE code = $1", [trip.code, t0 - 1000]);
+  const [, momProfile] = await call("POST", "/api/profiles", { name: "엄마" });
+  const [, mom] = await call("POST", `${t}/participants`, { seat: "ROW_1_LEFT", consent: true }, momProfile.token);
+  await join(trip.code, "서아", "ROW_2_LEFT");
+  const said = ["서와야 바다 봐", "되풀이 해 봐", "고장 난 줄", "붐빔 시험"];
+  const items = said.map((text, i) => ({ seq: i + 1, at: t0 + i * 3000, text, seatArea: i % 2 ? "ROW_2_LEFT" : "ROW_1_LEFT", generation: 1 }));
+  assert.equal((await call("POST", `${t}/utterances`, { device: "car", items }, mom.token))[0], 200);
+  await tripsDb().query("UPDATE utterances SET profile_id = $2 WHERE trip_code = $1 AND seat_area = 'ROW_1_LEFT'", [trip.code, momProfile.id]);
+  const [, moment] = await call("POST", `${t}/moments`, { at: t0, from: t0 - 1000, to: t0 + 11_000 });
+
+  Object.assign(process.env, { ASR_URL: `http://127.0.0.1:${fakeAsr.address().port}/asr/v1/`, ASR_TOKEN: "test-asr-token", ASR_GAP_MS: "20" });
+  const events = [];
+  const restore = captureLog((line) => events.push(JSON.parse(line)));
+  try {
+    const up = await fetch(`${base}${t}/recordings?moment=${moment.id}&generation=1&from=${t0 - 1000}`, { method: "POST", headers: { authorization: `Bearer ${mom.token}` }, body: wav(200, 12) });
+    assert.equal(up.status, 201, "응답은 재전사를 기다리지 않는다");
+    for (let i = 0; i < 300 && !events.some((e) => e.msg === "clip_retranscribed"); i++) await new Promise((ok) => setTimeout(ok, 20));
+  } finally {
+    restore();
+    delete process.env.ASR_URL;
+    delete process.env.ASR_TOKEN;
+    delete process.env.ASR_GAP_MS;
+  }
+
+  // 보낸 것: 연동 가이드의 공통 계약, 그 발화의 소리(16 kHz 모노 WAV)와 초안과 여행이 아는 낱말. 토큰은 머리말로만
+  const [first] = asr.calls;
+  assert.equal(first.path, "/asr/v1/chat/completions");
+  assert.equal(first.auth, "Bearer test-asr-token");
+  assert.deepEqual([first.body.model, first.body.temperature, first.body.chat_template_kwargs, first.body.skip_special_tokens], ["nemo_transcribe30", 0, { enable_thinking: false }, false]);
+  assert.equal(first.body.max_tokens, 8 * 3 + 64, "되풀이하다 토큰 한도까지 가지 않게(초안 8자)");
+  assert.match(first.prompt, /^Transcribe the following audio in Korean exactly as spoken\. Do not translate\./);
+  assert.match(first.prompt, /등장인물: 엄마, 서아\..*목적지: 속초\..*글레오/);
+  const sent = Buffer.from(first.body.messages[0].content[1].audio_url.url.replace("data:audio/wav;base64,", ""), "base64");
+  assert.deepEqual([sent.readUInt16LE(22), sent.readUInt32LE(24), sent.length - 44], [1, 16000, 6500 * 32], "0.5초 앞부터 같은 자리의 다음 말까지(6.5초) 모노 16 kHz");
+  assert.deepEqual(asr.calls.map((c) => c.draft), ["서와야 바다 봐", "되풀이 해 봐", "고장 난 줄", "붐빔 시험", "붐빔 시험"], "429면 다시");
+
+  // 고친 글은 원문 옆에 남고 숏폼 자막에 쓰인다. 되풀이·오류는 원문으로
+  const [, form] = await call("GET", `${t}/shortform`, null, mom.token);
+  assert.deepEqual(form.scenes[0].cues.map((c) => [c.text, c.raw]), [
+    ["서아야 바다 봐.", "서와야 바다 봐"],
+    ["되풀이 해 봐", "되풀이 해 봐"],
+    ["고장 난 줄", "고장 난 줄"],
+    ["붐빔 시험.", "붐빔 시험"],
+  ]);
+  const done = events.find((e) => e.msg === "clip_retranscribed");
+  assert.deepEqual([done.lines, done.fixed, done.fellBack, done.changed, done.reasons], [4, 2, 2, 1, { suspicious: 1, http_500: 1 }]);
+  assert.ok(!JSON.stringify(events).includes("서아야") && !JSON.stringify(events).includes("test-asr-token"), "로그에 글과 토큰을 남기지 않음");
+
+  // 자기 글 지우기는 고친 글도 함께 지운다
+  assert.equal((await call("DELETE", `${t}/utterances`, null, mom.token))[0], 200);
+  const { rows } = await tripsDb().query("SELECT count(*)::int AS n FROM utterances WHERE trip_code = $1 AND asr_text IS NOT NULL", [trip.code]);
+  assert.equal(rows[0].n, 1, "엄마의 줄(서아야…)은 지워지고 서아 쪽 '붐빔 시험.'만 남음");
+});
+
+test("재전사 도중 글이나 클립을 지우면 더 보내지 않고 붙이지 않으며, 같이 한 말은 자리별로 자른다(T75)", async () => {
+  const [, trip] = await call("POST", "/api/trips", {});
+  const t = `/api/trips/${trip.code}`;
+  const t0 = Date.now() - 600_000;
+  await tripsDb().query("UPDATE trips SET doc = jsonb_set(doc, '{createdAt}', to_jsonb($2::bigint)) WHERE code = $1", [trip.code, t0 - 1000]);
+  const [, momProfile] = await call("POST", "/api/profiles", { name: "엄마" });
+  const [, mom] = await call("POST", `${t}/participants`, { seat: "ROW_1_LEFT", consent: true }, momProfile.token);
+  const [, son] = await join(trip.code, "아들", "ROW_2_LEFT");
+  const lines = [
+    [0, "ROW_1_LEFT", "엄마 말 하나"],
+    [100, "ROW_2_LEFT", "아들 말"], // 거의 같이 말함
+    [4000, "ROW_1_LEFT", "엄마 말 둘"],
+    [20_000, "ROW_2_LEFT", "아들 둘째 말"],
+    [23_000, "ROW_2_LEFT", "아들 셋째 말"],
+  ];
+  const items = lines.map(([ms, seatArea, text], i) => ({ seq: i + 1, at: t0 + ms, text, seatArea, generation: 1 }));
+  assert.equal((await call("POST", `${t}/utterances`, { device: "car", items }, mom.token))[0], 200);
+  await tripsDb().query("UPDATE utterances SET profile_id = $2 WHERE trip_code = $1 AND seat_area = 'ROW_1_LEFT'", [trip.code, momProfile.id]);
+  const [, a] = await call("POST", `${t}/moments`, { at: t0, from: t0 - 1000, to: t0 + 7000 });
+  const [, b] = await call("POST", `${t}/moments`, { at: t0 + 20_000, from: t0 + 19_000, to: t0 + 26_000 });
+  const upload = (m, from, seconds) => fetch(`${base}${t}/recordings?moment=${m.id}&generation=1&from=${from}`, { method: "POST", headers: { authorization: `Bearer ${mom.token}` }, body: wav(200, seconds) });
+
+  Object.assign(process.env, { ASR_URL: `http://127.0.0.1:${fakeAsr.address().port}/asr/v1`, ASR_TOKEN: "test-asr-token", ASR_GAP_MS: "20" });
+  const events = [];
+  const restore = captureLog((line) => events.push(JSON.parse(line)));
+  const done = async (n) => {
+    for (let i = 0; i < 300 && events.filter((e) => e.msg === "clip_retranscribed").length < n; i++) await new Promise((ok) => setTimeout(ok, 20));
+    return events.filter((e) => e.msg === "clip_retranscribed")[n - 1];
+  };
+  const firstCall = asr.calls.length;
+  try {
+    // 1) 첫 줄을 보내는 사이 엄마가 자기 글을 지운다: 그 답은 붙이지 않고, 엄마의 다음 줄은 보내지 않는다
+    asr.onCall = () => call("DELETE", `${t}/utterances`, null, mom.token);
+    assert.equal((await upload(a, t0 - 1000, 8)).status, 201);
+    const one = await done(1);
+    const sent = asr.calls.slice(firstCall);
+    assert.deepEqual(sent.map((c) => c.draft), ["엄마 말 하나", "아들 말"]);
+    const seconds = (c) => (Buffer.from(c.body.messages[0].content[1].audio_url.url.split(",")[1], "base64").length - 44) / 32;
+    assert.deepEqual(sent.map(seconds), [4500, 7400], "같이 한 말에 잘리지 않고 같은 자리의 다음 말까지(엄마), 클립 끝까지(아들)");
+    assert.deepEqual([one.fixed, one.reasons], [1, { stopped: 2 }]);
+
+    // 2) 첫 줄을 보내는 사이 클립을 지운다: 그 답은 붙이지 않고 남은 줄은 보내지 않는다
+    const before = asr.calls.length;
+    asr.onCall = () => fetch(`${base}${t}/recordings/${b.id}`, { method: "DELETE", headers: { authorization: `Bearer ${son.token}` } });
+    assert.equal((await upload(b, t0 + 19_000, 7)).status, 201);
+    const two = await done(2);
+    assert.equal(asr.calls.length - before, 1);
+    assert.deepEqual([two.fixed, two.reasons], [0, { stopped: 2 }]);
+  } finally {
+    restore();
+    asr.onCall = null;
+    delete process.env.ASR_URL;
+    delete process.env.ASR_TOKEN;
+    delete process.env.ASR_GAP_MS;
+  }
+  const { rows } = await tripsDb().query("SELECT seq FROM utterances WHERE trip_code = $1 AND asr_text IS NOT NULL", [trip.code]);
+  assert.deepEqual(rows.map((r) => Number(r.seq)), [2], "아들의 첫 말만 붙음");
+});
+
+test("클립이 발화보다 먼저 와도, 늦게 온 발화로 다시 받아 적고 이미 본 줄은 다시 보내지 않는다(T75)", async () => {
+  const [, trip] = await call("POST", "/api/trips", { title: "속초" });
+  const t = `/api/trips/${trip.code}`;
+  const t0 = Date.now() - 600_000;
+  await tripsDb().query("UPDATE trips SET doc = jsonb_set(doc, '{createdAt}', to_jsonb($2::bigint)) WHERE code = $1", [trip.code, t0 - 1000]);
+  const [, mom] = await join(trip.code, "엄마", "ROW_1_LEFT");
+  const [, m] = await call("POST", `${t}/moments`, { at: t0, from: t0 - 1000, to: t0 + 9000 });
+  const lines = (from, texts) => call("POST", `${t}/utterances`, { device: "car", items: texts.map((text, i) => ({ seq: from + i, at: t0 + (from + i - 1) * 3000, text, seatArea: "ROW_1_LEFT", generation: 1 })) }, mom.token);
+  Object.assign(process.env, { ASR_URL: `http://127.0.0.1:${fakeAsr.address().port}/asr/v1`, ASR_TOKEN: "test-asr-token", ASR_GAP_MS: "20" });
+  const events = [];
+  const restore = captureLog((line) => events.push(JSON.parse(line)));
+  const runs = async (n) => {
+    for (let i = 0; i < 300 && events.filter((e) => e.msg === "clip_retranscribed").length < n; i++) await new Promise((ok) => setTimeout(ok, 20));
+    return events.filter((e) => e.msg === "clip_retranscribed").map((e) => [e.lines, e.fixed]);
+  };
+  const before = asr.calls.length;
+  try {
+    assert.equal((await fetch(`${base}${t}/recordings?moment=${m.id}&generation=1&from=${t0 - 1000}`, { method: "POST", headers: { authorization: `Bearer ${mom.token}` }, body: wav(200, 10) })).status, 201);
+    assert.deepEqual(await runs(1), [[0, 0]], "발화가 아직 없음");
+    assert.equal((await lines(1, ["서와 왔어", "고장 난 말"]))[0], 200);
+    assert.deepEqual(await runs(2), [[0, 0], [2, 1]], "늦게 온 발화로 다시(하나는 오류로 원문)");
+    assert.equal((await lines(3, ["서와 갔어"]))[0], 200);
+    assert.deepEqual(await runs(3), [[0, 0], [2, 1], [1, 1]], "새로 온 줄만 — 오류로 남은 줄은 되풀이해 보내지 않음");
+  } finally {
+    restore();
+    delete process.env.ASR_URL;
+    delete process.env.ASR_TOKEN;
+    delete process.env.ASR_GAP_MS;
+  }
+  assert.deepEqual(asr.calls.slice(before).map((c) => c.draft), ["서와 왔어", "고장 난 말", "서와 갔어"]);
+  const { rows } = await tripsDb().query("SELECT text, asr_text FROM utterances WHERE trip_code = $1 ORDER BY seq", [trip.code]);
+  assert.deepEqual(rows.map((r) => r.asr_text), ["서아 왔어.", null, "서아 갔어."]);
+});
+
+test("짧은 말도 초안과 글자가 절반 넘게 다르면 원문으로 남는다(T75)", async () => {
+  const [, trip] = await call("POST", "/api/trips", {});
+  const t = `/api/trips/${trip.code}`;
+  const t0 = Date.now() - 600_000;
+  await tripsDb().query("UPDATE trips SET doc = jsonb_set(doc, '{createdAt}', to_jsonb($2::bigint)) WHERE code = $1", [trip.code, t0 - 1000]);
+  const [, mom] = await join(trip.code, "엄마", "ROW_1_LEFT");
+  assert.equal((await call("POST", `${t}/utterances`, { device: "car", items: [{ seq: 1, at: t0, text: "가자", seatArea: "ROW_1_LEFT", generation: 1 }] }, mom.token))[0], 200);
+  const [, m] = await call("POST", `${t}/moments`, { at: t0, from: t0 - 1000, to: t0 + 3000 });
+  Object.assign(process.env, { ASR_URL: `http://127.0.0.1:${fakeAsr.address().port}/asr/v1`, ASR_TOKEN: "test-asr-token", ASR_GAP_MS: "20" });
+  const events = [];
+  const restore = captureLog((line) => events.push(JSON.parse(line)));
+  try {
+    assert.equal((await fetch(`${base}${t}/recordings?moment=${m.id}&generation=1&from=${t0 - 1000}`, { method: "POST", headers: { authorization: `Bearer ${mom.token}` }, body: wav(200, 4) })).status, 201);
+    for (let i = 0; i < 300 && !events.some((e) => e.msg === "clip_retranscribed"); i++) await new Promise((ok) => setTimeout(ok, 20));
+  } finally {
+    restore();
+    delete process.env.ASR_URL;
+    delete process.env.ASR_TOKEN;
+    delete process.env.ASR_GAP_MS;
+  }
+  assert.deepEqual(events.find((e) => e.msg === "clip_retranscribed").reasons, { suspicious: 1 }, "'가자' → '싫어'는 받지 않음");
 });
 
 test("쓰기가 몰려도 서버가 멈추지 않는다", async () => {
