@@ -1,16 +1,17 @@
 openapi: 3.1.0
 info:
   title: 같이타 API
-  version: 0.3.0
-  summary: 여행 세션, 기기 프로필, 부탁, 장면
+  version: 0.4.0
+  summary: 여행 세션, 기기 프로필, 부탁, 장면, 기록본
   description: |
     웹앱(frontend/web)과 차량 앱(frontend/car)이 부르는 API입니다. 구현은 backend/api/server.js입니다.
 
-    - 모든 본문은 JSON이고 10 KB를 넘으면 413입니다.
+    - 모든 본문은 JSON이고 10 KB를 넘으면 413입니다. 발화 묶음 올리기(`/utterances`)만 1 MB까지 받습니다.
     - 오류는 `{ "error": "이유" }`로 옵니다.
     - 기기 프로필 토큰이 있으면 `Authorization: Bearer <토큰>`으로 보냅니다. 기기 프로필 자체에는 로그인이 없습니다.
     - 구글 OAuth로 프로필을 찾아 이어 받을 수 있습니다(ADR-0006). 현대 계정 연동은 아직 없습니다(ADR-0004).
-    - 여행은 만든 뒤 48시간까지 읽을 수 있습니다.
+    - 여행은 만든 뒤 48시간까지 읽을 수 있습니다. 발화도 같은 시계에 지워지고, 사람이 장면으로 확정한 것만 프로필 앨범에 남습니다(ADR-0007·ADR-0014).
+    - 음성 경로(발화·기록본)의 인증은 참가할 때 받는 **참가자 토큰**입니다(프로필 토큰과 별개).
 
     이 서버가 부르는 외부 API는 구글 OAuth(계정 연결을 켰을 때)뿐입니다. 예정과 결정 상태는 docs/api/external.md에 있습니다.
 servers:
@@ -23,6 +24,7 @@ tags:
   - name: 참가자
   - name: 부탁
   - name: 장면
+  - name: 기록본
   - name: 상태 확인
 paths:
   /healthz:
@@ -175,6 +177,7 @@ paths:
       description: |
         프로필 토큰을 보내면 이름과 그 자리 종류의 선호를 프로필에서 가져옵니다. `consent`를 안 보내면 프로필의 기본값을 씁니다.
         같은 프로필이 다시 참가하면 있던 참가자를 200으로 돌려줍니다. 토큰이 없으면 손님으로 `name`과 `consent`가 필요합니다.
+        프로필·손님 모두 응답에 **참가자 토큰**을 함께 줍니다(ADR-0007). 발화 올리기·기록본 같은 음성 경로의 인증에 씁니다. 서버에는 해시만 남고, 다시 참가하면 새로 받습니다(옛 토큰은 못 쓰게 됨).
       security: [{}, { profileToken: [] }]
       requestBody:
         required: true
@@ -189,8 +192,8 @@ paths:
                 consent: { type: boolean, description: 손님일 때 필요 }
                 prefs: { $ref: "#/components/schemas/Prefs" }
       responses:
-        "200": { description: 이미 참가한 프로필, content: { application/json: { schema: { $ref: "#/components/schemas/Participant" } } } }
-        "201": { description: 참가함, content: { application/json: { schema: { $ref: "#/components/schemas/Participant" } } } }
+        "200": { description: 이미 참가한 프로필(참가자 토큰 새로 발급), content: { application/json: { schema: { $ref: "#/components/schemas/ParticipantWithToken" } } } }
+        "201": { description: 참가함, content: { application/json: { schema: { $ref: "#/components/schemas/ParticipantWithToken" } } } }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
@@ -260,30 +263,161 @@ paths:
     post:
       tags: [장면]
       summary: 장면의 시각과 위치 남기기
-      description: 차량 앱이 대화가 재미있던 순간을 표시할 때 부릅니다. `at`을 안 보내면 서버 시각을 씁니다.
+      description: |
+        차량 앱이 대화가 재미있던 순간을 표시할 때 부릅니다. `at`을 안 보내면 서버 시각을 씁니다.
+        위치 없는 장면도 저장합니다(ADR-0007) — `lat`·`lng`는 둘 다 있거나 둘 다 없음만 받고, 위치 없는 장면은 목록에만 있고 지도에는 나오지 않습니다.
+        `by`에 참가자 id를 남기면 그 참가자가 프로필을 가졌을 때 장면을 **확정**으로 보고 그 프로필의 앨범에 복사해 남깁니다(ADR-0014). 여행이 닫힌 뒤에도 남는 것은 이 앨범뿐입니다.
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [lat, lng]
               properties:
                 lat: { type: number, minimum: -90, maximum: 90 }
                 lng: { type: number, minimum: -180, maximum: 180 }
                 label: { type: string, minLength: 1, maxLength: 60 }
                 at: { type: integer, description: "epoch 밀리초. 여행을 만든 뒤부터 지금까지" }
+                by: { type: string, description: 장면을 고른 참가자 id. 이 여행의 참가자여야 함 }
       responses:
         "201": { description: 남김, content: { application/json: { schema: { $ref: "#/components/schemas/Moment" } } } }
         "400": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+  /api/trips/{code}/utterances:
+    parameters: [{ $ref: "#/components/parameters/code" }]
+    post:
+      tags: [기록본]
+      summary: 발화 묶음 올리기
+      description: |
+        차량 앱이 받아 적은 발화를 묶어 올립니다(ADR-0007·ADR-0014). 같은 `(device, seq)`는 다시 보내도 한 번만 남고(멱등), 순서는 섞여도 좋습니다.
+        응답의 `lastSeq`는 빠짐없이 받은 마지막 순번입니다 — 차량은 재동기화 뒤 그 뒤만 다시 보냅니다.
+        본문의 `generation`이 여행의 동의 세대와 다르면 받지 않고(409) 이미 받은 옛 세대의 발화를 폐기합니다. 재동기화해 세대를 맞춘 뒤 다시 올리십시오.
+        `profileId`는 이 여행 참가자의 프로필만 받습니다(좌석이 확실할 때 차량이 붙이고, 서버의 화자 대조 T38이 다시 채웁니다).
+      security: [{ participantToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [device, items]
+              properties:
+                device: { type: string, minLength: 1, maxLength: 40, description: 발화를 올리는 기기의 이름(차량 앱이 정함) }
+                generation: { type: integer, minimum: 1, description: 발화를 만들 때의 동의 세대. 기본 1 }
+                items:
+                  type: array
+                  maxItems: 500
+                  items: { $ref: "#/components/schemas/UtteranceInput" }
+      responses:
+        "200":
+          description: 받음
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [lastSeq, generation]
+                properties:
+                  lastSeq: { type: integer, description: 이 기기의 발화 가운데 빠짐없이 받은 마지막 순번 }
+                  generation: { type: integer, description: 지금 동의 세대 }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+    get:
+      tags: [기록본]
+      summary: 받은 발화 확인(동기화)
+      description: 재연결한 차량이 무엇을 받았는지 확인할 때 부릅니다. `device`와 `after`를 주면 그 기기의 순번 이후만 돌려줍니다.
+      security: [{ participantToken: [] }]
+      parameters:
+        - { name: device, in: query, schema: { type: string } }
+        - { name: after, in: query, schema: { type: integer }, description: 이 순번 뒤만. device가 있을 때만 봄 }
+      responses:
+        "200":
+          description: 발화 목록과 지금 상태
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [generation, recording, items]
+                properties:
+                  generation: { type: integer, description: 지금 동의 세대 }
+                  recording: { type: boolean, description: 지금 녹음 가능 여부 }
+                  items: { type: array, items: { $ref: "#/components/schemas/Utterance" } }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [기록본]
+      summary: 자기 발화 지우기
+      description: |
+        참가자 토큰의 주인이 프로필로 참가했을 때만, 그 프로필의 발화를 이 여행에서 지웁니다(손님은 403).
+        지우면 여행의 동의 세대가 오르고, 그 전에 받은 발화는 모두 폐기됩니다 — 늦게 올라온 발화가 지운 글을 되살리지 못하게 하는 것입니다(ADR-0007).
+      security: [{ participantToken: [] }]
+      responses:
+        "200":
+          description: 지운 줄 수
+          content:
+            application/json:
+              schema: { type: object, required: [deleted], properties: { deleted: { type: integer } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/trips/{code}/transcript:
+    parameters: [{ $ref: "#/components/parameters/code" }]
+    get:
+      tags: [기록본]
+      summary: 기록본
+      description: 이 여행의 발화를 시간순으로, 부탁과 도착 할 일과 함께 돌려줍니다. 도착 할 일 뽑기는 아직 구현 전이라 항상 빈 배열입니다.
+      security: [{ participantToken: [] }]
+      responses:
+        "200":
+          description: 기록본
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Transcript" }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/profiles/me/feed:
+    get:
+      tags: [프로필]
+      summary: 내 피드
+      description: |
+        한 프로필의 발화와 장면을 여행을 가로질러 최신순으로 돌려줍니다.
+        발화는 여행이 살아 있는 동안(만든 뒤 48시간)만 나오고, 장면은 앨범에 복사된 것이라 여행이 닫힌 뒤에도 나옵니다(ADR-0014).
+      security: [{ profileToken: [] }]
+      responses:
+        "200":
+          description: 피드 항목(최대 100)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/FeedItem" } }
+        "401": { $ref: "#/components/responses/Error" }
+  /api/profiles/me/moments/{id}:
+    parameters: [{ $ref: "#/components/parameters/id" }]
+    delete:
+      tags: [프로필]
+      summary: 앨범에서 장면 지우기
+      description: 내 앨범에 복사된 장면만 지웁니다. 여행의 moments에는 영향이 없습니다.
+      security: [{ profileToken: [] }]
+      responses:
+        "204": { description: 지움 }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
 components:
   securitySchemes:
     profileToken:
       type: http
       scheme: bearer
       description: POST /api/profiles가 돌려준 토큰
+    participantToken:
+      type: http
+      scheme: bearer
+      description: 여행 참가(POST /api/trips/{code}/participants) 응답이 돌려준 참가자 토큰. 음성 경로(발화·기록본)의 인증에 씀(ADR-0007)
   parameters:
     code: { name: code, in: path, required: true, schema: { type: string, pattern: "^[A-Za-z2-9]{6}$" }, description: 여행 코드. 대소문자를 가리지 않음 }
     id: { name: id, in: path, required: true, schema: { type: string } }
@@ -343,6 +477,12 @@ components:
         prefs: { $ref: "#/components/schemas/Prefs" }
         consent: { type: boolean }
         profileId: { type: string, format: uuid, description: 프로필로 참가했을 때만 }
+    ParticipantWithToken:
+      allOf:
+        - $ref: "#/components/schemas/Participant"
+        - type: object
+          required: [token]
+          properties: { token: { type: string, description: 참가자 토큰. 43자 base64url. 다시 참가하면 새로 받음 } }
     Request:
       type: object
       required: [id, by, text, when, status, createdAt]
@@ -355,13 +495,52 @@ components:
         createdAt: { type: integer }
     Moment:
       type: object
-      required: [id, at, lat, lng, label]
+      required: [id, at, label]
       properties:
         id: { type: string }
         at: { type: integer }
-        lat: { type: number }
+        lat: { type: number, description: 위치 없는 장면은 아예 없음(ADR-0007) }
         lng: { type: number }
         label: { type: string }
+    UtteranceInput:
+      type: object
+      required: [seq, at, text, seatArea]
+      properties:
+        seq: { type: integer, minimum: 1, maximum: 1000000000, description: 기기가 매기는 순번 }
+        at: { type: integer, description: epoch 밀리초 }
+        text: { type: string, minLength: 1, maxLength: 500 }
+        seatArea: { $ref: "#/components/schemas/Seat" }
+        profileId: { type: string, format: uuid, description: 이 여행 참가자의 프로필. 확실할 때만 }
+        confidence: { type: number, minimum: 0, maximum: 1, description: 받아쓰기 확신도. 제공자가 주면 }
+        lat: { type: number, minimum: -90, maximum: 90, description: 좌표는 둘 다 있거나 둘 다 없음 }
+        lng: { type: number, minimum: -180, maximum: 180 }
+    Utterance:
+      allOf:
+        - $ref: "#/components/schemas/UtteranceInput"
+        - type: object
+          required: [device]
+          properties: { device: { type: string } }
+    Transcript:
+      type: object
+      required: [generation, utterances, requests, todos]
+      properties:
+        generation: { type: integer }
+        utterances: { type: array, items: { $ref: "#/components/schemas/Utterance" } }
+        requests: { type: array, items: { $ref: "#/components/schemas/Request" } }
+        todos: { type: array, items: { type: object }, description: 도착 할 일. 뽑기(LLM) 구현 전까지 빈 배열 }
+    FeedItem:
+      type: object
+      required: [kind, tripCode, at]
+      properties:
+        kind: { type: string, enum: [utterance, moment] }
+        tripCode: { type: string }
+        at: { type: integer }
+        text: { type: string, description: kind가 utterance일 때 }
+        seatArea: { $ref: "#/components/schemas/Seat" }
+        id: { type: string, description: kind가 moment일 때 }
+        label: { type: string }
+        lat: { type: number }
+        lng: { type: number }
     Trip:
       type: object
       required: [code, title, status, recording, participants, requests, moments, version, createdAt]
@@ -370,6 +549,7 @@ components:
         title: { type: string }
         status: { $ref: "#/components/schemas/TripStatus" }
         recording: { type: boolean }
+        generation: { type: integer, description: 동의 세대(ADR-0007). 철회·삭제로 올라감 }
         participants: { type: array, items: { $ref: "#/components/schemas/Participant" } }
         requests: { type: array, items: { $ref: "#/components/schemas/Request" } }
         moments: { type: array, items: { $ref: "#/components/schemas/Moment" } }
