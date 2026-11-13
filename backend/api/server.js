@@ -976,12 +976,17 @@ async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
 }
 
 // 확장자 없는 주소는 화면이다: 그 폴더의 index.html(/demo), 없으면 웹앱 첫 화면 — 초대 주소 /j/<코드>처럼 웹앱이 주소를 읽는다.
-async function serveFile(path, res) {
+// 웹 파일은 쓸 때마다 다시 확인하게 한다(no-cache + ETag). 지시가 없으면 Cloudflare가 4시간 캐시해
+// 배포 뒤에도 옛 app.js가 쓰인다. 바뀌지 않았으면 304라 다시 받지 않는다.
+// ponytail: 파일 이름에 해시를 붙이는 빌드는 두지 않는다(빌드 없는 웹앱). 파일이 커지면 그때.
+async function serveFile(path, req, res) {
   const page = !extname(path);
   const file = normalize(join(WEB, page ? join(path, "index.html") : path));
   if (!file.startsWith(WEB)) fail(404, "없는 파일");
   const data = await readFile(file).catch(() => (page ? readFile(join(WEB, "index.html")) : fail(404, "없는 파일")));
-  res.writeHead(200, { "content-type": `${MIME[page ? ".html" : extname(file)] ?? "application/octet-stream"}; charset=utf-8` });
+  const headers = { "cache-control": "no-cache", etag: `"${createHash("sha256").update(data).digest("base64url").slice(0, 22)}"` };
+  if (req.headers["if-none-match"] === headers.etag) return void (res.writeHead(304, headers), res.end());
+  res.writeHead(200, { "content-type": `${MIME[page ? ".html" : extname(file)] ?? "application/octet-stream"}; charset=utf-8`, ...headers });
   res.end(data);
 }
 
@@ -1051,7 +1056,7 @@ export const server = createServer(async (req, res) => {
     } catch {
       fail(400, "잘못된 주소");
     }
-    await serveFile(path, res);
+    await serveFile(path, req, res);
   } catch (e) {
     const { status, type, message } = classify(e);
     failure = { type, ...(status >= 500 && errFields(e, status === 500)) }; // 서버 쪽 오류만 원인을, 예상 못 한 것(500)만 스택까지
