@@ -1,0 +1,22 @@
+# 메모리가 모자랄 때 누가 먼저 밀려나는지(ADR-0012의 가용성). 높을수록 오래 남는다.
+# Argo CD가 이 클래스를 쓰므로 Argo CD보다 먼저(구축 5단계) 넣는다. Cilium·CoreDNS는 쿠버네티스 기본 클래스를 쓴다.
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: gachita-platform
+value: 1000000
+description: "Controllers: Argo CD, cert-manager, CloudNativePG, External Secrets, Traefik, cloudflared"
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: gachita-data
+value: 900000
+description: "Postgres (trips, profiles)"
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: gachita-app
+value: 100000
+description: "API. Evicted first under memory pressure"

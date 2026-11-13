@@ -1,0 +1,21 @@
+# Argo CD(구축 5단계에서 kubectl apply -k). 판은 아래 주소 한곳에 고정한다.
+# Argo CD 자신은 Argo CD가 관리하지 않는다: 잘못 고친 선언이 Argo CD를 멈추면 되살릴 길이 없어서다.
+# 판을 올릴 때는 주소를 바꾸고 gachita-converge --tags argocd.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: argocd
+resources:
+  - namespace.yaml
+  - https://raw.githubusercontent.com/argoproj/argo-cd/v3.6.1/manifests/install.yaml
+patches:
+  # 뿌리 앱이 앞 물결 앱의 '건강'을 기다리게 한다(Application 건강 판정은 Argo CD 1.8에서 빠짐. v3.6 문서의 안내 그대로)
+  - path: argocd-cm.yaml
+  # 노드 사양 표(ADR-0012)의 요청·한도와 우선순위
+  - path: resources.yaml
+  # 로그인(dex)과 알림은 쓰지 않는다. 관리자는 SSM 포트 포워딩 뒤 admin 계정으로 본다
+  - target: { kind: Deployment, name: argocd-dex-server }
+    patch: |-
+      - { op: replace, path: /spec/replicas, value: 0 }
+  - target: { kind: Deployment, name: argocd-notifications-controller }
+    patch: |-
+      - { op: replace, path: /spec/replicas, value: 0 }

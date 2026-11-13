@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS utterances (
   seq bigint NOT NULL,                       -- 기기가 매기는 순번. 재전송 범위의 기준
   at bigint NOT NULL,                        -- epoch ms
   text text NOT NULL,
-  seat_area text NOT NULL,                   -- Pleos SeatArea와 같은 이름(좌석 구역, T37)
+  seat_area text,                            -- Pleos SeatArea와 같은 이름(좌석 구역, T37). 모르면 비어 있음
   profile_id uuid,                           -- 화자 대조 결과. 아직 못 붙이면 비어 있음(T38)
   confidence double precision,               -- 받아쓰기 확신도(제공자가 주면)
   lat double precision,
@@ -21,5 +21,13 @@ CREATE TABLE IF NOT EXISTS utterances (
 );
 CREATE INDEX IF NOT EXISTS utterances_trip_at ON utterances (trip_code, at);
 CREATE INDEX IF NOT EXISTS utterances_profile ON utterances (profile_id);
+
+-- 기기마다 빠짐없이 받은 마지막 순번. 발화 줄이 지워져도(동의 철회·글 지우기) 뒤로 가지 않게 따로 둔다.
+CREATE TABLE IF NOT EXISTS utterance_acks (
+  trip_code text NOT NULL,
+  device text NOT NULL,
+  last_seq bigint NOT NULL,
+  PRIMARY KEY (trip_code, device)
+);
 
 COMMIT;

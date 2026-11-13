@@ -1,4 +1,5 @@
-# 백업 대상(S3 데이터 버킷의 postgres/<db>/). 경로는 overlay에서. 자격은 서비스 계정 역할(웹 신원)에서 온다.
+# 백업 대상: s3://gachita-dev-<계정>/postgres/db/(서버 이름 db). 자격은 서비스 계정 역할(웹 신원)에서 온다.
+# 버킷은 접어도 남는 묶음(Terraform persist/)이라 다시 펼 때 여기서 복구한다(recover/, T52).
 apiVersion: barmancloud.cnpg.io/v1
 kind: ObjectStore
 metadata:
@@ -6,17 +7,18 @@ metadata:
 spec:
   retentionPolicy: 7d
   configuration:
-    destinationPath: s3://OVERLAY
+    destinationPath: s3://gachita-dev-721622471953/postgres
     s3Credentials:
       inheritFromIAMRole: true
     wal:
       compression: gzip
     data:
       compression: gzip
+  # 전체 백업(barman-cloud-backup, S3 나눠 올리기) 동안 128Mi에서 OOMKilled(11/13 실제 계정, 접기 전 백업이 실패함)
   instanceSidecarConfiguration:
     resources:
-      requests: { cpu: 10m, memory: 128Mi }
-      limits: { memory: 128Mi }
+      requests: { cpu: 10m, memory: 256Mi }
+      limits: { memory: 512Mi }
 ---
 # 매일 03:00(KST) 전체 백업. 처음 한 번은 만들자마자 뜬다.
 apiVersion: postgresql.cnpg.io/v1

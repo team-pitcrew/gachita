@@ -23,7 +23,7 @@ const ALBUM_SQL = fileURLToPath(new URL("profiles-3-moments.sql", import.meta.ur
 const GROUPS_SQL = fileURLToPath(new URL("profiles-4-groups.sql", import.meta.url));
 const VOICE_SQL = fileURLToPath(new URL("profiles-5-voice.sql", import.meta.url));
 const INVITE_BASE = process.env.INVITE_BASE_URL ?? "https://gachita.mangowhois.ai/j"; // QR에 담는 초대 주소(ADR-0009·0010)
-const PHOTO_MAX = 1_000_000; // 프로필 사진 상한. 형식은 매직 바이트로 확인해 다시 저장한다(ADR-0009 위험)
+const PHOTO_MAX = 1_000_000; // 프로필 사진 상한. 형식은 매직 바이트로만 확인한다(다시 그리기는 T46 화면, ADR-0009 위험)
 const TTL_MS = 48 * 60 * 60 * 1000; // 기획서 v4가 초기 제안으로 적은 보관 기간
 const MAX_BODY = 10_000;
 const CODE_CHARS = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"; // 0·O·1·I·L은 헷갈려서 뺌
@@ -86,6 +86,7 @@ export async function migrate() {
 
 async function readBody(req, limit = MAX_BODY) {
   let raw = "";
+  req.setEncoding("utf8"); // 조각 경계에 걸친 한글(3바이트)을 깨뜨리지 않는다
   for await (const chunk of req) {
     raw += chunk;
     if (raw.length > limit) fail(413, "본문이 너무 큼");
@@ -129,7 +130,7 @@ const participantOf = (req, trip) => {
 };
 
 // 동의 세대를 올리고 옛 세대의 발화를 지운다(ADR-0007).
-// 동의 철회·글 지우기 뒤에 늦게 올라온 발화가 지운 것을 되살리지 못하게 한다.
+// 동의 철회 뒤에 늦게 올라온 옛 세대 발화는 받은 것으로만 치고 저장하지 않는다(POST /utterances).
 async function bumpGeneration(trip, client) {
   trip.generation = (trip.generation ?? 1) + 1;
   await client.query("DELETE FROM utterances WHERE trip_code = $1 AND generation < $2", [trip.code, trip.generation]);
@@ -266,7 +267,7 @@ async function profiles(req, seg, b) {
     return [200, { seconds: Math.round(seconds * 10) / 10, dims: vector.length }];
   }
   if (seg[1] === "photo" && !seg[2]) {
-    // 프로필 사진. 형식은 매직 바이트로 확인하고 크기 상한 안에서 다시 저장한다(ADR-0009).
+    // 프로필 사진. 크기 상한과 형식(매직 바이트)만 확인해 그대로 둔다. 지금은 본인만 받아 간다(ADR-0009).
     if (m === "PUT") {
       const me = (await profileOf(req)) ?? fail(401, "프로필 토큰이 필요함");
       const raw = await readRaw(req, PHOTO_MAX);
@@ -292,9 +293,10 @@ async function profiles(req, seg, b) {
   const me = (await profileOf(req)) ?? fail(401, "프로필 토큰이 필요함");
   if (m === "GET") return [200, me];
   if (m === "DELETE") {
-    await profilesDb().query("DELETE FROM profile_moments WHERE profile_id = $1", [me.id]); // 앨범도 함께 지운다
-    await profilesDb().query("DELETE FROM tokens WHERE profile_id = $1", [me.id]); // 모든 기기 토큰이 함께 끊긴다
-    await profilesDb().query("DELETE FROM profiles WHERE id = $1", [me.id]);
+    // 내가 대표인 그룹과, 내가 만든 계정 없는 구성원(아이)의 프로필도 함께 지운다(ADR-0009).
+    const { rows: owned } = await profilesDb().query("SELECT id FROM groups WHERE owner_id = $1", [me.id]);
+    await deleteGroups(owned.map((r) => r.id));
+    await deleteProfiles([me.id]);
     return [204];
   }
   const next = {
@@ -378,6 +380,32 @@ async function googleLink(req, m, b) {
   fail(405, "POST, DELETE만 됨");
 }
 
+// 프로필과 거기 딸린 것(앨범, 기기 토큰, 그룹 자리)을 지운다. 그 프로필이 만든 아이 프로필도 함께 —
+// 아이 프로필은 토큰이 없어 대표가 아니면 지울 사람이 없다(ADR-0009). 두 DB라 여행 쪽 발화는 48시간 시계로 지워진다.
+async function deleteProfiles(ids) {
+  const db = profilesDb();
+  const { rows } = await db.query("SELECT id FROM profiles WHERE managed_by = ANY($1::uuid[])", [ids]);
+  const all = [...ids, ...rows.map((r) => r.id)];
+  await db.query("DELETE FROM profile_moments WHERE profile_id = ANY($1::uuid[])", [all]);
+  await db.query("DELETE FROM tokens WHERE profile_id = ANY($1::uuid[])", [all]);
+  await db.query("DELETE FROM group_members WHERE profile_id = ANY($1::uuid[])", [all]);
+  await db.query("DELETE FROM profiles WHERE id = ANY($1::uuid[])", [all]);
+}
+
+// 그룹을 지운다. 대표가 만든 아이 프로필은 함께 지운다.
+async function deleteGroups(ids) {
+  const db = profilesDb();
+  const { rows: kids } = await db.query(
+    `SELECT p.id FROM group_members m JOIN profiles p ON p.id = m.profile_id JOIN groups g ON g.id = m.group_id
+     WHERE m.group_id = ANY($1::text[]) AND p.managed_by = g.owner_id`,
+    [ids]
+  );
+  await deleteProfiles(kids.map((r) => r.id));
+  await db.query("DELETE FROM group_members WHERE group_id = ANY($1::text[])", [ids]);
+  await db.query("DELETE FROM invites WHERE group_id = ANY($1::text[])", [ids]);
+  await db.query("DELETE FROM groups WHERE id = ANY($1::text[])", [ids]);
+}
+
 // 가족·동승자 그룹과 QR 초대(ADR-0009, T45). 모든 경로의 인증은 프로필 토큰이다.
 const GROUP_KIND = ["family", "crew"];
 async function groups(req, seg, b) {
@@ -418,11 +446,10 @@ async function groups(req, seg, b) {
       const { rows } = await memberRows();
       return [200, { id: group.id, kind: group.kind, name: group.name, ownerId: group.owner_id, members: rows.map((r) => ({ profileId: r.profile_id, name: r.name, character: r.character, hasPhoto: r.has_photo, isOwner: r.owner_id === r.profile_id })) }];
     }
-    // 그룹을 지워도 이미 남긴 기록본과 앨범은 프로필 소유라 그대로 남는다(ADR-0009).
+    // 그룹을 지워도 계정 있는 구성원의 기록본과 앨범은 프로필 소유라 그대로 남는다(ADR-0009).
+    // 대표가 만든 아이 프로필은 함께 지운다.
     if (!isOwner) fail(403, "대표만 지울 수 있음");
-    await db.query("DELETE FROM group_members WHERE group_id = $1", [id]);
-    await db.query("DELETE FROM invites WHERE group_id = $1", [id]);
-    await db.query("DELETE FROM groups WHERE id = $1", [id]);
+    await deleteGroups([id]);
     return [204];
   }
 
@@ -430,7 +457,7 @@ async function groups(req, seg, b) {
     // 계정 없는 구성원(아이) 프로필을 대표가 만든다. 토큰은 없다 — 대표의 기기가 참가시킨다.
     if (!isOwner) fail(403, "대표만 구성원을 만들 수 있음");
     const p = { id: randomUUID(), name: text(b.name, 20, "name"), prefs: rolePrefs({}), consentDefault: false, character: b.character === undefined ? "" : text(b.character, 20, "character") };
-    await db.query("INSERT INTO profiles (id, name, prefs, consent_default, character) VALUES ($1, $2, $3, false, $4)", [p.id, p.name, p.prefs, p.character]);
+    await db.query("INSERT INTO profiles (id, name, prefs, consent_default, character, managed_by) VALUES ($1, $2, $3, false, $4, $5)", [p.id, p.name, p.prefs, p.character, me.id]);
     await db.query("INSERT INTO group_members (group_id, profile_id) VALUES ($1, $2)", [id, p.id]);
     return [201, { profileId: p.id, name: p.name, character: p.character, isOwner: false }];
   }
@@ -439,7 +466,10 @@ async function groups(req, seg, b) {
     if (arg === group.owner_id) fail(409, "대표는 그룹을 지워야 나갈 수 있음");
     const { rowCount } = await db.query("DELETE FROM group_members WHERE group_id = $1 AND profile_id = $2", [id, arg]);
     if (!rowCount) fail(404, "없는 구성원");
-    return [204]; // 기록본·앨범은 프로필 소유라 그대로다
+    // 대표가 만든 아이 프로필은 내보내면 지울 사람이 없어지므로 함께 지운다. 계정 있는 구성원의 기록은 그대로다.
+    const { rows: kid } = await db.query("SELECT id FROM profiles WHERE id = $1 AND managed_by = $2", [arg, group.owner_id]);
+    if (kid[0]) await deleteProfiles([arg]);
+    return [204];
   }
 
   if (sub === "invites" && !arg) {
@@ -465,40 +495,14 @@ async function groups(req, seg, b) {
   fail(404, "없는 경로");
 }
 
-// 그룹의 진행 중인 여행에 자동 참가시킨다(ADR-0009: 수락한 사람은 자리만 고르면 된다).
-// 자리가 남은 첫 여행에 동의 기본값 꺼짐으로 들어간다.
-async function joinActiveGroupTrip(groupId, profile) {
-  const { rows } = await tripsDb().query(
-    `SELECT code FROM trips WHERE doc->>'groupId' = $1 AND created_at > now() - interval '48 hours'
-     AND (doc->>'status') IN ('boarding', 'driving') ORDER BY created_at DESC LIMIT 5`,
-    [groupId]
-  );
-  for (const r of rows) {
-    const joined = await withTrip(r.code, true, (trip) => {
-      const seat = SEATS.find((s) => trip.participants.every((p) => p.seat !== s));
-      if (!seat) return null;
-      const token = randomBytes(32).toString("base64url");
-      const p = {
-        name: profile.name,
-        prefs: profile.prefs?.[ROLE[seat]] ?? prefs({}),
-        consent: false, // 기록 동의는 각자 따로 받는다(기본값 꺼짐, ADR-0009)
-        profileId: profile.id,
-        id: randomUUID().slice(0, 8),
-        seat,
-        tokenHash: tokenHash(token).toString("hex"),
-      };
-      trip.participants.push(p);
-      trip.version++;
-      return { code: trip.code, participant: asParticipant(p), token };
-    }).catch(() => null);
-    if (joined) return joined;
-  }
-  return null;
-}
-
 // 초대 수락. QR 주소(/j/<코드>)로 들어온 폰 브라우저가 부른다(ADR-0009).
 async function acceptInvite(req, code, b) {
   const db = profilesDb();
+  // 프로필 토큰이 있으면 있던 프로필로, 없으면 새 프로필을 만들어 이 기기 토큰을 준다.
+  // 입력과 토큰은 횟수를 쓰기 전에 본다 — 거절된 수락이 횟수를 쓰지 않게.
+  const me = await profileOf(req);
+  const profile = me ?? { id: randomUUID(), name: text(b.name, 20, "name"), prefs: rolePrefs(obj(b.prefs ?? {}, "prefs")), consentDefault: false, character: b.character === undefined ? "" : text(b.character, 20, "character"), links: [] };
+  const device = b.device === undefined ? "" : text(b.device, 20, "device");
   // 횟수 소진·만료·취소와의 경합은 UPDATE 조건으로 막는다(마지막 한 번을 두 명이 못 쓴다).
   const { rows } = await db.query(
     `UPDATE invites SET uses = uses + 1
@@ -511,17 +515,20 @@ async function acceptInvite(req, code, b) {
     if (!check[0]) fail(404, "없는 초대");
     fail(409, check[0].cancelled_at ? "취소된 초대" : new Date(check[0].expires_at).getTime() <= Date.now() ? "만료된 초대" : "쓸 수 있는 횟수가 다한 초대");
   }
-  // 프로필 토큰이 있으면 있던 프로필로, 없으면 새 프로필을 만들어 이 기기 토큰을 준다.
-  const me = await profileOf(req);
-  const profile = me ?? { id: randomUUID(), name: text(b.name, 20, "name"), prefs: rolePrefs(obj(b.prefs ?? {}, "prefs")), consentDefault: false, character: b.character === undefined ? "" : text(b.character, 20, "character"), links: [] };
   if (!me) {
     await db.query("INSERT INTO profiles (id, name, prefs, consent_default, character) VALUES ($1, $2, $3, false, $4)", [profile.id, profile.name, profile.prefs, profile.character]);
   }
-  const token = me ? null : await issueToken(profile.id, b.device === undefined ? "" : text(b.device, 20, "device"));
+  const token = me ? null : await issueToken(profile.id, device);
   await db.query("INSERT INTO group_members (group_id, profile_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", [rows[0].group_id, profile.id]);
   const { rows: g } = await db.query("SELECT id, kind, name FROM groups WHERE id = $1", [rows[0].group_id]);
-  const trip = await joinActiveGroupTrip(rows[0].group_id, profile);
-  return [200, { group: g[0], profile: { ...profile, hasPhoto: me?.hasPhoto ?? false }, ...(token ? { token } : {}), ...(trip ? { trip } : {}) }];
+  // 진행 중인 그룹 여행이 있으면 코드만 알려 준다. 자리는 본인이 골라 기존 참가 경로로 들어온다 —
+  // 동의·기록·자리 겹침 규칙이 그 경로 한 곳에만 있다(ADR-0009: 수락한 사람은 자리만 고르면 된다).
+  const { rows: trips } = await tripsDb().query(
+    `SELECT code FROM trips WHERE doc->>'groupId' = $1 AND created_at > now() - interval '48 hours'
+     AND (doc->>'status') IN ('boarding', 'driving') ORDER BY created_at DESC LIMIT 1`,
+    [rows[0].group_id]
+  );
+  return [200, { group: g[0], profile: { ...profile, hasPhoto: me?.hasPhoto ?? false }, ...(token ? { token } : {}), ...(trips[0] ? { trip: { code: trips[0].code } } : {}) }];
 }
 
 // 여행 한 줄을 읽어 fn에 넘긴다. 바꾸는 요청이면 그 줄을 잠그고, 끝나면 문서를 다시 쓴다.
@@ -563,7 +570,7 @@ async function trips(req, [code, sub, id], b, query) {
       title: b.title === undefined ? "" : text(b.title, 40, "title"),
       status: "boarding",
       recording: false,
-      generation: 1, // 동의 세대(ADR-0007). 철회·삭제로 올라간다.
+      generation: 1, // 동의 세대(ADR-0007). 동의 철회로 올라간다.
       participants: [],
       requests: [],
       moments: [],
@@ -571,8 +578,11 @@ async function trips(req, [code, sub, id], b, query) {
       createdAt: Date.now(),
       ...(groupId ? { groupId } : {}),
     };
-    await tripsDb().query("DELETE FROM trips WHERE created_at < now() - interval '48 hours'");
-    await tripsDb().query("DELETE FROM utterances WHERE trip_code NOT IN (SELECT code FROM trips)"); // 여행이 닫힌 발화도 함께 지운다
+    // 48시간 지난 여행과 그 발화·확인 순번을 한 문장으로 지운다. 지운 여행의 코드로만 찾으니(기본 키 앞부분)
+    // 발화 표 전체를 훑지 않는다 — 질의 하나는 2초에서 끊긴다(T26).
+    await tripsDb().query(`WITH gone AS (DELETE FROM trips WHERE created_at < now() - interval '48 hours' RETURNING code),
+      u AS (DELETE FROM utterances WHERE trip_code IN (SELECT code FROM gone))
+      DELETE FROM utterance_acks WHERE trip_code IN (SELECT code FROM gone)`);
     for (;;) {
       trip.code = newCode();
       const { rowCount } = await tripsDb().query("INSERT INTO trips (code, doc) VALUES ($1, $2) ON CONFLICT DO NOTHING", [trip.code, trip]);
@@ -580,10 +590,7 @@ async function trips(req, [code, sub, id], b, query) {
     }
   }
   const profile = sub === "participants" && m === "POST" && !id ? await profileOf(req) : null;
-  const out = await withTrip(code, m !== "GET", (trip, client) => handle(trip, { req, m, sub, id, b, query, profile }, client));
-  // 동의 세대가 다른 올림은 withTrip 안에서 옛 발화를 폐기하고 커밋한 뒤 이렇게 답한다(ADR-0007).
-  if (out?.stale) fail(409, "동의 세대가 바뀌었어요. 상태를 동기화한 뒤 다시 올려 주세요");
-  return out;
+  return withTrip(code, m !== "GET", (trip, client) => handle(trip, { req, m, sub, id, b, query, profile }, client));
 }
 
 async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
@@ -706,6 +713,8 @@ async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
     if (trip.moments.length >= 500) fail(409, "장면이 너무 많음");
     const hasLat = b.lat !== undefined;
     if (hasLat !== (b.lng !== undefined)) fail(400, "lat, lng: 둘 다 있거나 둘 다 없음");
+    // 고른 사람은 본문이 아니라 요청의 참가자 토큰으로 정한다. 토큰 없이 남긴 장면은 여행에만 남는다.
+    const picker = req.headers.authorization ? participantOf(req, trip) : null;
     const now = Date.now();
     const moment = {
       id: randomUUID().slice(0, 8),
@@ -716,15 +725,12 @@ async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
     trip.moments.push(moment);
     // 사람이 장면으로 확정하면 고른 사람의 프로필 앨범에 복사해 남긴다(ADR-0014).
     // 여행 잠금과 다른 저장소라 이 쓰기에는 원자성이 없다. 같은 장면 id로는 다시 복사되지 않는다.
-    if (b.by !== undefined) {
-      const picker = trip.participants.find((p) => p.id === b.by) ?? fail(400, "by: 이 여행의 참가자 id");
-      if (picker.profileId) {
-        await profilesDb().query(
-          `INSERT INTO profile_moments (id, profile_id, trip_code, at, lat, lng, label)
-           VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (id) DO NOTHING`,
-          [moment.id, picker.profileId, trip.code, moment.at, moment.lat ?? null, moment.lng ?? null, moment.label]
-        );
-      }
+    if (picker?.profileId) {
+      await profilesDb().query(
+        `INSERT INTO profile_moments (id, profile_id, trip_code, at, lat, lng, label)
+         VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (id) DO NOTHING`,
+        [moment.id, picker.profileId, trip.code, moment.at, moment.lat ?? null, moment.lng ?? null, moment.label]
+      );
     }
     return changed(201, moment);
   }
@@ -734,68 +740,73 @@ async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
     if (m !== "GET" && m !== "POST" && m !== "DELETE") fail(405, "GET, POST, DELETE만 됨");
     const caller = participantOf(req, trip);
     if (m === "POST") {
-      const generation = int(b.generation ?? 1, 1, 1_000_000, "generation");
-      if (generation !== (trip.generation ?? 1)) {
-        // 세대가 다른 발화는 받지 않고, 이미 받은 옛 세대는 폐기한다. 커밋 뒤 409로 답한다.
-        await client.query("DELETE FROM utterances WHERE trip_code = $1 AND generation < $2", [trip.code, trip.generation ?? 1]);
-        return { stale: true };
-      }
+      // 세대는 발화마다 받는다(묶음에 하나만 주면 모든 발화가 그 값). 지금보다 옛 세대의 발화는 동의 철회 전에
+      // 받아 적은 것이라 저장하지 않되 받은 것으로 쳐서 확인 순번에 넣는다. 409로 돌려보내면 확인 순번이
+      // 그 앞에서 멈춰 차량이 같은 묶음을 끝없이 다시 보낸다(ADR-0007).
+      const current = trip.generation ?? 1;
       const device = text(b.device, 40, "device");
       const items = Array.isArray(b.items) ? b.items : fail(400, "items: 배열");
       if (items.length > 500) fail(400, "items: 한 번에 500개까지");
+      // 화자(profileId)는 받지 않는다. 서버의 화자 대조(T38)만 붙인다 — 올리는 쪽이 남의 이름을 붙이지 못하게.
       const rows = items.map((it, i) => {
         const u = obj(it, `items[${i}]`);
         const hasLat = u.lat !== undefined;
         if (hasLat !== (u.lng !== undefined)) fail(400, `items[${i}].lat, lng: 둘 다 있거나 둘 다 없음`);
-        const seatArea = oneOf(u.seatArea, SEATS, `items[${i}].seatArea`);
         return [
           trip.code,
           device,
           int(u.seq, 1, 1_000_000_000, `items[${i}].seq`),
           num(u.at, 0, Date.now() + 600_000, `items[${i}].at`),
           text(u.text, 500, `items[${i}].text`),
-          seatArea,
-          u.profileId === undefined ? null : (trip.participants.some((p) => p.profileId === u.profileId) ? u.profileId : fail(400, `items[${i}].profileId: 이 여행 참가자의 프로필`)),
+          u.seatArea == null ? null : oneOf(u.seatArea, SEATS, `items[${i}].seatArea`), // 모르는 구역은 비워 둔다(T37)
           u.confidence === undefined ? null : num(u.confidence, 0, 1, `items[${i}].confidence`),
           hasLat ? num(u.lat, -90, 90, `items[${i}].lat`) : null,
           hasLat ? num(u.lng, -180, 180, `items[${i}].lng`) : null,
-          trip.generation ?? 1,
+          int(u.generation ?? b.generation, 1, current, `items[${i}].generation`),
         ];
       });
+      const fresh = rows.filter((r) => r[9] === current);
       // 같은 (기기, 순번)은 다시 보내도 한 번만 남는다(멱등). 순서는 섞여도 좋다.
-      for (let i = 0; i < rows.length; i += 100) {
-        const chunk = rows.slice(i, i + 100);
-        const values = chunk.map((_, j) => `(${Array.from({ length: 11 }, (_, k) => `$${j * 11 + k + 1}`).join(", ")})`).join(", ");
+      for (let i = 0; i < fresh.length; i += 100) {
+        const chunk = fresh.slice(i, i + 100);
+        const values = chunk.map((_, j) => `(${Array.from({ length: 10 }, (_, k) => `$${j * 10 + k + 1}`).join(", ")})`).join(", ");
         await client.query(
-          `INSERT INTO utterances (trip_code, device, seq, at, text, seat_area, profile_id, confidence, lat, lng, generation)
+          `INSERT INTO utterances (trip_code, device, seq, at, text, seat_area, confidence, lat, lng, generation)
            VALUES ${values} ON CONFLICT (trip_code, device, seq) DO NOTHING`,
           chunk.flat()
         );
       }
       // 빠짐없이 받은 마지막 순번을 돌려준다. 차량은 그 뒤만 다시 보낸다(ADR-0014).
-      const { rows: seqs } = await client.query("SELECT seq FROM utterances WHERE trip_code = $1 AND device = $2", [trip.code, device]);
-      const got = new Set(seqs.map((r) => Number(r.seq)));
-      let lastSeq = 0;
+      // 확인 순번은 발화 줄과 따로 둔다: 동의 철회나 글 지우기로 줄이 지워져도 뒤로 가지 않는다.
+      const { rows: ack } = await client.query("SELECT last_seq FROM utterance_acks WHERE trip_code = $1 AND device = $2", [trip.code, device]);
+      let lastSeq = Number(ack[0]?.last_seq ?? 0);
+      const { rows: seqs } = await client.query("SELECT seq FROM utterances WHERE trip_code = $1 AND device = $2 AND seq > $3", [trip.code, device, lastSeq]);
+      const got = new Set([...rows.map((r) => r[2]), ...seqs.map((r) => Number(r.seq))]);
       while (got.has(lastSeq + 1)) lastSeq++;
-      return [200, { lastSeq, generation: trip.generation ?? 1 }];
+      await client.query(
+        "INSERT INTO utterance_acks (trip_code, device, last_seq) VALUES ($1, $2, $3) ON CONFLICT (trip_code, device) DO UPDATE SET last_seq = EXCLUDED.last_seq",
+        [trip.code, device, lastSeq]
+      );
+      return [200, { lastSeq, generation: current }];
     }
     if (m === "GET") {
       const device = query.get("device");
       const params = [trip.code];
       let where = "trip_code = $1";
       if (device) {
-        params.push(device, Number(query.get("after") ?? 0));
+        params.push(device, int(Number(query.get("after") ?? 0), 0, 1_000_000_000, "after"));
         where += " AND device = $2 AND seq > $3";
       }
       const { rows } = await client.query(`SELECT device, seq, at, text, seat_area, profile_id, confidence, lat, lng FROM utterances WHERE ${where} ORDER BY at`, params);
       return [200, { generation: trip.generation ?? 1, recording: trip.recording, items: rows.map(asUtterance) }];
     }
     if (m === "DELETE") {
-      // 자기 글 지우기. 프로필로 참가한 사람만 자기 발화를 지울 수 있다(지운 글이 되살아나지 않게 세대를 올린다).
+      // 자기 글 지우기. 프로필로 참가한 사람만, 자기 이름이 붙은 발화만 지운다. 세대는 올리지 않는다 —
+      // 세대를 올리면 옛 세대 전부, 곧 그 여행의 모든 사람 글이 지워진다. 지운 줄의 순번은 이미 확인 순번 안이라
+      // 차량이 다시 보내지 않는다.
       if (!caller.profileId) fail(403, "프로필로 참가한 사람의 글만 지울 수 있음");
       const { rowCount } = await client.query("DELETE FROM utterances WHERE trip_code = $1 AND profile_id = $2", [trip.code, caller.profileId]);
-      await bumpGeneration(trip, client);
-      return changed(200, { deleted: rowCount });
+      return [200, { deleted: rowCount }];
     }
   }
 
@@ -868,7 +879,8 @@ export const server = createServer(async (req, res) => {
     res.end(data === undefined ? undefined : JSON.stringify(data));
   };
   const sendRaw = (status, buf, type) => {
-    res.writeHead(status, { "content-type": type, "cache-control": "no-store" });
+    // 매직 바이트만 본 파일이라 브라우저가 다른 형식으로 추측해 열지 못하게 한다.
+    res.writeHead(status, { "content-type": type, "cache-control": "no-store", "x-content-type-options": "nosniff" });
     res.end(buf);
   };
   try {

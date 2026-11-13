@@ -1,0 +1,87 @@
+name: ops
+
+# 운영(T57). 떠 있는 서버에 SSM으로 명령을 보낸다. 명령과 확인은 backend/infra/infra.sh 에 있고, 사람이 로컬에서 돌려도 같다.
+#   status     노드, 구축 단계, 앱 물결, Postgres·WAL 보관·최근 백업, ALB 대상, 실제 주소. 하나라도 정상이 아니면 실패
+#   converge   구축 단계 다시 돌리기(stages, 비우면 전부). 단계마다 이미 됐는지 먼저 본다
+#   backup     손 전체 백업
+#   restore    지정 시점 복구(target_time, 비우면 마지막 WAL까지). 옆에 db-pitr을 세워 걸린 시간과 표마다 행 수를 db와 비교한다.
+#              먼저 apply 없이(연습) 돌려 행 수를 본 뒤, 덮어쓸 때만 apply(db를 먼저 백업)
+#   clean-e2e  실제 주소 E2E(live-e2e)와 부하 시험이 남긴 여행(제목이 'E2E '로 시작)을 지운다
+# 서버가 없으면(접힌 상태) 분명히 실패한다. develop에서만(적용 역할이 develop만 믿음). 펴기·접기와 겹치지 않게 같은 줄에 선다.
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 할 일
+        type: choice
+        options: [status, converge, backup, restore, clean-e2e]
+        required: true
+      stages:
+        description: converge의 단계(쉼표로. os,k3s,cilium,oidc,argocd,root,verify). 비우면 전부
+        type: string
+        default: ""
+      target_time:
+        description: restore의 시각(RFC 3339, 예 2026-11-13T15:00:00+09:00). 비우면 마지막 WAL까지
+        type: string
+        default: ""
+      apply:
+        description: restore에서 복구한 데이터를 db에 덮어쓴다(끄면 연습. db는 그대로)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write # OIDC 토큰으로 AWS 역할을 받는다
+
+concurrency:
+  group: infra # infra 워크플로(펴기·접기)와 같은 줄
+  cancel-in-progress: false
+
+jobs:
+  ops:
+    runs-on: [self-hosted, gachita]
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash # -eo pipefail: tee 앞의 실패가 묻히지 않게
+    steps:
+      - name: develop에서만
+        if: github.ref != 'refs/heads/develop'
+        run: |
+          echo "::error::운영 워크플로는 develop에서만 됩니다(적용 역할이 develop만 믿음). 지금: $GITHUB_REF"
+          exit 1
+      - name: 역할 확인
+        if: vars.AWS_APPLY_ROLE_ARN == ''
+        run: |
+          echo "::error::저장소 변수 AWS_APPLY_ROLE_ARN이 비어 있습니다(backend/infra/terraform/README.md의 '처음 한 번')"
+          exit 1
+      - uses: actions/checkout@v7
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_APPLY_ROLE_ARN }}
+          role-session-name: gachita-ops-${{ inputs.action }}-${{ github.run_id }}
+          aws-region: ap-northeast-2
+      - name: ${{ inputs.action }}
+        env: # 입력은 환경 변수로만 넘긴다. 형식은 infra.sh가 본다
+          ACTION: ${{ inputs.action }}
+          STAGES: ${{ inputs.stages }}
+          TARGET_TIME: ${{ inputs.target_time }}
+          APPLY: ${{ inputs.apply && 'apply' || '' }}
+        run: |
+          case $ACTION in
+            converge) set -- converge "$STAGES" ;;
+            restore) set -- restore "$TARGET_TIME" "$APPLY" ;;
+            *) set -- "$ACTION" ;;
+          esac
+          backend/infra/infra.sh "$@" 2>&1 | tee "$RUNNER_TEMP/ops.log"
+      - name: 요약
+        if: always()
+        env:
+          ACTION: ${{ inputs.action }}
+        run: |
+          {
+            echo "### ops: $ACTION"
+            echo '```'
+            tail -n 80 "$RUNNER_TEMP/ops.log" 2>/dev/null || echo "(명령이 돌기 전에 멈춤)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
