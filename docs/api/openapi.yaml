@@ -84,7 +84,7 @@ paths:
     delete:
       tags: [프로필]
       summary: 내 프로필 지우기
-      description: 지우면 토큰도 못 씁니다. 이미 참가한 여행의 이름과 선호는 그 여행이 지워질 때까지 남습니다.
+      description: 지우면 모든 기기 토큰도 못 씁니다. 앨범, 내가 대표인 그룹, 내가 만든 계정 없는 구성원(아이)의 프로필도 함께 지웁니다. 이미 참가한 여행의 이름과 선호는 그 여행이 지워질 때까지 남습니다.
       security: [{ profileToken: [] }]
       responses:
         "204": { description: 지워짐 }
@@ -132,7 +132,7 @@ paths:
     post:
       tags: [여행]
       summary: 여행 만들기
-      description: "`groupId`를 주면 그룹 여행이 됩니다 — 대표만 만들 수 있고, 초대를 수락한 구성원이 자동 참가합니다(ADR-0009)."
+      description: "`groupId`를 주면 그룹 여행이 됩니다 — 대표만 만들 수 있고, 초대를 수락한 구성원은 수락 응답의 여행 코드로 자리만 골라 참가합니다(ADR-0009)."
       security: [{}, { profileToken: [] }]
       requestBody:
         content:
@@ -448,7 +448,7 @@ paths:
     put:
       tags: [프로필]
       summary: 프로필 사진 올리기
-      description: 이진 본문(PNG 또는 JPEG, 최대 1 MB). 서버가 매직 바이트로 형식을 확인해 다시 저장합니다(ADR-0009).
+      description: "이진 본문(PNG 또는 JPEG, 최대 1 MB). 서버는 매직 바이트로 형식만 확인하고 받은 그대로 둡니다(다시 그리기는 화면 T46에서). 지금은 본인만 받아 가고, 응답에 `x-content-type-options: nosniff`를 붙입니다."
       security: [{ profileToken: [] }]
       requestBody:
         required: true
@@ -508,7 +508,7 @@ paths:
     delete:
       tags: [그룹]
       summary: 그룹 지우기
-      description: 대표만 지울 수 있습니다. 이미 남긴 기록본과 앨범은 프로필 소유라 그대로 남습니다(ADR-0009).
+      description: 대표만 지울 수 있습니다. 계정 있는 구성원이 이미 남긴 기록본과 앨범은 프로필 소유라 그대로 남고, 대표가 만든 계정 없는 구성원(아이)의 프로필은 함께 지웁니다(ADR-0009).
       security: [{ profileToken: [] }]
       responses:
         "204": { description: 지움 }
@@ -542,7 +542,7 @@ paths:
     delete:
       tags: [그룹]
       summary: 구성원 내보내기·나가기
-      description: 대표는 누구나 내보낼 수 있고, 구성원은 자신만 나갈 수 있습니다. 대표는 그룹을 지워야 나갈 수 있습니다(409). 기록본은 그대로입니다.
+      description: 대표는 누구나 내보낼 수 있고, 구성원은 자신만 나갈 수 있습니다. 대표는 그룹을 지워야 나갈 수 있습니다(409). 계정 있는 구성원의 기록본은 그대로이고, 대표가 만든 계정 없는 구성원(아이)은 내보내면 프로필째 지웁니다.
       security: [{ profileToken: [] }]
       responses:
         "204": { description: 나감 }
@@ -606,7 +606,8 @@ paths:
       description: |
         QR 주소로 들어온 폰 브라우저가 부릅니다(ADR-0009).
         프로필 토큰이 있으면 있던 프로필로, 없으면 새 프로필(이름 필수)과 이 기기 토큰을 만들어 구성원이 됩니다.
-        그룹의 진행 중인 여행에 자리가 있으면 자동으로 참가합니다(동의 기본값 꺼짐).
+        그룹의 진행 중인 여행이 있으면 응답에 그 여행 코드를 줍니다. 자리는 본인이 골라 `POST /api/trips/{code}/participants`로 참가합니다(동의·기록 규칙이 그 경로에 있음).
+        입력이 틀리거나(400) 토큰이 틀리면(401) 횟수를 쓰지 않습니다.
         취소·만료·횟수 소진은 409, 없는 코드는 404입니다.
       security: [{}, { profileToken: [] }]
       requestBody:
@@ -634,10 +635,10 @@ paths:
                   token: { type: string, description: 새 프로필을 만들었을 때만. 이 기기가 쓸 토큰 }
                   trip:
                     type: object
-                    description: 진행 중인 그룹 여행에 자동 참가했을 때만
+                    description: 그룹의 진행 중인 여행이 있을 때만. 자리를 골라 참가할 여행
+                    required: [code]
                     properties:
                       code: { type: string }
-                      participant: { $ref: "#/components/schemas/ParticipantWithToken" }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
