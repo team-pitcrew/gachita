@@ -295,7 +295,9 @@ paths:
         차량 앱이 받아 적은 발화를 묶어 올립니다(ADR-0007·ADR-0014). 같은 `(device, seq)`는 다시 보내도 한 번만 남고(멱등), 순서는 섞여도 좋습니다.
         응답의 `lastSeq`는 빠짐없이 받은 마지막 순번입니다 — 차량은 재동기화 뒤 그 뒤만 다시 보냅니다.
         `lastSeq`는 발화 줄과 따로 적어 두어 뒤로 가지 않습니다(동의 철회·글 지우기로 줄이 지워져도).
-        발화마다 만들 때의 동의 세대(`generation`, 없으면 본문의 `generation`)를 적습니다. 지금 세대보다 옛 세대의 발화는 저장하지 않되 받은 것으로 쳐서 `lastSeq`에 넣습니다(ADR-0007) — 차량은 같은 발화를 다시 보내지 않아도 됩니다.
+        발화마다 만들 때의 동의 세대(`generation`, 없으면 본문의 `generation`)를 적습니다. 지금 세대보다 옛 세대의 발화는 저장하지 않되 받은 것으로 쳐서 `lastSeq`에 넣습니다(ADR-0007).
+        그러니 차량은 동의가 바뀌어도 옛 세대 발화를 큐에서 지우지 말고 순서대로 그대로 올립니다 — 지우면 그 순번이 비어 `lastSeq`가 멈춥니다.
+        기기 이름(`device`)은 처음 올린 참가자의 것입니다. 다른 참가자가 같은 이름으로 올리면 403입니다.
         화자(`profileId`)는 받지 않습니다. 서버의 화자 대조(T38)가 붙입니다.
       security: [{ participantToken: [] }]
       requestBody:
@@ -325,12 +327,13 @@ paths:
                   generation: { type: integer, description: 지금 동의 세대 }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "413": { $ref: "#/components/responses/Error" }
     get:
       tags: [기록본]
       summary: 받은 발화 확인(동기화)
-      description: 재연결한 차량이 무엇을 받았는지 확인할 때 부릅니다. `device`와 `after`를 주면 그 기기의 순번 이후만 돌려줍니다.
+      description: 재연결한 차량이 무엇을 받았는지 확인할 때 부릅니다. `device`와 `after`를 주면 그 기기의 순번 이후만 돌려줍니다. 녹음에 동의한 참가자만 읽습니다(아니면 403).
       security: [{ participantToken: [] }]
       parameters:
         - { name: device, in: query, schema: { type: string } }
@@ -349,6 +352,7 @@ paths:
                   items: { type: array, items: { $ref: "#/components/schemas/Utterance" } }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
     delete:
       tags: [기록본]
@@ -371,7 +375,7 @@ paths:
     get:
       tags: [기록본]
       summary: 기록본
-      description: 이 여행의 발화를 시간순으로, 부탁과 도착 할 일과 함께 돌려줍니다. 도착 할 일 뽑기는 아직 구현 전이라 항상 빈 배열입니다.
+      description: 이 여행의 발화를 시간순으로, 부탁과 도착 할 일과 함께 돌려줍니다. 도착 할 일 뽑기는 아직 구현 전이라 항상 빈 배열입니다. 녹음에 동의한 참가자만 읽습니다(아니면 403).
       security: [{ participantToken: [] }]
       responses:
         "200":
@@ -380,6 +384,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Transcript" }
         "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
   /api/profiles/me/feed:
     get:
@@ -541,7 +546,7 @@ components:
         tripCode: { type: string }
         at: { type: integer }
         text: { type: string, description: kind가 utterance일 때 }
-        seatArea: { $ref: "#/components/schemas/Seat" }
+        seatArea: { anyOf: [{ $ref: "#/components/schemas/Seat" }, { type: "null" }] }
         id: { type: string, description: kind가 moment일 때 }
         label: { type: string }
         lat: { type: number }

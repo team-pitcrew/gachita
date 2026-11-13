@@ -23,9 +23,11 @@ CREATE INDEX IF NOT EXISTS utterances_trip_at ON utterances (trip_code, at);
 CREATE INDEX IF NOT EXISTS utterances_profile ON utterances (profile_id);
 
 -- 기기마다 빠짐없이 받은 마지막 순번. 발화 줄이 지워져도(동의 철회·글 지우기) 뒤로 가지 않게 따로 둔다.
+-- 기기 이름은 처음 올린 참가자의 것이다(participant_id).
 CREATE TABLE IF NOT EXISTS utterance_acks (
   trip_code text NOT NULL,
   device text NOT NULL,
+  participant_id text NOT NULL,
   last_seq bigint NOT NULL,
   PRIMARY KEY (trip_code, device)
 );

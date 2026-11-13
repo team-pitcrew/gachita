@@ -318,6 +318,8 @@ test("발화를 기록본으로 저장하고 프로필 피드로 읽는다(T39)"
   assert.equal((await call("POST", `${t}/utterances`, { device: "car", items: [{ seq: 6, at: 1, text: "x" }] }, pa.token))[0], 400, "세대는 꼭 적는다");
   assert.equal((await call("POST", `${t}/utterances`, { device: "car", generation: 2, items: [{ seq: 6, at: 1, text: "x" }] }, pa.token))[0], 400, "아직 없는 세대");
   assert.equal((await call("GET", `${t}/utterances?device=car&after=abc`, null, pa.token))[0], 400);
+  assert.equal((await call("POST", `${t}/utterances`, { device: "car", generation: 1, items: [{ seq: 6, at: 1.5, text: "x" }] }, pa.token))[0], 400, "시각은 정수(epoch ms)");
+  assert.equal((await call("POST", `${t}/utterances`, { device: "car", generation: 1, items: [] }, pg.token))[0], 403, "기기 이름은 처음 올린 참가자의 것");
 
   // 64 KB가 넘는 묶음도 조각 경계에서 한글이 깨지지 않는다
   const long = Array.from({ length: 300 }, (_, i) => ({ seq: i + 1, at: at(10), text: "가".repeat(200), generation: 1 }));
@@ -371,6 +373,9 @@ test("발화를 기록본으로 저장하고 프로필 피드로 읽는다(T39)"
   await call("PATCH", `${t}/participants/${pb.id}`, { consent: false });
   const [, gone] = await call("GET", `${t}/utterances`, null, freshA);
   assert.deepEqual([gone.items.length, gone.generation], [0, 2], "철회 전에 받은 발화는 폐기됨");
+  await call("PATCH", `${t}/participants/${pb.id}`, { consent: false });
+  assert.equal((await call("GET", t))[1].generation, 2, "이미 꺼진 동의를 다시 꺼도 세대는 그대로");
+  assert.equal((await call("GET", `${t}/transcript`, null, pb.token))[0], 403, "녹음에 동의한 참가자만 읽음");
   const late = [
     { seq: 4, at: at(4), text: "철회 전에 받아 적음", generation: 1 },
     { seq: 5, at: at(11), text: "다시 시작", generation: 2 },
@@ -387,7 +392,7 @@ test("발화를 기록본으로 저장하고 프로필 피드로 읽는다(T39)"
   assert.equal((await call("DELETE", `${t}/utterances`, null, pg.token))[0], 403);
   const [del, delBody] = await call("DELETE", `${t}/utterances`, null, freshA);
   assert.deepEqual([del, delBody.deleted], [200, 1]);
-  const [, tr2] = await call("GET", `${t}/transcript`, null, pb.token);
+  const [, tr2] = await call("GET", `${t}/transcript`, null, freshA);
   assert.deepEqual(tr2.utterances.map((u) => u.text), ["응 좋아"], "다른 사람의 글은 남는다");
   const [, feedA4] = await call("GET", "/api/profiles/me/feed", null, meA.token);
   assert.equal(feedA4.items.filter((i) => i.kind === "utterance").length, 0);
