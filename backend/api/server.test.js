@@ -71,6 +71,7 @@ after(async () => {
   await endStores();
 });
 
+const OURS = "https://gachita.mangowhois.ai/auth/google"; // 구글이 코드를 돌려줄 우리 주소(T27)
 const call = async (method, path, body, token) => {
   const res = await fetch(base + path, { method, body: body && JSON.stringify(body), headers: token ? { authorization: `Bearer ${token}` } : {} });
   return [res.status, res.status === 304 || res.status === 204 ? null : await res.json()];
@@ -213,11 +214,11 @@ test("구글 OAuth: 기기 프로필에 연결하고, 다른 기기에서 계정
 
   // 이미 다른 프로필에 연결된 계정은 거절한다.
   const [, other] = await call("POST", "/api/profiles", { name: "다른 사람" });
-  assert.equal((await link({ code: "code-1", redirectUri: "x" }, other.token))[0], 409);
+  assert.equal((await link({ code: "code-1", redirectUri: OURS }, other.token))[0], 409);
 
   // 토큰 없이 같은 계정으로 찾아 들어가면 같은 프로필과 이 기기 토큰을 준다.
   // 기기마다 토큰이 따로이므로 앞선 기기의 토큰도 그대로 쓸 수 있다(T45, ADR-0009).
-  const [status, again] = await link({ code: "code-1", redirectUri: "x" });
+  const [status, again] = await link({ code: "code-1", redirectUri: OURS });
   assert.equal(status, 200);
   assert.equal(again.id, after.id);
   assert.match(again.token, /^[A-Za-z0-9_-]{43}$/);
@@ -230,7 +231,7 @@ test("구글 OAuth: 기기 프로필에 연결하고, 다른 기기에서 계정
   assert.deepEqual([joined, p.name], [201, "민준"]);
 
   // 처음 보는 계정이면 프로필을 새로 만든다. 이름은 제공자가 준 값을 쓴다.
-  const [created, fresh] = await link({ code: "code-2", redirectUri: "x" });
+  const [created, fresh] = await link({ code: "code-2", redirectUri: OURS });
   assert.deepEqual([created, fresh.name, fresh.links], [201, "구글-code-2", ["google"]]);
 
   // 연결을 끊는다. 끊은 뒤 다시 끊으면 404.
@@ -240,11 +241,11 @@ test("구글 OAuth: 기기 프로필에 연결하고, 다른 기기에서 계정
   assert.equal((await call("DELETE", "/api/profiles/me/links/google", null, again.token))[0], 404);
 
   // 제공자가 거절한 코드는 401.
-  assert.equal((await link({ code: "bad-1", redirectUri: "x" }))[0], 401);
+  assert.equal((await link({ code: "bad-1", redirectUri: OURS }))[0], 401);
 });
 
 test("제공자 오류를 코드 거절과 장애으로 나눠 알린다(T21)", async () => {
-  const link = (code) => call("POST", "/api/profiles/me/links/google", { code, redirectUri: "x" });
+  const link = (code) => call("POST", "/api/profiles/me/links/google", { code, redirectUri: OURS });
   assert.deepEqual(await link("bad-grant").then(([, b]) => b.error), "제공자가 코드를 거절함");
   assert.equal((await link("down"))[0], 503, "제공자 503은 일시 장애");
   assert.equal((await link("overloaded"))[0], 503, "제공자 429도 일시 장애");
@@ -253,6 +254,12 @@ test("제공자 오류를 코드 거절과 장애으로 나눠 알린다(T21)", 
   assert.equal((await link("no-token"))[0], 502, "접근 토큰이 없는 응답");
   assert.equal((await link("no-info"))[0], 502, "사용자 정보 조회 실패");
   assert.equal((await link("no-sub"))[0], 502, "사용자 번호가 없는 응답");
+  // 코드를 돌려받는 주소는 우리 출처만: 구글을 부르기 전에 거절한다(T27). 정상 코드여도 400
+  const via = (redirectUri) => call("POST", "/api/profiles/me/links/google", { code: "code-77", redirectUri }).then(([s]) => s);
+  for (const bad of ["https://evil.example/cb", "http://gachita.mangowhois.ai/cb", "https://gachita.mangowhois.ai.evil.example/cb", "https://gachita.mangowhois.ai@evil.example/cb", "http://localhost.evil.example/cb", "javascript:alert(1)", "x"]) {
+    assert.equal(await via(bad), 400, bad);
+  }
+  assert.equal(await via("http://127.0.0.1:8787/"), 201, "로컬 개발 주소");
   // 시간 제한을 짧게 두고 제공자가 늦게 답하면 504, 아예 연결이 안 되면 503.
   process.env.GOOGLE_TIMEOUT_MS = "150";
   try {
@@ -268,13 +275,13 @@ test("제공자 오류를 코드 거절과 장애으로 나눠 알린다(T21)", 
 
 test("조회 뒤 구글 연결이 바뀌면 오래된 계정으로 토큰을 받지 못한다(T21)", async () => {
   const [, me] = await call("POST", "/api/profiles", { name: "주인" });
-  const [, after] = await call("POST", "/api/profiles/me/links/google", { code: "code-9", redirectUri: "x" }, me.token);
+  const [, after] = await call("POST", "/api/profiles/me/links/google", { code: "code-9", redirectUri: OURS }, me.token);
   // 찾아 들어가기 요청이 연결 확인을 마친 뒤, 소유자가 다른 구글 계정으로 갈아끼운 상황(결정적 재현).
   await profilesDb().query("UPDATE profiles SET provider_user_id = 'code-B' WHERE id = $1", [after.id]);
   assert.equal(await verifyGoogleLink(after.id, "code-9"), null, "연결이 바뀌었으면 확인은 0행");
   assert.ok((await verifyGoogleLink(after.id, "code-B"))?.id, "지금 연결된 계정으로는 확인됨");
   // 바뀐 뒤 오래된 계정이 다시 로그인하면 새 프로필이 만들어진다(그 계정의 연결은 없으므로).
-  const [s, again] = await call("POST", "/api/profiles/me/links/google", { code: "code-9", redirectUri: "x" });
+  const [s, again] = await call("POST", "/api/profiles/me/links/google", { code: "code-9", redirectUri: OURS });
   assert.deepEqual([s, again.links], [201, ["google"]]);
   assert.notEqual(again.id, after.id);
 });
