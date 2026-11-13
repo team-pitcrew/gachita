@@ -12,7 +12,9 @@ const TRIP = {
   ended: ["여행 종료", "이 여행은 만든 뒤 48시간까지 볼 수 있어요."],
 };
 const NEXT_TRIP = { boarding: ["출발", "driving"], driving: ["주차", "parked"], parked: ["여행 끝내기", "ended"] };
-const LEVEL = ["끔", "1", "2", "3"];
+const ONLY_HERE = "이 폰에서 참가한 사람만 켤 수 있어요.";
+// 켜져 있던 동의를 끄면 서버가 동의 세대를 올려 그 여행의 받아 적은 글을 모두 지운다(ADR-0007). 누르기 전에 알린다.
+const OFF_WIPES = "동의를 끄면 기록이 멈추고, 이 여행에서 지금까지 받아 적은 글이 모두 지워져요. 끌까요?";
 // 프로필 캐릭터. 사진이 없을 때 이 그림으로 보인다(목록 고정은 T46).
 const CHARACTERS = [
   ["bunny", "🐰", "토끼"],
@@ -40,17 +42,18 @@ const inviteCode = () => /^\/j\/([\w-]+)$/.exec(location.pathname)?.[1];
 const store = (key, value) =>
   value === undefined ? localStorage.getItem(`gachita:${key}`) : value === null ? localStorage.removeItem(`gachita:${key}`) : localStorage.setItem(`gachita:${key}`, value);
 const myId = () => store(code());
+const myToken = () => store(`${code()}:token`); // 참가자 토큰: 동의 켜기와 음성 경로의 인증(T68, ADR-0007)
 
 let trip = null; // 서버에서 받은 여행
 let profile = null; // 이 폰의 프로필(GET /api/profiles/me). 토큰은 store("profile")
 let photo = ""; // 내 사진(object URL)
 let invited = null; // 초대 수락 결과
 let inviteError = ""; // 쓸 수 없는 초대(없음·취소·만료·횟수 소진)
-const pdraft = { name: "", character: "", photo: null, preview: "", tempC: 22, heat: 0, vent: 0, prefsTouched: false, consentDefault: false };
+const pdraft = { name: "", character: "", photo: null, preview: "", consentDefault: false };
 let failed = ""; // 여행을 불러오지 못한 이유
 let offline = false;
 let stale = false; // 입력 중에 온 변경은 입력이 끝난 뒤 그린다
-const draft = { join: "", step: 0, name: "", seat: "", tempC: 22, heat: 0, vent: 0 };
+const draft = { join: "", step: 0, name: "", seat: "" };
 
 // 여행 경로는 토큰 없이, 프로필 경로(mine)는 이 폰의 프로필 토큰으로.
 const call = (method, path, body) => api(method, `/trips${path}`, body);
@@ -93,6 +96,20 @@ async function act(fn) {
   }
 }
 
+// 다른 폰에서 이 프로필로 이미 참가한 여행이면 프로필 토큰으로 다시 참가해 이 폰의 참가자 토큰을 받는다.
+// 서버는 있던 참가자를 돌려주고 앞 폰의 토큰도 최근 4개까지 살려 둔다(T68). 참가자 id만 빌려 쓰면 동의를 켤 수 없다.
+// 다시 참가했으면 true. 겹쳐 불러도 한 번만 보낸다(보낼 때마다 토큰이 바뀐다).
+let claiming = null;
+const claim = () => (claiming ??= rejoin().finally(() => (claiming = null)));
+async function rejoin() {
+  const c = trip?.code;
+  if (!c || (store(c) && store(`${c}:token`)) || !profile || !trip.participants.some((p) => p.profileId === profile.id)) return false;
+  const p = await api("POST", `/trips/${c}/participants`, {}, store("profile"));
+  store(c, p.id);
+  store(`${c}:token`, p.token);
+  return true;
+}
+
 const typing = () => app.contains(document.activeElement) && /^(INPUT|SELECT)$/.test(document.activeElement.tagName);
 
 async function refresh(force) {
@@ -101,9 +118,10 @@ async function refresh(force) {
     try {
       const next = await call("GET", `/${code()}${trip && !force ? `?v=${trip.version}` : ""}`);
       offline = false;
-      if (!next) return;
-      trip = next;
-      failed = "";
+      if (next) (trip = next), (failed = "");
+      // 못 받았으면 다음 폴링에서 다시 한다. 그동안은 참가 화면이 보이고, 거기서 참가해도 같은 참가자로 들어간다.
+      const claimed = await claim().catch(() => false);
+      if (!next && !claimed) return;
     } catch (e) {
       if (e.status === 0) {
         // 터널 같은 곳에서는 마지막 화면을 그대로 두고 계속 다시 묻는다
@@ -144,12 +162,11 @@ function share() {
 const avatar = (p, src) => h("span", { className: "avatar", "aria-hidden": "true" }, src ? h("img", { src, alt: "" }) : FACE[p?.character] ?? (p?.name || "?").slice(0, 1));
 
 function fillDraft() {
-  const p = profile?.prefs?.driver ?? {};
   URL.revokeObjectURL(pdraft.preview);
-  Object.assign(pdraft, { name: profile?.name ?? "", character: profile?.character ?? "", photo: null, preview: "", tempC: p.tempC ?? 22, heat: p.heat ?? 0, vent: p.vent ?? 0, prefsTouched: false, consentDefault: profile?.consentDefault ?? false });
+  Object.assign(pdraft, { name: profile?.name ?? "", character: profile?.character ?? "", photo: null, preview: "", consentDefault: profile?.consentDefault ?? false });
 }
 
-// 프로필 칸: 이름이나 별명, 사진이나 캐릭터. full이면 자리 설정과 기록 동의 기본값까지.
+// 프로필 칸: 이름이나 별명, 사진이나 캐릭터. full이면 기록 동의 기본값까지.
 function profileFields(full) {
   const pick = async (e) => {
     const file = e.target.files[0];
@@ -165,8 +182,6 @@ function profileFields(full) {
   };
   // 얼굴만 다시 그린다(화면 전체를 다시 그리면 고른 파일 이름이 지워져 보인다)
   const face = () => app.querySelector(".face .avatar")?.replaceWith(avatar({ name: pdraft.name, character: pdraft.character }, pdraft.preview || photo));
-  const temp = h("output", { "aria-live": "polite" }, `${pdraft.tempC.toFixed(1)}℃`);
-  const bump = (d) => () => ((pdraft.prefsTouched = true), (temp.textContent = `${(pdraft.tempC = Math.min(27, Math.max(17, pdraft.tempC + d))).toFixed(1)}℃`));
   return [
     h("label", { className: "field" }, h("span", {}, "이름 또는 별명"), h("input", { value: pdraft.name, required: true, maxLength: 20, autocomplete: "nickname", oninput: (e) => (pdraft.name = e.target.value) })),
     h(
@@ -177,27 +192,16 @@ function profileFields(full) {
     ),
     chipGroup("캐릭터", "character", CHARACTERS.map(([v, face, label]) => [v, `${face} ${label}`]), pdraft.character, (v) => ((pdraft.character = v), face())),
     full &&
-      h(
-        "div",
-        { className: "card" },
-        h("p", { className: "what" }, "자리 설정(참가할 때 미리 채워요)"),
-        h("div", { className: "temp" }, h("button", { type: "button", onclick: bump(-0.5), "aria-label": "온도 낮추기" }, "−"), temp, h("button", { type: "button", onclick: bump(0.5), "aria-label": "온도 올리기" }, "+")),
-        chipGroup("시트 열선", "heat", LEVEL.map((l, i) => [i, l]), pdraft.heat, (v) => ((pdraft.heat = v), (pdraft.prefsTouched = true))),
-        chipGroup("시트 통풍", "vent", LEVEL.map((l, i) => [i, l]), pdraft.vent, (v) => ((pdraft.vent = v), (pdraft.prefsTouched = true))),
-      ),
-    full &&
       h("label", { className: "chip" }, h("input", { type: "checkbox", checked: pdraft.consentDefault, onchange: (e) => (pdraft.consentDefault = e.target.checked) }), "참가할 때 대화 기록 동의를 미리 켜 둠"),
   ];
 }
 
 const saveProfile = () =>
   act(async () => {
-    const p = { tempC: pdraft.tempC, heat: pdraft.heat, vent: pdraft.vent }; // ponytail: 자리마다 따로 두지 않고 셋에 같은 값. 자리별로 다르게 원하면 그때 나눈다
     const fresh = !store("profile");
     const body = {
       name: pdraft.name.trim(),
       consentDefault: pdraft.consentDefault,
-      ...((fresh || pdraft.prefsTouched) && { prefs: { driver: p, passenger: p, rear: p } }), // 손대지 않았으면 자리별 값을 그대로 둔다
       ...(pdraft.character && { character: pdraft.character }),
     };
     if (fresh) {
@@ -288,7 +292,7 @@ function home() {
   return [
     header(h("span", { className: "brand" }, "가치타")),
     h("h1", {}, "여행을 시작할까요?"),
-    h("p", { className: "sub" }, "같이 탄 사람들의 부탁과 자리 설정을 한곳에서 챙겨요."),
+    h("p", { className: "sub" }, "같이 탄 사람들의 부탁을 한곳에서 챙겨요."),
     profile
       ? h(
           "section",
@@ -336,19 +340,17 @@ function join() {
     render();
     app.querySelector("input:not([type=radio])")?.focus();
   };
-  // 프로필이 있으면 이름과 자리 설정은 프로필에서 오고 자리와 동의만 묻는다.
-  const order = profile ? [1, 3] : [0, 1, 2, 3];
+  // 프로필이 있으면 이름은 프로필에서 오고 자리와 동의만 묻는다.
+  const order = profile ? [1, 2] : [0, 1, 2];
   const submit = (consent) =>
     act(async () => {
-      const body = profile ? { seat: draft.seat, consent } : { name: draft.name.trim(), seat: draft.seat, consent, prefs: { tempC: draft.tempC, heat: draft.heat, vent: draft.vent } };
+      const body = profile ? { seat: draft.seat, consent } : { name: draft.name.trim(), seat: draft.seat, consent };
       const p = await api("POST", `/trips/${trip.code}/participants`, body, profile && store("profile"));
       store(trip.code, p.id);
       store(`${trip.code}:token`, p.token); // 참가자 토큰: 기록본처럼 음성 경로를 읽을 때 쓴다(ADR-0007)
       draft.step = 0;
     });
   const next = () => bar(h("button", { className: "primary" }, "다음"));
-  const temp = h("output", { "aria-live": "polite" }, `${draft.tempC.toFixed(1)}℃`);
-  const bump = (d) => () => (temp.textContent = `${(draft.tempC = Math.min(27, Math.max(17, draft.tempC + d))).toFixed(1)}℃`);
 
   const steps = [
     () => ({
@@ -362,25 +364,10 @@ function join() {
     }),
     () => ({
       title: "어디에 앉으셨나요?",
-      sub: profile ? `${profile.name} 님, 초대 코드 ${trip.code} 여행이에요. 자리 설정은 프로필대로 맞춰 드려요.` : "앉은 자리에 맞춰 온도와 시트를 적용해요.",
+      sub: profile ? `${profile.name} 님, 초대 코드 ${trip.code} 여행이에요.` : "운전석에 앉은 사람이 출발과 들를 곳을 정해요.",
       body: form(
         () => go(draft.step + 1),
         car(([id, label]) => chip("seat", id, label, { checked: draft.seat === id, disabled: !!taken[id], required: true, sub: taken[id], onpick: (v) => (draft.seat = v) })),
-        next(),
-      ),
-    }),
-    () => ({
-      title: "온도와 시트는 어떻게 할까요?",
-      sub: "차가 지원하는 범위 안에서 탈 때 맞춰 드려요.",
-      body: form(
-        () => go(draft.step + 1),
-        h(
-          "div",
-          { className: "card" },
-          h("div", { className: "temp" }, h("button", { type: "button", onclick: bump(-0.5), "aria-label": "온도 낮추기" }, "−"), temp, h("button", { type: "button", onclick: bump(0.5), "aria-label": "온도 올리기" }, "+")),
-          chipGroup("시트 열선", "heat", LEVEL.map((l, i) => [i, l]), draft.heat, (v) => (draft.heat = v)),
-          chipGroup("시트 통풍", "vent", LEVEL.map((l, i) => [i, l]), draft.vent, (v) => (draft.vent = v)),
-        ),
         next(),
       ),
     }),
@@ -415,6 +402,26 @@ function tripView(me) {
   const seated = Object.fromEntries(trip.participants.map((p) => [p.seat, p]));
   const waiting = trip.status === "driving" ? trip.participants.filter((p) => !p.consent).map((p) => p.name) : [];
   const patch = (path, body) => () => act(() => call("PATCH", t + path, body));
+  // 켜기는 본인의 참가자 토큰으로만 된다(끄기는 누구나). 서버가 이 폰의 토큰을 잊었으면(다른 곳에서 다섯 번 넘게
+  // 다시 참가) 프로필로 들어온 사람은 다시 참가해 새 토큰으로 한 번 더 켠다. 손님은 다시 받을 길이 없다.
+  // 누른 여행·참가자를 고정한다: 응답을 기다리는 사이 다른 여행으로 옮겨도 그 여행의 토큰을 건드리지 않는다.
+  const consentOn = () =>
+    act(async () => {
+      const c = trip.code;
+      const mine = profile && me.profileId === profile.id;
+      const on = () => api("PATCH", `/trips/${c}/participants/${me.id}`, { consent: true }, store(`${c}:token`));
+      await on()
+        .catch(async (e) => {
+          if (e.status !== 401 || !mine || trip?.code !== c) throw e; // 화면이 바뀌었으면 다시 하지 않는다
+          store(`${c}:token`, null);
+          await claim();
+          if (trip?.code !== c) throw e;
+          await on();
+        })
+        .catch((e) => {
+          throw e.status === 401 || e.status === 403 ? new Error(ONLY_HERE) : e;
+        });
+    });
   const open = trip.requests.filter((r) => !CLOSED.includes(r.status));
   const rec = trip.recording ? ["기록 중", "rec"] : trip.status !== "driving" ? ["기록 안 함", ""] : waiting.length ? ["동의 대기", ""] : ["기록 일시정지", ""];
   const next = NEXT_TRIP[trip.status];
@@ -470,12 +477,12 @@ function tripView(me) {
     h(
       "section",
       { className: "card" },
-      h("div", {}, h("p", { className: "what" }, "내 자리 설정"), h("p", { className: "meta" }, `${SEAT[me.seat]} · ${me.prefs.tempC}℃, 열선 ${LEVEL[me.prefs.heat]}, 통풍 ${LEVEL[me.prefs.vent]}`)),
+      h("div", {}, h("p", { className: "what" }, "내 자리"), h("p", { className: "meta" }, SEAT[me.seat])),
       h(
         "div",
         { className: "between" },
         h("div", {}, h("p", { className: "what" }, "대화 기록 동의"), h("p", { className: "meta" }, me.consent ? "동의했어요." : "동의하지 않았어요.")),
-        button(me.consent ? "동의 끄기" : "동의 켜기", patch(`/participants/${me.id}`, { consent: !me.consent })),
+        me.consent ? button("동의 끄기", () => confirm(OFF_WIPES) && patch(`/participants/${me.id}`, { consent: false })()) : myToken() ? button("동의 켜기", consentOn) : h("p", { className: "meta" }, ONLY_HERE),
       ),
     ),
     trip.moments.length > 0 &&
@@ -491,9 +498,7 @@ function tripView(me) {
 
 function render() {
   stale = false;
-  let me = trip?.participants.find((p) => p.id === myId());
-  // 다른 폰에서 이 프로필로 이미 참가했으면 그 자리를 이 폰에서도 쓴다
-  if (!me && profile && trip) (me = trip.participants.find((p) => p.profileId === profile.id)) && store(trip.code, me.id);
+  const me = trip?.participants.find((p) => p.id === myId());
   const view = inviteCode() ? inviteView() : location.hash === "#me" ? profileView() : !code() ? home() : failed ? missing() : !trip ? loading() : me ? tripView(me) : join();
   app.replaceChildren(...view.flat().filter(Boolean));
 }
@@ -535,3 +540,7 @@ render();
 await loadProfile();
 fillDraft();
 refresh(true);
+navigator.serviceWorker?.register("/sw.js").catch(() => {}); // 홈 화면 설치와 끊겼을 때의 마지막 화면(T6)
+// 처음 설치되는 방문에서는 여행을 워커가 맡기 전에 읽었고 그 뒤 폴링은 304라 캐시에 여행이 없다.
+// 워커가 이 화면을 맡는 순간 한 번 더 읽어 끊겼을 때 보일 여행을 남긴다.
+navigator.serviceWorker?.addEventListener("controllerchange", () => refresh(true));

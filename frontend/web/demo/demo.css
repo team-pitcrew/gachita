@@ -222,7 +222,7 @@ select {
   color: var(--sys-ink);
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: center;
   padding: 0 64px;
 }
 
@@ -351,24 +351,6 @@ select {
 }
 
 /* GNB */
-.hvac {
-  display: flex;
-  align-items: baseline;
-  gap: 18px;
-  font-size: 34px;
-}
-.hvac b {
-  font-size: 54px;
-  font-variant-numeric: tabular-nums;
-}
-.hvac small {
-  padding: 2px 14px;
-  border-radius: 999px;
-  background: var(--warn-bg);
-  color: var(--warn-ink);
-  font-size: 26px;
-  font-weight: 700;
-}
 .dock {
   display: flex;
   gap: 28px;

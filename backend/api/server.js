@@ -1,4 +1,4 @@
-// 가치타 API 서버. Node 22 표준 http와 Postgres 드라이버(pg) 하나만 쓴다.
+// 가치타 API 서버. Node 22 표준 http와 Postgres 드라이버(pg), 클립 버킷용 S3 SDK만 쓴다(ADR-0019 의존성 원칙).
 // 한 프로세스가 API(/api)와 웹앱(frontend/web)을 같이 내보낸다. 경로와 형식은 docs/api/openapi.yaml에 있다.
 //
 // ponytail: 여행 하나를 JSONB 문서 한 줄로 저장한다. 바꿀 때는 그 줄을 잠그고 통째로 다시 쓴다.
@@ -12,6 +12,7 @@ import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { profilesDb, tripsDb } from "./db.js";
 import { errFields, log } from "./log.js";
+import { clipStore } from "./providers/clips.js";
 import { googleIdentity, googlePublicConfig } from "./providers/google.js";
 import { embed, matchThreshold, similarity, wavMono } from "./providers/voice.js";
 
@@ -20,6 +21,7 @@ const TRIPS_SQL = fileURLToPath(new URL("trips.sql", import.meta.url));
 const PROFILES_SQL = fileURLToPath(new URL("profiles.sql", import.meta.url));
 const LINKS_SQL = fileURLToPath(new URL("profiles-2-links.sql", import.meta.url));
 const UTTERANCES_SQL = fileURLToPath(new URL("trips-2-utterances.sql", import.meta.url));
+const RECORDINGS_SQL = fileURLToPath(new URL("trips-3-recordings.sql", import.meta.url));
 const ALBUM_SQL = fileURLToPath(new URL("profiles-3-moments.sql", import.meta.url));
 const GROUPS_SQL = fileURLToPath(new URL("profiles-4-groups.sql", import.meta.url));
 const VOICE_SQL = fileURLToPath(new URL("profiles-5-voice.sql", import.meta.url));
@@ -66,7 +68,7 @@ export function classify(e) {
 }
 
 // 로그의 경로 틀: 정한 낱말이 아닌 마디(여행 코드, id, 초대 코드)는 :p로 가린다. 웹 파일은 /(web) 하나로.
-const ROUTE_WORDS = new Set(["api", "config", "trips", "participants", "requests", "moments", "utterances", "transcript", "voice-match", "profiles", "me", "links", "google", "feed", "tokens", "photo", "voice", "groups", "members", "invites", "j"]);
+const ROUTE_WORDS = new Set(["api", "config", "trips", "participants", "requests", "moments", "utterances", "transcript", "voice-match", "recordings", "profiles", "me", "links", "google", "feed", "tokens", "photo", "voice", "groups", "members", "invites", "j"]);
 const routeOf = (pathname) =>
   pathname === "/healthz" ? pathname : pathname.startsWith("/api/") ? `/${pathname.split("/").filter(Boolean).map((s) => (ROUTE_WORDS.has(s) ? s : ":p")).join("/")}` : "/(web)";
 // ALB가 붙이는 추적 id(X-Amzn-Trace-Id)를 그대로 쓴다. 없거나 모양이 이상하면 새로.
@@ -95,6 +97,7 @@ export async function migrate() {
   // profiles-2부터는 profiles.sql을 고치지 않고 번호 붙은 마이그레이션을 쌓는다.
   await tripsDb().query(await readFile(TRIPS_SQL, "utf8"));
   await tripsDb().query(await readFile(UTTERANCES_SQL, "utf8"));
+  await tripsDb().query(await readFile(RECORDINGS_SQL, "utf8"));
   await profilesDb().query(await readFile(PROFILES_SQL, "utf8"));
   await profilesDb().query(await readFile(LINKS_SQL, "utf8"));
   await profilesDb().query(await readFile(ALBUM_SQL, "utf8"));
@@ -158,6 +161,14 @@ const participantOf = (req, trip) => {
 async function bumpGeneration(trip, client) {
   trip.generation = (trip.generation ?? 1) + 1;
   await client.query("DELETE FROM utterances WHERE trip_code = $1 AND generation < $2", [trip.code, trip.generation]);
+  // 그 여행의 클립도 모두 지운다(T76). 같은 트랜잭션에서 지울 키를 적고 버킷은 커밋 뒤에 비운다(sweepClips) —
+  // 잠금을 쥔 채 S3를 기다리지 않고, 되돌려지면 적은 것도 되돌려진다. 늦게 올라오는 옛 세대 클립은 세대 확인이 막는다.
+  // 사람이 지운 표시(deleted_at)는 남긴다 — 철회 뒤 다시 동의해도 지운 장면의 클립을 다시 받지 않게(여행이 닫힐 때 함께 지움).
+  await client.query(
+    `WITH r AS (DELETE FROM recordings WHERE trip_code = $1 AND deleted_at IS NULL RETURNING object_key)
+     INSERT INTO clip_trash (object_key) SELECT object_key FROM r ON CONFLICT DO NOTHING`,
+    [trip.code]
+  );
 }
 
 // utterances 표의 한 줄을 API가 돌려주는 발화 모양으로 바꾼다. 비어 있는 칸은 아예 안 넣는다.
@@ -464,6 +475,111 @@ async function voiceMatch(trip, req, query) {
   return [200, { profileId: matched, confidence: Math.round(bestSim * 1000) / 1000, threshold, applied }];
 }
 
+// 녹음 클립(T76, docs/api/voice.md): 사람이 장면으로 고른 구간의 원음. 장면 하나에 클립 하나라 클립 id는 장면 id다.
+// 소리는 클립 버킷(providers/clips.js)에, 정보는 recordings 표에 둔다. 차가 자른 WAV를 그대로 두고 다시 자르지 않는다.
+const CLIP_MAX = 5_000_000;
+const asRecording = (r) => ({ id: r.moment_id, momentId: r.moment_id, startAt: Number(r.start_at), seconds: r.seconds, bytes: r.bytes });
+
+// 지울 키(clip_trash)를 버킷에서 지운다. 커밋 뒤와 치우기(10분마다)에서 돈다. 실패하면 키가 남아 다음에 다시 한다.
+// 던지지 않는다 — 부르는 쪽은 기다리지 않는다. 그래도 남는 것(DB에도 못 적은 것)은 버킷 수명 규칙(2일, T64)이 치운다.
+async function sweepClips() {
+  const store = clipStore();
+  if (!store) return;
+  try {
+    const { rows } = await tripsDb().query("SELECT object_key FROM clip_trash ORDER BY since LIMIT 1000");
+    if (!rows.length) return;
+    const keys = rows.map((r) => r.object_key);
+    await store.remove(keys);
+    await tripsDb().query("DELETE FROM clip_trash WHERE object_key = ANY($1::text[])", [keys]);
+  } catch (e) {
+    log("warn", "clip_sweep_failed", { err: errFields(e) });
+  }
+}
+// 남기지 못한 소리의 키를 적고 바로 한 번 비운다. 던지지 않는다.
+const trashClips = (keys) =>
+  tripsDb()
+    .query("INSERT INTO clip_trash (object_key) SELECT unnest($1::text[]) ON CONFLICT DO NOTHING", [keys])
+    .then(() => void sweepClips())
+    .catch((e) => log("warn", "clip_trash_failed", { err: errFields(e) }));
+
+async function recordings(code, id, req, query) {
+  const m = req.method;
+  if (!id && m !== "POST") fail(405, "POST만 됨");
+  if (id && m !== "GET" && m !== "DELETE") fail(405, "GET, DELETE만 됨");
+  const store = clipStore() ?? fail(503, "클립 저장소가 없음"); // CLIPS_BUCKET이 없는 환경(로컬·E2E)
+  const live = async (client, trip) =>
+    (await client.query("SELECT object_key FROM recordings WHERE trip_code = $1 AND moment_id = $2 AND deleted_at IS NULL", [trip.code, id])).rows[0] ?? fail(404, "없는 클립");
+
+  if (m === "GET") {
+    // 기록본과 같은 규칙: 녹음에 동의한 참가자만. 소리는 잠금 밖에서 받는다. 토큰은 머리말로만 —
+    // 웹은 fetch → blob → <audio>로 튼다(클립 하나 약 0.5~1.1 MB). 서명한 S3 주소는 주지 않는다(ADR-0020은 대체됨).
+    const { object_key } = await withTrip(code, false, (trip, client) =>
+      participantOf(req, trip).consent ? live(client, trip) : fail(403, "녹음에 동의한 참가자만 들을 수 있음")
+    );
+    return [200, (await store.get(object_key)) ?? fail(404, "없는 클립"), "audio/wav"];
+  }
+  if (m === "DELETE") {
+    // 이 여행의 참가자라면 누구나 — 동의 끄기처럼 지우는 쪽은 넓게 둔다. 버킷에서 먼저 지우고(실패하면 503, 다시 하면 됨)
+    // 줄에는 지운 표시를 남긴다: 차가 늦게 다시 올려도 되살아나지 않게. 받아 적은 글과 장면은 그대로다.
+    const { trip, row } = await withTrip(code, false, async (t, client) => (participantOf(req, t), { trip: t, row: await live(client, t) }));
+    await store.remove([row.object_key]);
+    // 지운 객체의 줄에만 표시한다. 버킷을 기다리는 사이 철회 → 다시 동의 → 같은 장면을 새로 올렸으면 그 새 클립은 건드리지 않고 409.
+    const { rowCount } = await tripsDb().query(
+      "UPDATE recordings SET deleted_at = now() WHERE trip_code = $1 AND moment_id = $2 AND object_key = $3 AND deleted_at IS NULL",
+      [trip.code, id, row.object_key]
+    );
+    if (!rowCount && (await tripsDb().query("SELECT 1 FROM recordings WHERE trip_code = $1 AND moment_id = $2 AND deleted_at IS NULL", [trip.code, id])).rows[0]) {
+      fail(409, "그 사이 같은 장면의 클립이 새로 올라옴 — 다시 지워 주세요");
+    }
+    return [204];
+  }
+
+  // 올리기. 본문(5 MB까지)을 받아 버킷에 두는 동안 여행 줄을 잠그지 않는다(voice-match와 같은 까닭: 느린 업로드가
+  // 동의 철회를 2초 제한에 걸리게 하지 않게). 그래서 받기 전에 한 번, 둔 뒤에 잠그고 한 번 더 본다.
+  // 그 사이 동의가 철회됐거나 누가 지웠으면 둔 것을 지우고 거절한다.
+  const check = async (trip, client) => {
+    const caller = participantOf(req, trip);
+    const momentId = text(query.get("moment") ?? undefined, 40, "moment");
+    if (!trip.moments.some((x) => x.id === momentId)) fail(404, "없는 장면");
+    const current = trip.generation ?? 1;
+    // 녹음할 때의 동의 세대. 옛 세대는 철회 전의 소리라 받지 않는다 — 차는 버린다(ADR-0007).
+    // 동의 확인보다 먼저 본다: 철회한 본인의 토큰으로 올려도 '나중에 다시'(403)가 아니라 '버림'(409)이 되게.
+    if (int(Number(query.get("generation")), 1, current, "generation") < current) fail(409, "동의가 바뀌기 전의 소리라 받지 않음");
+    // 클립 첫 표본의 시각. 자막(발화 시각)을 소리에 맞추는 기준이다(T43).
+    const startAt = int(Number(query.get("from")), trip.createdAt - 60_000, Date.now() + 60_000, "from");
+    if (!caller.consent) fail(403, "녹음에 동의한 참가자만 올릴 수 있음");
+    if (!everyoneConsents(trip)) fail(403, "동의하지 않은 탑승자가 있어 올릴 수 없음"); // 발화 올리기와 같은 규칙
+    const { rows } = await client.query("SELECT moment_id, start_at, bytes, seconds, deleted_at FROM recordings WHERE trip_code = $1 AND moment_id = $2", [trip.code, momentId]);
+    if (rows[0]?.deleted_at) fail(409, "지운 클립은 다시 받지 않음");
+    return { caller, momentId, startAt, tripCode: trip.code, current, existing: rows[0] };
+  };
+  const before = await withTrip(code, false, check);
+  if (before.existing) return [200, asRecording(before.existing)]; // 같은 장면을 다시 보냄(멱등)
+  const raw = await readRaw(req, CLIP_MAX);
+  const { samples, channels } = wavMono(raw); // WAV·16 kHz·16비트가 아니면 400
+  if (channels !== 1) fail(400, "모노 WAV만 됨");
+  if (!samples.length) fail(400, "소리가 비어 있음");
+  const seconds = Math.round(samples.length / 16) / 1000;
+  const key = `${before.tripCode}/${before.momentId}-${randomUUID().slice(0, 8)}.wav`;
+  try {
+    await store.put(key, raw); // 늦게 실패해도(제한 시간 뒤에 저장됨) 아래에서 키를 버린다
+    const result = await withTrip(code, true, async (trip, client) => {
+      const now = await check(trip, client);
+      if (now.existing) return [200, asRecording(now.existing)];
+      await client.query(
+        "INSERT INTO recordings (trip_code, moment_id, generation, participant_id, object_key, start_at, bytes, seconds) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        [trip.code, now.momentId, now.current, now.caller.id, key, now.startAt, raw.length, seconds]
+      );
+      return [201, asRecording({ moment_id: now.momentId, start_at: now.startAt, seconds, bytes: raw.length })];
+    });
+    if (result[0] === 200) await trashClips([key]); // 같은 장면을 동시에 올린 다른 요청이 먼저 남겼다 — 내 것은 버린다
+    return result;
+  } catch (e) {
+    await trashClips([key]); // 남기지 못한 소리는 버킷에 두지 않는다
+    throw e;
+  }
+}
+
 // 지우기는 프로필 DB의 한 트랜잭션에서 한다 — 중간에 실패해도 토큰만 지워지고 프로필이 남는 일이 없게.
 async function inProfilesTx(fn) {
   const client = await profilesDb().connect();
@@ -699,15 +815,7 @@ async function trips(req, [code, sub, id], b, query) {
       createdAt: Date.now(),
       ...(groupId ? { groupId } : {}),
     };
-    // 48시간 지난 여행과 그 발화·확인 순번을 한 문장으로 지운다. 지운 여행의 코드로만 찾으니(기본 키 앞부분)
-    // 발화 표 전체를 훑지 않는다 — 질의 하나는 2초에서 끊긴다(T26).
-    // 한 번에 여행 5개(발화 최대 10만 줄)까지. 여행을 만들 때마다 도니 밀린 것도 곧 따라잡는다.
-    // 치우기는 여행 만들기를 막지 않는다 — 실패하면 다음 여행을 만들 때 다시 한다.
-    await tripsDb()
-      .query(`WITH gone AS (DELETE FROM trips WHERE code IN (SELECT code FROM trips WHERE created_at < now() - interval '48 hours' LIMIT 5) RETURNING code),
-        u AS (DELETE FROM utterances WHERE trip_code IN (SELECT code FROM gone))
-        DELETE FROM utterance_acks WHERE trip_code IN (SELECT code FROM gone)`)
-      .catch((e) => log("warn", "trip_cleanup_failed", { err: errFields(e) })); // 다음 여행을 만들 때 다시 한다
+    await sweep(); // 여행을 만들 때마다 묵은 여행을 치운다(10분마다도 돈다)
     for (;;) {
       trip.code = newCode();
       const { rowCount } = await tripsDb().query("INSERT INTO trips (code, doc) VALUES ($1, $2) ON CONFLICT DO NOTHING", [trip.code, trip]);
@@ -715,8 +823,27 @@ async function trips(req, [code, sub, id], b, query) {
     }
   }
   if (sub === "voice-match" && !id) return voiceMatch(await withTrip(code, false, (trip) => trip), req, query);
+  if (sub === "recordings") return recordings(code, id, req, query);
   const profile = sub === "participants" && m === "POST" && !id ? await profileOf(req) : null;
-  return withTrip(code, m !== "GET", (trip, client) => handle(trip, { req, m, sub, id, b, query, profile }, client));
+  const result = await withTrip(code, m !== "GET", (trip, client) => handle(trip, { req, m, sub, id, b, query, profile }, client));
+  if (sub === "participants" && m === "PATCH") void sweepClips(); // 동의 철회가 적은 클립을 커밋 뒤에 버킷에서 지운다
+  return result;
+}
+
+// 48시간 지난 여행과 그 발화·확인 순번·클립을 한 문장으로 지운다. 지운 여행의 코드로만 찾으니(기본 키 앞부분)
+// 발화 표 전체를 훑지 않는다 — 질의 하나는 2초에서 끊긴다(T26).
+// 한 번에 여행 5개(발화 최대 10만 줄)까지. 여행을 만들 때와 10분마다 도니 밀린 것도 곧 따라잡는다.
+// 잠긴 여행(올리는 중)은 건너뛴다 — 기다리지 않고, 그 사이 남긴 클립 줄을 놓치지 않게.
+// 클립은 지울 키만 적고 버킷은 기다리지 않고 비운다(sweepClips). 실패해도 던지지 않는다 — 다음에 다시 한다.
+export async function sweep() {
+  await tripsDb()
+    .query(`WITH gone AS (DELETE FROM trips WHERE code IN (SELECT code FROM trips WHERE created_at < now() - interval '48 hours' LIMIT 5 FOR UPDATE SKIP LOCKED) RETURNING code),
+      u AS (DELETE FROM utterances WHERE trip_code IN (SELECT code FROM gone)),
+      a AS (DELETE FROM utterance_acks WHERE trip_code IN (SELECT code FROM gone)),
+      r AS (DELETE FROM recordings WHERE trip_code IN (SELECT code FROM gone) RETURNING object_key, deleted_at)
+      INSERT INTO clip_trash (object_key) SELECT object_key FROM r WHERE deleted_at IS NULL ON CONFLICT DO NOTHING`)
+    .catch((e) => log("warn", "trip_cleanup_failed", { err: errFields(e) }));
+  void sweepClips();
 }
 
 async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
@@ -1012,7 +1139,7 @@ export const server = createServer(async (req, res) => {
   };
   const sendRaw = (status, buf, type) => {
     // 매직 바이트만 본 파일이라 브라우저가 다른 형식으로 추측해 열지 못하게 한다.
-    res.writeHead(status, { "content-type": type, "cache-control": "no-store", "x-content-type-options": "nosniff" });
+    res.writeHead(status, { "content-type": type, "cache-control": "private, no-store", "x-content-type-options": "nosniff" });
     res.end(buf);
   };
   try {
@@ -1032,7 +1159,7 @@ export const server = createServer(async (req, res) => {
       // 발화 묶음은 본문이 커서 그 경로만 따로 한도를 둔다(docs/api/voice.md).
       const big = seg[1] === "trips" && seg[3] === "utterances";
       // 목소리 등록(…/voice)·발화 대조는 이진 본문(WAV)이다 — JSON으로 먼저 읽지 않는다.
-      const binary = req.method === "POST" && (seg.at(-1) === "voice" || (seg[1] === "trips" && seg[3] === "voice-match"));
+      const binary = req.method === "POST" && (seg.at(-1) === "voice" || (seg[1] === "trips" && (seg[3] === "voice-match" || seg[3] === "recordings")));
       const body = !binary && (req.method === "POST" || req.method === "PATCH") ? await readBody(req, big ? 1_000_000 : MAX_BODY) : {};
       if (seg[1] === "profiles") {
         const r = await profiles(req, seg.slice(2), body);
@@ -1044,7 +1171,11 @@ export const server = createServer(async (req, res) => {
         if (req.method !== "POST") fail(405, "POST만 됨");
         return send(...(await acceptInvite(req, seg[2], body)));
       }
-      if (seg[1] === "trips") return send(...(await trips(req, seg.slice(2), body, url.searchParams)));
+      if (seg[1] === "trips") {
+        const r = await trips(req, seg.slice(2), body, url.searchParams);
+        if (Buffer.isBuffer(r[1])) return void sendRaw(r[0], r[1], r[2]); // 클립 소리 같은 이진 응답
+        return send(...r);
+      }
       fail(404, "없는 경로");
     }
     if (req.method !== "GET") fail(405, "GET만 됨");
@@ -1070,4 +1201,5 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   process.on("uncaughtException", crash("uncaught_exception"));
   process.on("unhandledRejection", crash("unhandled_rejection"));
   server.listen(port, () => log("info", "listening", { port }));
+  setInterval(sweep, 10 * 60_000).unref(); // 여행을 아무도 만들지 않아도 묵은 여행과 클립을 치운다
 }
