@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { classify, migrate, server, sweep, verifyGoogleLink } from "./server.js";
 import { captureLog } from "./log.js";
+import { cues, suggest } from "./scenes.js";
 import { endStores, profilesDb, tripsDb } from "./db.js";
 
 let base;
@@ -939,6 +940,7 @@ test("장면 후보는 말이 몰린 구간을 규칙으로 고르고, 숏폼은
   assert.equal((await call("POST", `${t}/moments`, { at: a.at, from: a.from }))[0], 400, "from, to는 함께");
   assert.equal((await call("POST", `${t}/moments`, { at: a.at, from: a.at + 1, to: a.at + 2 }))[0], 400, "from ≤ at");
   assert.equal((await call("POST", `${t}/moments`, { at: a.at, from: a.from, to: a.from + 60_001 }))[0], 400, "60초 안");
+  assert.equal((await call("POST", `${t}/moments`, { at: a.at, from: a.at, to: a.at }))[0], 400, "1초 이상");
   const [made, moment] = await call("POST", `${t}/moments`, { at: a.at, from: a.from, to: a.to, label: "바다" });
   assert.deepEqual([made, moment.from, moment.to], [201, a.from, a.to]);
   assert.deepEqual((await call("GET", `${t}/scene-suggestions`, null, son.token))[1].items.map((c) => c.from - t0), [199_000], "남긴 장면은 다시 추천하지 않음");
@@ -951,13 +953,29 @@ test("장면 후보는 말이 몰린 구간을 규칙으로 고르고, 숏폼은
   assert.equal(form.title, "속초");
   assert.deepEqual(form.cast.map((c) => [c.participantId, c.name, c.character]), [[mom.id, "엄마", "토끼"], [son.id, "아들", ""]]);
   const [scene] = form.scenes;
-  assert.deepEqual([form.scenes.length, scene.momentId, scene.label, scene.clip, scene.startAt, scene.seconds], [1, moment.id, "바다", `${t}/recordings/${moment.id}`, a.from, 25]);
+  assert.deepEqual([form.scenes.length, scene.momentId, scene.label, scene.clip, scene.startAt, scene.seconds], [1, moment.id, "바다", `https://media.gachita.mangowhois.ai/media/trips/${trip.code}/recordings/${moment.id}`, a.from, 25]);
   assert.deepEqual(scene.cues.map((c) => [c.start, c.participantId, c.seatArea]), [
     [1, mom.id, "ROW_1_LEFT"], [5, null, "ROW_2_LEFT"], [9, mom.id, "ROW_1_LEFT"], [13, null, "ROW_2_LEFT"], [17, mom.id, "ROW_1_LEFT"], [21, null, "ROW_2_LEFT"],
   ]);
   assert.deepEqual(scene.cues.slice(0, 2).map((c) => c.end), [2.35, 6.65], "끝은 글자 수로 어림(글자당 0.15초, 1~6초): 9자·11자");
-  assert.ok(scene.cues.every((c, i) => c.end <= (scene.cues[i + 1]?.start ?? scene.seconds)), "다음 자막·클립 끝을 넘지 않음");
+  assert.ok(scene.cues.every((c, i) => c.end <= (scene.cues[i + 1]?.start ?? scene.seconds)), "다음 자막·클립 끝을 넘지 않음(4초 간격)");
   assert.equal((await call("GET", `${t}/shortform`))[0], 401);
+});
+
+test("장면 규칙의 가장자리: 한 순간에 몰린 2만 줄, 같은 시각의 두 말, 일부만 붙은 화자(T43)", () => {
+  // 차 시계가 멈춰 2만 줄이 한 시각에 몰려도 창을 복사하지 않고 끝난다(여행 한도, 파드 메모리 256 MiB)
+  const t0 = 1_000_000;
+  const flood = Array.from({ length: 20_000 }, (_, i) => ({ at: t0, text: "아", seatArea: i % 2 ? "ROW_1_LEFT" : "ROW_2_LEFT" }));
+  const started = performance.now();
+  const [one, ...rest] = suggest(flood, []);
+  assert.ok(performance.now() - started < 1000, "1초 안");
+  assert.deepEqual([rest.length, one.lines.length, one.to - one.from, one.why], [0, 30, 15_000, "30초에 말이 20000번, 2명이 말함"], "보여 줄 발화는 30줄, 구간은 15초 이상");
+  // 한 사람의 말에 화자 대조가 일부만 붙어도 한 사람이다(좌석 구역으로 센다). 구역을 모르면 세지 않는다
+  const solo = [0, 3, 6, 9].map((s, i) => ({ at: t0 + s * 1000, text: "응", seatArea: "ROW_1_LEFT", ...(i % 2 ? { profileId: "p1" } : {}) }));
+  assert.equal(suggest([...solo, { at: t0 + 10_000, text: "?" }], [])[0].why, "30초에 말이 5번");
+  // 두 자리에서 같은 시각에 말하면 자막이 겹쳐 보인다(0초짜리로 사라지지 않음)
+  const both = cues([{ at: t0, text: "와", seatArea: "ROW_1_LEFT" }, { at: t0, text: "우와", seatArea: "ROW_2_LEFT" }], t0 - 1000, 10);
+  assert.deepEqual(both.map((c) => [c.start, c.end]), [[1, 2], [1, 2]]);
 });
 
 test("쓰기가 몰려도 서버가 멈추지 않는다", async () => {

@@ -93,7 +93,7 @@ POST /api/trips/:code/utterances
 ### 5. 원음 클립
 
 - 원음 전체는 차에 둡니다. 차 밖으로 보내는 범위는 T12(ADR-0007, PR #55)가 '사람이 장면으로 확정한 구간의 클립만'으로 정했습니다. 화자 대조(T38)를 위해 발화 음성이 잠시 서버로 가는 것은 저장하지 않는 별개 경로입니다. 이 절은 클립을 올리는 방법만 정합니다.
-- 클립은 차량 앱이 API로 올리고(`Authorization` 머리말, ADR-0007·`docs/api/voice.md`), API가 S3 클립 전용 버킷(`CLIPS_BUCKET`, 버전 관리 끔, 2일 수명 규칙, T76)에 둡니다. 서명 주소는 쓰지 않습니다. DB에는 키와 구간(`recordings` 표)만 둡니다. 내려받을 때도 API가 권한을 확인하고 기존 주소로 내줍니다([ADR-0020](0020-media-delivery-subdomain.md)).
+- 클립은 차량 앱이 API로 올리고(`Authorization` 머리말, ADR-0007·`docs/api/voice.md`), API가 S3 클립 전용 버킷(`CLIPS_BUCKET`, 버전 관리 끔, 버킷은 T64가 만듦)에 둡니다. 서명 주소는 쓰지 않습니다. DB에는 키와 구간(`recordings` 표, T76)만 둡니다. 내려받을 때는 `media.gachita.mangowhois.ai`에서 API가 권한을 확인하고 흘려보냅니다([ADR-0020](0020-media-delivery-subdomain.md)). 지우기는 API가 직접 하고(사람의 요청·동의 철회·48시간), 수명 규칙(올린 뒤 2일을 다음 UTC 자정으로 올림, 최대 약 3일)이 뒷받침합니다.
 
 ### 6. 보관
 

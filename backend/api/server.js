@@ -977,12 +977,12 @@ async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
     const picker = req.headers.authorization ? participantOf(req, trip) : null;
     const now = Date.now();
     const at = b.at === undefined ? now : int(b.at, trip.createdAt, now + 60_000, "at"); // 통신이 끊겼다가 나중에 올리는 경우
-    // 장면 구간(T43): 차가 이 구간을 잘라 클립으로 올린다(T63). from ≤ at ≤ to, 60초 안. 없으면 차의 기본 구간.
+    // 장면 구간(T43): 차가 이 구간을 잘라 클립으로 올린다(T63). from ≤ at ≤ to, 1~60초. 없으면 at 앞 20초~뒤 10초(scenes.js).
     const from = hasSpan ? int(b.from, at - 60_000, at, "from") : null;
     const moment = {
       id: randomUUID().slice(0, 8),
       at,
-      ...(hasSpan ? { from, to: int(b.to, at, from + 60_000, "to") } : {}),
+      ...(hasSpan ? { from, to: int(b.to, Math.max(at, from + 1000), from + 60_000, "to") } : {}),
       ...(hasLat ? { lat: num(b.lat, -90, 90, "lat"), lng: num(b.lng, -180, 180, "lng") } : {}),
       label: b.label === undefined ? "" : text(b.label, 60, "label"),
     };
@@ -1105,7 +1105,9 @@ async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
 
   if (sub === "scene-suggestions") {
     // 장면 후보(T43): 규칙으로 고르고(scenes.js), 사람이 골라 POST /moments로 남긴다. 요청할 때만 계산하고 저장하지 않는다.
-    return [200, { items: suggest(await lines(), trip.moments) }];
+    // 장면으로 남길 수 있는 시각(여행을 만든 뒤 ~ 지금+1분)의 발화만 본다 — 고른 후보가 POST /moments에서 거절되지 않게.
+    const now = Date.now();
+    return [200, { items: suggest((await lines()).filter((u) => u.at >= trip.createdAt && u.at <= now + 60_000), trip.moments) }];
   }
 
   if (sub === "shortform") {
@@ -1121,12 +1123,12 @@ async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
       title: trip.title,
       cast: trip.participants.map((p) => ({ participantId: p.id, name: p.name, character: character.get(p.profileId) ?? "", seat: p.seat })),
       scenes: clips.map((r) => {
-        const moment = trip.moments.find((x) => x.id === r.moment_id) ?? {};
+        const moment = trip.moments.find((x) => x.id === r.moment_id); // 장면은 지워지지 않는다
         return {
           momentId: r.moment_id,
           label: moment.label ?? "",
           at: moment.at,
-          clip: `/api/trips/${trip.code}/recordings/${r.moment_id}`,
+          clip: `${MEDIA_BASE}/media/trips/${trip.code}/recordings/${r.moment_id}`, // ADR-0020: media 하위 도메인
           startAt: Number(r.start_at),
           seconds: r.seconds,
           cues: cues(all, Number(r.start_at), r.seconds).map(({ profileId, ...c }) => ({ ...c, participantId: byProfile.get(profileId) ?? null })),
