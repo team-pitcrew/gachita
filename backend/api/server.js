@@ -25,7 +25,7 @@ const LINKS_SQL = fileURLToPath(new URL("profiles-2-links.sql", import.meta.url)
 const UTTERANCES_SQL = fileURLToPath(new URL("trips-2-utterances.sql", import.meta.url));
 const RECORDINGS_SQL = fileURLToPath(new URL("trips-3-recordings.sql", import.meta.url));
 const ASR_SQL = fileURLToPath(new URL("trips-4-asr.sql", import.meta.url));
-const TRIP_VOICE_SQL = fileURLToPath(new URL("trips-3-voice.sql", import.meta.url));
+const TRIP_VOICE_SQL = fileURLToPath(new URL("trips-5-voice.sql", import.meta.url));
 const ALBUM_SQL = fileURLToPath(new URL("profiles-3-moments.sql", import.meta.url));
 const GROUPS_SQL = fileURLToPath(new URL("profiles-4-groups.sql", import.meta.url));
 const VOICE_SQL = fileURLToPath(new URL("profiles-5-voice.sql", import.meta.url));
@@ -447,13 +447,15 @@ async function participantVoice(code, id, req) {
     const p = trip.participants.find((x) => x.id === id) ?? fail(404, "없는 참가자");
     if (participantOf(req, trip) !== p) fail(403, "목소리는 본인만 등록할 수 있음");
     if (!p.consent) fail(409, "녹음에 동의한 뒤 등록함");
+    return trip.generation ?? 1;
   };
   // 본문(최대 1.5 MB)을 받고 계산하는 동안은 여행 줄을 잠그지 않는다(voiceMatch와 같은 까닭).
-  // 저장할 때 잠그고 다시 본다 — 그사이 동의가 꺼져 값을 지웠다면 늦게 온 등록이 되살리지 않게.
-  await withTrip(code, false, check);
+  // 저장할 때 잠그고 다시 보되, 동의 세대까지 같아야 한다 — 그사이 동의를 껐다 다시 켰으면(세대가 오름)
+  // 철회 전에 시작한 등록이 되살아나지 않게. 세대는 누구의 철회로도 오르니, 그때는 다시 등록한다.
+  const generation = await withTrip(code, false, check);
   const print = await enrollment(req);
   await withTrip(code, true, async (trip, client) => {
-    check(trip);
+    if (check(trip) !== generation) fail(409, "등록하는 사이 동의가 바뀜. 다시 등록함");
     await client.query(
       `INSERT INTO trip_voice_prints (trip_code, participant_id, vector, seconds) VALUES ($1, $2, $3, $4)
        ON CONFLICT (trip_code, participant_id) DO UPDATE SET vector = $3, seconds = $4, updated_at = now()`,
@@ -468,15 +470,21 @@ async function participantVoice(code, id, req) {
 // 원본 음성은 저장하지 않고, 찾으면 그 발화 줄의 participant_id(프로필 참가자면 profile_id도)를 채운다(ADR-0014).
 // 여행 문서를 바꾸지 않으므로 여행 줄을 잠그지 않는다 — 본문(최대 1 MB)을 받고 계산하는 동안
 // 같은 여행의 동의 바꾸기를 막으면, 업로드가 느릴 때 동의 철회가 2초 제한(T26)에 걸려 실패한다.
-async function voiceMatch(trip, req, query) {
+async function voiceMatch(code, req, query) {
   if (req.method !== "POST") fail(405, "POST만 됨");
   // 녹음에 동의한 참가자만 — 동의하지 않은 사람이 목소리로 남을 찾아보는 길이 되지 않게.
-  const caller = participantOf(req, trip);
-  if (!caller.consent) fail(403, "녹음에 동의한 참가자만 대조할 수 있음");
+  const consenting = (trip) => {
+    const caller = participantOf(req, trip);
+    return caller.consent ? caller : fail(403, "녹음에 동의한 참가자만 대조할 수 있음");
+  };
+  await withTrip(code, false, consenting);
   const { samples } = wavMono(await readRaw(req, 1_000_000));
   const seconds = samples.length / 16000;
   // ponytail: 임베딩은 이벤트 루프에서 동기로 돈다(10초 ≈ 30 ms, 60초 ≈ 185 ms). 발화는 보통 2~4초라 10초로 묶는다.
   if (seconds < 0.5 || seconds > 10) fail(400, "발화 음성은 0.5~10초");
+  // 본문을 받는 동안 동의·자리가 바뀌었을 수 있으니 최신 여행으로 다시 보고 후보를 정한다(잠그지 않고 읽기만).
+  const trip = await withTrip(code, false, (t) => t);
+  const caller = consenting(trip);
   // 후보: 그 줄(row 1 앞줄, 2 뒷줄 — 차량 앱의 좌석 구역 판정, T37)에 앉은, 녹음에 동의한 참가자. 줄을 모르면 그 줄 조건만 뺀다.
   // 값은 이 여행에 등록한 것을 먼저, 없으면 그 사람 프로필의 등록값을 쓴다 — 동의하지 않은 사람의 이름은 발화에 붙지 않는다.
   const row = query.get("row") ? oneOf(query.get("row"), ["1", "2"], "row") : null;
@@ -988,7 +996,7 @@ async function trips(req, [code, sub, id, leaf, ...rest], b, query) {
     }
   }
   if (rest.length || (leaf !== undefined && !(sub === "participants" && leaf === "voice"))) fail(404, "없는 경로");
-  if (sub === "voice-match" && !id) return voiceMatch(await withTrip(code, false, (trip) => trip), req, query);
+  if (sub === "voice-match" && !id) return voiceMatch(code, req, query);
   if (sub === "recordings") return recordings(code, id, req, query);
   if (leaf === "voice") return participantVoice(code, id, req);
   const profile = sub === "participants" && m === "POST" && !id ? await profileOf(req) : null;

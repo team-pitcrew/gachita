@@ -678,6 +678,22 @@ const wav = (freq, seconds) => {
   return Buffer.concat([head, data]);
 };
 const postRaw = (path, buf, token) => fetch(base + path, { method: "POST", headers: token ? { authorization: `Bearer ${token}` } : {}, body: buf });
+// 천천히 올리는 본문: 앞 조각만 보내 두고, 서버가 첫 확인을 마칠 때까지 기다린 뒤 release()로 나머지를 보낸다(업로드 중의 경합 재현).
+const slowPost = async (path, buf, token) => {
+  let release;
+  const gate = new Promise((ok) => (release = ok));
+  const body = new ReadableStream({
+    async start(c) {
+      c.enqueue(buf.subarray(0, 100));
+      await gate;
+      c.enqueue(buf.subarray(100));
+      c.close();
+    },
+  });
+  const done = fetch(base + path, { method: "POST", headers: { authorization: `Bearer ${token}` }, body, duplex: "half" });
+  await new Promise((ok) => setTimeout(ok, 200));
+  return { release, done };
+};
 
 test("목소리 등록으로 발화의 화자를 프로필에 붙인다(T38)", async () => {
 
@@ -1240,6 +1256,19 @@ test("손님 참가자도 여행에 목소리를 등록하면 화자가 붙는�
   await call("PATCH", `${t}/participants/${d.id}`, { consent: true }, d.token);
   const r4 = await (await postRaw(`${t}/voice-match?row=1`, wav(260, 1.5), a.token)).json();
   assert.deepEqual([r4.participantId, r4.profileId], [d.id, me.id], "동의하면 프로필 등록값으로 찾음");
+
+  // 업로드하는 사이 동의가 바뀌어도: 대조는 받은 뒤 최신 여행으로 후보를 정하고(리뷰 재현),
+  // 등록은 처음 확인 때의 동의 세대가 그대로일 때만 저장한다(껐다 켜도 철회 전 등록은 되살아나지 않음)
+  const match = await slowPost(`${t}/voice-match?row=1`, wav(260, 1.5), a.token);
+  await call("PATCH", `${t}/participants/${d.id}`, { consent: false });
+  match.release();
+  assert.equal((await (await match.done).json()).participantId, null, "업로드 중 동의를 끈 사람은 후보가 아님");
+  const late = await slowPost(`${t}/participants/${c.id}/voice`, wav(340, 3), c.token);
+  await call("PATCH", `${t}/participants/${c.id}`, { consent: false });
+  await call("PATCH", `${t}/participants/${c.id}`, { consent: true }, c.token);
+  late.release();
+  assert.equal((await late.done).status, 409);
+  assert.equal(await prints(c.id), 0, "철회 전에 시작한 등록은 저장되지 않음");
 
   // 48시간이 지나면 대조에 쓰이지 않고(여행이 읽히지 않음), 여행을 치울 때 함께 지워진다(외래 키 — 옛 판의 치우기도)
   await tripsDb().query("UPDATE trips SET created_at = now() - interval '49 hours' WHERE code = $1", [trip.code]);
