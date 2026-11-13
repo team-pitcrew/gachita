@@ -61,4 +61,5 @@ jobs:
         run: E2E_OUT="$RUNNER_TEMP/e2e" backend/infra/cluster/e2e-local.sh
       - name: 요약
         if: always()
-        run: cat "$RUNNER_TEMP/e2e/summary.md" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || echo "### 물결 E2E: 요약 없이 멈춤" >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          cat "$RUNNER_TEMP/e2e/summary.md" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || echo "### 물결 E2E: 요약 없이 멈춤" >> "$GITHUB_STEP_SUMMARY"
