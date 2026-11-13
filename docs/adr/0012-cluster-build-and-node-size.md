@@ -116,9 +116,12 @@ Terraform이 만든 값(`/tf/`) → SSM /gachita/dev/tf/* → 같은 길
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | `app/google/*` | 구글 OAuth 웹 클라이언트, 리다이렉트 `https://gachita.mangowhois.ai/…` | 사람 | API 환경 변수. 없어도 서버는 뜬다 |
 | `ARGOCD_REPO_TOKEN` | `bootstrap/argocd-repo-token` | 저장소 읽기 토큰(이 저장소 하나, HTTPS. 배포 키가 조직 설정으로 막혀 11/14에 바꿈) | 승인 뒤 | 첫 부팅(ansible-pull), Argo CD 저장소 자격 |
 | `CLOUDFLARE_API_TOKEN` | (SSM에 두지 않음) | `mangowhois.ai` DNS 편집 + 영역 WAF 편집 | 사람 | `terraform`·`infra` 워크플로의 develop 실행에서만(PR 계획에는 주지 않음) |
+| `CLOUDFLARE_API_TOKEN_READ` | (SSM에 두지 않음) | 같은 영역 DNS·Zone·Zone WAF 읽기만 | 사람 | PR의 `terraform` 계획 |
+| `PROJECT_TOKEN` | (SSM에 두지 않음) | 조직 Projects 읽기·쓰기, 이 저장소 이슈·PR 읽기 | 사람 | `tickets` 워크플로(클러스터와 무관) |
 | - | - | DB 주소(사용자·비밀번호 포함) | CloudNativePG가 DB 네임스페이스에 생성 | 그 Secret 하나만 읽는 역할로 `gachita`에 복사(ADR-0013) |
 
-- 첫 부팅 스크립트가 읽던 `/gachita/dev/ghcr-token`, `/gachita/dev/argocd-deploy-key`는 `app/`·`bootstrap/` 아래로 옮긴다. 이미지 받기 토큰은 노드가 아니라 네임스페이스에서 쓴다.
+- SSM에는 이 표의 값만 있고, 모두 `infra-secrets`(적용 역할)가 쓴다. 손으로 넣은 값이나 손으로 만든 클러스터 Secret은 두지 않는다(11/14 점검: 옛 `bootstrap/argocd-deploy-key`와 손으로 만든 Argo CD 자격을 지움. 클러스터의 Secret은 External Secrets·CloudNativePG·구축 단계만 만듦).
+- **바꿀 때:** `gh secret set` → `infra-secrets`. `app/*`는 External Secrets가 1시간 안에 따라온다(환경 변수로 읽는 구글 값은 그 뒤 API 파드를 다시 띄움). `bootstrap/argocd-repo-token`은 첫 부팅과 구축 단계만 읽으므로 `ops` 워크플로의 `converge`(단계 `argocd`)를 돌린다. 이미지 받기 토큰은 노드가 아니라 네임스페이스에서 쓴다.
 
 ## 결과
 
