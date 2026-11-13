@@ -12,7 +12,6 @@ const TRIP = {
   ended: ["여행 종료", "이 여행은 만든 뒤 48시간까지 볼 수 있어요."],
 };
 const NEXT_TRIP = { boarding: ["출발", "driving"], driving: ["주차", "parked"], parked: ["여행 끝내기", "ended"] };
-const LEVEL = ["끔", "1", "2", "3"];
 // 프로필 캐릭터. 사진이 없을 때 이 그림으로 보인다(목록 고정은 T46).
 const CHARACTERS = [
   ["bunny", "🐰", "토끼"],
@@ -46,11 +45,11 @@ let profile = null; // 이 폰의 프로필(GET /api/profiles/me). 토큰은 sto
 let photo = ""; // 내 사진(object URL)
 let invited = null; // 초대 수락 결과
 let inviteError = ""; // 쓸 수 없는 초대(없음·취소·만료·횟수 소진)
-const pdraft = { name: "", character: "", photo: null, preview: "", tempC: 22, heat: 0, vent: 0, prefsTouched: false, consentDefault: false };
+const pdraft = { name: "", character: "", photo: null, preview: "", consentDefault: false };
 let failed = ""; // 여행을 불러오지 못한 이유
 let offline = false;
 let stale = false; // 입력 중에 온 변경은 입력이 끝난 뒤 그린다
-const draft = { join: "", step: 0, name: "", seat: "", tempC: 22, heat: 0, vent: 0 };
+const draft = { join: "", step: 0, name: "", seat: "" };
 
 // 여행 경로는 토큰 없이, 프로필 경로(mine)는 이 폰의 프로필 토큰으로.
 const call = (method, path, body) => api(method, `/trips${path}`, body);
@@ -144,12 +143,11 @@ function share() {
 const avatar = (p, src) => h("span", { className: "avatar", "aria-hidden": "true" }, src ? h("img", { src, alt: "" }) : FACE[p?.character] ?? (p?.name || "?").slice(0, 1));
 
 function fillDraft() {
-  const p = profile?.prefs?.driver ?? {};
   URL.revokeObjectURL(pdraft.preview);
-  Object.assign(pdraft, { name: profile?.name ?? "", character: profile?.character ?? "", photo: null, preview: "", tempC: p.tempC ?? 22, heat: p.heat ?? 0, vent: p.vent ?? 0, prefsTouched: false, consentDefault: profile?.consentDefault ?? false });
+  Object.assign(pdraft, { name: profile?.name ?? "", character: profile?.character ?? "", photo: null, preview: "", consentDefault: profile?.consentDefault ?? false });
 }
 
-// 프로필 칸: 이름이나 별명, 사진이나 캐릭터. full이면 자리 설정과 기록 동의 기본값까지.
+// 프로필 칸: 이름이나 별명, 사진이나 캐릭터. full이면 기록 동의 기본값까지.
 function profileFields(full) {
   const pick = async (e) => {
     const file = e.target.files[0];
@@ -165,8 +163,6 @@ function profileFields(full) {
   };
   // 얼굴만 다시 그린다(화면 전체를 다시 그리면 고른 파일 이름이 지워져 보인다)
   const face = () => app.querySelector(".face .avatar")?.replaceWith(avatar({ name: pdraft.name, character: pdraft.character }, pdraft.preview || photo));
-  const temp = h("output", { "aria-live": "polite" }, `${pdraft.tempC.toFixed(1)}℃`);
-  const bump = (d) => () => ((pdraft.prefsTouched = true), (temp.textContent = `${(pdraft.tempC = Math.min(27, Math.max(17, pdraft.tempC + d))).toFixed(1)}℃`));
   return [
     h("label", { className: "field" }, h("span", {}, "이름 또는 별명"), h("input", { value: pdraft.name, required: true, maxLength: 20, autocomplete: "nickname", oninput: (e) => (pdraft.name = e.target.value) })),
     h(
@@ -177,27 +173,16 @@ function profileFields(full) {
     ),
     chipGroup("캐릭터", "character", CHARACTERS.map(([v, face, label]) => [v, `${face} ${label}`]), pdraft.character, (v) => ((pdraft.character = v), face())),
     full &&
-      h(
-        "div",
-        { className: "card" },
-        h("p", { className: "what" }, "자리 설정(참가할 때 미리 채워요)"),
-        h("div", { className: "temp" }, h("button", { type: "button", onclick: bump(-0.5), "aria-label": "온도 낮추기" }, "−"), temp, h("button", { type: "button", onclick: bump(0.5), "aria-label": "온도 올리기" }, "+")),
-        chipGroup("시트 열선", "heat", LEVEL.map((l, i) => [i, l]), pdraft.heat, (v) => ((pdraft.heat = v), (pdraft.prefsTouched = true))),
-        chipGroup("시트 통풍", "vent", LEVEL.map((l, i) => [i, l]), pdraft.vent, (v) => ((pdraft.vent = v), (pdraft.prefsTouched = true))),
-      ),
-    full &&
       h("label", { className: "chip" }, h("input", { type: "checkbox", checked: pdraft.consentDefault, onchange: (e) => (pdraft.consentDefault = e.target.checked) }), "참가할 때 대화 기록 동의를 미리 켜 둠"),
   ];
 }
 
 const saveProfile = () =>
   act(async () => {
-    const p = { tempC: pdraft.tempC, heat: pdraft.heat, vent: pdraft.vent }; // ponytail: 자리마다 따로 두지 않고 셋에 같은 값. 자리별로 다르게 원하면 그때 나눈다
     const fresh = !store("profile");
     const body = {
       name: pdraft.name.trim(),
       consentDefault: pdraft.consentDefault,
-      ...((fresh || pdraft.prefsTouched) && { prefs: { driver: p, passenger: p, rear: p } }), // 손대지 않았으면 자리별 값을 그대로 둔다
       ...(pdraft.character && { character: pdraft.character }),
     };
     if (fresh) {
@@ -288,7 +273,7 @@ function home() {
   return [
     header(h("span", { className: "brand" }, "가치타")),
     h("h1", {}, "여행을 시작할까요?"),
-    h("p", { className: "sub" }, "같이 탄 사람들의 부탁과 자리 설정을 한곳에서 챙겨요."),
+    h("p", { className: "sub" }, "같이 탄 사람들의 부탁을 한곳에서 챙겨요."),
     profile
       ? h(
           "section",
@@ -336,19 +321,17 @@ function join() {
     render();
     app.querySelector("input:not([type=radio])")?.focus();
   };
-  // 프로필이 있으면 이름과 자리 설정은 프로필에서 오고 자리와 동의만 묻는다.
-  const order = profile ? [1, 3] : [0, 1, 2, 3];
+  // 프로필이 있으면 이름은 프로필에서 오고 자리와 동의만 묻는다.
+  const order = profile ? [1, 2] : [0, 1, 2];
   const submit = (consent) =>
     act(async () => {
-      const body = profile ? { seat: draft.seat, consent } : { name: draft.name.trim(), seat: draft.seat, consent, prefs: { tempC: draft.tempC, heat: draft.heat, vent: draft.vent } };
+      const body = profile ? { seat: draft.seat, consent } : { name: draft.name.trim(), seat: draft.seat, consent };
       const p = await api("POST", `/trips/${trip.code}/participants`, body, profile && store("profile"));
       store(trip.code, p.id);
       store(`${trip.code}:token`, p.token); // 참가자 토큰: 기록본처럼 음성 경로를 읽을 때 쓴다(ADR-0007)
       draft.step = 0;
     });
   const next = () => bar(h("button", { className: "primary" }, "다음"));
-  const temp = h("output", { "aria-live": "polite" }, `${draft.tempC.toFixed(1)}℃`);
-  const bump = (d) => () => (temp.textContent = `${(draft.tempC = Math.min(27, Math.max(17, draft.tempC + d))).toFixed(1)}℃`);
 
   const steps = [
     () => ({
@@ -362,25 +345,10 @@ function join() {
     }),
     () => ({
       title: "어디에 앉으셨나요?",
-      sub: profile ? `${profile.name} 님, 초대 코드 ${trip.code} 여행이에요. 자리 설정은 프로필대로 맞춰 드려요.` : "앉은 자리에 맞춰 온도와 시트를 적용해요.",
+      sub: profile ? `${profile.name} 님, 초대 코드 ${trip.code} 여행이에요.` : "운전석에 앉은 사람이 출발과 들를 곳을 정해요.",
       body: form(
         () => go(draft.step + 1),
         car(([id, label]) => chip("seat", id, label, { checked: draft.seat === id, disabled: !!taken[id], required: true, sub: taken[id], onpick: (v) => (draft.seat = v) })),
-        next(),
-      ),
-    }),
-    () => ({
-      title: "온도와 시트는 어떻게 할까요?",
-      sub: "차가 지원하는 범위 안에서 탈 때 맞춰 드려요.",
-      body: form(
-        () => go(draft.step + 1),
-        h(
-          "div",
-          { className: "card" },
-          h("div", { className: "temp" }, h("button", { type: "button", onclick: bump(-0.5), "aria-label": "온도 낮추기" }, "−"), temp, h("button", { type: "button", onclick: bump(0.5), "aria-label": "온도 올리기" }, "+")),
-          chipGroup("시트 열선", "heat", LEVEL.map((l, i) => [i, l]), draft.heat, (v) => (draft.heat = v)),
-          chipGroup("시트 통풍", "vent", LEVEL.map((l, i) => [i, l]), draft.vent, (v) => (draft.vent = v)),
-        ),
         next(),
       ),
     }),
@@ -470,7 +438,7 @@ function tripView(me) {
     h(
       "section",
       { className: "card" },
-      h("div", {}, h("p", { className: "what" }, "내 자리 설정"), h("p", { className: "meta" }, `${SEAT[me.seat]} · ${me.prefs.tempC}℃, 열선 ${LEVEL[me.prefs.heat]}, 통풍 ${LEVEL[me.prefs.vent]}`)),
+      h("div", {}, h("p", { className: "what" }, "내 자리"), h("p", { className: "meta" }, SEAT[me.seat])),
       h(
         "div",
         { className: "between" },
@@ -535,3 +503,4 @@ render();
 await loadProfile();
 fillDraft();
 refresh(true);
+navigator.serviceWorker?.register("/sw.js").catch(() => {}); // 홈 화면 설치와 끊겼을 때의 마지막 화면(T6)

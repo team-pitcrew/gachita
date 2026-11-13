@@ -1,5 +1,5 @@
 // 가치타 웹 시연(/demo). 에뮬레이터 모양의 차량 화면을 브라우저에 그리고, 실제 API로 여행 하나를 돌린다(T66).
-// 차량 앱(frontend/car)의 흐름과 문구를 따른다. Pleos SDK에서만 되는 것(내비 경유지, 공조, 차량 STT·TTS)은
+// 차량 앱(frontend/car)의 흐름과 문구를 따른다. Pleos SDK에서만 되는 것(내비 경유지, 차량 STT·TTS)은
 // 흉내만 내고 화면에 '시연'이라고 적는다. 마이크는 쓰지 않는다. 사용자가 쓴 글은 textContent로만 넣는다.
 // 차량은 운전석 참가자로 들어가 참가자 토큰을 받고, 여행 코드·토큰·순번은 localStorage에 두어 새로 고쳐도 이어진다.
 
@@ -29,7 +29,6 @@ const els = {
   stt: $("stt"), sttState: $("stt-state"), sttLines: $("stt-lines"), sttSeat: $("stt-seat"), sttText: $("stt-text"), sttSend: $("stt-send"), sttErr: $("stt-err"),
   phone: $("phone"), phoneEmpty: $("phone-empty"), phoneOpen: $("phone-open"),
   fit: $("fit"), screen: $("screen"), speed: $("speed"), gears: $("gears"), seats: $("seats"), net: $("net"), clock: $("clock"),
-  tDriver: $("t-driver"), tPassenger: $("t-passenger"),
 };
 
 let car = load(); // { code, id, token, seq } — 이 차량(운전석 참가자)
@@ -289,7 +288,6 @@ async function loadLines() {
 const button = (label, onclick, className = "") => h("button", { type: "button", className, onclick, disabled: busy }, label);
 const card = (...kids) => h("section", { className: "card" }, kids);
 const hm = (ms) => new Date(ms).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false });
-const temp = (p) => (p ? `${Number(p.prefs.tempC).toFixed(1)}℃` : "—");
 
 function joinCard() {
   const url = `${location.origin}/#${trip.code}`;
@@ -467,8 +465,6 @@ function renderSystem() {
   const at = Object.fromEntries((trip?.participants ?? []).map((p) => [p.seat, p]));
   const pos = { ROW_1_LEFT: "s11", ROW_1_RIGHT: "s13", ROW_2_LEFT: "s21", ROW_2_CENTER: "s22", ROW_2_RIGHT: "s23" };
   els.seats.replaceChildren(...SEATS.map(([id, label]) => h("div", { className: `seat ${pos[id]}${at[id] ? " on" : ""}`, title: label }, at[id] ? at[id].name.slice(0, 3) : "")));
-  els.tDriver.textContent = temp(at.ROW_1_LEFT);
-  els.tPassenger.textContent = temp(at.ROW_1_RIGHT);
   els.net.textContent = online ? "통신 연결됨" : "연결이 끊겼어요";
   els.net.classList.toggle("off", !online);
 }
