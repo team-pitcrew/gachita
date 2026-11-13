@@ -4,6 +4,7 @@
 // 사용자가 쓴 글은 textContent로만 넣는다(innerHTML 금지).
 
 import { SEATS, SEAT, WHEN, REQ, CLOSED, api, h, toast } from "/shared.js";
+import { createCaptions } from "/captions.js";
 import qrcode from "/qrcode.js";
 import { createRecords } from "/records.js";
 
@@ -70,6 +71,15 @@ let reading = false; // 여행 화면의 '동의 켜기': 켜기 전에 동의 �
 // 여행 경로는 토큰 없이, 프로필 경로(mine)는 이 폰의 프로필 토큰으로.
 const call = (method, path, body) => api(method, `/trips${path}`, body);
 const mine = (method, path, body) => api(method, path, body, store("profile"));
+const captions = createCaptions({
+  getTrip: () => trip,
+  getParticipant: () => trip?.participants.find((p) => p.id === myId()),
+  request: (code, method, path, body, signal) => {
+    if (trip?.code !== code) return Promise.reject(new Error("여행이 바뀌었어요."));
+    return asMe(trip.participants.find((p) => p.id === myId()), (c, token) => api(method, `/trips/${c}${path}`, body, token, signal));
+  },
+  refreshTrip: () => refresh(true),
+});
 const records = createRecords({
   getProfile: () => profile,
   getProfileToken: () => store("profile"),
@@ -571,6 +581,7 @@ function tripView(me) {
       // 이미 동의한 사람도 지금의 동의 문구(바뀐 것 포함)를 언제든 다시 본다
       h("details", {}, h("summary", { className: "meta" }, "동의 문구 보기"), h("ul", {}, CONSENT.map((line) => h("li", {}, line)))),
     ),
+    me.consent && myToken() && button("자막 확인하기", captions.open),
     me.consent && myToken() && button("장면 후보 보기", records.openScenes),
     trip.moments.length > 0 &&
       h(
@@ -689,6 +700,7 @@ function shortView() {
 }
 
 function render() {
+  captions.sync();
   records.sync();
   stale = false;
   const me = trip?.participants.find((p) => p.id === myId());
