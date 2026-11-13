@@ -10,7 +10,7 @@
 | `frontend/car/` | Pleos 차량 앱(Android · Kotlin · Compose) | 아직 없음(T7) |
 | `backend/api/` | API 서버. 기기 프로필(OAuth 없음), 여행 코드, 참가자와 자리, 좌석·공조 선호, 기록 동의, 부탁의 상태, 장면의 시각과 위치 | 동작. Postgres에 저장 |
 | `backend/infra/` | AWS 자원([Terraform](backend/infra/terraform/README.md))과 클러스터 선언([Argo CD](backend/infra/gitops/README.md)) | 코드 있음. 실제 자원은 만들지 않음 |
-| `docs/` | [개발 규칙](docs/development.md), [구조와 스택](docs/architecture.md), [작업 목록](docs/tasks.md), [프로젝트 보드](docs/project-board.md), [결정 기록](docs/adr) | |
+| `docs/` | [개발 규칙](docs/development.md), [구조와 스택](docs/architecture.md), [작업 목록](docs/tasks.md), [프로젝트 보드](docs/project-board.md), [결정 기록](docs/adr), [실측 보고](docs/research) | |
 | `apk/` | 제출용 APK(`팀명_앱이름_release.apk`) | 아직 없음(T13) |
 
 ## 실행 방법
