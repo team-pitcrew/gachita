@@ -828,8 +828,8 @@ test("녹음 클립: 고른 장면의 원음을 받고, 재생하고, 바로 지
   assert.ok(await gone(), "철회하면 버킷에서 지움");
   assert.equal((await play(m2.id, mom.token)).status, 404);
   assert.equal((await up(m4.id, clip, son.token, 1)).status, 409, "철회한 본인의 옛 세대도 409");
-  await call("PATCH", `${t}/participants/${son.id}`, { consent: true });
-  await call("PATCH", `${t}/participants/${guest.id}`, { consent: true });
+  await call("PATCH", `${t}/participants/${son.id}`, { consent: true }, son.token);
+  await call("PATCH", `${t}/participants/${guest.id}`, { consent: true }, guest.token);
   assert.equal((await up(m4.id, clip, mom.token, 1)).status, 409, "철회 전 세대");
   assert.equal((await up(m4.id, clip, mom.token, 2)).status, 201);
 
@@ -841,7 +841,7 @@ test("녹음 클립: 고른 장면의 원음을 받고, 재생하고, 바로 지
   assert.ok(await gone(), "철회가 지운 m4와, 올리다 거절된 m5 모두 버킷에 없음");
 
   // 철회 때 버킷에 닿지 못해도 지울 키가 남아 다음 치우기가 지운다
-  await call("PATCH", `${t}/participants/${son.id}`, { consent: true });
+  await call("PATCH", `${t}/participants/${son.id}`, { consent: true }, son.token);
   assert.equal((await up(m5.id, clip, mom.token, 3)).status, 201);
   s3.down = true;
   await call("PATCH", `${t}/participants/${son.id}`, { consent: false });
@@ -852,7 +852,7 @@ test("녹음 클립: 고른 장면의 원음을 받고, 재생하고, 바로 지
   assert.ok(await gone(), "다음 치우기가 지움");
 
   // 48시간: 여행을 치울 때 그 여행의 클립도 버킷에서 지운다
-  await call("PATCH", `${t}/participants/${son.id}`, { consent: true });
+  await call("PATCH", `${t}/participants/${son.id}`, { consent: true }, son.token);
   const [, m6] = await call("POST", `${t}/moments`, {});
   assert.equal((await up(m6.id, clip, mom.token, 4)).status, 201);
   await tripsDb().query("UPDATE trips SET created_at = now() - interval '49 hours' WHERE code = $1", [trip.code]);
