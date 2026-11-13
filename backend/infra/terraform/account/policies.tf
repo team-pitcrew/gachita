@@ -2,6 +2,10 @@
 #   상태 버킷 gachita-tfstate-<계정>, 데이터 버킷 gachita-<env>-<계정>, 발급자 버킷 gachita-<env>-oidc-<계정>
 #   SSM 값 /gachita/<env>/tf/*(Terraform이 씀), /gachita/<env>/app/*·bootstrap/*(사람이 넣은 비밀 값, 워크플로가 씀)
 locals {
+  cloudwatch_ours = [ # 소진 속도 알림과 SLO 대시보드(T62)
+    "arn:aws:cloudwatch:${var.region}:${local.account}:alarm:gachita-*",
+    "arn:aws:cloudwatch::${local.account}:dashboard/gachita-*",
+  ]
   boundary_arn = "arn:aws:iam::${local.account}:policy/gachita-workload-boundary"
   # 사람이 넣은 비밀 값. 계획·적용 역할 모두 직접 읽지 못한다(적용 역할은 쓰기만).
   # 다만 적용 역할은 경계 안의 역할(서버·파드)을 만들 수 있고 그 역할은 읽을 수 있으므로, 이 값들의 신뢰 범위는
@@ -56,6 +60,15 @@ data "aws_iam_policy_document" "plan_read" {
   statement {
     actions   = ["s3:GetObject"]
     resources = ["arn:aws:s3:::gachita-tfstate-${local.account}/*"]
+  }
+  # 소진 속도 알림과 SLO 대시보드(본 설정 slo.tf). 알림 설정 목록은 자원 단위로 좁힐 수 없다(값이 아니라 설정)
+  statement {
+    actions   = ["cloudwatch:DescribeAlarms"]
+    resources = ["*"]
+  }
+  statement {
+    actions   = ["cloudwatch:ListTagsForResource", "cloudwatch:GetDashboard"]
+    resources = local.cloudwatch_ours
   }
   # Terraform이 쓴 값과 공개 AMI 번호만
   statement {
@@ -253,6 +266,16 @@ data "aws_iam_policy_document" "apply" {
   }
   statement {
     actions   = ["ssm:GetCommandInvocation", "ssm:ListCommandInvocations", "ssm:DescribeInstanceInformation"]
+    resources = ["*"]
+  }
+  # ---- CloudWatch: 소진 속도 알림과 SLO 대시보드(본 설정 slo.tf, T62). 이름(gachita-*)으로 ----
+  statement {
+    actions = ["cloudwatch:PutMetricAlarm", "cloudwatch:DeleteAlarms", "cloudwatch:TagResource", "cloudwatch:UntagResource",
+    "cloudwatch:ListTagsForResource", "cloudwatch:PutDashboard", "cloudwatch:GetDashboard", "cloudwatch:DeleteDashboards"]
+    resources = local.cloudwatch_ours
+  }
+  statement { # 적용의 refresh와 ops 워크플로의 status(알림 상태)
+    actions   = ["cloudwatch:DescribeAlarms"]
     resources = ["*"]
   }
   # ---- IAM: 이름(gachita-*)과 태그(Project=gachita)가 둘 다 맞는 것만 ----

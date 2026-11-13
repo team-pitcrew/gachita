@@ -5,7 +5,7 @@
 #   backend/infra/infra.sh down   edge 앱 지우기(길을 닫음, 컨트롤러가 ALB를 지움) → 마지막 백업 → 접는 묶음 destroy → 남은 것 확인
 #
 # 운영(T57, ops 워크플로). 떠 있는 서버에 SSM으로 명령을 보낸다. 서버가 없으면 실패한다.
-#   backend/infra/infra.sh status              노드, 구축 단계, 앱 물결, Postgres와 백업, ALB 대상, 실제 주소(SERVICE_URL)
+#   backend/infra/infra.sh status              노드, 구축 단계, 앱 물결, Postgres와 백업, ALB 대상, 소진 속도 알림, 실제 주소(SERVICE_URL)
 #   backend/infra/infra.sh converge [단계,...]  구축 단계 다시 돌리기(비우면 전부. os,k3s,cilium,oidc,argocd,root,verify)
 #   backend/infra/infra.sh backup              손 전체 백업
 #   backend/infra/infra.sh restore [시각] [apply]  지정 시점 복구. 옆에 db-pitr을 세워 재고 비교한다(연습).
@@ -260,13 +260,18 @@ down() {
 status() {
   local id bad="" health code url=${SERVICE_URL:-https://gachita.mangowhois.ai}
   id=$(server)
-  log 1/3 "클러스터(서버 $id): 노드, 구축 단계, 앱 물결, Postgres와 백업"
+  log 1/4 "클러스터(서버 $id): 노드, 구축 단계, 앱 물결, Postgres와 백업"
   on_server "$id" 120 "$(status_script)" || bad=" 클러스터"
-  log 2/3 "ALB 대상"
+  log 2/4 "ALB 대상"
   health=$(target_health)
   echo "  ${health:-ALB 없음}"
   healthy "$health" || bad="$bad ALB대상"
-  log 3/3 "실제 주소 ${url%/}/healthz"
+  log 3/4 "가용성 소진 속도 알림(ADR-0016, Terraform slo.tf)"
+  alarms=$(aws cloudwatch describe-alarms --alarm-name-prefix "$CLUSTER-availability-burn-" \
+    --query 'MetricAlarms[].[AlarmName, StateValue]' --output text)
+  echo "${alarms:-알림 없음}" | sed 's/^/  /'
+  ! awk '$2 == "ALARM"' <<<"$alarms" | grep -q . || bad="$bad 소진속도"
+  log 4/4 "실제 주소 ${url%/}/healthz"
   code=$(curl -s -o /dev/null -m 10 -w '%{http_code}' "${url%/}/healthz" || true)
   echo "  $code"
   [ "$code" = 200 ] || bad="$bad 실제주소"
