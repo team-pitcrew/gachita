@@ -1,0 +1,57 @@
+name: infra
+
+# 펴기와 접기(T53, ADR-0017). 순서와 확인은 backend/infra/infra.sh 에 있고, 사람이 로컬에서 돌려도 같다.
+#   up:   남는 묶음 → 접는 묶음 → 구축 단계 → ALB → Cloudflare 레코드 → https://gachita.mangowhois.ai/healthz
+#   down: edge 앱 지우기(길을 닫음, 컨트롤러가 ALB를 지움) → 마지막 백업 → 접는 묶음 destroy → 태그로 남은 것 확인
+# 수동 실행만, develop에서만(적용 역할이 develop만 믿음). 실행하는 것이 비용 승인이다. 실제 주소 E2E는 live-e2e 워크플로(T54).
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: up(펴기) 또는 down(접기)
+        type: choice
+        options: [up, down]
+        required: true
+
+permissions:
+  contents: read
+  id-token: write # OIDC 토큰으로 AWS 역할을 받는다
+
+concurrency:
+  group: infra # 펴기와 접기가 겹치지 않게
+  cancel-in-progress: false
+
+jobs:
+  infra:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+      # 영역 번호가 비면 인증서·레코드 없이 ALB까지만 편다(Terraform의 local.edge)
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      TF_VAR_cloudflare_zone_id: ${{ vars.CLOUDFLARE_ZONE_ID }}
+    steps:
+      - name: develop에서만
+        if: github.ref != 'refs/heads/develop'
+        run: |
+          echo "::error::펴기·접기는 develop에서만 됩니다(적용 역할이 develop만 믿음). 지금: $GITHUB_REF"
+          exit 1
+      - name: 역할 확인
+        if: vars.AWS_APPLY_ROLE_ARN == '' || vars.TF_STATE_BUCKET == ''
+        run: |
+          echo "::error::저장소 변수 AWS_APPLY_ROLE_ARN·TF_STATE_BUCKET이 비어 있습니다(backend/infra/terraform/README.md의 '처음 한 번')"
+          exit 1
+      - uses: actions/checkout@v7
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "1.17.1"
+          terraform_wrapper: false
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_APPLY_ROLE_ARN }}
+          role-session-name: gachita-infra-${{ inputs.action }}-${{ github.run_id }}
+          aws-region: ap-northeast-2
+      - name: ${{ inputs.action }}
+        env:
+          ACTION: ${{ inputs.action }}
+        run: backend/infra/infra.sh "$ACTION"

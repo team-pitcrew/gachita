@@ -120,7 +120,7 @@ Postgres가 하나면 그 노드가 강한 의존성입니다. 요청은 거의 
 | 장애 | - | 하나가 멈추면 여행과 프로필이 같이 멈춤(전에는 한쪽만) |
 | 백업 | S3에 WAL과 전체 백업 | 따로 되돌리기. 복구하면 둘이 같은 시점으로 같이 돌아감. IAM 역할과 백업 경로도 하나 |
 
-- 아끼는 것: 메모리 요청 512 MiB(Postgres 둘과 사이드카 둘 1,152 → 하나씩 640).
+- 아끼는 것: 메모리 요청 384 MiB(Postgres 둘과 사이드카 둘 1,152 → 하나씩 768. 사이드카는 11/13 실제 계정에서 128 MiB로 접기 전 전체 백업 중 OOMKilled되어 요청 256·한도 512로 올림).
 - **SLO에 주는 영향.** Postgres가 강한 의존성 하나가 됩니다.
 
 | 장애 | 되살아나는 길 | 걸리는 시간(어림, 재지 않음) | 데이터 |
@@ -142,14 +142,14 @@ Postgres가 하나면 그 노드가 강한 의존성입니다. 요청은 거의 
 | Traefik | 0 | 둘(128) → 없음(ALB가 프록시를 맡음) |
 | AWS Load Balancer Controller | 64 | 새로 하나. 차트에 기본값이 없어 요청값은 어림 |
 | cloudflared | 0 | 둘(96) → 없음(ALB) |
-| Postgres + 백업 사이드카 | 640 | 둘(1,152) → 하나 |
+| Postgres + 백업 사이드카 | 768 | 둘(1,152) → 하나. 사이드카 128 → 256(11/13 실측) |
 | API 2개 | 192 | - |
-| **파드 합계** | **2,580** | 3,252에서 672 줄어듦 |
+| **파드 합계** | **2,708** | 3,252에서 544 줄어듦 |
 
 | 인스턴스 | 파드에 쓸 수 있는 메모리 | 요청 대비 |
 |---|---|---|
-| t4g.medium(4 GiB) | 1,792 MiB | 144%. 올라가지 않음 |
-| **t4g.large(8 GiB)** | 5,888 MiB | 44% |
+| t4g.medium(4 GiB) | 1,792 MiB | 151%. 올라가지 않음 |
+| **t4g.large(8 GiB)** | 5,888 MiB | 46% |
 
 - **t4g.medium으로는 내려가지 못합니다.** 막는 것은 사용자 부하가 아니라 고정 몫입니다. 노드 예약 2,304 MiB(OS 512, K3s 서버 1,536, 축출 기준 256)와 컨트롤러·CNI 1,748 MiB가 사용자와 무관하게 필요해 합이 4,052 MiB입니다. 데이터 경로(API 둘, Postgres)의 요청은 832 MiB뿐이고 로컬에서 실제로 쓴 것은 200 MiB 안팎이었습니다. 4 GiB로 가려면 Argo CD(752)나 Cilium(384)을 빼거나 컨트롤 플레인을 밖으로 내보내야 하는데, 정해 둔 방침(GitOps, 이름으로 막는 정책, 직접 운영)과 어긋납니다.
 - **분산 노드는 기본에 넣지 않습니다.** 부하로 보면 동시 접속 100의 데이터 경로가 이 기기의 0.14코어, t4g 어림 0.4 vCPU라 나눌 것이 없습니다. 가용성으로 보면 Postgres가 하나라 워커를 늘려도 요청 경로의 가용성이 오르지 않습니다. 워커는 2단계에서 변수로 붙입니다.
@@ -164,7 +164,7 @@ Postgres가 하나면 그 노드가 강한 의존성입니다. 요청은 거의 
 | 단계 | 동시 접속 | 바꾸는 것 | 방식 |
 |---|---|---|---|
 | 0 기본 | ~300 | - | t4g.large 한 대 |
-| 1 | ~1,000 | API 2 → 4, Postgres 메모리 512 → 1,024 MiB, 볼륨 8 → 20 Gi | GitOps 값만(PR 하나). 한 대 그대로(요청 약 3,300 / 5,888 MiB) |
+| 1 | ~1,000 | API 2 → 4, Postgres 메모리 512 → 1,024 MiB, 볼륨 8 → 20 Gi | GitOps 값만(PR 하나). 한 대 그대로(요청 약 3,430 / 5,888 MiB) |
 | 2 | ~3,000 | 워커 2대(t4g.medium, 가용 영역 둘), API 6~8개를 워커로 | Terraform 변수 `worker_count`와 GitOps 값. 컨트롤러가 워커를 ALB 대상에 넣음. 구조는 그대로 |
 | 3 | 그 이상, 또는 SLO를 99.9%로 | Postgres 대기 복제본, 연결 풀러, 조회를 서버가 밀어 주는 방식으로, 컨트롤 플레인 셋, 사설 서브넷과 NAT | 구조가 바뀜. 따로 결정 기록 |
 
@@ -197,7 +197,7 @@ Postgres가 하나면 그 노드가 강한 의존성입니다. 요청은 거의 
   - `bootstrap/10-traefik.yaml`을 빼고 AWS Load Balancer Controller의 Application을 넣음. 공식 차트 `eks/aws-load-balancer-controller` 3.6.2(`https://aws.github.io/eks-charts`). 값: `clusterName: gachita-dev`, `region: ap-northeast-2`, `vpcId`(IMDS 홉 1이라 둘 다 꼭 줌), `replicaCount: 1`, `enableCertManager: true`, `enableServiceMutatorWebhook: false`, `defaultTags.Project: gachita`, 서비스 계정의 역할 `gachita-dev-alb-controller`, 컨트롤 플레인 노드 선택자와 테인트 허용, 메모리 요청 64Mi·한도 256Mi(어림). 물결 3에 둠: 컨트롤러의 AWS 자격은 파드 신원 웹훅(물결 2)이 파드를 만들 때 넣는데, 그 웹훅은 실패해도 통과시키므로(`failurePolicy: Ignore`) 웹훅이 준비되기 전에 뜬 파드는 자격 없이 뜨고 저절로 고쳐지지 않음. 웹훅 인증서를 주는 cert-manager는 물결 1이라 이미 있음. 자세한 것은 ADR-0017(PR #104).
   - `apps/edge`: cloudflared, Traefik용 GatewayClass와 Middleware, HTTPRoute의 `ExtensionRef`를 뺌. GatewayClass를 컨트롤러 것으로, Gateway 리스너는 HTTPS 443(ACM 인증서), 대상은 인스턴스·건강 확인 `/healthz`. HTTPRoute의 호스트와 경로는 그대로.
   - `apps/api/base/service.yaml`을 `NodePort`로. 포트 규칙(`platform/cluster-base/port-rules.yaml`)에 `gachita`의 `gachita-api` 서비스 하나만 예외. `network.yaml`의 들어오는 쪽을 Traefik 파드에서 공개 서브넷 대역(ALB)으로.
-- Terraform `backend/infra/terraform`
+- Terraform `backend/infra/terraform`(구현에서 달라진 것: ALB 앞단 보안 그룹은 컨트롤러가 `sourceRanges`로 만들고(ADR-0017), `worker_count`·`worker_instance_type`·`private_nodes` 변수는 2·3단계에서 넣는다. 지금 코드는 그 기본값과 같은 동작)
   - 변수 `worker_count`(기본 0), `worker_instance_type`(기본 `t4g.medium`), `private_nodes`(기본 `false`).
   - `network.tf`: 공개 서브넷 둘(`10.10.0.0/24`, `10.10.1.0/24`)과 컨트롤러가 찾는 태그(`kubernetes.io/role/elb=1`, `kubernetes.io/cluster/gachita-dev=owned`). 사설 서브넷과 NAT는 `private_nodes`일 때만. ALB 앞단 보안 그룹(Cloudflare 대역의 443만)과, 노드 보안 그룹에 그 보안 그룹에서 오는 NodePort 범위.
   - `compute.tf`: 서버 하나(`t4g.large`)와 `worker_count`만큼의 워커(가용 영역을 번갈아).
@@ -205,7 +205,7 @@ Postgres가 하나면 그 노드가 강한 의존성입니다. 요청은 거의 
   - `edge.tf`: 터널을 빼고 ACM 인증서와 검증 레코드. **ALB와 대상 그룹은 Terraform이 만들지 않음.** `gachita` 레코드는 ALB가 생긴 뒤 태그로 찾아 가리킴(펴기의 둘째 단계).
 - 접는 순서: ALB가 Terraform 상태 밖이므로 `destroy` 전에 `edge` 앱(Gateway)을 지우고, ALB가 사라진 것을 태그로 확인합니다. 그러지 않으면 ALB가 남아 비용이 나고 서브넷과 VPC 삭제를 막습니다.
 - 구축 단계 `backend/infra/cluster`: 워커가 붙는 단계는 `worker_count`가 1 이상일 때만. **서버 노드의 테인트도 워커가 있을 때만 겁니다.** 워커 없이 걸면 API와 Postgres가 갈 곳이 없습니다.
-- 문서: ADR-0013의 5절(DB 네임스페이스 둘)과 10절의 표, T26(#32)의 '서로 다른 파드로', ADR-0012의 노드 사양 표(요청 3,252 → 2,580), ADR-0015의 상태 줄. ADR-0014의 '여행 DB'와 '프로필 DB'는 데이터베이스 단위로 읽으면 그대로입니다.
+- 문서: ADR-0013의 5절(DB 네임스페이스 둘)과 10절의 표, T26(#32)의 '서로 다른 파드로', ADR-0012의 노드 사양 표(요청 3,252 → 2,708), ADR-0015의 상태 줄. ADR-0014의 '여행 DB'와 '프로필 DB'는 데이터베이스 단위로 읽으면 그대로입니다.
 
 **확인한 것(11/13, 로컬)**
 

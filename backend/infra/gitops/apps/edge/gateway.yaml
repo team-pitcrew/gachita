@@ -1,17 +1,30 @@
-# 밖에서 들어오는 길(ADR-0013). Cloudflare 엣지 → Tunnel → cloudflared → 이 Gateway(Traefik) → HTTPRoute → API.
+# 밖에서 들어오는 길(ADR-0016, ADR-0017): Cloudflare(프록시, TLS) → ALB(HTTPS 443) → 노드의 NodePort → API.
+# ALB는 AWS Load Balancer Controller(물결 3)가 이 선언을 보고 만든다. 이름은 gachita-dev로 고정(접기·레코드가 이 이름과 태그로 찾음).
+# 인증서는 리스너의 호스트 이름으로 ACM에서 찾는다(Terraform persist/가 만든 것. Git에 ARN이 없음).
 # 경로를 붙일 수 있는 네임스페이스는 gachita.io/expose: "true" 라벨이 있는 곳뿐이다.
-# 리스너 포트 8000은 Traefik의 web 진입점(파드 안 포트)이다. 서비스로는 traefik.edge:80, 밖으로는 열지 않는다.
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: alb
+spec:
+  controllerName: gateway.k8s.aws/alb
+---
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
   name: public
   namespace: edge
 spec:
-  gatewayClassName: traefik
+  gatewayClassName: alb
+  infrastructure:
+    parametersRef:
+      group: gateway.k8s.aws
+      kind: LoadBalancerConfiguration
+      name: public
   listeners:
-    - name: web
-      protocol: HTTP
-      port: 8000
+    - name: https
+      protocol: HTTPS
+      port: 443
       hostname: gachita.mangowhois.ai
       allowedRoutes:
         namespaces:
@@ -19,7 +32,34 @@ spec:
           selector:
             matchLabels: { gachita.io/expose: "true" }
 ---
-# 웹앱과 API는 같은 이름에서 나간다(API는 /api/, ADR-0010). 경로와 요청 수 제한은 API 네임스페이스에 둔다.
+# ALB 설정. 앞단 보안 그룹은 Cloudflare 대역의 443만 받는다(원본 보호. Cloudflare를 거치지 않은 요청은 ALB에 닿지 않음).
+# 대역: https://www.cloudflare.com/ips-v4 (2026-11-13). 자주 바뀌지 않지만 바뀌면 여기를 고친다.
+apiVersion: gateway.k8s.aws/v1
+kind: LoadBalancerConfiguration
+metadata:
+  name: public
+  namespace: edge
+spec:
+  loadBalancerName: gachita-dev
+  scheme: internet-facing
+  sourceRanges:
+    - 173.245.48.0/20
+    - 103.21.244.0/22
+    - 103.22.200.0/22
+    - 103.31.4.0/22
+    - 141.101.64.0/18
+    - 108.162.192.0/18
+    - 190.93.240.0/20
+    - 188.114.96.0/20
+    - 197.234.240.0/22
+    - 198.41.128.0/17
+    - 162.158.0.0/15
+    - 104.16.0.0/13
+    - 104.24.0.0/14
+    - 172.64.0.0/13
+    - 131.0.72.0/22
+---
+# 웹앱과 API는 같은 이름에서 나간다(API는 /api/, ADR-0010). 요청 수 제한은 Cloudflare 엣지(Terraform persist/).
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -27,28 +67,25 @@ metadata:
   namespace: gachita
 spec:
   parentRefs:
-    - { name: public, namespace: edge, sectionName: web }
+    - { name: public, namespace: edge, sectionName: https }
   hostnames: [gachita.mangowhois.ai]
   rules:
     - matches:
         - path: { type: PathPrefix, value: / }
-      filters:
-        - type: ExtensionRef
-          extensionRef: { group: traefik.io, kind: Middleware, name: ratelimit }
       backendRefs:
         - { name: gachita-api, port: 80 }
 ---
-# 한 사용자 주소에서 오는 요청 수 제한. 클러스터 안에서 보이는 출발지는 cloudflared라, Cloudflare가 넣는
-# CF-Connecting-IP(실제 사용자 주소)로 센다. Traefik에는 cloudflared만 닿으므로(network.yaml) 이 머리글은 믿을 수 있다.
-# 통신사 NAT 뒤의 차와 폰이 같은 주소를 쓸 수 있어 넉넉히 둔다.
-apiVersion: traefik.io/v1alpha1
-kind: Middleware
+# 대상 그룹: 노드의 NodePort(인스턴스 대상). 건강 확인은 준비 프로브와 같은 /healthz(두 DB에 닿는지).
+# 대상이 모두 나쁘면 ALB는 모두에게 보낸다(fail-open). 그래서 DB가 잠깐 멈춰도 경로가 통째로 닫히지는 않는다.
+apiVersion: gateway.k8s.aws/v1
+kind: TargetGroupConfiguration
 metadata:
-  name: ratelimit
+  name: gachita-api
   namespace: gachita
 spec:
-  rateLimit:
-    average: 20
-    burst: 40
-    sourceCriterion:
-      requestHeaderName: CF-Connecting-IP
+  targetReference:
+    name: gachita-api
+  defaultConfiguration:
+    targetType: instance
+    healthCheckConfig:
+      healthCheckPath: /healthz

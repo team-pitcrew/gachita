@@ -1,8 +1,13 @@
-# 여행·프로필 Postgres가 같이 쓰는 선언. 네임스페이스와 역할·백업 경로·크기는 trips/, profiles/에서.
+# Postgres 하나(ADR-0016): 클러스터 db, 네임스페이스 gachita-db, 데이터베이스 trips·profiles와 소유 역할 둘.
+# 주소는 쿠버네티스 DNS 이름 db-rw.gachita-db.svc.cluster.local:5432.
+# 처음 펼 때는 위 폴더(apps/db)가, 복구로 펼 때는 recover/가 이 선언을 쓴다(T52).
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
+namespace: gachita-db
 resources:
+  - namespace.yaml
   - cluster.yaml
+  - roles.yaml
   - backup.yaml
   - network.yaml
   - reader.yaml
