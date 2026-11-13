@@ -7,7 +7,7 @@ info:
     웹앱(frontend/web)과 차량 앱(frontend/car)이 부르는 API입니다. 구현은 backend/api/server.js입니다.
 
     - 모든 본문은 JSON이고 10 KB를 넘으면 413입니다. 발화 묶음 올리기(`/utterances`)만 1 MB까지 받습니다.
-    - 오류는 `{ "error": "이유" }`로 옵니다.
+    - 오류는 `{ "error": "이유", "type": "종류" }`로 옵니다. 클라이언트는 문장이 아니라 `type`으로 가릅니다(T71).
     - 기기 프로필 토큰이 있으면 `Authorization: Bearer <토큰>`으로 보냅니다. 기기 프로필 자체에는 로그인이 없습니다.
     - 구글 OAuth로 프로필을 찾아 이어 받을 수 있습니다(ADR-0006). 현대 계정 연동은 아직 없습니다(ADR-0004).
     - 여행은 만든 뒤 48시간까지 읽을 수 있습니다. 발화도 같은 시계에 지워지고, 사람이 장면으로 확정한 것만 프로필 앨범에 남습니다(ADR-0007·ADR-0014).
@@ -122,8 +122,9 @@ paths:
         토큰 없이 부르면 그 계정의 프로필을 찾아 들어갑니다. 있으면 이 기기에 쓸 토큰을 하나 더 돌려주고(다른 기기의 토큰은 그대로, ADR-0009), 없으면 프로필을 새로 만듭니다.
         찾아 들어가기는 갱신 순간에 연결을 다시 확인합니다 — 요청 중 연결이 바뀌었으면 토큰을 주지 않고 401로 끝냅니다.
         코드는 서버가 구글과 바꾸므로 클라이언트 비밀 값은 클라이언트에 없습니다(ADR-0006).
-        `redirectUri`는 우리 출처만 받습니다(T27): `https://gachita.mangowhois.ai`와 로컬 개발(`http://localhost`·`http://127.0.0.1`의 아무 포트). 다른 주소는 구글을 부르지 않고 400입니다.
-        오류는 나눠 옵니다: 400 입력 오류(허용하지 않는 `redirectUri` 포함), 401 코드 거절 또는 연결 변경, 500 서버의 클라이언트 설정 오류, 502 제공자 응답 오류, 503 제공자 일시 장애·연결 실패, 504 제공자 응답 시간 초과.
+        `redirectUri`는 우리 콜백 하나만 받습니다(T27): `https://gachita.mangowhois.ai/oauth/google/callback`, 또는 로컬 개발 `http://localhost`·`http://127.0.0.1`(아무 포트)의 같은 경로. 다른 주소는 구글을 부르지 않고 400입니다. 서버는 이 콜백 경로에 웹앱을 내줍니다.
+        **PKCE(S256)가 필수입니다.** 웹은 인가 요청에 `code_challenge`(= BASE64URL(SHA-256(verifier)))와 `code_challenge_method=S256`, `state`를 붙이고, 받은 코드와 함께 `codeVerifier`를 보냅니다. 서버가 토큰 교환에 `code_verifier`로 넘깁니다. 공개 Client ID는 `GET /api/config`에서 읽습니다.
+        오류는 나눠 옵니다: 400 입력 오류(허용하지 않는 `redirectUri`, 없거나 형식이 틀린 `codeVerifier`), 401 코드 거절(맞지 않는 `codeVerifier` 포함) 또는 연결 변경, 401 코드 거절 또는 연결 변경, 500 서버의 클라이언트 설정 오류, 502 제공자 응답 오류, 503 제공자 일시 장애·연결 실패, 504 제공자 응답 시간 초과.
       security: [{}, { profileToken: [] }]
       requestBody:
         required: true
@@ -131,10 +132,11 @@ paths:
           application/json:
             schema:
               type: object
-              required: [code, redirectUri]
+              required: [code, redirectUri, codeVerifier]
               properties:
                 code: { type: string, minLength: 1, maxLength: 500, description: 구글이 redirect 주소로 돌려준 인증 코드 }
-                redirectUri: { type: string, minLength: 1, maxLength: 500, description: "코드를 받을 때 쓴 주소. https://gachita.mangowhois.ai 또는 http://localhost·127.0.0.1의 주소를 정규형으로(사용자 정보 없이). 구글에 등록된 값과 같아야 함" }
+                redirectUri: { type: string, minLength: 1, maxLength: 500, description: "코드를 받을 때 쓴 주소. https://gachita.mangowhois.ai/oauth/google/callback, 또는 http://localhost·127.0.0.1의 같은 경로(정규형, 쿼리 없이). 구글에 등록된 값과 같아야 함" }
+                codeVerifier: { type: string, pattern: "^[A-Za-z0-9._~-]{43,128}$", description: "PKCE code_verifier(RFC 7636). 인가 요청에 보낸 code_challenge의 원래 값" }
       responses:
         "200": { description: 연결했거나 찾아 들어간 프로필, content: { application/json: { schema: { $ref: "#/components/schemas/ProfileMaybeToken" } } } }
         "201": { description: 계정으로 새로 만든 프로필, content: { application/json: { schema: { $ref: "#/components/schemas/ProfileMaybeToken" } } } }
