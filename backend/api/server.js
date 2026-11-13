@@ -79,6 +79,7 @@ export async function migrate() {
 
 async function readBody(req, limit = MAX_BODY) {
   let raw = "";
+  req.setEncoding("utf8"); // 조각 경계에 걸친 한글(3바이트)을 깨뜨리지 않는다
   for await (const chunk of req) {
     raw += chunk;
     if (raw.length > limit) fail(413, "본문이 너무 큼");
@@ -108,7 +109,7 @@ const participantOf = (req, trip) => {
 };
 
 // 동의 세대를 올리고 옛 세대의 발화를 지운다(ADR-0007).
-// 동의 철회·글 지우기 뒤에 늦게 올라온 발화가 지운 것을 되살리지 못하게 한다.
+// 동의 철회 뒤에 늦게 올라온 옛 세대 발화는 받은 것으로만 치고 저장하지 않는다(POST /utterances).
 async function bumpGeneration(trip, client) {
   trip.generation = (trip.generation ?? 1) + 1;
   await client.query("DELETE FROM utterances WHERE trip_code = $1 AND generation < $2", [trip.code, trip.generation]);
@@ -302,15 +303,18 @@ async function trips(req, [code, sub, id], b, query) {
       title: b.title === undefined ? "" : text(b.title, 40, "title"),
       status: "boarding",
       recording: false,
-      generation: 1, // 동의 세대(ADR-0007). 철회·삭제로 올라간다.
+      generation: 1, // 동의 세대(ADR-0007). 동의 철회로 올라간다.
       participants: [],
       requests: [],
       moments: [],
       version: 1,
       createdAt: Date.now(),
     };
-    await tripsDb().query("DELETE FROM trips WHERE created_at < now() - interval '48 hours'");
-    await tripsDb().query("DELETE FROM utterances WHERE trip_code NOT IN (SELECT code FROM trips)"); // 여행이 닫힌 발화도 함께 지운다
+    // 48시간 지난 여행과 그 발화·확인 순번을 한 문장으로 지운다. 지운 여행의 코드로만 찾으니(기본 키 앞부분)
+    // 발화 표 전체를 훑지 않는다 — 질의 하나는 2초에서 끊긴다(T26).
+    await tripsDb().query(`WITH gone AS (DELETE FROM trips WHERE created_at < now() - interval '48 hours' RETURNING code),
+      u AS (DELETE FROM utterances WHERE trip_code IN (SELECT code FROM gone))
+      DELETE FROM utterance_acks WHERE trip_code IN (SELECT code FROM gone)`);
     for (;;) {
       trip.code = newCode();
       const { rowCount } = await tripsDb().query("INSERT INTO trips (code, doc) VALUES ($1, $2) ON CONFLICT DO NOTHING", [trip.code, trip]);
@@ -318,10 +322,7 @@ async function trips(req, [code, sub, id], b, query) {
     }
   }
   const profile = sub === "participants" && m === "POST" && !id ? await profileOf(req) : null;
-  const out = await withTrip(code, m !== "GET", (trip, client) => handle(trip, { req, m, sub, id, b, query, profile }, client));
-  // 동의 세대가 다른 올림은 withTrip 안에서 옛 발화를 폐기하고 커밋한 뒤 이렇게 답한다(ADR-0007).
-  if (out?.stale) fail(409, "동의 세대가 바뀌었어요. 상태를 동기화한 뒤 다시 올려 주세요");
-  return out;
+  return withTrip(code, m !== "GET", (trip, client) => handle(trip, { req, m, sub, id, b, query, profile }, client));
 }
 
 async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
@@ -428,6 +429,8 @@ async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
     if (trip.moments.length >= 500) fail(409, "장면이 너무 많음");
     const hasLat = b.lat !== undefined;
     if (hasLat !== (b.lng !== undefined)) fail(400, "lat, lng: 둘 다 있거나 둘 다 없음");
+    // 고른 사람은 본문이 아니라 요청의 참가자 토큰으로 정한다. 토큰 없이 남긴 장면은 여행에만 남는다.
+    const picker = req.headers.authorization ? participantOf(req, trip) : null;
     const now = Date.now();
     const moment = {
       id: randomUUID().slice(0, 8),
@@ -438,15 +441,12 @@ async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
     trip.moments.push(moment);
     // 사람이 장면으로 확정하면 고른 사람의 프로필 앨범에 복사해 남긴다(ADR-0014).
     // 여행 잠금과 다른 저장소라 이 쓰기에는 원자성이 없다. 같은 장면 id로는 다시 복사되지 않는다.
-    if (b.by !== undefined) {
-      const picker = trip.participants.find((p) => p.id === b.by) ?? fail(400, "by: 이 여행의 참가자 id");
-      if (picker.profileId) {
-        await profilesDb().query(
-          `INSERT INTO profile_moments (id, profile_id, trip_code, at, lat, lng, label)
-           VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (id) DO NOTHING`,
-          [moment.id, picker.profileId, trip.code, moment.at, moment.lat ?? null, moment.lng ?? null, moment.label]
-        );
-      }
+    if (picker?.profileId) {
+      await profilesDb().query(
+        `INSERT INTO profile_moments (id, profile_id, trip_code, at, lat, lng, label)
+         VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (id) DO NOTHING`,
+        [moment.id, picker.profileId, trip.code, moment.at, moment.lat ?? null, moment.lng ?? null, moment.label]
+      );
     }
     return changed(201, moment);
   }
@@ -456,68 +456,73 @@ async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
     if (m !== "GET" && m !== "POST" && m !== "DELETE") fail(405, "GET, POST, DELETE만 됨");
     const caller = participantOf(req, trip);
     if (m === "POST") {
-      const generation = int(b.generation ?? 1, 1, 1_000_000, "generation");
-      if (generation !== (trip.generation ?? 1)) {
-        // 세대가 다른 발화는 받지 않고, 이미 받은 옛 세대는 폐기한다. 커밋 뒤 409로 답한다.
-        await client.query("DELETE FROM utterances WHERE trip_code = $1 AND generation < $2", [trip.code, trip.generation ?? 1]);
-        return { stale: true };
-      }
+      // 세대는 발화마다 받는다(묶음에 하나만 주면 모든 발화가 그 값). 지금보다 옛 세대의 발화는 동의 철회 전에
+      // 받아 적은 것이라 저장하지 않되 받은 것으로 쳐서 확인 순번에 넣는다. 409로 돌려보내면 확인 순번이
+      // 그 앞에서 멈춰 차량이 같은 묶음을 끝없이 다시 보낸다(ADR-0007).
+      const current = trip.generation ?? 1;
       const device = text(b.device, 40, "device");
       const items = Array.isArray(b.items) ? b.items : fail(400, "items: 배열");
       if (items.length > 500) fail(400, "items: 한 번에 500개까지");
+      // 화자(profileId)는 받지 않는다. 서버의 화자 대조(T38)만 붙인다 — 올리는 쪽이 남의 이름을 붙이지 못하게.
       const rows = items.map((it, i) => {
         const u = obj(it, `items[${i}]`);
         const hasLat = u.lat !== undefined;
         if (hasLat !== (u.lng !== undefined)) fail(400, `items[${i}].lat, lng: 둘 다 있거나 둘 다 없음`);
-        const seatArea = oneOf(u.seatArea, SEATS, `items[${i}].seatArea`);
         return [
           trip.code,
           device,
           int(u.seq, 1, 1_000_000_000, `items[${i}].seq`),
           num(u.at, 0, Date.now() + 600_000, `items[${i}].at`),
           text(u.text, 500, `items[${i}].text`),
-          seatArea,
-          u.profileId === undefined ? null : (trip.participants.some((p) => p.profileId === u.profileId) ? u.profileId : fail(400, `items[${i}].profileId: 이 여행 참가자의 프로필`)),
+          u.seatArea == null ? null : oneOf(u.seatArea, SEATS, `items[${i}].seatArea`), // 모르는 구역은 비워 둔다(T37)
           u.confidence === undefined ? null : num(u.confidence, 0, 1, `items[${i}].confidence`),
           hasLat ? num(u.lat, -90, 90, `items[${i}].lat`) : null,
           hasLat ? num(u.lng, -180, 180, `items[${i}].lng`) : null,
-          trip.generation ?? 1,
+          int(u.generation ?? b.generation, 1, current, `items[${i}].generation`),
         ];
       });
+      const fresh = rows.filter((r) => r[9] === current);
       // 같은 (기기, 순번)은 다시 보내도 한 번만 남는다(멱등). 순서는 섞여도 좋다.
-      for (let i = 0; i < rows.length; i += 100) {
-        const chunk = rows.slice(i, i + 100);
-        const values = chunk.map((_, j) => `(${Array.from({ length: 11 }, (_, k) => `$${j * 11 + k + 1}`).join(", ")})`).join(", ");
+      for (let i = 0; i < fresh.length; i += 100) {
+        const chunk = fresh.slice(i, i + 100);
+        const values = chunk.map((_, j) => `(${Array.from({ length: 10 }, (_, k) => `$${j * 10 + k + 1}`).join(", ")})`).join(", ");
         await client.query(
-          `INSERT INTO utterances (trip_code, device, seq, at, text, seat_area, profile_id, confidence, lat, lng, generation)
+          `INSERT INTO utterances (trip_code, device, seq, at, text, seat_area, confidence, lat, lng, generation)
            VALUES ${values} ON CONFLICT (trip_code, device, seq) DO NOTHING`,
           chunk.flat()
         );
       }
       // 빠짐없이 받은 마지막 순번을 돌려준다. 차량은 그 뒤만 다시 보낸다(ADR-0014).
-      const { rows: seqs } = await client.query("SELECT seq FROM utterances WHERE trip_code = $1 AND device = $2", [trip.code, device]);
-      const got = new Set(seqs.map((r) => Number(r.seq)));
-      let lastSeq = 0;
+      // 확인 순번은 발화 줄과 따로 둔다: 동의 철회나 글 지우기로 줄이 지워져도 뒤로 가지 않는다.
+      const { rows: ack } = await client.query("SELECT last_seq FROM utterance_acks WHERE trip_code = $1 AND device = $2", [trip.code, device]);
+      let lastSeq = Number(ack[0]?.last_seq ?? 0);
+      const { rows: seqs } = await client.query("SELECT seq FROM utterances WHERE trip_code = $1 AND device = $2 AND seq > $3", [trip.code, device, lastSeq]);
+      const got = new Set([...rows.map((r) => r[2]), ...seqs.map((r) => Number(r.seq))]);
       while (got.has(lastSeq + 1)) lastSeq++;
-      return [200, { lastSeq, generation: trip.generation ?? 1 }];
+      await client.query(
+        "INSERT INTO utterance_acks (trip_code, device, last_seq) VALUES ($1, $2, $3) ON CONFLICT (trip_code, device) DO UPDATE SET last_seq = EXCLUDED.last_seq",
+        [trip.code, device, lastSeq]
+      );
+      return [200, { lastSeq, generation: current }];
     }
     if (m === "GET") {
       const device = query.get("device");
       const params = [trip.code];
       let where = "trip_code = $1";
       if (device) {
-        params.push(device, Number(query.get("after") ?? 0));
+        params.push(device, int(Number(query.get("after") ?? 0), 0, 1_000_000_000, "after"));
         where += " AND device = $2 AND seq > $3";
       }
       const { rows } = await client.query(`SELECT device, seq, at, text, seat_area, profile_id, confidence, lat, lng FROM utterances WHERE ${where} ORDER BY at`, params);
       return [200, { generation: trip.generation ?? 1, recording: trip.recording, items: rows.map(asUtterance) }];
     }
     if (m === "DELETE") {
-      // 자기 글 지우기. 프로필로 참가한 사람만 자기 발화를 지울 수 있다(지운 글이 되살아나지 않게 세대를 올린다).
+      // 자기 글 지우기. 프로필로 참가한 사람만, 자기 이름이 붙은 발화만 지운다. 세대는 올리지 않는다 —
+      // 세대를 올리면 옛 세대 전부, 곧 그 여행의 모든 사람 글이 지워진다. 지운 줄의 순번은 이미 확인 순번 안이라
+      // 차량이 다시 보내지 않는다.
       if (!caller.profileId) fail(403, "프로필로 참가한 사람의 글만 지울 수 있음");
       const { rowCount } = await client.query("DELETE FROM utterances WHERE trip_code = $1 AND profile_id = $2", [trip.code, caller.profileId]);
-      await bumpGeneration(trip, client);
-      return changed(200, { deleted: rowCount });
+      return [200, { deleted: rowCount }];
     }
   }
 

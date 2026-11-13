@@ -282,6 +282,10 @@ test("조회 뒤 구글 연결이 바뀌면 오래된 계정으로 토큰을 받
 test("발화를 기록본으로 저장하고 프로필 피드로 읽는다(T39)", async () => {
   const [, trip] = await call("POST", "/api/trips", { title: "강릉" });
   const t = `/api/trips/${trip.code}`;
+  const at = (s) => trip.createdAt + s * 1000;
+  // 화자는 서버의 대조(T38)만 붙인다. 이 시험에서는 그 결과를 표에 바로 적는다.
+  const speak = (seqs, profileId) =>
+    tripsDb().query("UPDATE utterances SET profile_id = $3 WHERE trip_code = $1 AND seq = ANY($2::bigint[])", [trip.code, seqs, profileId]);
 
   // 참가자 토큰: 프로필·손님 모두 참가 응답에 한 번씩 받는다(ADR-0007)
   const [, meA] = await call("POST", "/api/profiles", { name: "아빠" });
@@ -292,31 +296,43 @@ test("발화를 기록본으로 저장하고 프로필 피드로 읽는다(T39)"
   assert.ok([ja, jb, jg].every((s) => [200, 201].includes(s)));
   for (const p of [pa, pb, pg]) assert.match(p.token, /^[A-Za-z0-9_-]{43}$/);
 
-  // 발화 묶음: 순서는 섞여도 좋고 다시 보내도 중복되지 않는다(멱등)
+  // 발화 묶음: 순서는 섞여도 좋고 다시 보내도 중복되지 않는다(멱등). 올리는 쪽이 붙인 profileId는 받지 않는다.
   const items = [
-    { seq: 3, at: trip.createdAt + 3000, text: "바다는 왜 짜?", seatArea: "ROW_2_LEFT", profileId: meB.id, confidence: 0.9, lat: 37.7, lng: 128.9 },
-    { seq: 1, at: trip.createdAt + 1000, text: "강릉 얼마나 남았어?", seatArea: "ROW_1_LEFT", profileId: meA.id },
-    { seq: 2, at: trip.createdAt + 2000, text: "휴게소 가자", seatArea: "ROW_1_LEFT", profileId: meA.id },
+    { seq: 3, at: at(3), text: "바다는 왜 짜?", seatArea: "ROW_2_LEFT", profileId: meA.id, confidence: 0.9, lat: 37.7, lng: 128.9 },
+    { seq: 1, at: at(1), text: "강릉 얼마나 남았어?", seatArea: "ROW_1_LEFT" },
+    { seq: 2, at: at(2), text: "휴게소 가자", seatArea: null },
   ];
   const [u1, r1] = await call("POST", `${t}/utterances`, { device: "car", generation: 1, items }, pa.token);
-  assert.deepEqual([u1, r1.lastSeq], [200, 3], "1~3을 다 받으면 마지막 순번은 3");
+  assert.deepEqual([u1, r1.lastSeq], [200, 3], "1~3을 다 받으면 마지막 순번은 3. 좌석 구역을 모르는 발화도 받는다");
   await call("POST", `${t}/utterances`, { device: "car", generation: 1, items: [items[1]] }, pa.token);
   // 순번 1이 빠진 기기는 빠짐없이 받은 마지막이 0이다
-  const [, r2] = await call("POST", `${t}/utterances`, { device: "phone", generation: 1, items: [{ seq: 5, at: trip.createdAt + 5000, text: "콜라 사줘", seatArea: "ROW_2_RIGHT" }] }, pg.token);
+  const [, r2] = await call("POST", `${t}/utterances`, { device: "phone", items: [{ seq: 5, at: at(5), text: "콜라 사줘", seatArea: "ROW_2_RIGHT", generation: 1 }] }, pg.token);
   assert.equal(r2.lastSeq, 0);
+  await speak([1, 2], meA.id);
+  await speak([3], meB.id);
 
   // 인증과 검증
   assert.equal((await call("POST", `${t}/utterances`, { device: "car", generation: 1, items: [] }))[0], 401, "토큰 없이는 못 올림");
   assert.equal((await call("GET", `${t}/utterances`))[0], 401);
-  assert.equal((await call("POST", `${t}/utterances`, { device: "car", generation: 1, items: [{ seq: 6, at: 1, text: "x", seatArea: "ROW_1_LEFT", lat: 37 }] }, pa.token))[0], 400, "좌표는 둘 다 있거나 둘 다 없음");
-  assert.equal((await call("POST", `${t}/utterances`, { device: "car", generation: 1, items: [{ seq: 7, at: 1, text: "x", seatArea: "ROW_1_LEFT", profileId: "00000000-0000-0000-0000-000000000000" }] }, pa.token))[0], 400, "이 여행 참가자의 프로필만");
+  assert.equal((await call("POST", `${t}/utterances`, { device: "car", generation: 1, items: [{ seq: 6, at: 1, text: "x", lat: 37 }] }, pa.token))[0], 400, "좌표는 둘 다 있거나 둘 다 없음");
+  assert.equal((await call("POST", `${t}/utterances`, { device: "car", items: [{ seq: 6, at: 1, text: "x" }] }, pa.token))[0], 400, "세대는 꼭 적는다");
+  assert.equal((await call("POST", `${t}/utterances`, { device: "car", generation: 2, items: [{ seq: 6, at: 1, text: "x" }] }, pa.token))[0], 400, "아직 없는 세대");
+  assert.equal((await call("GET", `${t}/utterances?device=car&after=abc`, null, pa.token))[0], 400);
+
+  // 64 KB가 넘는 묶음도 조각 경계에서 한글이 깨지지 않는다
+  const long = Array.from({ length: 300 }, (_, i) => ({ seq: i + 1, at: at(10), text: "가".repeat(200), generation: 1 }));
+  assert.equal((await call("POST", `${t}/utterances`, { device: "car2", items: long }, pa.token))[1].lastSeq, 300);
+  const [, car2] = await call("GET", `${t}/utterances?device=car2`, null, pa.token);
+  assert.ok(car2.items.every((u) => u.text === "가".repeat(200)), "글자가 그대로");
+  await tripsDb().query("DELETE FROM utterances WHERE trip_code = $1 AND device = 'car2'", [trip.code]);
 
   // 기록본: 발화 시간순 + 부탁 함께. 도착 할 일은 아직 비어 있다
   const [, q] = await call("POST", `${t}/requests`, { by: pg.id, text: "화장실 가고 싶어" });
   assert.ok(q.id);
   const [, tr] = await call("GET", `${t}/transcript`, null, pa.token);
   assert.deepEqual(tr.utterances.map((u) => u.text), ["강릉 얼마나 남았어?", "휴게소 가자", "바다는 왜 짜?", "콜라 사줘"]);
-  assert.deepEqual(tr.utterances[2], { device: "car", seq: 3, at: trip.createdAt + 3000, text: "바다는 왜 짜?", seatArea: "ROW_2_LEFT", profileId: meB.id, confidence: 0.9, lat: 37.7, lng: 128.9 });
+  assert.deepEqual(tr.utterances[2], { device: "car", seq: 3, at: at(3), text: "바다는 왜 짜?", seatArea: "ROW_2_LEFT", profileId: meB.id, confidence: 0.9, lat: 37.7, lng: 128.9 });
+  assert.equal(tr.utterances[1].seatArea, null);
   assert.equal(tr.requests.length, 1);
   assert.deepEqual(tr.todos, []);
 
@@ -333,41 +349,63 @@ test("발화를 기록본으로 저장하고 프로필 피드로 읽는다(T39)"
   assert.deepEqual(feedA.items.filter((i) => i.kind === "utterance").map((i) => i.text), ["휴게소 가자", "강릉 얼마나 남았어?"]);
   assert.deepEqual(feedB.items.map((i) => i.text), ["바다는 왜 짜?"]);
 
-  // 장면 확정: 고른 사람의 앨범에만 복사된다(ADR-0014)
-  const [, mom] = await call("POST", `${t}/moments`, { at: trip.createdAt + 2500, lat: 37.75, lng: 128.9, label: "휴게소 농담", by: pa.id });
+  // 장면 확정: 고른 사람(참가자 토큰의 주인)의 앨범에만 복사된다(ADR-0014). 본문으로 남을 고른 사람으로 만들 수 없다
+  const [, mom] = await call("POST", `${t}/moments`, { at: at(2.5), lat: 37.75, lng: 128.9, label: "휴게소 농담", by: pb.id }, freshA);
   const [, feedA2] = await call("GET", "/api/profiles/me/feed", null, meA.token);
   assert.deepEqual([feedA2.items[0].kind, feedA2.items[0].label, feedA2.items[0].tripCode], ["moment", "휴게소 농담", trip.code]);
   const [, feedB2] = await call("GET", "/api/profiles/me/feed", null, meB.token);
   assert.ok(feedB2.items.every((i) => i.kind === "utterance"), "고른 사람의 앨범에만");
-  assert.equal((await call("POST", `${t}/moments`, { label: "터널", by: "nobody" }))[0], 400, "없는 참가자가 골랐다고 하면 거절");
+  assert.equal((await call("POST", `${t}/moments`, { label: "터널" }, "x".repeat(43)))[0], 401, "틀린 참가자 토큰은 거절");
+  assert.equal((await call("POST", `${t}/moments`, { label: "터널" }))[0], 201, "토큰 없이 남긴 장면은 여행에만");
+  const [, feedA3] = await call("GET", "/api/profiles/me/feed", null, meA.token);
+  assert.equal(feedA3.items.filter((i) => i.kind === "moment").length, 1);
 
   // 앨범의 장면 복사본을 지운다. 여행의 moments는 그대로다
   assert.equal((await call("DELETE", `/api/profiles/me/moments/${mom.id}`, null, meA.token))[0], 204);
   assert.equal((await call("DELETE", `/api/profiles/me/moments/${mom.id}`, null, meA.token))[0], 404);
   const [, tripNow] = await call("GET", t);
-  assert.equal(tripNow.moments.length, 1);
+  assert.equal(tripNow.moments.length, 2);
 
-  // 동의 철회: 세대가 오르고 옛 세대 발화는 폐기된다
+  // 동의 철회: 세대가 오르고 옛 세대 발화는 폐기된다. 철회 전에 받아 적은 발화는 저장하지 않되
+  // 받은 것으로 쳐서 확인 순번이 앞으로 간다 — 차량이 같은 묶음을 끝없이 다시 보내지 않는다(ADR-0007)
   await call("PATCH", `${t}/participants/${pb.id}`, { consent: false });
-  assert.equal((await call("POST", `${t}/utterances`, { device: "car", generation: 1, items: [{ seq: 10, at: trip.createdAt + 10000, text: "y", seatArea: "ROW_1_LEFT" }] }, freshA))[0], 409);
   const [, gone] = await call("GET", `${t}/utterances`, null, freshA);
-  assert.equal(gone.items.length, 0, "철회 전에 받은 발화는 폐기됨");
-  assert.equal(gone.generation, 2);
-  await call("POST", `${t}/utterances`, { device: "car", generation: 2, items: [{ seq: 11, at: trip.createdAt + 11000, text: "다시 시작", seatArea: "ROW_1_LEFT", profileId: meA.id }] }, freshA);
+  assert.deepEqual([gone.items.length, gone.generation], [0, 2], "철회 전에 받은 발화는 폐기됨");
+  const late = [
+    { seq: 4, at: at(4), text: "철회 전에 받아 적음", generation: 1 },
+    { seq: 5, at: at(11), text: "다시 시작", generation: 2 },
+    { seq: 6, at: at(12), text: "응 좋아", generation: 2 },
+  ];
+  const [s3, r3] = await call("POST", `${t}/utterances`, { device: "car", items: late }, freshA);
+  assert.deepEqual([s3, r3.lastSeq, r3.generation], [200, 6, 2], "확인 순번은 지워진 줄을 넘어 앞으로만 간다");
+  const [, kept] = await call("GET", `${t}/utterances?device=car&after=0`, null, freshA);
+  assert.deepEqual(kept.items.map((u) => u.text), ["다시 시작", "응 좋아"]);
+  await speak([5], meA.id);
+  await speak([6], meB.id);
 
-  // 자기 글 지우기: 손님은 못 지우고, 프로필 참가자는 자기 발화만
+  // 자기 글 지우기: 손님은 못 지우고, 프로필 참가자는 자기 발화만. 다른 사람의 글과 확인 순번은 그대로다
   assert.equal((await call("DELETE", `${t}/utterances`, null, pg.token))[0], 403);
   const [del, delBody] = await call("DELETE", `${t}/utterances`, null, freshA);
   assert.deepEqual([del, delBody.deleted], [200, 1]);
-  const [, feedA3] = await call("GET", "/api/profiles/me/feed", null, meA.token);
-  assert.equal(feedA3.items.filter((i) => i.kind === "utterance").length, 0);
+  const [, tr2] = await call("GET", `${t}/transcript`, null, pb.token);
+  assert.deepEqual(tr2.utterances.map((u) => u.text), ["응 좋아"], "다른 사람의 글은 남는다");
+  const [, feedA4] = await call("GET", "/api/profiles/me/feed", null, meA.token);
+  assert.equal(feedA4.items.filter((i) => i.kind === "utterance").length, 0);
+  const [, r4] = await call("POST", `${t}/utterances`, { device: "car", generation: 2, items: [{ seq: 7, at: at(13), text: "다음" }] }, freshA);
+  assert.equal(r4.lastSeq, 7, "지운 뒤에도 확인 순번은 뒤로 가지 않는다");
 
-  // 48시간이 지나면 발화는 지워지고 앨범에 확정해 둔 장면만 남는다(기준 문서: 선택한 장면만 개인 앨범에)
+  // 48시간이 지나면 발화와 확인 순번은 지워지고 앨범에 확정해 둔 장면만 남는다(기준 문서: 선택한 장면만 개인 앨범에)
+  const [, mom2] = await call("POST", `${t}/moments`, { label: "바다" }, freshA);
   await tripsDb().query("UPDATE trips SET created_at = now() - interval '49 hours' WHERE code = $1", [trip.code]);
   await call("POST", "/api/trips", {}); // 여행 만들기가 묵은 여행과 발화를 치운다
-  const left = await tripsDb().query("SELECT count(*)::int AS n FROM utterances WHERE trip_code = $1", [trip.code]);
-  assert.equal(left.rows[0].n, 0, "발화는 여행과 같은 시계에 지워짐");
+  const left = await tripsDb().query(
+    "SELECT (SELECT count(*) FROM utterances WHERE trip_code = $1)::int AS u, (SELECT count(*) FROM utterance_acks WHERE trip_code = $1)::int AS a",
+    [trip.code]
+  );
+  assert.deepEqual(left.rows[0], { u: 0, a: 0 }, "발화는 여행과 같은 시계에 지워짐");
   assert.equal((await call("GET", `${t}/utterances`, null, freshA))[0], 404, "여행이 닫혔다");
+  const [, feedA5] = await call("GET", "/api/profiles/me/feed", null, meA.token);
+  assert.deepEqual(feedA5.items.map((i) => i.id), [mom2.id]);
 });
 
 test("쓰기가 몰려도 서버가 멈추지 않는다", async () => {

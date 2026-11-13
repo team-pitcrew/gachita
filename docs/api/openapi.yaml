@@ -266,7 +266,9 @@ paths:
       description: |
         차량 앱이 대화가 재미있던 순간을 표시할 때 부릅니다. `at`을 안 보내면 서버 시각을 씁니다.
         위치 없는 장면도 저장합니다(ADR-0007) — `lat`·`lng`는 둘 다 있거나 둘 다 없음만 받고, 위치 없는 장면은 목록에만 있고 지도에는 나오지 않습니다.
-        `by`에 참가자 id를 남기면 그 참가자가 프로필을 가졌을 때 장면을 **확정**으로 보고 그 프로필의 앨범에 복사해 남깁니다(ADR-0014). 여행이 닫힌 뒤에도 남는 것은 이 앨범뿐입니다.
+        장면을 고른 사람의 참가자 토큰과 함께 부르면, 그 참가자가 프로필을 가졌을 때 장면을 **확정**으로 보고 그 프로필의 앨범에 복사해 남깁니다(ADR-0014).
+        고른 사람은 본문이 아니라 토큰으로 정합니다. 토큰 없이 부르면 여행에만 남습니다. 여행이 닫힌 뒤에도 남는 것은 이 앨범뿐입니다.
+      security: [{}, { participantToken: [] }]
       requestBody:
         required: true
         content:
@@ -278,10 +280,10 @@ paths:
                 lng: { type: number, minimum: -180, maximum: 180 }
                 label: { type: string, minLength: 1, maxLength: 60 }
                 at: { type: integer, description: "epoch 밀리초. 여행을 만든 뒤부터 지금까지" }
-                by: { type: string, description: 장면을 고른 참가자 id. 이 여행의 참가자여야 함 }
       responses:
         "201": { description: 남김, content: { application/json: { schema: { $ref: "#/components/schemas/Moment" } } } }
         "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
   /api/trips/{code}/utterances:
@@ -292,8 +294,9 @@ paths:
       description: |
         차량 앱이 받아 적은 발화를 묶어 올립니다(ADR-0007·ADR-0014). 같은 `(device, seq)`는 다시 보내도 한 번만 남고(멱등), 순서는 섞여도 좋습니다.
         응답의 `lastSeq`는 빠짐없이 받은 마지막 순번입니다 — 차량은 재동기화 뒤 그 뒤만 다시 보냅니다.
-        본문의 `generation`이 여행의 동의 세대와 다르면 받지 않고(409) 이미 받은 옛 세대의 발화를 폐기합니다. 재동기화해 세대를 맞춘 뒤 다시 올리십시오.
-        `profileId`는 이 여행 참가자의 프로필만 받습니다(좌석이 확실할 때 차량이 붙이고, 서버의 화자 대조 T38이 다시 채웁니다).
+        `lastSeq`는 발화 줄과 따로 적어 두어 뒤로 가지 않습니다(동의 철회·글 지우기로 줄이 지워져도).
+        발화마다 만들 때의 동의 세대(`generation`, 없으면 본문의 `generation`)를 적습니다. 지금 세대보다 옛 세대의 발화는 저장하지 않되 받은 것으로 쳐서 `lastSeq`에 넣습니다(ADR-0007) — 차량은 같은 발화를 다시 보내지 않아도 됩니다.
+        화자(`profileId`)는 받지 않습니다. 서버의 화자 대조(T38)가 붙입니다.
       security: [{ participantToken: [] }]
       requestBody:
         required: true
@@ -304,7 +307,7 @@ paths:
               required: [device, items]
               properties:
                 device: { type: string, minLength: 1, maxLength: 40, description: 발화를 올리는 기기의 이름(차량 앱이 정함) }
-                generation: { type: integer, minimum: 1, description: 발화를 만들 때의 동의 세대. 기본 1 }
+                generation: { type: integer, minimum: 1, description: 발화마다 세대를 적지 않았을 때 모든 발화의 세대. 둘 다 없으면 400 }
                 items:
                   type: array
                   maxItems: 500
@@ -323,7 +326,6 @@ paths:
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
-        "409": { $ref: "#/components/responses/Error" }
         "413": { $ref: "#/components/responses/Error" }
     get:
       tags: [기록본]
@@ -345,14 +347,15 @@ paths:
                   generation: { type: integer, description: 지금 동의 세대 }
                   recording: { type: boolean, description: 지금 녹음 가능 여부 }
                   items: { type: array, items: { $ref: "#/components/schemas/Utterance" } }
+        "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
     delete:
       tags: [기록본]
       summary: 자기 발화 지우기
       description: |
-        참가자 토큰의 주인이 프로필로 참가했을 때만, 그 프로필의 발화를 이 여행에서 지웁니다(손님은 403).
-        지우면 여행의 동의 세대가 오르고, 그 전에 받은 발화는 모두 폐기됩니다 — 늦게 올라온 발화가 지운 글을 되살리지 못하게 하는 것입니다(ADR-0007).
+        참가자 토큰의 주인이 프로필로 참가했을 때만, 그 프로필의 발화를 이 여행에서 지웁니다(손님은 403). 다른 사람의 발화는 남습니다.
+        동의 세대는 오르지 않습니다. 지운 발화의 순번은 이미 `lastSeq` 안이라 차량이 다시 보내지 않습니다.
       security: [{ participantToken: [] }]
       responses:
         "200":
@@ -504,13 +507,13 @@ components:
         label: { type: string }
     UtteranceInput:
       type: object
-      required: [seq, at, text, seatArea]
+      required: [seq, at, text]
       properties:
         seq: { type: integer, minimum: 1, maximum: 1000000000, description: 기기가 매기는 순번 }
         at: { type: integer, description: epoch 밀리초 }
         text: { type: string, minLength: 1, maxLength: 500 }
-        seatArea: { $ref: "#/components/schemas/Seat" }
-        profileId: { type: string, format: uuid, description: 이 여행 참가자의 프로필. 확실할 때만 }
+        seatArea: { anyOf: [{ $ref: "#/components/schemas/Seat" }, { type: "null" }], description: 좌석 구역(T37). 모르면 null이나 생략 }
+        generation: { type: integer, minimum: 1, description: 발화를 만들 때의 동의 세대(올릴 때만). 없으면 본문의 generation }
         confidence: { type: number, minimum: 0, maximum: 1, description: 받아쓰기 확신도. 제공자가 주면 }
         lat: { type: number, minimum: -90, maximum: 90, description: 좌표는 둘 다 있거나 둘 다 없음 }
         lng: { type: number, minimum: -180, maximum: 180 }
@@ -519,7 +522,9 @@ components:
         - $ref: "#/components/schemas/UtteranceInput"
         - type: object
           required: [device]
-          properties: { device: { type: string } }
+          properties:
+            device: { type: string }
+            profileId: { type: string, format: uuid, description: 서버의 화자 대조(T38)가 붙인 프로필. 아직 없으면 생략 }
     Transcript:
       type: object
       required: [generation, utterances, requests, todos]
@@ -549,7 +554,7 @@ components:
         title: { type: string }
         status: { $ref: "#/components/schemas/TripStatus" }
         recording: { type: boolean }
-        generation: { type: integer, description: 동의 세대(ADR-0007). 철회·삭제로 올라감 }
+        generation: { type: integer, description: 동의 세대(ADR-0007). 동의 철회로 올라감 }
         participants: { type: array, items: { $ref: "#/components/schemas/Participant" } }
         requests: { type: array, items: { $ref: "#/components/schemas/Request" } }
         moments: { type: array, items: { $ref: "#/components/schemas/Moment" } }
