@@ -43,6 +43,10 @@ class Server(base: String) {
         call("PATCH", "/api/trips/$code/requests/$id", JSONObject().put("status", status))
     }
 
+    /** 동승 연결(T46, #195): 탑승자 폰 QR의 code와 고른 자리로 참가시킨다. 새 참가자의 이름. 자리가 찼거나 이미 쓴 QR은 409, 만료·없는 QR은 404. 동의는 폰에서만 켠다. */
+    fun rideLink(code: String, qr: String, seat: Seat): String =
+        JSONObject(call("POST", "/api/trips/$code/ride-links", JSONObject().put("code", qr).put("seat", seat.name))!!).getJSONObject("participant").getString("name")
+
     /** 최신 여행. 보낸 version에서 바뀐 것이 없으면(304) null. 서버가 여행을 모르면(없음, 48시간 지남) Gone. */
     fun trip(code: String, version: Int? = null): Got? = call("GET", "/api/trips/$code" + (version?.let { "?v=$it" } ?: ""), null)?.let(::got)
 
