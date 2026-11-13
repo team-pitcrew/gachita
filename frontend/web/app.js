@@ -304,7 +304,7 @@ function inviteView() {
     act(async () => {
       const body = profile ? {} : { name: pdraft.name.trim(), device: "폰", ...(pdraft.character && { character: pdraft.character }) };
       const res = await api("POST", `/j/${inviteCode()}`, body, store("profile")).catch((e) => {
-        if (e.status === 404 || e.status === 409) inviteError = e.message;
+        if (e.status === 404 || e.status === 409) (inviteError = e.message), render(); // act()는 실패하면 다시 그리지 않는다
         throw e;
       });
       if (res.token) store("profile", res.token);
