@@ -62,7 +62,8 @@ let trip = null; // 서버에서 받은 여행
 let profile = null; // 이 폰의 프로필(GET /api/profiles/me). 토큰은 store("profile")
 let photo = ""; // 내 사진(object URL)
 let invited = null; // 초대 수락 결과
-const pdraft = { name: "", character: "", photo: null, preview: "", tempC: 22, heat: 0, vent: 0, consentDefault: false };
+let inviteError = ""; // 쓸 수 없는 초대(없음·취소·만료·횟수 소진)
+const pdraft = { name: "", character: "", photo: null, preview: "", tempC: 22, heat: 0, vent: 0, prefsTouched: false, consentDefault: false };
 let failed = ""; // 여행을 불러오지 못한 이유
 let offline = false;
 let stale = false; // 입력 중에 온 변경은 입력이 끝난 뒤 그린다
@@ -84,8 +85,8 @@ async function api(method, path, body, token) {
     body: body instanceof Blob ? body : body && JSON.stringify(body),
   });
   if (res.status === 304 || res.status === 204) return null;
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error);
+  const data = await res.json().catch(() => ({})); // 앞단(ALB 등)의 HTML 오류 쪽은 JSON이 아니다
+  if (!res.ok) throw Object.assign(new Error(data.error ?? `서버가 잠시 답하지 못했어요(${res.status}). 잠시 뒤 다시 해 주세요.`), { status: res.status });
   return data;
 }
 const call = (method, path, body) => api(method, `/trips${path}`, body);
@@ -100,7 +101,7 @@ async function loadProfile() {
   try {
     profile = await mine("GET", "/profiles/me");
   } catch (e) {
-    if (!(e instanceof TypeError)) store("profile", null);
+    if (e.status === 401) store("profile", null); // 서버가 모르는 토큰일 때만 잊는다(서버가 잠시 멈춘 것과 구분)
     return;
   }
   if (profile.hasPhoto) {
@@ -188,7 +189,7 @@ const avatar = (p, src) => h("span", { className: "avatar", "aria-hidden": "true
 function fillDraft() {
   const p = profile?.prefs?.driver ?? {};
   URL.revokeObjectURL(pdraft.preview);
-  Object.assign(pdraft, { name: profile?.name ?? "", character: profile?.character ?? "", photo: null, preview: "", tempC: p.tempC ?? 22, heat: p.heat ?? 0, vent: p.vent ?? 0, consentDefault: profile?.consentDefault ?? false });
+  Object.assign(pdraft, { name: profile?.name ?? "", character: profile?.character ?? "", photo: null, preview: "", tempC: p.tempC ?? 22, heat: p.heat ?? 0, vent: p.vent ?? 0, prefsTouched: false, consentDefault: profile?.consentDefault ?? false });
 }
 
 // 프로필 칸: 이름이나 별명, 사진이나 캐릭터. full이면 자리 설정과 기록 동의 기본값까지.
@@ -208,7 +209,7 @@ function profileFields(full) {
   // 얼굴만 다시 그린다(화면 전체를 다시 그리면 고른 파일 이름이 지워져 보인다)
   const face = () => app.querySelector(".face .avatar")?.replaceWith(avatar({ name: pdraft.name, character: pdraft.character }, pdraft.preview || photo));
   const temp = h("output", { "aria-live": "polite" }, `${pdraft.tempC.toFixed(1)}℃`);
-  const bump = (d) => () => (temp.textContent = `${(pdraft.tempC = Math.min(27, Math.max(17, pdraft.tempC + d))).toFixed(1)}℃`);
+  const bump = (d) => () => ((pdraft.prefsTouched = true), (temp.textContent = `${(pdraft.tempC = Math.min(27, Math.max(17, pdraft.tempC + d))).toFixed(1)}℃`));
   return [
     h("label", { className: "field" }, h("span", {}, "이름 또는 별명"), h("input", { value: pdraft.name, required: true, maxLength: 20, autocomplete: "nickname", oninput: (e) => (pdraft.name = e.target.value) })),
     h(
@@ -224,8 +225,8 @@ function profileFields(full) {
         { className: "card" },
         h("p", { className: "what" }, "자리 설정(참가할 때 미리 채워요)"),
         h("div", { className: "temp" }, h("button", { type: "button", onclick: bump(-0.5), "aria-label": "온도 낮추기" }, "−"), temp, h("button", { type: "button", onclick: bump(0.5), "aria-label": "온도 올리기" }, "+")),
-        chipGroup("시트 열선", "heat", LEVEL.map((l, i) => [i, l]), pdraft.heat, (v) => (pdraft.heat = v)),
-        chipGroup("시트 통풍", "vent", LEVEL.map((l, i) => [i, l]), pdraft.vent, (v) => (pdraft.vent = v)),
+        chipGroup("시트 열선", "heat", LEVEL.map((l, i) => [i, l]), pdraft.heat, (v) => ((pdraft.heat = v), (pdraft.prefsTouched = true))),
+        chipGroup("시트 통풍", "vent", LEVEL.map((l, i) => [i, l]), pdraft.vent, (v) => ((pdraft.vent = v), (pdraft.prefsTouched = true))),
       ),
     full &&
       h("label", { className: "chip" }, h("input", { type: "checkbox", checked: pdraft.consentDefault, onchange: (e) => (pdraft.consentDefault = e.target.checked) }), "참가할 때 대화 기록 동의를 미리 켜 둠"),
@@ -235,9 +236,17 @@ function profileFields(full) {
 const saveProfile = () =>
   act(async () => {
     const p = { tempC: pdraft.tempC, heat: pdraft.heat, vent: pdraft.vent }; // ponytail: 자리마다 따로 두지 않고 셋에 같은 값. 자리별로 다르게 원하면 그때 나눈다
-    const body = { name: pdraft.name.trim(), consentDefault: pdraft.consentDefault, prefs: { driver: p, passenger: p, rear: p }, ...(pdraft.character && { character: pdraft.character }) };
-    if (profile) await mine("PATCH", "/profiles/me", body);
-    else store("profile", (await api("POST", "/profiles", { ...body, device: "폰" })).token);
+    const fresh = !store("profile");
+    const body = {
+      name: pdraft.name.trim(),
+      consentDefault: pdraft.consentDefault,
+      ...((fresh || pdraft.prefsTouched) && { prefs: { driver: p, passenger: p, rear: p } }), // 손대지 않았으면 자리별 값을 그대로 둔다
+      ...(pdraft.character && { character: pdraft.character }),
+    };
+    if (fresh) {
+      store("profile", (await api("POST", "/profiles", { ...body, device: "폰" })).token);
+      await loadProfile(); // 사진 올리기가 실패해도 다음 저장은 이 프로필을 고친다
+    } else await mine("PATCH", "/profiles/me", body);
     if (pdraft.photo) await mine("PUT", "/profiles/me/photo", pdraft.photo);
     await loadProfile();
     toast("프로필을 저장했어요.");
@@ -246,7 +255,7 @@ const saveProfile = () =>
 
 function profileView() {
   const remove = () =>
-    confirm("프로필과 남긴 장면 앨범이 지워져요. 지울까요?") &&
+    confirm("프로필과 남긴 장면 앨범, 내가 대표인 그룹과 내가 만든 아이 프로필까지 지워져요. 지울까요?") &&
     act(async () => {
       await mine("DELETE", "/profiles/me");
       store("profile", null);
@@ -275,6 +284,13 @@ function profileView() {
 
 // QR로 받은 그룹 초대(/j/<초대>). 프로필이 있으면 그 프로필로, 없으면 이름과 얼굴만 정해 새로 만든다.
 function inviteView() {
+  if (inviteError)
+    return [
+      header(h("span", { className: "brand" }, "같이타")),
+      h("h1", {}, "이 초대는 쓸 수 없어요"),
+      h("p", { className: "sub" }, `${inviteError}. 대표에게 새 초대를 부탁해 주세요.`),
+      bar(button("처음으로", () => (location.href = "/"), "primary")),
+    ];
   if (invited) {
     const kind = invited.group.kind === "family" ? "가족" : "동승자";
     return [
@@ -287,7 +303,10 @@ function inviteView() {
   const accept = () =>
     act(async () => {
       const body = profile ? {} : { name: pdraft.name.trim(), device: "폰", ...(pdraft.character && { character: pdraft.character }) };
-      const res = await api("POST", `/j/${inviteCode()}`, body, store("profile"));
+      const res = await api("POST", `/j/${inviteCode()}`, body, store("profile")).catch((e) => {
+        if (e.status === 404 || e.status === 409) inviteError = e.message;
+        throw e;
+      });
       if (res.token) store("profile", res.token);
       if (res.token && pdraft.photo) await mine("PUT", "/profiles/me/photo", pdraft.photo);
       await loadProfile();
