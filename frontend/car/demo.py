@@ -12,7 +12,8 @@
 - 대사는 macOS say(Yuna) 합성 음성이다. 영상에는 팀원이 녹음한 대사로 바꾸는 편이 낫다(docs/demo-video.md).
 - 마트 도착은 차를 옮기지 않고 기어 P로 연출한다. 앱은 '내비 목적지가 할 일의 장소인가'로 도착을 본다.
 - 결과: OUT/scene-N.webm(원본), OUT/scene-N.mp4(대사를 섞고 '에뮬레이터 실행 화면'을 적은 것), OUT/draft.mp4(이어 붙인 가편집),
-  OUT/short.mp4(숏폼용 세로 1080×1920: 위는 Driving view의 속도·기어, 아래는 우리 앱 왼쪽 칸. 장면 2~4), OUT/clips.json.
+  OUT/short.mp4(숏폼용 세로 1080×1920, 60초 안: 위는 Driving view의 속도·기어, 아래는 우리 앱 왼쪽 칸. 장면 3~4), OUT/clips.json.
+- 디버그 APK로 찍는다(서버·목적지를 실행 인자로 받음). 서명이 다른 release가 깔려 있으면 지우고 깐다.
 - 녹화는 두고 섞기만 다시: python3 frontend/car/demo.py --remix <폴더>
 """
 import json, shlex, subprocess, sys, threading, time
@@ -60,7 +61,7 @@ def speed(kmh):
 
 
 def mix(n):
-    """장면 녹화에 넣은 대사를 섞고(TTS는 작게 녹음돼 키움) 오른쪽 위에 표시를 적는다."""
+    """장면 녹화에 넣은 대사를 섞고(TTS는 작게 녹음돼 키움) 오른쪽 아래(앱 창 안)에 표시를 적는다."""
     src = OUT / f"scene-{n}.webm"; mine = [c for c in clips if c["scene"] == n]
     args = ["ffmpeg", "-y", "-loglevel", "error", "-i", str(src)] + sum((["-i", str(OUT / "inputs" / f"{c['clip']}.wav")] for c in mine), [])
     parts = ["[0:a]volume=3[a0]"] + [f"[{i + 1}:a]adelay={max(0, c['offset_ms'])}:all=1[a{i + 1}]" for i, c in enumerate(mine)]
@@ -76,7 +77,10 @@ def main(apk):
     inj = cap.Injector()
     for name, lines in LINES.items(): cap.fixture(name, lines, lead=0.5, tail=2.5)
     note("apk", sha256=e2e.hashlib.sha256(open(apk, "rb").read()).hexdigest())
-    subprocess.run(ADB + ["install", "--user", "10", "-r", "-g", apk], capture_output=True)
+    out = subprocess.run(ADB + ["install", "--user", "10", "-r", "-g", apk], capture_output=True, text=True).stdout
+    if "INSTALL_FAILED_UPDATE_INCOMPATIBLE" in out:  # 서명이 다른 release가 깔려 있음
+        adb("uninstall", PKG); out = subprocess.run(ADB + ["install", "--user", "10", "-r", "-g", apk], capture_output=True, text=True).stdout
+    if "Success" not in out: raise SystemExit(f"APK를 깔지 못했습니다: {out.strip()[-200:]}")
     gear("Park")
     adb("shell", "am", "force-stop", "--user", "10", PKG); adb("shell", "pm", "clear", "--user", "10", PKG)
     for perm in ("RECORD_AUDIO", "POST_NOTIFICATIONS"): adb("shell", "pm", "grant", "--user", "10", PKG, f"android.permission.{perm}")
@@ -85,6 +89,22 @@ def main(apk):
     check("내비 목적지 이마트 강릉점", wait_log("경로 시작 이마트 강릉점", k, 30))
     time.sleep(2); front_app(); time.sleep(1)
 
+    try:
+        scenes(inj)
+    finally:  # 중간에 멈춰도 에뮬레이터를 주차·정지·기록 꺼짐으로 돌려 둔다
+        subprocess.run(ADB + ["emu", "screenrecord", "stop"], capture_output=True); speed(0); gear("Park")
+    tap_switch(); time.sleep(1)
+
+    (OUT / "clips.json").write_text(json.dumps(clips, ensure_ascii=False, indent=1))
+    cut()
+    (OUT / "results.json").write_text(json.dumps({"clips": clips, "log": e2e.log}, ensure_ascii=False, indent=1))
+    (OUT / "app-log.json").write_text(json.dumps(app_log, ensure_ascii=False, indent=1))
+    fails = [x["name"] for x in e2e.log if x["step"] == "check" and not x["ok"]]
+    print("실패:", fails if fails else "없음")
+    sys.exit(1 if fails else 0)
+
+
+def scenes(inj):
     with Scene(1, "기록 동의"):
         time.sleep(2); tap_text("여행 만들기"); time.sleep(5)
         tap_switch()
@@ -108,15 +128,6 @@ def main(apk):
         speed(0); k = len(app_log); gear("Park")
         check("도착 브리핑", wait_log(r"도착 브리핑 마트 2건", k, 10)); time.sleep(9)
         k = len(app_log); check("완료 누름", tap_text("완료", last=False) and wait_log(r"할 일 완료", k, 5)); time.sleep(3)
-    tap_switch(); time.sleep(1)
-
-    (OUT / "clips.json").write_text(json.dumps(clips, ensure_ascii=False, indent=1))
-    cut()
-    (OUT / "results.json").write_text(json.dumps({"clips": clips, "log": e2e.log}, ensure_ascii=False, indent=1))
-    (OUT / "app-log.json").write_text(json.dumps(app_log, ensure_ascii=False, indent=1))
-    fails = [x["name"] for x in e2e.log if x["step"] == "check" and not x["ok"]]
-    print("실패:", fails if fails else "없음")
-    sys.exit(1 if fails else 0)
 
 
 def vertical(n):
@@ -127,16 +138,17 @@ def vertical(n):
                     "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "24", "-c:a", "aac", "-b:a", "160k", str(OUT / f"short-{n}.mp4")], check=True)
 
 
-def join(names, out):
+def join(names, out, limit=None):
     (OUT / f"{out}.txt").write_text("".join(f"file '{n}.mp4'\n" for n in names))
-    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", str(OUT / f"{out}.txt"), "-c", "copy", str(OUT / f"{out}.mp4")], check=True)
+    cap_s = ["-t", str(limit)] if limit else []
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", str(OUT / f"{out}.txt")] + cap_s + ["-c", "copy", str(OUT / f"{out}.mp4")], check=True)
 
 
 def cut():
     for n in range(1, 5): mix(n)
     join([f"scene-{n}" for n in range(1, 5)], "draft")
-    for n in range(2, 5): vertical(n)
-    join([f"short-{n}" for n in range(2, 5)], "short")
+    for n in (3, 4): vertical(n)
+    join(["short-3", "short-4"], "short", limit=60)  # 숏폼은 30초~1분(docs/demo-video.md)
 
 
 def remix():
@@ -146,4 +158,5 @@ def remix():
 
 
 if __name__ == "__main__":
+    if len(sys.argv) < 3: raise SystemExit("사용: python3 demo.py <디버그 APK> <저장소 밖 폴더>  또는  python3 demo.py --remix <폴더>")
     remix() if sys.argv[1] == "--remix" else main(sys.argv[1])
