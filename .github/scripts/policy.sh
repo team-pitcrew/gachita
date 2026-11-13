@@ -19,7 +19,7 @@ case "$kind" in
     exit 1
     ;;
   branch)
-    if printf '%s' "$value" | grep -Eq '^(main|develop|bot/sync-tasks)$'; then exit 0; fi
+    if printf '%s' "$value" | grep -Eq '^(main|develop|bot/sync-tasks|bot/deploy-tag)$'; then exit 0; fi
     if printf '%s' "$value" | grep -Eq '^(feature|hotfix)/T[0-9]+-[a-z0-9][a-z0-9-]*$'; then exit 0; fi
     if printf '%s' "$value" | grep -Eq '^release/v[0-9]+\.[0-9]+\.[0-9]+$'; then exit 0; fi
     echo "브랜치 이름은 feature/T번호-설명, hotfix/T번호-설명, release/vX.Y.Z 중 하나입니다. 예: feature/T3-device-profile" >&2
@@ -30,7 +30,7 @@ case "$kind" in
     # gitflow: 어느 브랜치가 어디로 들어갈 수 있는가
     base=${3:?PR 대상 브랜치}
     case "$value" in
-      feature/* | bot/sync-tasks) ok=develop ;;
+      feature/* | bot/sync-tasks | bot/deploy-tag) ok=develop ;;
       release/* | hotfix/*) ok="main develop" ;;
       *) ok="" ;;
     esac
