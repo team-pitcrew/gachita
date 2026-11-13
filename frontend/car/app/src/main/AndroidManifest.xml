@@ -3,6 +3,7 @@
  <uses-permission android:name="android.permission.INTERNET" />
  <uses-permission android:name="pleos.car.permission.CAR_DRIVE" />
  <uses-permission android:name="pleos.car.permission.NAVI_ROUTE" />
+ <uses-permission android:name="pleos.car.permission.NAVI_ROUTE_SEARCH" /> <!-- 경로 요청·경유지 추가(requestRoute, addWaypoint)에 필요. 없으면 SecurityException(T9 에뮬레이터) -->
  <uses-permission android:name="pleos.car.permission.TTS_SERVICE" />
  <uses-permission android:name="pleos.car.permission.STT_SERVICE" />
  <uses-permission android:name="android.permission.RECORD_AUDIO" />
@@ -16,7 +17,9 @@
  <application android:label="같이타" android:icon="@drawable/ic_launcher" android:theme="@android:style/Theme.Material.Light.NoActionBar"
   android:allowBackup="false" android:networkSecurityConfig="@xml/network_security_config">
   <uses-library android:name="ai.pleos.playground.car" android:required="true" />
-  <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTop" android:resizeableActivity="true">
+  <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTop" android:resizeableActivity="true"
+   android:configChanges="uiMode|orientation|screenSize|smallestScreenSize|screenLayout|density">
+   <!-- 낮·밤 전환이나 창 크기 변화로 화면이 다시 만들어지면 내비 답을 기다리던 경유지 추가와 수음이 끊긴다. Compose가 바뀐 설정으로 다시 그린다 -->
    <meta-data android:name="distractionOptimized" android:value="true" />
    <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
   </activity>

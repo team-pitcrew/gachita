@@ -39,6 +39,8 @@ object Live {
     var count by mutableStateOf(0)
     var pending by mutableStateOf(0)
     @Volatile var gear: String? = null
+    /** 받아 적은 말 한 건이 보관함에 들어갈 때마다(메인 스레드). 부탁을 알아채는 화면(T9)이 건다. */
+    var onHeard: ((Utterance) -> Unit)? = null
     var box: Outbox? = null
         private set
 
@@ -137,6 +139,7 @@ class CaptureService : Service() {
                     val u = box.add(d, Live.gear)
                     Live.show(box)
                     Log.i(TAG, "발화 ${u.seq} ${u.text.length}자 ${u.endedAt - u.startedAt}ms") // 글자는 보관함에만
+                    Live.onHeard?.invoke(u)
                 }
             }
         }
