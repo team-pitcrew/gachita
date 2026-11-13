@@ -1,0 +1,120 @@
+name: terraform
+
+# Terraform 계획과 적용을 OIDC로 받은 AWS 역할로 돌린다. 저장소와 서버에 AWS 열쇠를 두지 않는다(ADR-0011).
+# 필수 검사(ci.yml)와 따로 돈다. 형식·정합성 검사는 ci.yml의 backend-infra가 그대로 맡는다.
+#   PR: backend/infra/terraform/ 이 바뀌면 계획 역할로 plan을 돌려 PR 댓글로 남긴다.
+#   수동 실행(develop에서만): 적용 역할로 plan을 돌리고, apply를 고르면 그 계획을 적용한다. 비용이 생기므로 지환님이 승인한 때에만 고른다.
+# 역할과 상태 버킷은 저장소 변수(AWS_PLAN_ROLE_ARN, AWS_APPLY_ROLE_ARN, TF_STATE_BUCKET)로 받는다. 비어 있으면 "역할이 없어 건너뜀"으로 끝난다.
+on:
+  pull_request:
+    paths:
+      - backend/infra/terraform/**
+      - .github/workflows/terraform.yml
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: 계획을 적용한다(비용이 생긴다. 승인받은 뒤에만)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write # OIDC 토큰으로 AWS 역할을 받는다
+  pull-requests: write # 계획을 PR 댓글로 남긴다
+
+concurrency:
+  group: terraform-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # main: 서비스 자원(backend/infra/terraform). account: OIDC 역할과 권한 경계(사람이 로컬에서만 적용)
+        stack: [main, account]
+    env:
+      STACK: ${{ matrix.stack }}
+      DIR: ${{ matrix.stack == 'account' && 'backend/infra/terraform/account' || 'backend/infra/terraform' }}
+      KEY: ${{ matrix.stack == 'account' && 'account/terraform.tfstate' || 'dev/terraform.tfstate' }}
+      ROLE: ${{ github.event_name == 'pull_request' && vars.AWS_PLAN_ROLE_ARN || vars.AWS_APPLY_ROLE_ARN }}
+      BUCKET: ${{ vars.TF_STATE_BUCKET }}
+    steps:
+      - name: 역할 확인
+        id: gate
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+        run: |
+          skip() { echo "$1"; echo "$1" >> "$GITHUB_STEP_SUMMARY"; echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0; }
+          if [ -z "$ROLE" ] || [ -z "$BUCKET" ]; then
+            skip "역할이 없어 건너뜀($STACK): 저장소 변수 AWS_PLAN_ROLE_ARN·AWS_APPLY_ROLE_ARN·TF_STATE_BUCKET이 비어 있습니다. 만드는 순서는 backend/infra/terraform/README.md의 '처음 한 번'."
+          fi
+          if [ "$EVENT" = workflow_dispatch ] && [ "$STACK" = account ]; then
+            skip "계정 설정(account)은 CI가 고치지 않습니다. 사람이 로컬 자격으로 적용합니다."
+          fi
+          if [ "$EVENT" = workflow_dispatch ] && [ "$REF" != refs/heads/develop ]; then
+            echo "::error::수동 실행은 develop에서만 됩니다(적용 역할이 develop만 믿음). 지금: $REF"; exit 1
+          fi
+      - uses: actions/checkout@v7
+        if: steps.gate.outputs.skip != 'true'
+      - uses: hashicorp/setup-terraform@v4
+        if: steps.gate.outputs.skip != 'true'
+        with:
+          terraform_version: "1.17.1"
+          terraform_wrapper: false
+      - uses: aws-actions/configure-aws-credentials@v6
+        if: steps.gate.outputs.skip != 'true'
+        with:
+          role-to-assume: ${{ env.ROLE }}
+          role-session-name: gachita-${{ matrix.stack }}-${{ github.run_id }}
+          aws-region: ap-northeast-2
+      - name: 초기화(S3 상태)
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          terraform -chdir="$DIR" init -input=false \
+            -backend-config="bucket=$BUCKET" -backend-config="key=$KEY" \
+            -backend-config=region=ap-northeast-2 -backend-config=use_lockfile=true -backend-config=encrypt=true
+      - name: 계획
+        if: steps.gate.outputs.skip != 'true'
+        env:
+          # PR의 계획은 상태를 잠그지 않는다(계획 역할은 상태에 쓰지 못함). 수동 실행은 잠근다.
+          LOCK: ${{ github.event_name == 'pull_request' && '-lock=false' || '-lock=true' }}
+        run: |
+          terraform -chdir="$DIR" plan -input=false -no-color $LOCK -out=tfplan
+          terraform -chdir="$DIR" show -no-color tfplan > "$RUNNER_TEMP/plan.txt"
+          { echo "### Terraform plan · \`$DIR\`"; echo; grep -E '^(Plan:|No changes)' "$RUNNER_TEMP/plan.txt" || true; } >> "$GITHUB_STEP_SUMMARY"
+      - name: PR에 계획 남기기
+        if: steps.gate.outputs.skip != 'true' && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          marker="<!-- terraform-plan:$STACK -->"
+          body="$RUNNER_TEMP/comment.md"
+          {
+            echo "$marker"
+            echo "### Terraform plan · \`$DIR\` · $(git rev-parse --short HEAD)"
+            echo
+            grep -E '^(Plan:|No changes)' "$RUNNER_TEMP/plan.txt" || true
+            echo
+            echo '<details><summary>전체 계획</summary>'
+            echo
+            echo '```'
+            head -c 60000 "$RUNNER_TEMP/plan.txt"
+            echo '```'
+            echo '</details>'
+          } > "$body"
+          # 같은 PR에는 묶음마다 댓글 하나를 두고 고쳐 쓴다
+          id=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
+            -q ".[] | select(.body | startswith(\"$marker\")) | .id" | head -1)
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -F "body=@$body" > /dev/null
+          else
+            gh pr comment "$PR" -R "$GITHUB_REPOSITORY" -F "$body"
+          fi
+      - name: 적용
+        if: steps.gate.outputs.skip != 'true' && github.event_name == 'workflow_dispatch' && inputs.apply && matrix.stack == 'main'
+        run: terraform -chdir="$DIR" apply -input=false tfplan
