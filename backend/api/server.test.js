@@ -897,6 +897,14 @@ test("사람이 지운 클립은 철회·다시 동의 뒤에도 받지 않고, 
   const heard = await fetch(`${base}${t}/recordings/${m2.id}`, { headers: { authorization: `Bearer ${mom.token}` } });
   assert.equal(heard.status, 200, "새 클립은 지운 표시 없이 들린다");
   assert.equal((await del(m2)).status, 204, "다시 지우면 됨");
+
+  // 지우는 사이(버킷을 기다리는 동안) 동의 철회가 줄을 먼저 지워도 지운 표시는 남는다 — 다시 동의해도 그 장면은 409
+  const [, m3] = await call("POST", `${t}/moments`, {});
+  assert.equal((await up(m3, 3)).status, 201);
+  s3.onDelete = () => consent(false);
+  assert.equal((await del(m3)).status, 204);
+  await consent(true);
+  assert.equal((await up(m3, 4)).status, 409, "철회와 겹친 지우기도 표시를 남김");
 });
 
 test("장면 후보는 말이 몰린 구간을 규칙으로 고르고, 숏폼은 클립과 자막 큐로 내준다(T43)", async () => {

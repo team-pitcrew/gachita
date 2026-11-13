@@ -522,17 +522,22 @@ async function recordings(code, id, req, query) {
   if (m === "DELETE") {
     // 이 여행의 참가자라면 누구나 — 동의 끄기처럼 지우는 쪽은 넓게 둔다. 버킷에서 먼저 지우고(실패하면 503, 다시 하면 됨)
     // 줄에는 지운 표시를 남긴다: 차가 늦게 다시 올려도 되살아나지 않게. 받아 적은 글과 장면은 그대로다.
-    const { trip, row } = await withTrip(code, false, async (t, client) => (participantOf(req, t), { trip: t, row: await live(client, t) }));
+    const { caller, row } = await withTrip(code, false, async (t, client) => ({ caller: participantOf(req, t), row: await live(client, t) }));
     await store.remove([row.object_key]);
-    // 지운 객체의 줄에만 표시한다. 버킷을 기다리는 사이 철회 → 다시 동의 → 같은 장면을 새로 올렸으면 그 새 클립은 건드리지 않고 409.
-    const { rowCount } = await tripsDb().query(
-      "UPDATE recordings SET deleted_at = now() WHERE trip_code = $1 AND moment_id = $2 AND object_key = $3 AND deleted_at IS NULL",
-      [trip.code, id, row.object_key]
-    );
-    if (!rowCount && (await tripsDb().query("SELECT 1 FROM recordings WHERE trip_code = $1 AND moment_id = $2 AND deleted_at IS NULL", [trip.code, id])).rows[0]) {
-      fail(409, "그 사이 같은 장면의 클립이 새로 올라옴 — 다시 지워 주세요");
-    }
-    return [204];
+    // 버킷을 기다리는 사이 동의 철회가 줄을 지웠거나 같은 장면이 새로 올라왔을 수 있다. 여행 줄을 잠그고(철회·올리기와 차례를 맞춤) 다시 본다:
+    // 다른 키의 새 클립이 살아 있으면 건드리지 않고 409(다시 지우면 됨), 아니면 지운 표시를 남긴다 — 줄이 없어졌으면 표시만 있는 줄을 새로 적는다.
+    return withTrip(code, true, async (t, client) => {
+      const { rows } = await client.query("SELECT object_key, deleted_at FROM recordings WHERE trip_code = $1 AND moment_id = $2", [t.code, id]);
+      const now = rows[0];
+      if (now && !now.deleted_at && now.object_key !== row.object_key) fail(409, "그 사이 같은 장면의 클립이 새로 올라옴 — 다시 지워 주세요");
+      if (now) await client.query("UPDATE recordings SET deleted_at = now() WHERE trip_code = $1 AND moment_id = $2 AND deleted_at IS NULL", [t.code, id]);
+      else
+        await client.query(
+          "INSERT INTO recordings (trip_code, moment_id, generation, participant_id, object_key, start_at, bytes, seconds, deleted_at) VALUES ($1, $2, $3, $4, $5, 0, 0, 0, now())",
+          [t.code, id, t.generation ?? 1, caller.id, row.object_key]
+        );
+      return [204];
+    });
   }
 
   // 올리기. 본문(5 MB까지)을 받아 버킷에 두는 동안 여행 줄을 잠그지 않는다(voice-match와 같은 까닭: 느린 업로드가
