@@ -363,7 +363,7 @@ export async function verifyGoogleLink(profileId, providerUserId) {
 
 async function googleLink(req, m, b) {
   if (m === "POST") {
-    const identity = await googleIdentity(text(b.code, 500, "code"), text(b.redirectUri, 500, "redirectUri"));
+    const identity = await googleIdentity(text(b.code, 500, "code"), text(b.redirectUri, 500, "redirectUri"), b.codeVerifier);
     const db = profilesDb();
     const { rows: found } = await db.query("SELECT id FROM profiles WHERE provider = 'google' AND provider_user_id = $1", [identity.providerUserId]);
     const me = await profileOf(req);
