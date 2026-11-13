@@ -5,14 +5,15 @@ BEGIN;
 SELECT pg_advisory_xact_lock(74622); -- 서버 여러 대가 동시에 시작해도 한 번에 하나만 실행
 
 CREATE TABLE IF NOT EXISTS profile_moments (
-  id text PRIMARY KEY,                       -- 여행의 moments와 같은 id(같은 장면을 다시 복사하지 않는다)
+  id text NOT NULL,                          -- 여행의 moments와 같은 id(같은 장면을 다시 복사하지 않는다). 여행 안에서만 유일
   profile_id uuid NOT NULL,
   trip_code text NOT NULL,
   at bigint NOT NULL,                        -- epoch ms
   lat double precision,                      -- 위치 없는 장면은 둘 다 비어 있다(ADR-0007)
   lng double precision,
   label text NOT NULL DEFAULT '',
-  created_at timestamptz NOT NULL DEFAULT now()
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (profile_id, id)
 );
 CREATE INDEX IF NOT EXISTS profile_moments_profile ON profile_moments (profile_id, at DESC);
 
