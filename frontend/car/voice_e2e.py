@@ -124,9 +124,11 @@ def main(apk, n):
     covered = sum(1 for r in rows if r["seq"])
     check("넣은 문장의 90% 이상에 받아 적은 발화가 하나 이상 붙음(맞힘 수를 셀 바탕)", covered >= len(rows) * 0.9, covered=covered, lines=len(rows))
     check("발화마다 좌석 구역이 맞음(틀림 0)", zr and zone["wrong"] == 0 and zone["right"] >= len(zr) * 0.9, **zone)
-    # 서버 임베더가 이 합성 목소리들을 가르는 만큼(차를 거치지 않은 기준)에 견준다. 기준보다 틀림이 늘거나 맞힘이 절반 아래로 줄면 차 쪽 문제
-    check("발화에 말한 사람이 붙음(차를 거치지 않은 서버 기준보다 틀림이 늘지 않고 맞힘이 기준의 절반 이상)", sr and spk["wrong"] <= bs["wrong"] and spk["right"] * len(lines) >= bs["right"] * len(sr) * 0.5,
-          car=spk, baseline=bs)
+    # 서버 임베더가 이 합성 목소리들을 가르는 만큼(차를 거치지 않은 기준)에 견준다. 넣는 목소리는 Yuna 하나의 음높이만 바꾼 것이라
+    # 서버도 가르지 못하는(기준이 모름인) 문장이 있다. 차의 틀림은 그런 문장에서만 허용하고, 맞힘은 기준의 절반 이상이어야 한다
+    wrong_known = [r["text"] for r, b in zip(rows, base) for g in r["got"] if g is not None and g != r["who"] and b[1] is not None]
+    check("발화에 말한 사람이 붙음(서버가 가르는 문장에서는 틀림 0, 맞힘은 차를 거치지 않은 서버 기준의 절반 이상)",
+          sr and not wrong_known and spk["right"] * len(lines) >= bs["right"] * len(sr) * 0.5, car=spk, baseline=bs, wrong_where_server_knows=wrong_known)
     # 3. 화면: 방금 받아 적은 말에 이름이 붙고, '누구?'면 주차 중에 고칠 수 있다
     adb("shell", "am", "start", "--user", "10", "-n", f"{PKG}/.MainActivity"); time.sleep(3)
     ui = texts(); shot("03-heard-names"); note("ui", texts=ui)
@@ -136,7 +138,9 @@ def main(apk, n):
     unknown = [t for t in ui if " · 누구? · " in t]
     if unknown:  # 모름인 줄마다 이름 단추가 모두 있다(그 구역 사람이 앞). 화면 위쪽의 첫 '누구?' 줄의 '엄마'를 누른다
         fixed = re.sub(r" · 누구\? · ", " · 엄마 · ", unknown[0], count=1)
-        tap_text("엄마", last=False); time.sleep(2); ui = texts(); note("ui", texts=ui)
+        for _ in range(3):  # 경유지 카드가 사라지며 줄이 밀리면 누름이 빗나간다. 바뀔 때까지 다시
+            tap_text("엄마", last=False); time.sleep(2); ui = texts(); note("ui", texts=ui)
+            if fixed in ui: break
         check("모름인 말은 주차 중에 사람을 골라 고칠 수 있음", fixed in ui, line=fixed)
     else:
         note("fix.skip", why="이번 화면의 두 줄에 '누구?'가 없어 고치기 단계는 건너뜀")

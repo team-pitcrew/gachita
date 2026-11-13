@@ -403,7 +403,7 @@ class MainActivity : ComponentActivity() {
     private fun match(api: Server, code: String, token: String, dev: String, items: List<Utterance>, sp: Speakers) {
         val files = RawFile.of(filesDir, code)
         for (u in items) {
-            val to = u.endedAt
+            val to = u.endedAt - 500 // 최종 결과는 말 끝 0.6초 뒤에 온다(11/13): 끝의 무음을 덜어 목소리만
             val from = maxOf(u.startedAt + LEAD_MS / 2, to - 9_900) // 서버는 0.5~10초를 받는다. 0.1초 묶음 단위로 잘려도 그 안에 들게
             val pcm = if (to - from < 600) null else clipFile(files, from..to)?.let { runCatching { it.cut(Live.seal(this), from, to) }.getOrNull() }
             if (pcm == null || pcm.size < RATE) { sp.done(u.seq); continue } // 원음이 없거나 짧음: 다시 하지 않음
