@@ -636,6 +636,7 @@
 - [ ] 요청 수 제한은 Cloudflare 엣지, 본문 크기 제한은 API
 - [ ] 구글 OAuth의 리다이렉트 주소와 서버의 허용 출처를 이 이름으로 맞춤
 - [ ] 폰의 이동통신망과 차량(에뮬레이터)에서 이 주소로 닿는지 확인
+- [ ] 이 주소가 열리면 차량 앱의 기본 서버를 이 주소로 바꾸고, T13에서 release에도 연 평문 허용(`network_security_config.xml`의 10.0.2.2·localhost·127.0.0.1)을 디버그 빌드로 되돌림
 
 하지 않는 것: `mangowhois.ai` 영역 전체를 Terraform으로 가져오지 않는다. 네임서버와 메일 설정을 바꾸지 않는다. CloudFront, external-dns, AWS WAF는 두지 않는다. Cloudflare의 유료 기능을 켜지 않는다.
 
