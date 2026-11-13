@@ -81,7 +81,7 @@ def main(apk, minutes):
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", S3_PORT), S3); threading.Thread(target=srv.serve_forever, daemon=True).start()
     inj = Injector()
     five = fixture("five", TALK[:5], tail=4.0)
-    if minutes: fixture("long", TALK * 20, seconds=minutes * 60)
+    if minutes: fixture("long", TALK * max(1, round(minutes / 10)), seconds=minutes * 60)  # 10분에 대화 50문장(capture_e2e와 같은 밀도)
     note("apk", sha256=e2e.hashlib.sha256(open(apk, "rb").read()).hexdigest())
     note("install", out=e2e.subprocess.run(ADB + ["install", "--user", "10", "-r", "-g", apk], capture_output=True, text=True).stdout.strip()[-200:])
     gear("Park")
