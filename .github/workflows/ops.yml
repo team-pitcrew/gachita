@@ -8,7 +8,11 @@ name: ops
 #              먼저 apply 없이(연습) 돌려 행 수를 본 뒤, 덮어쓸 때만 apply(db를 먼저 백업)
 #   clean-e2e  실제 주소 E2E(live-e2e)와 부하 시험이 남긴 여행(제목이 'E2E '로 시작)을 지운다
 # 서버가 없으면(접힌 상태) 분명히 실패한다. develop에서만(적용 역할이 develop만 믿음). 펴기·접기와 겹치지 않게 같은 줄에 선다.
+# 매시 status를 저절로 돌린다(#180): 디스크 70%, WAL 보관 실패·밀림, 마지막 전체 백업 26시간 넘음, 복구 구간 없음도 실패로 본다.
+# 실패하면 GitHub의 워크플로 실패 알림이 간다(이 줄을 마지막으로 고친 사람에게). 접혀 있으면(서버 없음) 건너뛴다.
 on:
+  schedule:
+    - cron: "17 * * * *" # 매시 17분(정각에 몰리는 GitHub 지연을 피함). 기본 브랜치 develop에서 돈다
   workflow_dispatch:
     inputs:
       action:
@@ -59,11 +63,19 @@ jobs:
       - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.AWS_APPLY_ROLE_ARN }}
-          role-session-name: gachita-ops-${{ inputs.action }}-${{ github.run_id }}
+          role-session-name: gachita-ops-${{ inputs.action || 'status' }}-${{ github.run_id }}
           aws-region: ap-northeast-2
-      - name: ${{ inputs.action }}
+      - name: 접혀 있으면 건너뜀(주기 실행만)
+        id: folded
+        if: github.event_name == 'schedule'
+        run: |
+          id=$(aws ec2 describe-instances --filters Name=tag:Name,Values=gachita-dev-k3s \
+            Name=instance-state-name,Values=pending,running,stopping,stopped --query 'Reservations[].Instances[].InstanceId' --output text)
+          if [ -z "$id" ]; then echo "접혀 있어(서버 없음) status를 건너뜀" | tee -a "$GITHUB_STEP_SUMMARY"; echo "skip=true" >> "$GITHUB_OUTPUT"; fi
+      - name: ${{ inputs.action || 'status' }}
+        if: steps.folded.outputs.skip != 'true'
         env: # 입력은 환경 변수로만 넘긴다. 형식은 infra.sh가 본다
-          ACTION: ${{ inputs.action }}
+          ACTION: ${{ inputs.action || 'status' }}
           STAGES: ${{ inputs.stages }}
           TARGET_TIME: ${{ inputs.target_time }}
           APPLY: ${{ inputs.apply && 'apply' || '' }}
@@ -75,9 +87,9 @@ jobs:
           esac
           backend/infra/infra.sh "$@" 2>&1 | tee "$RUNNER_TEMP/ops.log"
       - name: 요약
-        if: always()
+        if: always() && steps.folded.outputs.skip != 'true'
         env:
-          ACTION: ${{ inputs.action }}
+          ACTION: ${{ inputs.action || 'status' }}
         run: |
           {
             echo "### ops: $ACTION"
