@@ -139,7 +139,12 @@ down() {
       if kubectl -n gachita-db get cluster db >/dev/null 2>&1; then
         n=fold-$(date +%Y%m%d%H%M%S)
         printf "apiVersion: postgresql.cnpg.io/v1\nkind: Backup\nmetadata: {name: %s, namespace: gachita-db}\nspec:\n  cluster: {name: db}\n  method: plugin\n  pluginConfiguration: {name: barman-cloud.cloudnative-pg.io}\n" "$n" | kubectl apply -f -
-        kubectl -n gachita-db wait backup/$n --for=jsonpath="{.status.phase}"=completed --timeout=1100s
+        for i in $(seq 1 220); do
+          p=$(kubectl -n gachita-db get backup/$n -o jsonpath="{.status.phase}")
+          case $p in completed) echo "백업 $n 완료"; exit 0 ;; failed) kubectl -n gachita-db get backup/$n -o jsonpath="{.status.error}"; exit 1 ;; esac
+          sleep 5
+        done
+        exit 1
       else
         echo "Postgres가 없어 백업을 건너뜀"
       fi' || fail "마지막 백업이 끝나지 않았습니다. 데이터를 지키려면 접지 않습니다(고친 뒤 다시)"
