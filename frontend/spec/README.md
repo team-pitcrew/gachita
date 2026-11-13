@@ -31,4 +31,24 @@
 - [도착 후 화면](after-trip.md): T18, T42. 장면 고르기, 주행 기억 지도, 공유, 피드와 숏폼 재생
 - [프로필과 동승 연결](profile.md): T19, T42. 프로필과 캐릭터, 동승 연결 QR(차가 읽음)과 기록 동의. 그룹과 초대 코드는 두지 않음(11/14)
 
+### 화면 지도
+
+| 시안 | 기기 | 들어오는 길 | 화면 문서 |
+|---|---|---|---|
+| [C6 여행 만들기](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=3-1116) | 차, 주차 | 여행이 없을 때 첫 화면 | [차량 화면](car.md) 흐름 1의 1 |
+| [C5 출발 전](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=3-647) | 차, 주차 | 여행을 만든 뒤 | 흐름 1의 2~4(동승자 추가, 기록 동의, 목소리 등록) |
+| [C7 QR 읽은 뒤 자리 고르기](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=12-531) | 차, 주차 | C5의 '동승자 추가' | 흐름 1의 2 |
+| [C1](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=2-2)·[C1n](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=4-254) 기록 중과 말하는 사람 강조 | 차, 주행 | 기어 D | 흐름 2 |
+| [C2](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=2-121)·[C2n](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=4-357) 휴게소 제안과 말로 수락 | 차, 주행 | 쉬어 가자는 말 | 흐름 3 |
+| [C4 기록 잠시 멈춤](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=3-537) | 차, 주행 | 호출어나 'Gleo 쓰기' | 흐름 5 |
+| [C3 도착 브리핑](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=3-93) | 차, 주차 | 할 일 장소에서 기어 P | 흐름 4 |
+| [P1 홈·내 기록본](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=5-345) | 폰 | 주소를 열면 | [프로필 화면](profile.md) 1절, [도착 후 화면](after-trip.md) 4절 |
+| [P2 프로필 만들기](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=5-431) | 폰 | P1의 '프로필 만들기', 동승 연결 전 | 프로필 1절 |
+| [P3 동승 연결 QR](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=5-509) | 폰 | P1의 '동승 연결' | 프로필 4절 |
+| [P4 탔어요·기록 동의](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=5-571) | 폰 | 차가 QR을 읽은 뒤 | 프로필 4절 |
+| [P5 여행 중](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=6-464) | 폰 | P4 뒤 | 프로필 4절의 4 |
+| [P6 부탁 남기기](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=6-546) | 폰 | P5의 '부탁 남기기' | 문서 없음(처음 웹앱 때 만든 화면) |
+| [P7 기록본](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=6-581) | 폰 | 여행 뒤, P1의 내 기록본 | 도착 후 1~2절, 4절 피드 |
+| [P8 9:16 숏폼](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=6-651) | 폰, 주차 중 차 | P7의 '숏폼 보기' | 도착 후 4절 |
+
 11/13 뒤 화면의 시안은 [개편 파일(11/14)](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=0-1)에 있고, 시안과 화면 문서가 다르면 화면 문서를 따릅니다. 만든 것과 만드는 중인 것은 각 문서의 흐름 끝에 '목표 동작 + 구현 상태'로 적습니다.

@@ -5,7 +5,7 @@ WORKDIR /app
 ENV NODE_ENV=production
 COPY backend/api/package.json backend/api/package-lock.json backend/api/
 RUN cd backend/api && npm ci --omit=dev && npm cache clean --force
-COPY backend/api/server.js backend/api/db.js backend/api/log.js backend/api/ride-links.js backend/api/*.sql backend/api/
+COPY backend/api/server.js backend/api/db.js backend/api/log.js backend/api/scenes.js backend/api/ride-links.js backend/api/*.sql backend/api/
 COPY backend/api/providers backend/api/providers
 COPY frontend/web frontend/web
 USER node

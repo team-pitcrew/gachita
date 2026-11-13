@@ -84,6 +84,8 @@ private const val TITLE = "가치타 가족 여행"
 private const val TAG = "GachitaAsk"
 private const val RESULT_MS = 60_000L // 경유지 결과 카드를 보여 두는 시간
 private const val GLEO_ARRIVAL = "GACHITA_ARRIVAL_TASKS" // assets/schema.json의 함수 이름(T40)
+private const val GLEO_PAUSE = "GACHITA_PAUSE_RECORDING" // 같은 곳(T41)
+private const val GLEO_RESUME = "GACHITA_RESUME_RECORDING"
 private const val OFFER_MS = 30_000L // 제안에 답이 없으면 보관으로 되돌리는 시간. 그사이 휴게소를 지나칠 수 있어 길게 두지 않는다
 
 class MainActivity : ComponentActivity() {
@@ -122,6 +124,9 @@ class MainActivity : ComponentActivity() {
     private var visible = false // onStart ~ onStop
     private var resumed = false // 우리 화면이 앞: 마이크 서비스는 이때만 시작할 수 있다(T10)
     private var askedMic = false
+    private lateinit var handoff: Handoff // Gleo와 마이크 주고받기(T41). ponytail: 화면이 다시 만들어지면(configChanges 밖, 글꼴·언어) 넘긴 상태는 옛 화면의 시간 초과로 풀린다
+    /** Gleo로 '기록 멈추기'를 부름(T41). 동의는 그대로 두고 수음만 멈춘다. 앱이 다시 켜져도 멋대로 다시 기록하지 않게 저장한다. */
+    private var muted by mutableStateOf(false)
     private lateinit var device: String // 보관함의 기기 값. 설치 단위(ADR-0014 초안의 device_id)
     private val uplink: Uplink = KEEP // ponytail: 발화 저장 API(T39)가 생기면 그 호출로 바꾼다. 지금은 보관함에 쌓기만
 
@@ -141,7 +146,9 @@ class MainActivity : ComponentActivity() {
      */
     private fun syncCapture() {
         val code = s.trip?.code
-        if (!s.recording || code == null) {
+        if (!s.recording || code == null || muted) {
+            if (!s.recording && muted) mute(false) // 기록이 끝나면 멈춤 표시도 푼다. 다시 켜면 새로 기록한다
+            handoff.stop()
             if (CaptureService.running) CaptureService.stop(this)
             return
         }
@@ -158,6 +165,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = getSharedPreferences("car", MODE_PRIVATE)
+        handoff = Handoff(this, CaptureService::hold)
+        muted = prefs.getBoolean("muted", false)
         // 실행 인자(--es server, --ei widthDp, --es route)는 디버그 빌드에서만 받는다. 밖에서 연 화면이 서버 주소를 바꾸지 못하게
         debug = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
         if (debug) intent.getStringExtra("server")?.let { prefs.edit().putString("server", it).apply() }
@@ -225,7 +234,7 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         main.removeCallbacksAndMessages(null) // 조회, 제안 시간 초과, 결과 카드 닫기
         if (Live.onHeard == ::heard) Live.onHeard = null
-        if (!isChangingConfigurations) CaptureService.stop(this) // 동의를 확인할 화면이 없어지면 수음도 멈춘다
+        if (!isChangingConfigurations) { handoff.stop(); CaptureService.stop(this) } // 동의를 확인할 화면이 없어지면 수음도 멈춘다
         car.stop(); io.shutdown(); super.onDestroy()
     }
 
@@ -309,9 +318,10 @@ class MainActivity : ComponentActivity() {
     // ---- 부탁을 경유지로(T9). 서버의 부탁 상태: held → proposed → accepted → reflected, 못 넣으면 held(openapi.yaml) ----
     // 제안은 한 번에 하나(offer)이고 단계는 FINDING → ASKING → ADDING → ADDED·FAILED. 새 부탁은 열린 제안에 묶인다.
 
-    /** 받아 적은 말 한 건(메인 스레드). 열린 제안에 대한 답, 쉬어 가자는 부탁, 장소가 붙은 할 일(T40), 모호한 답 순서로 본다. */
+    /** 받아 적은 말 한 건(메인 스레드). Gleo 호출어(T41), 열린 제안에 대한 답, 쉬어 가자는 부탁, 장소가 붙은 할 일(T40), 모호한 답 순서로 본다. */
     private fun heard(u: Utterance) {
         val t = s.trip?.takeIf { it.code == u.trip } ?: return
+        if (isWake(u.text)) { if (Live.mic == Mic.ON) handoff.give(wake = true); return }
         val o = offer?.takeIf { it.stage == Offer.Stage.ASKING }
         val a = answerOf(u.text)
         if (o != null && a != Answer.UNCLEAR) { // "그래, 쉬었다 가자"도 수락이다
@@ -467,15 +477,38 @@ class MainActivity : ComponentActivity() {
      * Gleo는 함수 이름이나 '<패키지>.<함수 이름>'을 action으로 보낸다(11/1 프로브). 응답의 functionName은 schema의 함수 이름 그대로.
      */
     private fun gleo(i: Intent?) {
-        if (i?.action?.substringAfterLast('.') != GLEO_ARRIVAL) return
+        when (i?.action?.substringAfterLast('.')) {
+            GLEO_ARRIVAL -> arrivalTasks()
+            GLEO_PAUSE -> {
+                val on = s.recording
+                if (on) { mute(true); syncCapture() }
+                reply(GLEO_PAUSE, on, if (on) "Recording is paused. Ask to resume recording, or tap Resume on the screen." else "Recording is not on.")
+            }
+            GLEO_RESUME -> {
+                val on = s.recording
+                if (on) { mute(false); syncCapture() } // 우리 화면이 앞으로 나오면(onResume) 수음을 시작한다
+                reply(GLEO_RESUME, on, if (on) "Recording resumed." else "Recording consent is off. Turn it on in the Gachita app while parked.")
+            }
+        }
+    }
+
+    private fun mute(on: Boolean) { prefs.edit().putBoolean("muted", on).commit(); muted = on; Log.i(TAG, "기록 멈추기 $on") }
+
+    /** Gleo에 결과를 돌려준다(Callback Schema: message는 영어, 항목은 data). 말은 Gleo가 한다. ponytail: 실패 status 값은 Gleo 승인 뒤 확인. */
+    private fun reply(fn: String, ok: Boolean, msg: String, data: String? = null) {
+        val r = JSONObject().put("functionName", fn).put("status", if (ok) "success" else "fail").put("message", msg).put("mode", "voice")
+        data?.let { r.put("data", it) }
+        sendBroadcast(Intent("ai.pleos.playground.intent.action.APP_ACTION_RESPONSE").putExtra("packageName", packageName).putExtra("response", r.toString()))
+        Log.i(TAG, "Gleo 응답 $fn ${r.getString("status")}")
+    }
+
+    private fun arrivalTasks() {
         s.trip?.let { todosOf(it.code) }
         briefAt(null, speak = false)
         val open = todos?.open().orEmpty()
         val msg = if (open.isEmpty()) "There are no to-do items for after arriving." else "Found ${open.size} to-do items for after arriving. The list is on the screen once the car is parked."
-        val data = JSONArray(open.map { JSONObject().put("place", it.place).put("task", it.text) }).toString()
-        val reply = JSONObject().put("functionName", GLEO_ARRIVAL).put("status", "success").put("message", msg).put("mode", "voice").put("data", data)
-        sendBroadcast(Intent("ai.pleos.playground.intent.action.APP_ACTION_RESPONSE").putExtra("packageName", packageName).putExtra("response", reply.toString()))
-        Log.i(TAG, "Gleo 도착 할 일 ${open.size}건 응답 ${reply.getString("functionName")}")
+        Log.i(TAG, "Gleo 도착 할 일 ${open.size}건")
+        reply(GLEO_ARRIVAL, true, msg, JSONArray(open.map { JSONObject().put("place", it.place).put("task", it.text) }).toString())
     }
 
     /** 제안을 결과 단계로 닫고 말로 알린다. 그 제안이 이미 바뀌었으면(새 여행) 화면은 두고 말도 하지 않는다. */
@@ -541,7 +574,14 @@ class MainActivity : ComponentActivity() {
     private fun Summary(t: Trip) {
         val c = MaterialTheme.colorScheme
         Card {
-            if (s.recording) {
+            if (s.recording && muted) {
+                Text("기록 멈춤", fontSize = 48.sp, fontWeight = FontWeight.Bold)
+                Text("Gleo로 멈췄어요 · 동의는 그대로예요", color = c.onSurfaceVariant)
+                Button({ mute(false); syncCapture() }, Modifier.heightIn(min = 72.dp)) { Text("다시 기록", fontSize = 26.sp) }
+            } else if (s.recording && handoff.state != Handoff.State.OFF) {
+                Text("기록 잠시 멈춤", fontSize = 48.sp, fontWeight = FontWeight.Bold)
+                Text(if (handoff.state == Handoff.State.WAITING) "운전대 버튼을 누르세요" else "Gleo가 끝나면 다시 기록해요", fontSize = 30.sp, fontWeight = FontWeight.Bold)
+            } else if (s.recording) {
                 when (Live.mic) {
                     Mic.ON -> {
                         Text("● 기록 중", fontSize = 48.sp, fontWeight = FontWeight.Bold, color = c.error)
@@ -663,6 +703,9 @@ class MainActivity : ComponentActivity() {
                 Switch(s.agreed, { if (it) turnOn() else turnOff() }, enabled = !s.busy && (s.agreed || !carStatus.restricted)) // 주행 제한 중에는 끄기(한 번 누름)만
             }
             if (s.note.isNotEmpty()) Text(s.note, color = c.error)
+            // 우리가 수음하는 동안 Gleo는 운전대 버튼을 무시한다. 한 번 눌러 마이크를 넘긴다(T41). 주행 중에도 한 번 누름이라 둔다
+            if (s.recording && !muted && Live.mic == Mic.ON && handoff.state == Handoff.State.OFF)
+                OutlinedButton({ handoff.give(wake = false) }, Modifier.heightIn(min = 72.dp)) { Text("Gleo 쓰기", fontSize = 26.sp) }
         }
         Card {
             if (s.online) Text("서버에 연결됐어요", color = c.tertiary)
