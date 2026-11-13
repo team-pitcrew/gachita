@@ -142,6 +142,10 @@ def main(apk, n):
             tap_text("엄마", last=False); time.sleep(2); ui = texts(); note("ui", texts=ui)
             if fixed in ui: break
         check("모름인 말은 주차 중에 사람을 골라 고칠 수 있음", fixed in ui, line=fixed)
+        time.sleep(3)  # 고친 사람을 서버 기록에도 보낸다(#65 PATCH)
+        text = fixed.split(" · ", 2)[2]
+        srv = [u for u in wait_uploaded(code, phone, 1)["items"] if u["text"].startswith(text[:8])]
+        check("고친 말한 사람이 서버 기록에도 남음", srv and srv[0].get("participantId") == ids["엄마"], got=[u.get("participantId") for u in srv], want=ids["엄마"])
     else:
         note("fix.skip", why="이번 화면의 두 줄에 '누구?'가 없어 고치기 단계는 건너뜀")
     tap_switch(); time.sleep(3)
