@@ -184,22 +184,27 @@ down() {
     tf "$TF" destroy -input=false -auto-approve
   fi
 
-  log 4/4 "남은 것: Project=gachita 태그가 붙은 EC2·ELB가 없어야 한다(태그 목록은 몇 분 늦게 맞춰질 수 있음)"
-  local left=""
-  for ((i = 0; i < 18; i++)); do
-    # 지운 서버는 한동안 terminated로 보이므로 서버는 상태로 따로 본다
-    left="$(aws resourcegroupstaggingapi get-resources --tag-filters Key=Project,Values=gachita \
-      --resource-type-filters ec2 elasticloadbalancing --query 'ResourceTagMappingList[].ResourceARN' --output text |
-      tr '\t' '\n' | grep -v ':instance/' || true) $(aws ec2 describe-instances --filters Name=tag:Project,Values=gachita \
-      Name=instance-state-name,Values=pending,running,stopping,stopped --query 'Reservations[].Instances[].InstanceId' --output text)"
-    left=$(echo "$left" | xargs)
+  log 4/4 "남은 것: Project=gachita 태그가 붙은 네트워크·서버·디스크와 컨트롤러가 만든 ALB·대상 그룹이 없어야 한다"
+  # 태그 검색 API(resourcegroupstaggingapi)는 지운 것을 몇 분 넘게 보여 주므로(11/13 실제로 3분 넘게) 서비스마다 직접 묻는다
+  local left="" tag=Name=tag:Project,Values=gachita
+  for ((i = 0; i < 12; i++)); do
+    left=$({
+      aws ec2 describe-vpcs --filters $tag --query 'Vpcs[].VpcId' --output text
+      aws ec2 describe-instances --filters $tag Name=instance-state-name,Values=pending,running,stopping,stopped \
+        --query 'Reservations[].Instances[].InstanceId' --output text
+      aws ec2 describe-security-groups --filters $tag --query 'SecurityGroups[].GroupId' --output text
+      aws ec2 describe-volumes --filters $tag --query 'Volumes[].VolumeId' --output text
+      aws ec2 describe-vpc-endpoints --filters $tag --query 'VpcEndpoints[?State!=`deleted`].VpcEndpointId' --output text
+      alb_arn
+      for t in $(lbc_resources elasticloadbalancing:targetgroup); do
+        aws elbv2 describe-target-groups --target-group-arns "$t" --query 'TargetGroups[].TargetGroupArn' --output text 2>/dev/null || true
+      done
+    } | grep -v '^None$' | xargs)
     [ -z "$left" ] && break
     sleep 10
   done
   [ -z "$left" ] || fail "접은 뒤에도 남은 것: $left"
-  echo "  남는 묶음(접지 않음):"
-  aws resourcegroupstaggingapi get-resources --tag-filters Key=Project,Values=gachita \
-    --query 'ResourceTagMappingList[].ResourceARN' --output text | tr '\t' '\n' | sed 's/^/    /'
+  echo "  남는 것(접지 않음): 버킷 $(aws s3api list-buckets --query "Buckets[?starts_with(Name,'gachita-')].Name" --output text | xargs)"
   log 끝 "접었습니다"
 }
 
