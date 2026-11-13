@@ -380,9 +380,10 @@ async function voicePrint(req, m, profileId) {
     await profilesDb().query("DELETE FROM voice_prints WHERE profile_id = $1", [profileId]);
     return [204];
   }
-  const { samples } = wavMono(await readRaw(req, 5_000_000)); // WAV 파싱 실패는 400으로 돌아온다
+  const { samples } = wavMono(await readRaw(req, 1_500_000)); // WAV 파싱 실패는 400으로 돌아온다
   const seconds = samples.length / 16000;
-  if (seconds < 1 || seconds > 60) fail(400, "등록 음성은 1~60초");
+  // ponytail: 임베딩이 이벤트 루프에서 동기로 돈다(20초 ≈ 65 ms). 등록은 문장 몇 개면 되므로 20초로 묶는다.
+  if (seconds < 1 || seconds > 20) fail(400, "등록 음성은 1~20초");
   const vector = embed(samples);
   // 본문을 받는 사이 프로필이 지워졌으면 외래 키가 막는다(23503) — 지워진 프로필의 값이 남지 않게.
   await profilesDb()
@@ -398,7 +399,7 @@ async function voicePrint(req, m, profileId) {
 // 발화 대조(ADR-0008·0019): 발화 음성과 좌석 구역을 받아 등록된 목소리와 비교해
 // 프로필과 확신도를 돌려준다. 확신이 낮으면 '모름'(profileId: null).
 // 원본 음성은 저장하지 않고, 찾으면 그 발화 줄의 profile_id를 채운다(ADR-0014).
-// 여행 문서를 바꾸지 않으므로 여행 줄을 잠그지 않는다 — 본문(최대 5 MB)을 받고 계산하는 동안
+// 여행 문서를 바꾸지 않으므로 여행 줄을 잠그지 않는다 — 본문(최대 1 MB)을 받고 계산하는 동안
 // 같은 여행의 동의 바꾸기를 막으면, 업로드가 느릴 때 동의 철회가 2초 제한(T26)에 걸려 실패한다.
 async function voiceMatch(trip, req, query) {
   if (req.method !== "POST") fail(405, "POST만 됨");

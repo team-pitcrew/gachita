@@ -488,7 +488,7 @@ paths:
       tags: [프로필]
       summary: 목소리 등록
       description: |
-        이진 본문(WAV 16 kHz 16비트 PCM, 모노·스테레오 모두 — 스테레오는 합쳐 모노로). 1~60초, 5 MB까지.
+        이진 본문(WAV 16 kHz 16비트 PCM, 모노·스테레오 모두 — 스테레오는 합쳐 모노로). 1~20초, 1.5 MB까지.
         **원본 음성은 어디에도 저장하지 않고** 대조용 값(벡터)만 남깁니다(ADR-0019). 다시 등록하면 값을 바꿉니다.
       security: [{ profileToken: [] }]
       requestBody:
