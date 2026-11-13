@@ -121,9 +121,17 @@ export async function runJourney(base, { asr, storage, clip = wave(210, 25), wai
       report.shortformScenes = form.scenes.length;
     });
     await step("내 글·클립 삭제와 재업로드 차단", async () => {
-      await request("DELETE", `${t}/utterances`, 200, { token: riders[0].token });
-      const remaining = (await request("GET", `${t}/transcript`, 200, { token: riders[1].token })).json.utterances;
-      assert.ok(remaining.every((u) => u.text !== said[0] && u.asrText !== said[0]));
+      // 삭제 전후를 (device, seq)로 대조한다: riders[0]의 화자로 붙은 첫 발화만 사라지고, 나머지 다섯은 순번·원문이 그대로이며
+      // 삭제 전에 있던 재전사문을 잃지 않아야 한다(재전사는 뒤에서 계속 돌아 삭제 뒤에 새로 붙을 수는 있다).
+      const transcript = async () => (await request("GET", `${t}/transcript`, 200, { token: riders[1].token })).json.utterances;
+      const key = (u) => `${u.device}:${u.seq}`;
+      const before = await transcript();
+      assert.equal(before.length, said.length, "삭제 전 발화 수");
+      assert.equal((await request("DELETE", `${t}/utterances`, 200, { token: riders[0].token })).json.deleted, 1, "자기 이름이 붙은 발화 하나만 지움");
+      const after = await transcript();
+      const kept = before.filter((u) => !(u.device === "journey-car" && u.seq === 1));
+      assert.deepEqual(after.map((u) => [key(u), u.text]), kept.map((u) => [key(u), u.text]), "나머지 다섯은 순번·원문이 그대로");
+      for (const u of kept.filter((x) => x.asrText)) assert.equal(after.find((x) => key(x) === key(u)).asrText, u.asrText, `${key(u)}의 재전사문이 남음`);
       await request("DELETE", `${t}/recordings/${moments[0].id}`, 204, { token: riders[1].token });
       await request("GET", `${t}/recordings/${moments[0].id}`, 404, { token: riders[0].token });
       await request("POST", `${t}/recordings?moment=${moments[0].id}&generation=${generation}&from=${choice.from}`, 409, { token: riders[0].token, raw: clip });
