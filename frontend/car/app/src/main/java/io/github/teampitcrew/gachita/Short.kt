@@ -45,5 +45,14 @@ fun parseShort(json: String): Short {
 /** t초에 보일 자막. 같이 말해 겹치면 나중에 시작한 줄. 없으면 null. */
 fun cueAt(cues: List<Cue>, t: Double): Cue? = cues.lastOrNull { t >= it.start && t < it.end }
 
-/** 클립 주소: 절대 주소는 그대로, '/api/…'는 앱의 서버 주소에 붙인다. */
-fun clipUrl(server: String, clip: String): String = if (clip.startsWith("http")) clip else server.trim().trimEnd('/') + clip
+/**
+ * 클립 주소: '/api/…'는 앱의 서버 주소에 붙이고, 절대 주소는 서버와 같은 호스트나 그 아래 이름(media.<서버>)일 때만 받는다.
+ * 참가자 토큰을 머리말로 보내므로 다른 호스트로는 보내지 않는다. 받지 않으면 null.
+ */
+fun clipUrl(server: String, clip: String): String? {
+    val base = server.trim().trimEnd('/')
+    if (clip.startsWith("/")) return base + clip
+    val host = java.net.URI(base).host ?: return null
+    val u = runCatching { java.net.URI(clip) }.getOrNull() ?: return null
+    return clip.takeIf { u.scheme == "https" && (u.host == host || u.host.orEmpty().endsWith(".$host")) }
+}

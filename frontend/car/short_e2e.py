@@ -13,7 +13,7 @@
 """
 import http.server, json, os, re, subprocess, sys, tempfile, threading, time, urllib.request, wave
 import numpy as np
-import e2e, capture_e2e as cap
+import e2e, capture_e2e as cap, gleo_e2e as gl
 from e2e import ADB, PKG, OUT, adb, shot, texts, tap_text, tap_switch, gear, check, note
 
 UP = f"http://localhost:{cap.PORT}"
@@ -82,17 +82,6 @@ class Proxy(http.server.BaseHTTPRequestHandler):
     do_GET = do_POST = do_PATCH = do_PUT = do_DELETE = forward
 
 
-def ours_playing():
-    """우리 앱이 소리를 내는 중인지(dumpsys audio의 재생 목록)."""
-    out = adb("shell", "dumpsys", "audio")
-    sec = out.split("playback activity", 1)[-1].split("\n\n", 1)[0] if "playback activity" in out else out
-    return any("state:started" in l and "usage=USAGE_MEDIA" in l for l in sec.splitlines() if str(uid()) in l)
-
-
-def uid():
-    m = re.search(r"userId=(\d+)", adb("shell", "dumpsys", "package", PKG)); return int(m.group(1)) + 1_000_000 if m else -1
-
-
 def main(apk):
     srv = http.server.ThreadingHTTPServer(("0.0.0.0", SHORT_PORT), Proxy); threading.Thread(target=srv.serve_forever, daemon=True).start()
     threading.Thread(target=e2e.heartbeat, daemon=True).start()
@@ -113,7 +102,7 @@ def main(apk):
     check("참가자 토큰(Bearer)으로 구성과 클립을 받음", served and all(s["bearer"] for s in served), served=served)
     time.sleep(1.5); ui = texts(); note("ui", texts=ui)
     check("자막과 말한 사람(이름, 못 붙인 사람은 자리)", "아빠, 바다는 왜 짜?" in ui and "하은" in ui or "바닷물에 소금이 녹아 있어서 그래" in ui and "운전석" in ui, texts=ui)
-    check("재생하는 동안 우리 수음은 멈춤(재생 소리가 기록에 들어가지 않게)", not cap.mic_holders() or not any("silenced:false" in l for l in cap.mic_holders()))
+    check("재생하는 동안 우리 수음은 멈춤(재생 소리가 기록에 들어가지 않게) · '기록 잠시 멈춤'", not gl.ours_recording() and "기록 잠시 멈춤" in ui)
     gear("Drive"); time.sleep(3); ui = texts(); shot("2-drive-hidden"); note("ui", texts=ui)
     check("주행 중에는 숏폼 카드를 가리고 재생을 멈춤", not any(t.startswith("1 / 2") or t == "숏폼 보기" for t in ui))
     gear("Park"); time.sleep(3)
@@ -121,7 +110,7 @@ def main(apk):
     ui = cap.wait_texts(lambda u: any(t.startswith("2 / 2") for t in u), 40); shot("3-scene2"); note("ui", texts=ui)
     check("장면이 끝나면 다음 장면으로", any(t.startswith("2 / 2") and "수수께끼" in t for t in ui))
     ui = cap.wait_texts(lambda u: "숏폼 보기" in u and "● 기록 중" in u, 40); shot("4-done"); note("ui", texts=ui)
-    check("끝나면 카드가 닫히고 다시 기록 중", "● 기록 중" in ui)
+    check("끝나면 카드가 닫히고 다시 기록 중(마이크도)", "● 기록 중" in ui and gl.ours_recording())
 
     (OUT / "results.json").write_text(json.dumps(e2e.log, ensure_ascii=False, indent=1))
     fails = [x for x in e2e.log if x["step"] == "check" and not x["ok"]]

@@ -31,6 +31,8 @@ class ShortTest {
 
     @Test fun clipAddress() {
         assertEquals("https://gachita.mangowhois.ai/api/trips/A/recordings/m", clipUrl("https://gachita.mangowhois.ai/", "/api/trips/A/recordings/m"))
-        assertEquals("https://media.example/x", clipUrl("https://gachita.mangowhois.ai", "https://media.example/x"))
+        assertEquals("https://media.gachita.mangowhois.ai/media/x", clipUrl("https://gachita.mangowhois.ai", "https://media.gachita.mangowhois.ai/media/x"))
+        assertNull(clipUrl("https://gachita.mangowhois.ai", "https://evil.example/x")) // 토큰을 다른 호스트로 보내지 않는다
+        assertNull(clipUrl("https://gachita.mangowhois.ai", "http://media.gachita.mangowhois.ai/x"))
     }
 }
