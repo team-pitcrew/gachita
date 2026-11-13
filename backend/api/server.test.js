@@ -685,6 +685,18 @@ test("쓰기가 몰려도 서버가 멈추지 않는다", async () => {
   }
 });
 
+test("확장자 없는 주소는 웹 화면으로 연다(초대 /j/<코드>, 시연 /demo)", async () => {
+  for (const path of ["/", "/j/abcDEF123", "/demo"]) {
+    const res = await fetch(base + path);
+    assert.deepEqual([res.status, res.headers.get("content-type")], [200, "text/html; charset=utf-8"], path);
+  }
+  assert.equal((await fetch(`${base}/app.js`)).headers.get("content-type"), "text/javascript; charset=utf-8");
+  assert.equal((await fetch(`${base}/nothing.js`)).status, 404, "없는 파일은 그대로 404");
+  assert.equal((await fetch(`${base}/..%2F..%2Fbackend%2Fapi%2Fserver.js`)).status, 404, "웹 폴더 밖은 404");
+  const outside = await fetch(`${base}/..%2F..%2Fbackend%2Fapi`);
+  assert.ok((await outside.text()).includes("<title>같이타</title>"), "확장자 없는 주소로 웹 폴더 밖을 가리켜도 웹앱 첫 화면만 나옴");
+});
+
 test("명세(docs/api/openapi.yaml)와 서버의 경로가 같다", async () => {
   // 표준 라이브러리에 YAML 읽기가 없어 ruby로 JSON으로 바꾼다(macOS와 CI 실행기에 기본으로 있음)
   const file = fileURLToPath(new URL("../../docs/api/openapi.yaml", import.meta.url));
