@@ -1,0 +1,61 @@
+name: live-e2e
+
+# 실제 주소(Cloudflare → 클러스터 → DB 둘)에 대고 E2E를 돈다(T54). 이미지에 대고 도는 것과 같은 스크립트(.github/scripts/e2e.mjs).
+# 필수 검사(ci.yml)와 따로 돈다. 손으로 돌리거나(Actions → live-e2e → Run workflow), 펴기·내보내기 워크플로가 부른다(workflow_call).
+# 시험 데이터: 프로필은 E2E가 마지막에 지운다. 여행(제목 'E2E 양양')과 그 참가자·부탁은 실제 DB에 남는다.
+# 여행을 지우는 API가 없어, 지우기는 운영 워크플로(ops의 clean-e2e, T57)가 맡는다. 지우지 않아도 API가 48시간 뒤 지운다.
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 대상 주소
+        type: string
+        default: https://gachita.mangowhois.ai
+  workflow_call:
+    inputs:
+      url:
+        type: string
+        default: https://gachita.mangowhois.ai
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-e2e
+  cancel-in-progress: false
+
+jobs:
+  e2e:
+    runs-on: [self-hosted, gachita]
+    timeout-minutes: 10
+    env:
+      URL: ${{ inputs.url }} # 셸에는 환경 변수로만 넘긴다
+    steps:
+      - name: 닿는지(클러스터가 떠 있는지)
+        run: |
+          case "$URL" in https://* | http://*) ;; *) echo "::error::주소는 https:// 또는 http://로 시작해야 합니다: $URL"; exit 1 ;; esac
+          URL=${URL%/}
+          code=$(curl -s -o /dev/null -m 10 -w '%{http_code}' "$URL/healthz" || true)
+          echo "healthz=$code"
+          if [ "$code" != 200 ]; then
+            echo "::error::$URL/healthz 가 200이 아닙니다($code). 클러스터가 떠 있는지(펴기, T53) 먼저 봅니다"
+            echo "### 실제 주소 E2E: \`$URL\` 닿지 않음(healthz=$code)" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: E2E(여행 하나의 흐름)
+        env:
+          E2E_WAIT_SECONDS: 30
+        run: node .github/scripts/e2e.mjs "${URL%/}" 2>&1 | tee "$RUNNER_TEMP/e2e.log"
+      - name: 요약
+        if: always() && hashFiles('.github/scripts/e2e.mjs') != ''
+        run: |
+          {
+            echo "### 실제 주소 E2E: \`$URL\`"
+            echo '```'
+            tail -n 40 "$RUNNER_TEMP/e2e.log" 2>/dev/null || echo "(E2E가 돌기 전에 멈춤)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

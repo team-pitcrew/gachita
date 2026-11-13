@@ -1,6 +1,6 @@
 # ADR-0010: 주소는 gachita.mangowhois.ai, 가장자리는 Cloudflare
 
-* **상태:** 제안, 2026-11-13 (T44. PR 병합으로 정함)
+* **상태:** 제안, 2026-11-13 (T44. PR 병합으로 정함. '서버로 가는 길'은 [ADR-0015](0015-split-nodes-private-subnets-alb.md)가 대신함)
 * **관련:** T44, #68, T27, T24, T25, T46, ADR-0002, ADR-0009
 
 ## 배경

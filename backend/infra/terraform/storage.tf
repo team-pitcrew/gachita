@@ -1,46 +1,15 @@
-# Postgres 백업과 나중의 클립 보관에 쓰는 버킷. 공개하지 않는다.
 data "aws_caller_identity" "current" {}
 
-resource "aws_s3_bucket" "data" {
-  bucket = "gachita-${var.env}-${data.aws_caller_identity.current.account_id}"
+locals {
+  account = data.aws_caller_identity.current.account_id
+  cluster = "gachita-${var.env}" # ALB 컨트롤러의 clusterName(backend/infra/gitops의 차트 값과 같아야 함)
 }
 
-resource "aws_s3_bucket_public_access_block" "data" {
-  bucket                  = aws_s3_bucket.data.id
-  block_public_acls       = true
-  block_public_policy     = true
-  ignore_public_acls      = true
-  restrict_public_buckets = true
+# 버킷 둘은 남는 묶음(persist/)에 있다. 접는 묶음은 이름으로 읽기만 하므로 접어도 백업과 발급자 주소가 남는다(T51).
+data "aws_s3_bucket" "data" {
+  bucket = "gachita-${var.env}-${local.account}"
 }
 
-resource "aws_s3_bucket_versioning" "data" {
-  bucket = aws_s3_bucket.data.id
-  versioning_configuration {
-    status = "Enabled"
-  }
-}
-
-resource "aws_s3_bucket_server_side_encryption_configuration" "data" {
-  bucket = aws_s3_bucket.data.id
-  rule {
-    apply_server_side_encryption_by_default {
-      sse_algorithm = "AES256"
-    }
-  }
-}
-
-resource "aws_s3_bucket_lifecycle_configuration" "data" {
-  bucket = aws_s3_bucket.data.id
-
-  rule {
-    id     = "expire-old-versions"
-    status = "Enabled"
-    filter {}
-    noncurrent_version_expiration {
-      noncurrent_days = 30
-    }
-    abort_incomplete_multipart_upload {
-      days_after_initiation = 7
-    }
-  }
+data "aws_s3_bucket" "oidc" {
+  bucket = "gachita-${var.env}-oidc-${local.account}"
 }
