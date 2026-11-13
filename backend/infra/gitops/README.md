@@ -1,17 +1,17 @@
 # 클러스터 선언 (GitOps)
 
-Argo CD가 이 폴더를 읽어 클러스터를 맞춥니다. 사람이 `kubectl apply`로 직접 고치지 않고, 이 폴더를 고쳐 PR로 올립니다. 설계는 [ADR-0013](../../../docs/adr/0013-network-edge-and-isolation.md), 클러스터를 세우는 단계는 [`backend/infra/cluster`](../cluster/README.md)(T24 앞부분 PR). **2026-11-13 기준으로 실제 클러스터(AWS)에 올려 본 적이 없습니다.** 로컬 E2E 결과는 아래 '확인한 것'.
+Argo CD가 이 폴더를 읽어 클러스터를 맞춥니다. 사람이 `kubectl apply`로 직접 고치지 않고, 이 폴더를 고쳐 PR로 올립니다. 설계는 [ADR-0013](../../../docs/adr/0013-network-edge-and-isolation.md)(격리·포트), [ADR-0016](../../../docs/adr/0016-slo-capacity-single-postgres.md)(Postgres 하나·ALB), [ADR-0017](../../../docs/adr/0017-alb-by-controller-and-fold-order.md)(ALB 컨트롤러·펴기 순서). 클러스터를 세우는 단계는 [`backend/infra/cluster`](../cluster/README.md).
 
 ```
 backend/infra/gitops/
-├── bootstrap/          뿌리 앱(root)이 읽는 곳. 물결(sync-wave) 순서의 Application 13개
+├── bootstrap/          뿌리 앱(root)이 읽는 곳. 물결(sync-wave) 순서의 Application 12개
 ├── platform/           플랫폼 설정: cluster-base(포트 규칙), pod-identity-webhook, secret-stores(SSM)
 ├── components/
 │   └── data-plane/     데이터 경로 네임스페이스의 기본 차단과 DNS 허용
 └── apps/
-    ├── db/             Postgres(base) → trips/(gachita-trips), profiles/(gachita-profiles)
+    ├── db/             Postgres 하나(gachita-db): base/, 처음 펼 때 이 폴더(initdb), 복구로 펼 때 recover/
     ├── api/            API(base) → overlays/dev(gachita, 이미지 태그)
-    └── edge/           Gateway, HTTPRoute, 요청 수 제한, cloudflared(edge)
+    └── edge/           GatewayClass(ALB), Gateway와 ALB 설정, HTTPRoute와 대상 그룹 설정
 ```
 
 ## 올라오는 순서
@@ -21,35 +21,33 @@ backend/infra/gitops/
 | 물결 | 앱 | 무엇 |
 |---|---|---|
 | 0 | `cluster-base`, `gateway-api` | 포트 규칙, Gateway API CRD v1.6.3 |
-| 1 | `cert-manager`, `cnpg`, `external-secrets`, `traefik` | CRD와 운영자 |
+| 1 | `cert-manager`, `cnpg`, `external-secrets` | CRD와 운영자 |
 | 2 | `barman-cloud`, `pod-identity-webhook`, `secret-stores` | 운영자에 기대는 플랫폼 설정 |
-| 3 | `db-trips`, `db-profiles` | 네임스페이스, Postgres, 백업, 네트워크 정책 |
-| 4 | `api` | 비밀 값(DB 주소·이미지 받기·구글), 배포, 네트워크 정책 |
-| 5 | `edge` | Gateway, HTTPRoute, cloudflared. API가 건강해진 뒤에 밖으로 연다 |
+| 3 | `db`, `aws-load-balancer-controller` | Postgres 하나와 백업. ALB 컨트롤러(파드 신원 웹훅 뒤라야 AWS 자격을 받음) |
+| 4 | `api` | 비밀 값(DB 주소·이미지 받기·구글), 배포(서비스는 NodePort), 네트워크 정책 |
+| 5 | `edge` | Gateway → 컨트롤러가 ALB를 만들고 노드를 대상에 넣음. API가 건강해진 뒤에 밖으로 연다 |
 
-## 자원을 만들기 전에 채울 곳
+뿌리 앱은 이 저장소를 읽는 자식 앱 여섯(`cluster-base`, `secret-stores`, `pod-identity-webhook`, `db`, `api`, `edge`)에 자기와 같은 저장소 주소와 판을 넘깁니다(`backend/infra/cluster/templates/root-app.yaml.j2`). 그래서 병합 전 브랜치도 실제 계정에 펴 볼 수 있습니다. 데이터 버킷에 Postgres 전체 백업이 있으면 `db` 앱의 경로를 `apps/db/recover`로 바꿔 복구로 폅니다(T52).
 
-계정 번호 자리 표시 `000000000000`이 역할 ARN(서비스 계정 주석)과 버킷 이름에 있습니다. 서버가 뜨자마자 이 폴더를 올리므로 **만들기 전에** 채워 develop에 병합합니다. 채우지 않으면 SSM 저장소가 `InvalidProviderConfig`로 물결 2에서 멈춥니다(독립 검증에서 확인). Terraform도 자리 표시가 남아 있으면 서버를 만들지 않습니다. 주소(`gachita.mangowhois.ai`)는 정해져 있어 바꿀 것이 없습니다.
+## 이름과 주소
 
-```sh
-backend/infra/gitops/fill-account.sh          # 지금 aws 자격의 계정 번호로. 다시 돌려도 같은 결과
-```
-
-API 이미지 태그(`apps/api/overlays/dev`)도 GHCR에 올라간 태그여야 합니다. 지금 값은 `c74a82915936`(11/13, 병합 때 `ci.yml`의 `publish`가 올림)입니다.
+- 클러스터 안에서는 쿠버네티스 DNS 이름으로 찾습니다: API는 `gachita-api.gachita.svc.cluster.local`, Postgres는 `db-rw.gachita-db.svc.cluster.local:5432`(데이터베이스 `trips`, `profiles`). API의 DB 주소는 External Secrets가 두 역할의 비밀 번호로 이 이름을 넣어 만듭니다.
+- 펼 때마다 바뀌는 값은 Git에 두지 않습니다: ALB 컨트롤러는 VPC를 이름 태그(`Name=gachita-dev`)로, 인증서를 리스너의 호스트 이름으로, 서브넷을 태그로 찾습니다. 계정 번호(역할 ARN, 버킷 이름)는 계정마다 한 번 채운 값입니다.
+- 밖에서 들어오는 길은 Cloudflare → ALB(`gachita-dev`, Cloudflare 대역만 443) → 노드의 NodePort → API 하나입니다. NodePort는 포트 규칙이 `gachita/gachita-api`에만 허용합니다.
 
 ## 새 판 내보내기
 
 1. 로컬에서 `make push`로 이미지를 올립니다. 올리기 전에 이미지를 띄워 `/healthz`와 웹앱을 봅니다. 태그는 커밋 SHA 앞 12자입니다.
 2. `make deploy-tag TAG=<올린 태그>`로 `apps/api/overlays/dev/kustomization.yaml`의 `newTag`를 바꾸고 PR로 올립니다.
-3. 병합되면 Argo CD가 하나씩 바꿉니다(새 파드가 두 DB에 닿아 준비된 뒤 옛 파드를 내림). 되돌릴 때는 이전 태그로 같은 일을 합니다.
+3. 병합되면 Argo CD가 하나씩 바꿉니다(새 파드가 두 데이터베이스에 닿아 준비된 뒤 옛 파드를 내림). 되돌릴 때는 이전 태그로 같은 일을 합니다.
 
-## 격리를 확인하는 명령(실제 클러스터에서, T26)
+## 격리를 확인하는 명령(실제 클러스터에서)
 
 ```sh
 # API가 아닌 파드에서 DB로: 막혀야 한다
-kubectl -n edge run probe --rm -it --image=postgres:17 --restart=Never -- pg_isready -h db-rw.gachita-trips -p 5432 -t 3
+kubectl -n default run probe --rm -it --image=postgres:17 --restart=Never -- pg_isready -h db-rw.gachita-db.svc.cluster.local -p 5432 -t 3
 # 실제로 막힌 흐름 보기(Cilium Hubble, 에이전트 안의 명령)
-kubectl -n kube-system exec ds/cilium -c cilium-agent -- hubble observe --namespace gachita-trips --verdict DROPPED --last 20
+kubectl -n kube-system exec ds/cilium -c cilium-agent -- hubble observe --namespace gachita-db --verdict DROPPED --last 20
 # 포트 규칙: 거절되어야 한다
 kubectl -n gachita create service nodeport probe --tcp=80:80
 ```
@@ -80,8 +78,6 @@ kubectl -n gachita create service nodeport probe --tcp=80:80
   - **로컬에서 확인하지 못한 것**: 네트워크 정책이 실제로 막는지(Cilium이 있어야 함), SSM·STS·S3에 닿는지, 백업, Cloudflare Tunnel, 노드 예약값. 모두 실제 클러스터에서 봅니다(T24·T26).
 
 ## 알고 쓰는 한계
-
-- 물결 0의 Gateway API CRD가 Established가 돼도 Argo CD가 다음 주기 갱신(약 2~3분)까지 Progressing으로 볼 수 있습니다. Argo CD 3.x 기본값이 상태만 바뀐 갱신을 무시하기 때문입니다(`resource.customizations.ignoreResourceUpdates.all: /status`). 로컬 E2E 두 번째에서 3분 반 늦었고, 물결은 그 뒤 순서대로 이어졌습니다.
 
 - Postgres와 노드가 한 대씩입니다. 서버가 죽으면 멈춥니다(ADR-0013의 '무엇이 죽으면').
 - 컨트롤러 네임스페이스에는 아직 네트워크 정책이 없습니다. 실제 클러스터에서 Hubble로 흐름을 본 뒤 조입니다.

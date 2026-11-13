@@ -45,7 +45,7 @@ spec:
   serviceAccountTemplate:
     metadata:
       annotations:
-        eks.amazonaws.com/role-arn: arn:aws:iam::721622471953ole/gachita-dev-pg
+        eks.amazonaws.com/role-arn: arn:aws:iam::721622471953:role/gachita-dev-pg
   # 백업과 WAL 보관은 Barman Cloud 플러그인(물결 2)이 ObjectStore backup으로. 경로는 s3://<버킷>/postgres/db
   plugins:
     - name: barman-cloud.cloudnative-pg.io
