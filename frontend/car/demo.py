@@ -77,9 +77,10 @@ def main(apk):
     inj = cap.Injector()
     for name, lines in LINES.items(): cap.fixture(name, lines, lead=0.5, tail=2.5)
     note("apk", sha256=e2e.hashlib.sha256(open(apk, "rb").read()).hexdigest())
-    out = subprocess.run(ADB + ["install", "--user", "10", "-r", "-g", apk], capture_output=True, text=True).stdout
+    install = lambda: (lambda r: r.stdout + r.stderr)(subprocess.run(ADB + ["install", "--user", "10", "-r", "-g", apk], capture_output=True, text=True))
+    out = install()  # 실패 사유는 stderr로 온다
     if "INSTALL_FAILED_UPDATE_INCOMPATIBLE" in out:  # 서명이 다른 release가 깔려 있음
-        adb("uninstall", PKG); out = subprocess.run(ADB + ["install", "--user", "10", "-r", "-g", apk], capture_output=True, text=True).stdout
+        adb("uninstall", PKG); out = install()
     if "Success" not in out: raise SystemExit(f"APK를 깔지 못했습니다: {out.strip()[-200:]}")
     gear("Park")
     adb("shell", "am", "force-stop", "--user", "10", PKG); adb("shell", "pm", "clear", "--user", "10", PKG)
