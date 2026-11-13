@@ -21,8 +21,10 @@ import ai.pleos.playground.tts.constant.Mode
 import ai.pleos.playground.tts.listener.EventListener
 import ai.pleos.playground.tts.listener.OnInitializeListener
 import ai.pleos.playground.vehicle.Vehicle
+import ai.pleos.playground.vehicle.api.model.area.SeatArea
 import ai.pleos.playground.vehicle.constant.control.VehicleGear
 import ai.pleos.playground.vehicle.listener.GearSelectionListener
+import ai.pleos.playground.vehicle.listener.SeatOccupancyListener
 import android.car.drivingstate.CarUxRestrictions
 import android.car.drivingstate.CarUxRestrictionsManager
 import android.content.Context
@@ -35,7 +37,14 @@ import java.util.Locale
  * 차가 알려 준 것. gear는 "P", "D", "R", "N" 같은 글자이고 모르면 null.
  * restricted는 플랫폼이 주행 제한을 거는 중인지(CarUxRestrictions. 기어 D여도 오토 홀드면 풀릴 수 있음). 값을 받기 전이나 받지 못하면 제한으로 둔다(frontend/spec/car.md).
  */
-data class CarStatus(val gear: String? = null, val navi: Boolean = false, val voice: Boolean = false, val naviEvent: String = "", val restricted: Boolean = true)
+/**
+ * seats: 차가 가진 좌석(Vehicle SDK의 SEAT_OCCUPANCY 영역, SeatValue 이름 ROW_1_LEFT 등). 못 읽었으면 비어 있다.
+ * occupied: 그 가운데 지금 사람이 앉았다고 차가 알린 좌석(T83).
+ */
+data class CarStatus(
+    val gear: String? = null, val navi: Boolean = false, val voice: Boolean = false, val naviEvent: String = "", val restricted: Boolean = true,
+    val seats: List<String> = emptyList(), val occupied: Set<String> = emptySet(),
+)
 
 data class Place(val lat: Double, val lng: Double, val name: String, val address: String = "")
 
@@ -56,6 +65,30 @@ class Car(ctx: Context, private val onChange: (CarStatus) -> Unit) {
     @Volatile private var ttsTo = 0L
 
     private fun update(f: (CarStatus) -> CarStatus) { main.post { status = f(status); onChange(status) } }
+
+    private val seatListeners = mutableListOf<Pair<SeatArea, SeatOccupancyListener>>()
+
+    /**
+     * 차의 좌석 배치와 앉음 여부(T83). 좌석 칸은 차가 SEAT_OCCUPANCY를 주는 영역이다(Pleos 에뮬레이터: 0x1·0x4·0x10·0x20·0x40 = 앞 둘, 뒤 셋).
+     * 영역마다 앉음 알림을 걸고, 처음 값은 따로 묻는다. 못 읽으면 seats가 비어 화면은 기본 배치(앞 둘·뒤 셋)를 쓴다.
+     */
+    private fun readSeats(v: Vehicle) = runCatching {
+        v.getSeat().checkSeatOccupancyCapabilities({ areas ->
+            val names = areas.flatMap { a -> a.values.map { it.name } }
+            Log.i(TAG, "좌석 영역 $names")
+            update { it.copy(seats = names) }
+            for (a in areas) {
+                val name = a.values.firstOrNull()?.name ?: continue
+                fun seen(on: Boolean?) = update { s -> s.copy(occupied = if (on == true) s.occupied + name else s.occupied - name) }
+                val l = object : SeatOccupancyListener {
+                    override fun onSeatOccupancyUpdated(on: Boolean?) = seen(on)
+                    override fun onFailed(e: Exception) { Log.w(TAG, "앉음 알림 실패 $name", e) }
+                }
+                runCatching { v.getSeat().getCurrentSeatOccupancy(a, ::seen) { Log.w(TAG, "앉음 읽기 실패 $name", it) } }
+                runCatching { v.getSeat().registerSeatOccupancy(a, l); seatListeners += a to l }.onFailure { Log.w(TAG, "앉음 알림 등록 실패 $name", it) }
+            }
+        }, { Log.w(TAG, "좌석 영역을 받지 못함 · 기본 자리 배치로 둠", it) })
+    }.onFailure { Log.w(TAG, "좌석 읽기 실패 · 기본 자리 배치로 둠", it) }
 
     private val gearListener = object : GearSelectionListener {
         override fun onSelected(gear: VehicleGear?) { update { it.copy(gear = label(gear)) } }
@@ -123,6 +156,7 @@ class Car(ctx: Context, private val onChange: (CarStatus) -> Unit) {
         runCatching {
             vehicle = Vehicle(app).also { it.initialize(); it.getGear().registerGearSelection(gearListener) }
         }.onFailure { Log.w(TAG, "Vehicle 초기화 실패", it) }
+        vehicle?.let(::readSeats)
         readGear { }
         // 차 서비스가 늦게 뜨거나 다시 뜨면 ready로 다시 불린다. 생명주기 리스너 없이 만들면 차 서비스가 죽을 때 우리 프로세스도 같이 죽는다(AOSP Car)
         runCatching {
@@ -155,6 +189,7 @@ class Car(ctx: Context, private val onChange: (CarStatus) -> Unit) {
 
     fun stop() {
         runCatching { vehicle?.getGear()?.unregisterGearSelection(gearListener) }
+        seatListeners.forEach { (a, l) -> runCatching { vehicle?.getSeat()?.unregisterSeatOccupancy(a, l) } }
         runCatching { vehicle?.release() }
         runCatching { ux?.unregisterListener() }
         runCatching { aaos?.disconnect() }
