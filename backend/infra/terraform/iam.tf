@@ -4,7 +4,7 @@ locals {
   ssm_prefix   = "arn:aws:ssm:${var.region}:${local.account}:parameter/gachita/${var.env}"
 }
 
-# ---- 서버: SSM 세션, 배포 키 읽기, 서비스 계정 발급자의 공개 키 올리기, 백업이 있는지 보기 ----
+# ---- 서버: SSM 세션, 저장소 읽기 토큰 읽기, 서비스 계정 발급자의 공개 키 올리기, 백업이 있는지 보기 ----
 data "aws_iam_policy_document" "assume_ec2" {
   statement {
     actions = ["sts:AssumeRole"]

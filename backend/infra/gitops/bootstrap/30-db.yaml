@@ -11,7 +11,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: git@github.com:team-pitcrew/gachita.git
+    repoURL: https://github.com/team-pitcrew/gachita.git
     targetRevision: develop
     path: backend/infra/gitops/apps/db
   destination:

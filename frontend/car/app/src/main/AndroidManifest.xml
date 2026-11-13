@@ -10,7 +10,7 @@
  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
  <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
- <!-- 평문 http는 에뮬레이터에서 본 개발 서버(10.0.2.2)와 기기 자신에만 허용한다(res/xml/network_security_config.xml). 나머지는 https만.
+ <!-- release는 https만(res/xml/network_security_config.xml). 로컬 서버(10.0.2.2·localhost·127.0.0.1) 평문은 디버그 빌드에만 연다(src/debug/res/xml).
       minSdk 29: 마이크 유형 포그라운드 서비스와 녹음 막힘 확인(AudioRecordingConfiguration)이 API 29부터. Pleos Connect는 API 34.
       주행 중 쓰는 화면으로 선언(distractionOptimized)해 기어 D에서도 앞에 남는다. 막을 것은 앱이 주행 제한 값을 보고 가린다(T11). -->
  <application android:label="가치타" android:icon="@drawable/ic_launcher" android:theme="@android:style/Theme.Material.Light.NoActionBar"

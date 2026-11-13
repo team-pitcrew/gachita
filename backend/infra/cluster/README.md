@@ -76,5 +76,5 @@ kubectl -n gachita get deploy gachita-api -o jsonpath='{.spec.template.spec.cont
 | 2단계에서 발급자 검사 실패 | `/etc/rancher/k3s/config.yaml`의 `service-account-issuer-=`. K3s가 기본값을 앞에 두면 STS가 역할을 내주지 않음 |
 | 3단계에서 노드가 Ready가 안 됨 | `kubectl -n kube-system get helmchart,job,pod`. Cilium 설치 작업(`helm-install-cilium`) 로그 |
 | 4단계 실패 | 계정의 S3 공개 차단(계정 단위 Block Public Access)이 켜져 있으면 발급자 버킷 정책이 거절됨 |
-| 첫 부팅이 '저장소를 기다림'에서 멈춤 | 저장소 자격(SSM `/gachita/<env>/bootstrap/argocd-deploy-key`)과 주소. 이 저장소는 조직 설정으로 배포 키가 막혀 있음(2026-11-13) |
+| 첫 부팅이 '저장소를 기다림'에서 멈춤 | 저장소 읽기 토큰(SSM `/gachita/<env>/bootstrap/argocd-repo-token`)과 주소, 토큰 만료 |
 | 7단계에서 오래 멈춤 | 로그에 남은 `물결:앱:동기화/건강`. `kubectl -n argocd get app <이름> -o yaml`의 `status.conditions` |

@@ -3,18 +3,9 @@
 // 흉내만 내고 화면에 '시연'이라고 적는다. 마이크는 쓰지 않는다. 사용자가 쓴 글은 textContent로만 넣는다.
 // 차량은 운전석 참가자로 들어가 참가자 토큰을 받고, 여행 코드·토큰·순번은 localStorage에 두어 새로 고쳐도 이어진다.
 
-const SEATS = [
-  ["ROW_1_LEFT", "운전석"],
-  ["ROW_1_RIGHT", "조수석"],
-  ["ROW_2_LEFT", "뒤 왼쪽"],
-  ["ROW_2_CENTER", "뒤 가운데"],
-  ["ROW_2_RIGHT", "뒤 오른쪽"],
-];
-const SEAT = Object.fromEntries(SEATS);
+import { SEATS, SEAT, WHEN, REQ, CLOSED, api as request, h, toast } from "/shared.js";
+
 const STATUS = { boarding: "탑승 중", driving: "주행 중", parked: "주차 완료", ended: "여행 종료" };
-const REQ = { held: "보관", proposed: "제안 중", accepted: "수락됨", reflected: "경유지 반영", done: "완료", cancelled: "취소됨" };
-const WHEN = { now: "다음에 쉴 때", return: "돌아가는 길에", before_arrival: "도착하기 전에", after_parking: "주차한 뒤에" };
-const CLOSED = ["done", "cancelled"];
 // 강릉 가족 여행 대사(docs/demo-video.md, frontend/car/demo.py). [누가, 자리, 말]
 const LINES = [
   ["딸", "ROW_2_RIGHT", "아빠, 바다는 언제 보여?"],
@@ -36,7 +27,7 @@ const $ = (id) => document.getElementById(id);
 const els = {
   setup: $("setup"), setupErr: $("setup-err"), tripwin: $("tripwin"), left: $("left"), ops: $("ops"), right: $("right"),
   stt: $("stt"), sttState: $("stt-state"), sttLines: $("stt-lines"), sttSeat: $("stt-seat"), sttText: $("stt-text"), sttSend: $("stt-send"), sttErr: $("stt-err"),
-  phone: $("phone"), phoneEmpty: $("phone-empty"), phoneOpen: $("phone-open"), toast: $("toast"),
+  phone: $("phone"), phoneEmpty: $("phone-empty"), phoneOpen: $("phone-open"),
   fit: $("fit"), screen: $("screen"), speed: $("speed"), gears: $("gears"), seats: $("seats"), net: $("net"), clock: $("clock"),
   tDriver: $("t-driver"), tPassenger: $("t-passenger"),
 };
@@ -67,46 +58,26 @@ function save() {
   }
 }
 
-let toastTimer;
-function toast(message) {
-  els.toast.textContent = message;
-  els.toast.hidden = false;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => (els.toast.hidden = true), 4000);
-}
 const speak = (line) => (said = line);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ---- API ----
 
-class Refused extends Error {
-  constructor(status, message) {
-    super(message);
-    this.status = status; // 0이면 서버에 닿지 않음
-  }
-}
-
+// 이 여행의 경로(/api/trips…). auth면 차량의 참가자 토큰을 보낸다. 서버에 닿았는지는 연결 표시에 쓴다.
 async function api(method, path, body, auth = false) {
-  const headers = {};
-  if (body) headers["content-type"] = "application/json";
-  if (auth) headers.authorization = `Bearer ${car.token}`;
-  let res;
   try {
-    res = await fetch(`/api/trips${path}`, { method, headers, body: body && JSON.stringify(body) });
-  } catch {
-    online = false;
-    throw new Refused(0, "서버에 닿지 않음");
+    const data = await request(method, `/trips${path}`, body, auth && car.token);
+    online = true;
+    return data;
+  } catch (e) {
+    online = e.status !== 0;
+    throw e;
   }
-  online = true;
-  if (res.status === 304) return null;
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Refused(res.status, data.error ?? "");
-  return data;
 }
 
 // 서버가 거절한 이유를 쉬운 말로. 서버의 원래 답도 괄호에 남겨 무엇이 막았는지 보이게 한다.
 function plain(e) {
-  if (!(e instanceof Refused)) return `처리하지 못했어요 · ${e.message}`;
+  if (e.status === undefined) return `처리하지 못했어요 · ${e.message}`;
   const m = e.message;
   const why =
     e.status === 0 ? "서버에 닿지 않아요. 연결을 확인해 주세요."
@@ -315,11 +286,6 @@ async function loadLines() {
 
 // ---- 그리기 ----
 
-function h(tag, props = {}, ...kids) {
-  const el = Object.assign(document.createElement(tag), props);
-  el.append(...kids.flat().filter((k) => k || k === 0));
-  return el;
-}
 const button = (label, onclick, className = "") => h("button", { type: "button", className, onclick, disabled: busy }, label);
 const card = (...kids) => h("section", { className: "card" }, kids);
 const hm = (ms) => new Date(ms).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false });
@@ -462,7 +428,7 @@ function requestsCard() {
             return h(
               "li",
               { className: CLOSED.includes(r.status) ? "closed" : "" },
-              h("div", { className: "between" }, h("span", { className: "what" }, r.text), h("span", { className: `pill${r.status === "reflected" || r.status === "done" ? " ok" : ""}` }, REQ[r.status])),
+              h("div", { className: "between" }, h("span", { className: "what" }, r.text), h("span", { className: `pill${r.status === "reflected" || r.status === "done" ? " ok" : ""}` }, REQ[r.status][0])),
               h("p", { className: "meta" }, `${by[r.by] ?? "떠난 사람"} · ${WHEN[r.when] ?? r.when}`),
               acts.length > 0 && h("div", { className: "row" }, acts),
             );
