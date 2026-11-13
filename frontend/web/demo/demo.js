@@ -134,7 +134,7 @@ async function createTrip() {
     const p = await api("POST", `/${t.code}/participants`, { seat: "ROW_1_LEFT", name, consent: true });
     car = { code: t.code, id: p.id, token: p.token, seq: 0 };
     save();
-    speak("여행을 만들었어요. 폰에서 참가해 주세요");
+    speak("여행을 만들었어요. 폰에서 동승 연결 QR을 띄워 주세요");
   } catch (e) {
     els.setupErr.textContent = `여행을 만들지 못했어요 · ${plain(e)}`;
   }
