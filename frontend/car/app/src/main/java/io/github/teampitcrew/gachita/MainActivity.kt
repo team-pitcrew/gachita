@@ -160,7 +160,7 @@ class MainActivity : ComponentActivity() {
                         val t = s.trip
                         when {
                             t != null -> TripScreen(t)
-                            carStatus.driving -> SetupLocked()
+                            carStatus.restricted -> SetupLocked()
                             else -> Setup()
                         }
                     }
@@ -373,7 +373,7 @@ class MainActivity : ComponentActivity() {
             Live.recent.asReversed().forEach { u ->
                 Text("${hm.format(Date(u.startedAt))} · ${u.text}", maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
-            if (Live.pending > 0 && !carStatus.driving) Text("서버에 보내지 않고 이 차에 보관 중 ${Live.pending}건", color = c.onSurfaceVariant, fontSize = 20.sp)
+            if (Live.pending > 0 && !carStatus.restricted) Text("서버에 보내지 않고 이 차에 보관 중 ${Live.pending}건", color = c.onSurfaceVariant, fontSize = 20.sp)
         }
     }
 
@@ -384,21 +384,21 @@ class MainActivity : ComponentActivity() {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("대화 기록 동의", fontSize = 30.sp, fontWeight = FontWeight.Bold)
-                    if (!carStatus.driving) Text("기본값은 꺼짐 · 주차 중에만 켤 수 있어요", color = c.onSurfaceVariant, fontSize = 20.sp)
+                    if (!carStatus.restricted) Text("기본값은 꺼짐 · 주차 중에만 켤 수 있어요", color = c.onSurfaceVariant, fontSize = 20.sp)
                 }
-                Switch(s.agreed, { if (it) turnOn() else turnOff() }, enabled = !s.busy)
+                Switch(s.agreed, { if (it) turnOn() else turnOff() }, enabled = !s.busy && (s.agreed || !carStatus.restricted)) // 주행 제한 중에는 끄기(한 번 누름)만
             }
             if (s.note.isNotEmpty()) Text(s.note, color = c.error)
         }
         Card {
             if (s.online) Text("서버에 연결됐어요", color = c.tertiary)
             else Text("연결이 끊겼어요 · 마지막으로 확인한 정보예요", color = c.error)
-            if (!carStatus.driving) {
+            if (!carStatus.restricted) {
                 Text("기어 ${s.gear ?: "모름"} · 내비 ${if (carStatus.navi) "연결됨" else "연결 안 됨"} · 음성 ${if (carStatus.voice) "준비됨" else "준비 안 됨"}", color = c.onSurfaceVariant, fontSize = 20.sp)
                 Text("여행 코드 ${t.code}", color = c.onSurfaceVariant, fontSize = 20.sp)
             }
         }
-        if (!carStatus.driving) OutlinedButton(::newTrip, Modifier.heightIn(min = 64.dp), enabled = !s.agreed && !s.busy) { Text("새 여행 만들기") }
+        if (!carStatus.restricted) OutlinedButton(::newTrip, Modifier.heightIn(min = 64.dp), enabled = !s.agreed && !s.busy) { Text("새 여행 만들기") }
     }
 
     @Composable

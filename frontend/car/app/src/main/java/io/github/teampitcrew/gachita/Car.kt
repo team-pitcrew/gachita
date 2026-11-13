@@ -29,9 +29,9 @@ import java.util.Locale
 
 /**
  * 차가 알려 준 것. gear는 "P", "D", "R", "N" 같은 글자이고 모르면 null.
- * driving은 플랫폼이 주행 제한을 거는 중인지(CarUxRestrictions). 값을 받기 전이나 받지 못하면 제한으로 둔다(frontend/spec/car.md).
+ * restricted는 플랫폼이 주행 제한을 거는 중인지(CarUxRestrictions. 기어 D여도 오토 홀드면 풀릴 수 있음). 값을 받기 전이나 받지 못하면 제한으로 둔다(frontend/spec/car.md).
  */
-data class CarStatus(val gear: String? = null, val navi: Boolean = false, val voice: Boolean = false, val naviEvent: String = "", val driving: Boolean = true)
+data class CarStatus(val gear: String? = null, val navi: Boolean = false, val voice: Boolean = false, val naviEvent: String = "", val restricted: Boolean = true)
 
 data class Place(val lat: Double, val lng: Double, val name: String, val address: String = "")
 
@@ -71,9 +71,9 @@ class Car(ctx: Context, private val onChange: (CarStatus) -> Unit) {
     private val uxListener = CarUxRestrictionsManager.OnUxRestrictionsChangedListener(::onUx)
 
     private fun onUx(r: CarUxRestrictions?) {
-        val driving = r?.isRequiresDistractionOptimization ?: true
-        Log.i(TAG, "주행 제한 ${if (driving) "켜짐" else "꺼짐"} ${r?.activeRestrictions}")
-        update { it.copy(driving = driving) }
+        val on = r?.isRequiresDistractionOptimization ?: true
+        Log.i(TAG, "주행 제한 ${if (on) "켜짐" else "꺼짐"} ${r?.activeRestrictions}")
+        update { it.copy(restricted = on) }
     }
 
     private fun naviEvent(e: String) { Log.i(TAG, "내비: $e"); update { it.copy(naviEvent = e) } }
@@ -83,14 +83,19 @@ class Car(ctx: Context, private val onChange: (CarStatus) -> Unit) {
             vehicle = Vehicle(app).also { it.initialize(); it.getGear().registerGearSelection(gearListener) }
         }.onFailure { Log.w(TAG, "Vehicle 초기화 실패", it) }
         readGear { }
+        // 차 서비스가 늦게 뜨거나 다시 뜨면 ready로 다시 불린다. 생명주기 리스너 없이 만들면 차 서비스가 죽을 때 우리 프로세스도 같이 죽는다(AOSP Car)
         runCatching {
-            aaos = android.car.Car.createCar(app)?.also { c ->
-                ux = (c.getCarManager(android.car.Car.CAR_UX_RESTRICTION_SERVICE) as CarUxRestrictionsManager).also {
-                    it.registerListener(uxListener)
-                    onUx(it.currentCarUxRestrictions)
-                }
+            aaos = android.car.Car.createCar(app, main, android.car.Car.CAR_WAIT_TIMEOUT_DO_NOT_WAIT) { c, ready ->
+                ux = null
+                if (!ready) return@createCar onUx(null)
+                runCatching {
+                    ux = (c.getCarManager(android.car.Car.CAR_UX_RESTRICTION_SERVICE) as CarUxRestrictionsManager).also {
+                        it.registerListener(uxListener)
+                        onUx(it.currentCarUxRestrictions)
+                    }
+                }.onFailure { Log.w(TAG, "주행 제한 값을 받지 못함 · 제한된 화면으로 둠", it) }
             }
-        }.onFailure { Log.w(TAG, "주행 제한 값을 받지 못함 · 제한된 화면으로 둠", it) }
+        }.onFailure { Log.w(TAG, "차 서비스에 붙지 못함 · 제한된 화면으로 둠", it) }
         runCatching {
             navi.initialize(
                 onConnected = { navi.addListener(naviListener); update { it.copy(navi = true) } },
@@ -110,7 +115,8 @@ class Car(ctx: Context, private val onChange: (CarStatus) -> Unit) {
     fun stop() {
         runCatching { vehicle?.getGear()?.unregisterGearSelection(gearListener) }
         runCatching { vehicle?.release() }
-        runCatching { ux?.unregisterListener(); aaos?.disconnect() }
+        runCatching { ux?.unregisterListener() }
+        runCatching { aaos?.disconnect() }
         runCatching { navi.removeListener(naviListener); navi.release() }
         runCatching { tts?.release() }
     }

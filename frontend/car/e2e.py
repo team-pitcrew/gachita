@@ -48,6 +48,11 @@ def tap_text(text, last=True):
     note("tap", text=text); return True
 
 
+def switch_enabled():
+    m = re.search(r'checkable="true"[^>]*?enabled="(\w+)"', nodes()[1])
+    return m and m.group(1) == "true"
+
+
 def tap_switch():
     # Compose Switch는 글자 없이 checkable 노드로 나온다
     m = re.search(r'checkable="true"[^>]*?bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', nodes()[1])
@@ -148,10 +153,10 @@ def main(apk):
     t = server(code)
     check("서버에 여행과 가족 4명, 동의는 모두 꺼짐", len(t["participants"]) == 4 and not any(p["consent"] for p in t["participants"]))
     check("기록 꺼짐 화면과 기어 P", "기록 꺼짐" in ui and any(u.startswith("기어 P") for u in ui))
-    # 기어 D: 주행 중 화면으로 선언해(T11) 누른 것이 앱에 닿는다. 앱이 기어를 다시 읽고 켜지 않아야 한다
-    gear("Drive"); tap_switch(); time.sleep(2)
+    # 기어 D: 주행 제한 중에는 켜는 쪽 조작을 막는다(T11). 눌러도 켜지지 않아야 한다
+    gear("Drive"); on = switch_enabled(); tap_switch(); time.sleep(2)
     shot("03-drive-not-on"); ui = texts(); note("ui", texts=ui); t = server(code)
-    check("기어 D에서는 켜지지 않음(서버 동의 그대로 꺼짐)", "● 기록 중" not in ui and "주차(P)한 뒤에 켤 수 있어요" in ui and not any(p["consent"] for p in t["participants"]))
+    check("기어 D에서는 동의 스위치가 꺼진 채 눌리지 않음(서버 동의 그대로 꺼짐)", not on and "● 기록 중" not in ui and not any(p["consent"] for p in t["participants"]))
     gear("Park"); tap_switch(); time.sleep(3)
     shot("04-recording"); ui = texts(); note("ui", texts=ui); t = server(code)
     check("기어 P에서 켜면 기록 중, 서버 동의 모두 켜짐", "● 기록 중" in ui and all(p["consent"] for p in t["participants"]))
@@ -186,7 +191,7 @@ def main(apk):
     t = server(code)
     check("서버가 돌아오면 끄기가 서버에 반영됨", not any(p["consent"] for p in t["participants"]))
     shot("11-synced"); ui = texts(); note("ui", texts=ui)
-    check("다시 연결됨", "서버에 연결됐어요" in ui and "기록 꺼짐" in ui)
+    check("다시 연결됨, 앱을 다시 켠 뒤에도 P에서 주행 제한이 풀림", "서버에 연결됐어요" in ui and "기록 꺼짐" in ui and "새 여행 만들기" in ui)
     # 반쪽 창(약 841): 에뮬레이터가 창을 나누지 않아 앱 안에서 폭을 줄여 그린다(디버그 빌드)
     adb("shell", "am", "start", "--user", "10", "-S", "-n", f"{PKG}/.MainActivity", "--ei", "widthDp", "841")
     time.sleep(4); shot("12-half-width-841"); ui = texts(); note("ui", texts=ui)
