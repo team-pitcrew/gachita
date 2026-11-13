@@ -290,6 +290,19 @@ async function profiles(req, seg, b) {
     ].sort((a, b) => b.at - a.at);
     return [200, { items: items.slice(0, 100) }];
   }
+  if (seg[1] === "moments" && !seg[2]) {
+    // 한 여행의 내 앨범 장면(T81 공유 후보). 피드와 달리 발화와 섞지도 100개로 자르지도 않는다 — 여행당 장면은 500개가 상한이다.
+    // 앨범 복사본이라 여행이 닫힌 뒤에도 나온다(공유할 수 있는 기간은 부르는 쪽이 여행 시각으로 본다).
+    if (m !== "GET") fail(405, "GET만 됨");
+    const me = (await profileOf(req)) ?? fail(401, "프로필 토큰이 필요함");
+    const trip = new URL(req.url, "http://localhost").searchParams.get("trip") ?? "";
+    if (!/^[A-Za-z2-9]{6}$/.test(trip)) fail(400, "trip: 여행 코드 6자");
+    const { rows } = await profilesDb().query(
+      "SELECT id, trip_code, at, lat, lng, label FROM profile_moments WHERE profile_id = $1 AND trip_code = $2 ORDER BY at, id",
+      [me.id, trip.toUpperCase()]
+    );
+    return [200, { items: rows.map((r) => ({ id: r.id, tripCode: r.trip_code, at: Number(r.at), label: r.label, ...(r.lat !== null ? { lat: r.lat, lng: r.lng } : {}) })) }];
+  }
   if (seg[1] === "moments" && seg[2] && !seg[3]) {
     // 앨범에 남은 장면 복사본을 지운다. 여행의 moments에는 영향이 없다.
     if (m !== "DELETE") fail(405, "DELETE만 됨");
