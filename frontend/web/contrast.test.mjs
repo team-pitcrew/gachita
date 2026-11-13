@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 const css = readFileSync(new URL("style.css", import.meta.url), "utf8");
-const tokens = (block) => Object.fromEntries([...block.matchAll(/--([\w-]+):\s*(#[0-9a-f]{6})/g)].map((m) => [m[1], m[2]]));
+const tokens = (block) => Object.fromEntries([...block.matchAll(/--([\w-]+):\s*(#[0-9a-f]{6})(?![0-9a-f])/gi)].map((m) => [m[1], m[2]]));
 const [light, dark] = [...css.matchAll(/:root\s*\{([^}]*)\}/g)].map((m) => tokens(m[1]));
 
 const luminance = (hex) => {
@@ -24,17 +24,27 @@ const PAIRS = [
   ["ink-2", "bg", "보조 글"],
   ["ink-2", "surface", "카드 보조 글"],
   ["ink-2", "line", "비활성 단추"],
-  ["on-accent", "accent", "주 단추"],
-  ["accent", "accent-soft", "보조 단추, 고른 칩"],
-  ["accent", "surface", "브랜드 글자"],
+  ["on-accent", "accent-fill", "주 단추(민트 바탕에 먹색 글자)"],
+  ["accent", "accent-soft", "보조 단추"],
+  ["accent", "surface", "브랜드 글자(카드 위)"],
   ["rec", "bg", "기록 중 표시"],
   ["ok", "bg", "완료 표시"],
+  ["warn", "bg", "기다림 표시"],
+  ["ink", "surface-2", "묶음 안 글자"],
+  ["ink-2", "surface-2", "묶음 안 보조 글"],
+  ["accent", "bg", "브랜드 글자(바탕 위)"],
+  ["surface", "ink", "고른 칩"],
+  ["ok", "surface-2", "완료 알약"],
+  ["rec", "surface-2", "기록 중 알약"],
+  ["ink", "accent-soft", "기록·공유 결과 줄"],
+  ["rec", "accent-soft", "기록·공유 오류 줄"],
   ["bg", "ink", "알림 띠"],
 ];
 
 for (const [name, theme] of [["밝은 화면", light], ["어두운 화면", dark]]) {
   test(`${name}: 글자 대비 4.5:1 이상`, () => {
     for (const [fg, bg, where] of PAIRS) {
+      assert.ok(theme[fg] && theme[bg], `${where}: 토큰 ${fg}·${bg}가 ${name}에 없어요`);
       const r = ratio(theme[fg], theme[bg]);
       assert.ok(r >= 4.5, `${where}(${fg} on ${bg}) ${r.toFixed(2)}:1`);
     }

@@ -32,16 +32,19 @@ const CONSENT = [
   "프로필로 참가한 사람은 자기 이름이 붙은 글을, 참가자 누구나 장면으로 남긴 소리를 바로 지울 수 있습니다.",
   "동의는 여행 중 언제든 끌 수 있고, 끄면 이 여행에서 그때까지 받아 적은 글과 올라간 소리가 모두 지워집니다.",
 ];
-// 프로필 캐릭터. 사진이 없을 때 이 그림으로 보인다(목록 고정은 T46).
+// 프로필 캐릭터: 사진이 없을 때 보이는 원본 10종(디자인 1급 문서 11/14). 그림은 chars/<값>.svg, 꾸밈은 style.css의 .c-<값>.
 const CHARACTERS = [
-  ["bunny", "🐰", "토끼"],
-  ["bear", "🐻", "곰"],
-  ["cat", "🐱", "고양이"],
-  ["dog", "🐶", "강아지"],
-  ["fox", "🦊", "여우"],
-  ["penguin", "🐧", "펭귄"],
+  ["basic", "기본"],
+  ["cap", "캡모자"],
+  ["glasses", "안경"],
+  ["travel", "여행"],
+  ["game", "게임"],
+  ["sport", "운동"],
+  ["pet", "반려동물"],
+  ["camping", "캠핑"],
+  ["office", "직장인"],
+  ["healing", "힐링"],
 ];
-const FACE = Object.fromEntries(CHARACTERS.map(([v, face]) => [v, face]));
 // 한 번 눌러 채우는 부탁: [단추 글자, 채울 문장, 언제]
 const QUICK = [
   ["화장실", "화장실 가고 싶어요", "now"],
@@ -209,8 +212,10 @@ const chipGroup = (legend, name, options, current, onpick) =>
 const car = (seat, className = "car") =>
   h("div", { className }, h("p", { className: "meta" }, "차 앞쪽"), h("div", { className: "front" }, SEATS.slice(0, 2).map(seat)), h("div", { className: "rear" }, SEATS.slice(2).map(seat)));
 
-// 얼굴: 사진, 없으면 캐릭터, 없으면 이름 첫 글자
-const avatar = (p, src) => h("span", { className: "avatar", "aria-hidden": "true" }, src ? h("img", { src, alt: "" }) : FACE[p?.character] ?? (p?.name || "?").slice(0, 1));
+// 얼굴: 사진, 없으면 캐릭터 그림(style.css .c-*), 없으면 기본 그림
+// 캐릭터 값은 서버가 20자 문자열로만 받으므로, 목록에 있는 값만 클래스로 쓴다(다른 클래스가 섞이지 않게).
+const face = (c) => (CHARACTERS.some(([v]) => v === c) ? c : "basic");
+const avatar = (p, src) => h("span", { className: src ? "avatar" : `avatar c-${face(p?.character)}`, "aria-hidden": "true" }, src && h("img", { src, alt: "" }));
 
 function fillDraft() {
   URL.revokeObjectURL(pdraft.preview);
@@ -241,7 +246,7 @@ function profileFields(full) {
       avatar({ name: pdraft.name, character: pdraft.character }, pdraft.preview || photo),
       h("label", { className: "field grow" }, h("span", {}, "사진(고르면 캐릭터 대신 보여요)"), h("input", { type: "file", accept: "image/*", onchange: pick })),
     ),
-    chipGroup("캐릭터", "character", CHARACTERS.map(([v, face, label]) => [v, `${face} ${label}`]), pdraft.character, (v) => ((pdraft.character = v), face())),
+    chipGroup("캐릭터", "character", CHARACTERS, pdraft.character, (v) => ((pdraft.character = v), face())),
     full &&
       h("label", { className: "chip" }, h("input", { type: "checkbox", checked: pdraft.consentDefault, onchange: (e) => (pdraft.consentDefault = e.target.checked) }), "참가할 때 대화 기록 동의를 미리 켜 둠"),
   ];
