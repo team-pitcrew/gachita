@@ -10,7 +10,7 @@
 #   backend/infra/infra.sh backup              손 전체 백업
 #   backend/infra/infra.sh restore [시각] [apply]  지정 시점 복구. 옆에 db-pitr을 세워 재고 비교한다(연습).
 #                                              apply면 먼저 db를 백업하고 db-pitr의 데이터를 db에 덮어쓴다
-#   backend/infra/infra.sh clean-e2e           실제 주소 E2E가 남긴 여행(제목 'E2E 양양')을 지운다(T54)
+#   backend/infra/infra.sh clean-e2e           실제 주소 E2E와 부하 시험이 남긴 여행(제목이 'E2E '로 시작)을 지운다(T54, T62)
 #
 # 필요한 것: AWS 자격(워크플로는 OIDC 적용 역할), jq. up·down은 상태 버킷 TF_STATE_BUCKET도.
 # 고를 것: CLOUDFLARE_API_TOKEN과 TF_VAR_cloudflare_zone_id(없으면 인증서·레코드 없이 ALB까지만),
@@ -394,13 +394,13 @@ EOF
 clean_e2e() {
   local id
   id=$(server)
-  log 1/1 "실제 주소 E2E가 남긴 여행(제목 'E2E 양양')을 지운다(서버 $id)"
+  log 1/1 "실제 주소 E2E와 부하 시험이 남긴 여행(제목이 'E2E '로 시작)을 지운다(서버 $id)"
   on_server "$id" 120 "$(
     cat <<'EOF'
 set -euo pipefail
 export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 p=$(kubectl -n gachita-db get cluster db -o jsonpath='{.status.currentPrimary}')
-n=$(kubectl -n gachita-db exec "$p" -c postgres -- psql -d trips -tAc "WITH d AS (DELETE FROM trips WHERE doc->>'title' = 'E2E 양양' RETURNING 1) SELECT count(*) FROM d")
+n=$(kubectl -n gachita-db exec "$p" -c postgres -- psql -d trips -tAc "WITH d AS (DELETE FROM trips WHERE doc->>'title' LIKE 'E2E %' RETURNING 1) SELECT count(*) FROM d")
 echo "지운 여행: $n"
 EOF
   )" || fail "지우지 못했습니다"
