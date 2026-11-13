@@ -1,16 +1,17 @@
 /* 가치타 웹 시연(/demo). 색은 폰 웹앱(../style.css)의 토큰을 옮겨 쓰고, 에뮬레이터 시스템 영역 색만 더한다.
    차량 화면은 2560 × 1440 좌표 그대로 그리고 demo.js가 --s 배율로 통째로 줄인다(글자 크기도 그 좌표 기준). */
 :root {
-  --bg: #f6f5f9;
+  --bg: #f6f4f1;
   --surface: #ffffff;
-  --ink: #1f1d2b;
-  --ink-2: #5a5669;
-  --line: #e4e1eb;
-  --accent: #5b47b0;
-  --accent-soft: #efebfa;
-  --on-accent: #ffffff;
+  --ink: #28221b;
+  --ink-2: #5a5044;
+  --line: #edeae6;
+  --accent: #2b7a53;
+  --accent-soft: #e4f4ec;
+  --accent-fill: #60c090;
+  --on-accent: #28221b;
   --rec: #b3261e;
-  --ok: #1b7350;
+  --ok: #2b7a53;
   --sys: #dfe4ec;
   --sys-2: #c8cfdb;
   --sys-ink: #1d2330;
@@ -21,16 +22,17 @@
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #17161f;
-    --surface: #22202d;
-    --ink: #ece9f3;
-    --ink-2: #aaa5ba;
-    --line: #383549;
-    --accent: #b6a6ee;
-    --accent-soft: #2f2a47;
-    --on-accent: #17161f;
-    --rec: #ff9288;
-    --ok: #74d3a8;
+    --bg: #12110f;
+    --surface: #1c1a17;
+    --ink: #f4f1ec;
+    --ink-2: #b5ada2;
+    --line: #34302a;
+    --accent: #7fddb2;
+    --accent-soft: #1c3a2d;
+    --accent-fill: #6fd3a6;
+    --on-accent: #12110f;
+    --rec: #ff8a80;
+    --ok: #7fddb2;
     --sys: #101118;
     --sys-2: #1c1d27;
     --sys-ink: #e8e9f0;
@@ -369,7 +371,7 @@ select {
   font-style: normal;
   font-size: 28px;
   font-weight: 700;
-  background: var(--accent);
+  background: var(--accent-fill);
   color: var(--on-accent);
 }
 
@@ -526,7 +528,7 @@ button:active {
 }
 button.primary {
   min-height: 96px;
-  background: var(--accent);
+  background: var(--accent-fill);
   color: var(--on-accent);
   font-size: 40px;
 }

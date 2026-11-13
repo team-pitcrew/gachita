@@ -16,8 +16,6 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -31,21 +29,16 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
-import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.ProvideTextStyle
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.Typography
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -53,8 +46,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -68,21 +59,6 @@ import java.io.File
 import java.util.UUID
 import java.util.concurrent.Executors
 
-// 색은 frontend/web/style.css의 토큰과 같다. 꾸밈은 시안(T20) 뒤에 맞춘다.
-private val LightColors = lightColorScheme(
-    background = Color(0xFFF6F5F9), surface = Color(0xFFFFFFFF), onBackground = Color(0xFF1F1D2B), onSurface = Color(0xFF1F1D2B),
-    onSurfaceVariant = Color(0xFF5A5669), outline = Color(0xFFE4E1EB), primary = Color(0xFF5B47B0), primaryContainer = Color(0xFFEFEBFA),
-    onPrimary = Color(0xFFFFFFFF), error = Color(0xFFB3261E), tertiary = Color(0xFF1B7350),
-)
-private val DarkColors = darkColorScheme(
-    background = Color(0xFF17161F), surface = Color(0xFF22202D), onBackground = Color(0xFFECE9F3), onSurface = Color(0xFFECE9F3),
-    onSurfaceVariant = Color(0xFFAAA5BA), outline = Color(0xFF383549), primary = Color(0xFFB6A6EE), primaryContainer = Color(0xFF2F2A47),
-    onPrimary = Color(0xFF17161F), error = Color(0xFFFF9288), tertiary = Color(0xFF74D3A8),
-)
-
-// 칩·단추(labelLarge)와 입력란(bodyLarge)의 기본 14~16sp는 차 화면에서 작다
-private val CarType = Typography(labelLarge = TextStyle(fontSize = 24.sp), bodyLarge = TextStyle(fontSize = 24.sp))
-
 private const val DEFAULT_SERVER = "https://gachita.mangowhois.ai" // 실서비스(T27). 로컬 서버는 디버그 빌드에서 '서버 주소'나 --es server로
 private const val POLL_MS = 10_000L // 웹앱은 2초. 차에서는 주행 중 자원 기준(CPU 5% 미만)을 생각해 길게 둔다
 private const val TITLE = "가치타 가족 여행"
@@ -92,10 +68,13 @@ private const val GLEO_ARRIVAL = "GACHITA_ARRIVAL_TASKS" // assets/schema.json�
 private const val GLEO_PAUSE = "GACHITA_PAUSE_RECORDING" // 같은 곳(T41)
 private const val GLEO_RESUME = "GACHITA_RESUME_RECORDING"
 private const val RESYNC_EVERY = 30 // 조회 30번(5분)마다, 그리고 끊겼다 다시 닿을 때 서버의 확인 순번을 다시 받는다(ADR-0014 2절). 5분마다는 서버에서 지운 글도 차 사본에 맞춘다(T69)
+private const val MATCH_MAX = 20 // 한 차례에 대조할 발화 수. 밀린 것이 많아도 통신 줄을 오래 잡지 않게
 private const val OFFER_MS = 30_000L // 제안에 답이 없으면 보관으로 되돌리는 시간. 그사이 휴게소를 지나칠 수 있어 길게 두지 않는다
 
 class MainActivity : ComponentActivity() {
     private val io = Executors.newSingleThreadExecutor()
+    private val clipIo = Executors.newSingleThreadExecutor() // 장면 클립 올리기(T63). 동의 끄기 요청이 클립 묶음 뒤에 서지 않게 따로
+    @Volatile private var clipsAllowed = false // 모두 동의했고 끄기 대기가 없음. 클립을 하나 올릴 때마다 본다
     private val main = Handler(Looper.getMainLooper())
     private lateinit var prefs: SharedPreferences
     private lateinit var car: Car
@@ -112,8 +91,20 @@ class MainActivity : ComponentActivity() {
             if (v.offPending != state.offPending || v.started != state.started)
                 prefs.edit().putBoolean("offPending", v.offPending).putBoolean("started", v.started).commit()
             state = v
+            clipsAllowed = v.consented && !v.offPending // 끄면 남은 클립을 더 올리지 않는다
             syncCapture() // 동의가 빠졌으면 수음을 먼저 멈춘다
-            v.trip?.let { t -> Live.outbox(this, t.code).let { if (it.see(t.generation, t.createdAt)) Live.show(it) } } // 동의 세대가 오르면 옛 세대 발화의 글을 지운다
+            v.trip?.let { t ->
+                // 등록값은 그 사람의 동의가 꺼지면 서버가 지운다. 꺼졌다 10초 안에 다시 켜져 차가 못 봤어도 세대가 오르므로 세대가 바뀌면 다시 등록한다
+                val gen = "${t.code}:${t.generation}"
+                voiced.filter { id -> voicedAt == gen && t.people.any { it.id == id && it.consent } }.toSet().takeIf { it != voiced || voicedAt != gen }?.let {
+                    voiced = it; voicedAt = gen; prefs.edit().putString("voiced", "$gen:" + it.joinToString(",")).apply()
+                }
+                speakersOf(t.code).see(t.generation)
+                val box = Live.outbox(this, t.code)
+                if (box.see(t.generation, t.createdAt)) Live.show(box) // 동의 세대가 오르면 옛 세대 발화의 글을 지운다
+                if (v.consented) Live.rawGen = box.generation // 원음은 모두 동의한 세대로만 남긴다(T63)
+                if ("${t.code}:${box.generation}" != rawSeen) { rawSeen = "${t.code}:${box.generation}"; dropRaw(filesDir, t.code, below = box.generation) } // 옛 세대의 원음은 지운다
+            }
         }
     private var carStatus by mutableStateOf(CarStatus())
     private var server by mutableStateOf(DEFAULT_SERVER)
@@ -124,6 +115,17 @@ class MainActivity : ComponentActivity() {
     private var pendingRoute: List<String>? = null // 내비에 붙으면 보낼 목적지(디버그 인자)
     private var offers = 0L // 제안 번호. 늦게 온 콜백이 다른 제안을 건드리지 않게
     private var todos: Todos? = null // 지금 여행의 장소별 할 일(T40)
+    private var clipping = false // 장면 클립을 올리는 중(T63)
+    private var rawSeen = "" // 옛 세대 원음을 지운 여행·세대. 세대가 바뀔 때만 파일 목록을 본다
+    private var speakers: Speakers? = null // 지금 여행의 발화별 말한 사람(T37)
+    private var matching = false // 대조·고침 보내기가 clipIo에 있음
+    private var heardTick by mutableStateOf(0) // 말한 사람이 바뀌면 받아 적은 말 카드를 다시 그린다
+    /** 이 차에서 목소리를 등록한 참가자. 그 사람의 동의가 꺼지면 서버가 등록값을 지우므로 여기서도 뺀다(#65). */
+    private var voiced by mutableStateOf(emptySet<String>())
+    private var voicedAt = "" // voiced가 맞는 여행·동의 세대
+    private var enrolling by mutableStateOf<Person?>(null)
+    private var voiceNote by mutableStateOf("")
+    private var clipsAfter = 0L // 다시 해도 되는 실패(403·503·끊김) 뒤에는 이때까지 쉰다. 큰 원음 파일을 10초마다 다시 읽지 않게
     private var todoList by mutableStateOf(emptyList<Todo>())
     /** 보이고 있는 도착 브리핑. place가 null이면 모든 장소(Gleo로 부름). 주차해 주행 제한이 풀렸을 때만 그린다. */
     private data class Brief(val place: String?)
@@ -210,7 +212,9 @@ class MainActivity : ComponentActivity() {
         if (saved == null) prefs.edit().remove("trip").remove("tokens").commit()
         tokens = unsealed("tokens")?.let { j -> JSONObject(j).let { o -> o.keys().asSequence().associateWith { o.getString(it) } } }.orEmpty()
         // 앱을 다시 켜도, 서버에 닿지 않아도 마지막으로 받은 여행과 끄기 대기, 받아 적은 말과 순번을 이어 보여 준다
+        prefs.getString("voiced", null)?.split(":")?.takeIf { it.size == 3 }?.let { (code, gen, ids) -> voicedAt = "$code:$gen"; voiced = ids.split(",").filter { it.isNotEmpty() }.toSet() }
         s = Session.restore(saved, prefs.getBoolean("offPending", false), prefs.getBoolean("started", false), tokens.keys)
+        if (s.offPending) s.trip?.let { dropRawAll(it.code) } // 끈 뒤 지우기 전에 앱이 꺼졌으면 마저 지운다
         car = Car(this) {
             carStatus = it
             if (it.restricted && shortAt >= 0) stopShort() // 주행 중에는 숏폼을 틀지 않는다(T11)
@@ -225,17 +229,15 @@ class MainActivity : ComponentActivity() {
         routeFrom(intent)
         if (savedInstanceState == null) gleo(intent) // 다시 만들어진 화면이 지난 호출에 또 답하지 않게
         setContent {
-            MaterialTheme(colorScheme = if (isSystemInDarkTheme()) DarkColors else LightColors, typography = CarType) {
-                ProvideTextStyle(TextStyle(fontSize = 24.sp)) {
-                    // ponytail: 에뮬레이터는 창을 나누지 않아 반쪽 창을 --ei widthDp 841로 흉내 낸다. 실제 분할 창 확인은 실차에서
-                    val w = if (debug) intent.getIntExtra("widthDp", 0) else 0
-                    Surface(if (w > 0) Modifier.fillMaxHeight().width(w.dp) else Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-                        val t = s.trip
-                        when {
-                            t != null -> TripScreen(t)
-                            carStatus.restricted -> SetupLocked()
-                            else -> Setup()
-                        }
+            GachitaTheme {
+                // ponytail: 에뮬레이터는 창을 나누지 않아 반쪽 창을 --ei widthDp 841로 흉내 낸다. 실제 분할 창 확인은 실차에서
+                val w = if (debug) intent.getIntExtra("widthDp", 0) else 0
+                Surface(if (w > 0) Modifier.fillMaxHeight().width(w.dp) else Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                    val t = s.trip
+                    when {
+                        t != null -> TripScreen(t)
+                        carStatus.restricted -> SetupLocked()
+                        else -> Setup()
                     }
                 }
             }
@@ -273,7 +275,7 @@ class MainActivity : ComponentActivity() {
         main.removeCallbacksAndMessages(null) // 조회, 제안 시간 초과, 결과 카드 닫기
         if (Live.onHeard == ::heard) Live.onHeard = null
         if (!isChangingConfigurations) { handoff.stop(); CaptureService.stop(this) } // 동의를 확인할 화면이 없어지면 수음도 멈춘다
-        car.stop(); io.shutdown(); super.onDestroy()
+        car.stop(); io.shutdown(); clipIo.shutdownNow(); super.onDestroy()
     }
 
     /** 통신은 한 줄로 차례대로 돌리고 결과만 메인 스레드로 돌려받는다. */
@@ -315,9 +317,6 @@ class MainActivity : ComponentActivity() {
         val off = s.offTargets
         val v = s.pollVersion
         val url = server
-        val box = Live.box?.takeIf { it.trip == t.code }
-        val dev = device
-        val up = tokens.minByOrNull { it.key }?.value // 올리는 사람은 늘 같은 참가자(서버는 기기를 처음 올린 참가자에 묶는다)
         bg({
             val api = Server(url)
             off.forEach { api.consent(t.code, it, false) }
@@ -326,9 +325,20 @@ class MainActivity : ComponentActivity() {
             r.onSuccess { got ->
                 if (s.trip?.code != t.code) return@onSuccess // 그사이 지운 여행(48시간·404)이나 새 여행: 늦게 온 응답으로 되살리지 않는다
                 s = if (got == null) s.copy(online = true) else s.withTrip(keep(got))
+                upload(t, resync, prune) // 받은 여행의 동의 세대를 보관함에 반영한(철회면 글을 지운) 뒤에만 올린다
+                speakers(t) // 올릴 새 발화가 없어도 밀린 대조와 고침을 잇는다
+                s.trip?.let(::clips)
             }
-                .onFailure { if (it is Gone) forget(t.code) else s = s.copy(online = it is ApiError, note = if (it is ApiError) reason(it) else s.note) }
+                .onFailure { if (it is Gone) forget(t.code) else s = s.copy(online = it is ApiError, note = if (it is ApiError) reason(it) else s.note) } // 조회를 못 하면 이번에는 올리지 않는다
         }
+    }
+
+    /** 받아 적은 말을 올린다. 여행 조회가 성공해 그 응답을 반영한 뒤에만 부른다(끊긴 사이 철회됐으면 지운 뒤에 올리게). */
+    private fun upload(t: Trip, resync: Boolean, prune: Boolean) {
+        val url = server
+        val box = Live.box?.takeIf { it.trip == t.code }
+        val dev = device
+        val up = tokens.minByOrNull { it.key }?.value // 올리는 사람은 늘 같은 참가자(서버는 기기를 처음 올린 참가자에 묶는다)
         // 받아 적은 말은 동의와 따로 보낸다. 못 보내면(끊김, 동의 대기 403) 보관함에 두었다 다음 조회에 다시 보낸다.
         // 지운 글 맞추기는 같은 차례에 받은 lastSeq 안에서만 한다(빈 묶음이라도 먼저 보냄). 되살린 DB에서 잃은 순번을 지운 것으로 보지 않게
         val again = (resync || prune) && box != null && box.acked > 0
@@ -342,6 +352,36 @@ class MainActivity : ComponentActivity() {
             uploading = false
             r.exceptionOrNull()?.let { Log.w(TAG, "발화 올리기 못 함 ${if (it is ApiError) it.message else "연결"}") } // 서버 거절(400 등)의 글에는 받아 적은 말이 없다
             if (r.exceptionOrNull() is Gone) forget(t.code) else if (Live.box === box) Live.show(box) // 그사이 지운 여행은 다시 보이지 않게
+            if (s.trip?.code == t.code) speakers(t) // 이번에 서버가 받은 발화의 말한 사람
+        }
+    }
+
+    /**
+     * 말한 사람(T37): 서버가 받았지만 아직 대조하지 않은 발화(한 차례 20건)와, 사람이 고쳤지만 서버에 남기지 못한 것을 처리한다.
+     * 올릴 새 발화가 있든 없든 조회마다 본다(밀린 대조를 이어 하게). 대조는 원음을 보내므로 클립과 같은 따로 둔 실행기에서 돌고,
+     * 요청마다 '모두 동의, 끄기 대기 없음'을 다시 본다(동의를 끄면 남은 원음을 보내지 않고, 끄기 요청이 그 뒤에 서지 않게).
+     */
+    private fun speakers(t: Trip) {
+        val box = Live.box?.takeIf { it.trip == t.code } ?: return
+        val up = tokens.minByOrNull { it.key }?.value ?: return
+        if (matching || !clipsAllowed) return
+        val sp = speakersOf(t.code)
+        // 등록값이 있을 만할 때만 대조한다(이 차에서 등록했거나 프로필 참가자가 있음)
+        val todo = if (voiced.isNotEmpty() || t.people.any { it.profile }) box.ackedAfter(sp.through).take(MATCH_MAX) else emptyList()
+        val fixes = sp.unsent()
+        if (todo.isEmpty() && fixes.isEmpty()) return
+        matching = true
+        val url = server; val dev = device
+        if (!clipIo.isShutdown) clipIo.execute {
+            val r = runCatching {
+                val api = Server(url)
+                for ((seq, f) in fixes) { api.fixSpeaker(t.code, up, dev, seq, f.who); sp.set(seq, f.copy(sent = true)) }
+                match(api, t.code, up, dev, todo, sp)
+            }
+            main.post {
+                matching = false; heardTick++
+                r.exceptionOrNull()?.let { Log.i(TAG, "말한 사람 대조·고침 미룸 ${if (it is ApiError) it.status else "연결"}") }
+            }
         }
     }
 
@@ -353,12 +393,127 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * 사람이 확정한 장면(moments)의 구간을 이 차의 원음에서 16 kHz 모노 WAV로 잘라 올린다(T63 → T76 POST /recordings). 모두 동의한 동안만.
+     * 구간이 끝나고 3초가 지난 장면만 본다(아직 녹음 중인 구간을 자르지 않게). 원음이 이 차에 없거나 서버가 버리라고 하면(400·404·409·413) 다시 하지 않는다.
+     * ponytail: 차 앱이 켜져 있을 때만 올린다. 폰에서 장면을 고른 뒤 차가 꺼져 있으면 다음에 앱을 켤 때(48시간 안).
+     */
+    private fun clips(t: Trip) {
+        val up = tokens.minByOrNull { it.key }?.value ?: return
+        val now = System.currentTimeMillis()
+        if (clipping || now < clipsAfter || !s.consented) return
+        val log = ClipLog(filesDir, t.code)
+        val done = log.done()
+        val todo = t.moments.filter { it.id !in done && it.window.last + 3_000 < now }
+        if (todo.isEmpty()) return
+        clipping = true
+        val url = server; val dir = filesDir
+        val done2: (Result<Unit>) -> Unit = { r ->
+            clipping = false
+            r.exceptionOrNull()?.let { clipsAfter = System.currentTimeMillis() + 5 * 60_000; Log.i(TAG, "클립 올리기 미룸 ${if (it is ApiError) it.status else "연결"}") }
+        }
+        if (!clipIo.isShutdown) clipIo.execute { val r = runCatching {
+            val api = Server(url)
+            val files = RawFile.of(dir, t.code)
+            for (m in todo) {
+                if (!clipsAllowed) break // 그사이 동의를 껐으면(철회) 남은 클립은 올리지 않는다
+                val w = m.window
+                val f = clipFile(files, w)
+                val pcm = f?.let { runCatching { it.cut(Live.seal(this), w.first, w.last) }.getOrNull() }
+                if (f == null || pcm == null) { log.add(m.id); Log.i(TAG, "장면 ${m.id}: 이 차에 그 구간의 원음이 없어 올리지 않음"); continue }
+                try {
+                    api.recording(t.code, up, m.id, f.generation, maxOf(w.first, f.startedAt), wav(pcm))
+                    log.add(m.id); Log.i(TAG, "장면 ${m.id} 클립 ${pcm.size / 32}ms 올림")
+                } catch (e: ApiError) {
+                    if (e.status in listOf(400, 404, 409, 413)) { log.add(m.id); Log.i(TAG, "장면 ${m.id} 클립 버림 ${e.status}") } else throw e
+                }
+            }
+        }; main.post { done2(r) } }
+    }
+
+    /**
+     * 이 여행의 원음 지우기(사람의 요청, T63). 지난 것을 지우는 요청이라 동의 철회(앞으로를 멈춤)와 다르다(ADR-0007): 기록은 이어 가고 받아 적은 글·올린 클립은 그대로.
+     * 수음 중이면 쓰던 파일까지 수음 스레드가 지우고 새 파일로 이어 쓴다.
+     */
+    private fun dropRawNow() {
+        val t = s.trip ?: return
+        val n = dropRawAll(t.code) // 쓰던 파일도(닫히면 그 자리가 비워진다)
+        if (CaptureService.running) Live.rollRaw = t.code // 수음 스레드는 다음 묶음부터 새 파일에
+        s = s.copy(note = if (n > 0) "이 차에 둔 지난 원음을 지웠어요" else "이 차에 둔 원음이 없어요")
+    }
+
+    /** 그 여행의 원음을 모두 지운다. 원음 쓰기와 같은 잠금 안에서(쓰던 파일까지). 지운 파일 수. */
+    private fun dropRawAll(code: String): Int = synchronized(RAW_LOCK) { RawFile.of(filesDir, code).count { it.file.delete() } }
+
+    /**
+     * 말한 사람(T37, #65): 서버가 받은 발화마다 이 차의 원음에서 그 구간(첫 결과 쪽 0.5초를 빼고 10초까지)을 잘라 목소리 대조를 부른다(통신 스레드).
+     * 좌석 구역이 있으면 그 줄(row)의 사람만 후보다. 서버가 찾으면 그 발화 줄에 화자를 붙이고, 차는 결과를 남겨 화면에 보인다. 원음이 없으면 건너뛴다.
+     */
+    private fun match(api: Server, code: String, token: String, dev: String, items: List<Utterance>, sp: Speakers) {
+        val files = RawFile.of(filesDir, code)
+        for (u in items) {
+            val to = u.endedAt - 500 // 최종 결과는 말 끝 0.6초 뒤에 온다(11/13): 끝의 무음을 덜어 목소리만
+            val from = maxOf(u.startedAt + LEAD_MS / 2, to - 9_900) // 서버는 0.5~10초를 받는다. 0.1초 묶음 단위로 잘려도 그 안에 들게
+            if (!clipsAllowed) return // 그사이 동의를 껐으면(철회) 원음을 더 보내지 않는다
+            val pcm = if (to - from < 600) null else clipFile(files, from..to)?.let { runCatching { it.cut(Live.seal(this), from, to) }.getOrNull() }
+            if (pcm == null || pcm.size < RATE) { sp.done(u.seq); continue } // 원음이 없거나 짧음: 다시 하지 않음
+            val r = try {
+                // 구역이 틀렸을 수 있어(앞뒤 사람이 이어 말함) 그 줄에서 못 찾으면 줄 없이 한 번 더
+                api.voiceMatch(code, token, u.seatZone?.plus(1), dev, u.seq, wav(pcm)).let { r ->
+                    if (r.who == null && u.seatZone != null && clipsAllowed) api.voiceMatch(code, token, null, dev, u.seq, wav(pcm)) else r
+                }
+            } catch (e: ApiError) {
+                if (e.status in listOf(400, 404, 409, 413)) { sp.done(u.seq); continue } else throw e // 403·5xx·끊김: 다음 차례에 이 발화부터
+            }
+            sp.set(u.seq, r); sp.done(u.seq)
+            Log.i("GachitaCapture", "말한 사람 ${u.seq} 구역 ${u.seatZone ?: "모름"} ${if (r.who != null) "찾음" else "모름"} ${r.confidence}") // 이름·글자는 남기지 않는다
+        }
+    }
+
+    private fun speakersOf(code: String): Speakers = speakers?.takeIf { it.trip == code } ?: Speakers(filesDir, code, Live.seal(this)).also { speakers = it; heardTick++ }
+
+    /**
+     * 출발 전 목소리 등록(T37, #65): 그 사람이 두 문장을 읽는 동안(10초) 수음 중인 모노 소리를 모아 그 사람의 토큰으로 올린다.
+     * 기록 중(모두 동의)일 때만. 그 사이 받아 적힌 말은 보관함에, 소리는 원음에 남기지 않는다. 서버도 대조용 값만 둔다.
+     */
+    private fun enroll(p: Person) {
+        val token = tokens[p.id] ?: return
+        val code = s.trip?.code ?: return
+        if (!CaptureService.running || muted || enrolling != null || Live.enroll != null) return // Gleo에 마이크를 넘긴 동안(T41)은 모을 소리가 없다
+        val buf = java.io.ByteArrayOutputStream()
+        val now = System.currentTimeMillis()
+        Live.quiet = (now - 1_000)..(now + ENROLL_MS + 1_500)
+        Live.enroll = buf
+        enrolling = p; voiceNote = ""
+        main.postDelayed({
+            if (Live.enroll === buf) Live.enroll = null // 보통은 수음 스레드가 10초가 차서 이미 놓았다
+            enrolling = null
+            val pcm = buf.toByteArray()
+            val url = server
+            bg({ Server(url).voice(code, p.id, token, wav(pcm)) }) { r ->
+                r.onSuccess {
+                    voiced = voiced + p.id; prefs.edit().putString("voiced", "$voicedAt:" + voiced.joinToString(",")).apply()
+                    voiceNote = "${p.name} 목소리를 등록했어요"
+                }.onFailure { voiceNote = "${p.name} 목소리를 등록하지 못했어요 · ${reason(it)}" }
+            }
+        }, ENROLL_MS + 300)
+    }
+
+    /**
+     * 화면에서 말한 사람을 고침(T37). 차 안에 남기고(부탁·화면, 대조가 덮지 않음) 서버 기록에도 보낸다(#65 PATCH, 올린 참가자의 토큰).
+     * 고칠 수 있는 줄은 대조를 마친(곧 서버가 받은) 발화뿐이다. 보내지 못하면 차 안에만 남는다.
+     */
+    private fun fixSpeaker(u: Utterance, p: Person) {
+        speakersOf(u.trip).set(u.seq, Speaker(p.id, 1.0, byPerson = true, sent = false)); heardTick++ // 서버에 남길 때까지 '보내는 중'
+        s.trip?.takeIf { it.code == u.trip }?.let(::speakers) // 바로 보내고, 못 보내면 다음 조회마다 다시
+    }
+
     /** 서버가 모르는 여행(48시간이 지나 지워짐): 기록을 멈추고 이 차의 사본(보관함·할 일)을 지운 뒤 처음 화면으로. */
     private fun forget(code: String) {
-        if (s.trip?.code != code) return
-        newTrip()
-        dropTrip(filesDir, code); Live.forget(code)
-        error = "서버에 없는 여행이라 이 차에 남은 기록도 지웠어요"
+        val current = s.trip?.code == code
+        if (current) newTrip() // 기록을 멈추고 처음 화면으로
+        dropTrip(filesDir, code); Live.forget(code) // 새 여행을 만든 뒤 늦게 온 앞 여행의 404여도 그 사본은 지운다
+        if (current) error = "서버에 없는 여행이라 이 차에 남은 기록도 지웠어요"
     }
 
     /** 기록 중이면 내비에 지금 위치를 물어 둔다. 발화에 붙인다(FIX_MS). 휴게소를 찾는 중이면 그 물음을 끊지 않게 묻지 않는다. */
@@ -381,7 +536,12 @@ class MainActivity : ComponentActivity() {
                 t.people.forEach { p -> mine[p.id]?.let { api.consent(t.code, p.id, true, it) } } // 폰으로 들어온 사람은 자기 폰에서
                 api.trip(t.code)!!
             }) { r ->
-                r.onSuccess { s = s.copy(busy = false).turnedOn(keep(it)); if (s.recording) car.speak("기록을 시작했어요") }
+                if (s.trip?.code != t.code) return@bg // 그사이 지운 여행이나 새 여행: 늦게 온 응답은 지금 세션(새 여행 만들기의 busy 등)을 건드리지 않는다
+                r.onSuccess {
+                    // 같은 여행이어도 보관 기한(48시간)이 지났으면 되살리지 않고 이 요청의 busy만 푼다
+                    if (System.currentTimeMillis() - it.trip.createdAt > KEEP_MS) { s = s.copy(busy = false); return@onSuccess }
+                    s = s.copy(busy = false).turnedOn(keep(it)); if (s.recording) car.speak("기록을 시작했어요")
+                }
                     .onFailure { s = s.copy(busy = false, online = it is ApiError, note = "기록을 시작하지 못했어요 · ${reason(it)}") }
             }
         }
@@ -389,7 +549,8 @@ class MainActivity : ComponentActivity() {
 
     /** 끄기는 서버를 기다리지 않고 바로 멈춘다. 서버에는 refresh가 알린다. */
     private fun turnOff() {
-        s = s.turnOff().copy(note = "")
+        s = s.turnOff().copy(note = "") // 수음을 먼저 멈춘다(setter의 syncCapture)
+        s.trip?.let { dropRawAll(it.code) } // 원음은 차에만 있으니 서버 확인을 기다리지 않고 바로 지운다(ADR-0007 철회 때 원음 삭제)
         car.speak("기록을 멈췄어요")
         refresh()
     }
@@ -399,7 +560,7 @@ class MainActivity : ComponentActivity() {
         sweep(filesDir, Live.seal(this), System.currentTimeMillis()).forEach(Live::forget)
         tokens = emptyMap()
         s = Session(gear = s.gear)
-        offer = null; todos = null; todoList = emptyList(); brief = null
+        offer = null; todos = null; todoList = emptyList(); brief = null; speakers = null; voiced = emptySet()
     }
 
     // ---- 부탁을 경유지로(T9). 서버의 부탁 상태: held → proposed → accepted → reflected, 못 넣으면 held(openapi.yaml) ----
@@ -681,6 +842,7 @@ class MainActivity : ComponentActivity() {
                         selected = on,
                         onClick = { if (on) picked.remove(m.name) else picked.add(m.name) },
                         label = { Text("${m.name} · ${m.seat.label}", Modifier.padding(vertical = 16.dp, horizontal = 8.dp)) },
+                        colors = FilterChipDefaults.filterChipColors(selectedContainerColor = c.onSurface, selectedLabelColor = c.surface), // 칩 선택은 먹색(k-style)
                     )
                 }
             }
@@ -707,13 +869,21 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun TripScreen(t: Trip) {
         BoxWithConstraints(Modifier.fillMaxSize().padding(32.dp)) {
-            if (maxWidth >= 1200.dp) {
-                Row(horizontalArrangement = Arrangement.spacedBy(32.dp)) {
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(24.dp)) { Summary(t) }
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(24.dp)) { Controls(t) }
+            val wide = maxWidth >= 1200.dp
+            Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
+                AppBar(t.title.ifEmpty { "가족 여행" }, listening = s.recording && Live.mic == Mic.ON && !muted && handoff.state == Handoff.State.OFF)
+                // 넓은 창: 왼쪽은 지금 일(기록 상태·제안·받아 적은 말·부탁 수), 오른쪽은 사람과 조작(일행·동의·연결).
+                // 한 칸이면 같은 순서로 쌓는다(frontend/spec/car.md 화면 요소). 칸이 넘치면 손으로 스크롤할 수 있다(자동 스크롤 없음).
+                if (wide) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(32.dp)) {
+                        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(24.dp)) { Summary(t); Counts(t) }
+                        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(24.dp)) { People(t); Consent(); Controls(t) }
+                    }
+                } else {
+                    // 한 칸에서는 주행 중에 누를 수 있는 유일한 조작(기록 동의 끄기)이 스크롤 밖으로 밀리지 않게 아래에 붙인다
+                    Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(24.dp)) { Summary(t); People(t, compact = carStatus.restricted); Counts(t); Controls(t) }
+                    Consent()
                 }
-            } else {
-                Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(24.dp)) { Summary(t); Controls(t) }
             }
         }
     }
@@ -721,7 +891,7 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun Summary(t: Trip) {
         val c = MaterialTheme.colorScheme
-        Card {
+        Card(statusTone()) {
             if (s.recording && muted) {
                 Text("기록 멈춤", fontSize = 48.sp, fontWeight = FontWeight.Bold)
                 Text("Gleo로 멈췄어요 · 동의는 그대로예요", color = c.onSurfaceVariant)
@@ -765,14 +935,35 @@ class MainActivity : ComponentActivity() {
         brief?.takeIf { !carStatus.restricted }?.let { BriefCard(it) } // 주행 중에는 목록을 띄우지 않는다(T40)
         if (!carStatus.restricted) ShortCard() // 숏폼은 주차 중에만(T11)
         offer?.takeIf { it.stage != Offer.Stage.FINDING }?.let { OfferCard(it) }
-        if (s.recording || Live.count > 0) Heard()
+        EnrollCard(t)
+        if (s.recording || Live.count > 0) Heard(t)
+    }
+
+    /**
+     * 일행 자리 지도. 자리는 지도의 위치가 말해 주므로 이름 아래에는 동의만 적는다.
+     * compact(좁은 창 주행 중): 캐릭터를 줄이고 동의 줄을 빼서 부탁 수와 기록 동의가 한 화면에 들어오게 한다.
+     */
+    @Composable
+    private fun People(t: Trip, compact: Boolean = false) {
+        val c = MaterialTheme.colorScheme
         Card {
-            Text("일행 ${t.people.size}명", fontSize = 30.sp, fontWeight = FontWeight.Bold)
-            t.people.forEach { p ->
-                val seat = runCatching { Seat.valueOf(p.seat).label }.getOrDefault(p.seat)
-                Text("${p.name} · $seat" + if (p.consent) " · 동의" else if (s.waitsFor(p)) " · 동의 대기" else "")
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("일행 ${t.people.size}명", Modifier.weight(1f), fontSize = 30.sp, fontWeight = FontWeight.Bold)
+                Text("차 앞쪽 ▲", color = c.onSurfaceVariant)
             }
+            // 방금 받아 적은 말의 좌석 구역(T37)을 그 줄의 바탕으로, 말한 사람(대조·고침, T37)을 그 사람의 캐릭터로 보인다. 모르면 강조하지 않는다.
+            heardTick // 말한 사람이 바뀌면 다시 그린다
+            val last = Live.recent.lastOrNull()?.takeIf { s.recording }
+            SeatMap(
+                t.people, last?.seatZone, highlight = last?.let { u -> speakers?.takeIf { it.trip == t.code }?.get(u.seq)?.who }, size = if (compact) 56.dp else 80.dp,
+                note = if (compact) null else { p -> if (p.consent) "동의" to c.tertiary else if (s.waitsFor(p)) "동의 대기" to c.secondary else "동의 전" to c.onSurfaceVariant },
+            )
         }
+    }
+
+    /** 보관한 부탁 수와 도착해서 할 일 수. */
+    @Composable
+    private fun Counts(t: Trip) {
         Card {
             Text(if (t.heldRequests == 0) "보관한 부탁이 없어요" else "보관한 부탁 ${t.heldRequests}건", fontSize = 30.sp, fontWeight = FontWeight.Bold)
             val open = todoList.count { !it.done }
@@ -784,17 +975,53 @@ class MainActivity : ComponentActivity() {
      * 방금 받아 적은 말 두 줄. 주행 중 화면 기준(docs/emulator/README.md): 글자 24sp 이상, 자동 스크롤·움직이는 표시 없음.
      * 긴 대화 기록은 주행 중에 보이지 않는다(frontend/spec/car.md). 한 줄은 두 줄까지만 보이고 넘치면 줄임표.
      */
+    @OptIn(ExperimentalLayoutApi::class)
     @Composable
-    private fun Heard() {
+    private fun Heard(t: Trip) {
         val c = MaterialTheme.colorScheme
         val hm = SimpleDateFormat("HH:mm", Locale.KOREA)
+        heardTick // 말한 사람이 바뀌면 다시 그린다
         Card {
             Text("받아 적은 말 ${Live.count}건", fontSize = 30.sp, fontWeight = FontWeight.Bold)
             if (Live.recent.isEmpty()) Text("아직 받아 적은 말이 없어요", color = c.onSurfaceVariant)
             Live.recent.asReversed().forEach { u ->
-                Text("${hm.format(Date(u.startedAt))} · ${u.text}", maxLines = 2, overflow = TextOverflow.Ellipsis)
+                val sp = speakers?.takeIf { it.trip == t.code }?.get(u.seq)
+                val name = sp?.who?.let { id -> t.people.firstOrNull { it.id == id }?.name }
+                Text("${hm.format(Date(u.startedAt))} · " + (name ?: if (sp != null) "누구?" else "").let { if (it.isEmpty()) "" else "$it · " } + u.text +
+                    if (sp?.byPerson == true && !sp.sent) " (보내는 중)" else "", maxLines = 2, overflow = TextOverflow.Ellipsis)
+                // 대조를 마친 줄은 주차 중에 사람을 골라 고친다(T37): '모름'이든 이름이 틀렸든. 그 구역의 사람을 앞에 두되 모두 보인다(구역이 틀렸을 수 있음).
+                // 주행 중에는 고치지 않는다
+                if (sp != null && !carStatus.restricted) FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val row = u.seatZone?.let { if (it == 0) "ROW_1" else "ROW_2" }
+                    t.people.filter { it.id != sp.who }.sortedBy { if (row != null && it.seat.startsWith(row)) 0 else 1 }.forEach { p ->
+                        OutlinedButton({ fixSpeaker(u, p) }, Modifier.heightIn(min = 56.dp)) { Text(p.name, fontSize = 20.sp) }
+                    }
+                }
             }
             if (Live.pending > 0 && !carStatus.restricted) Text("서버에 아직 보내지 못하고 이 차에 보관 중 ${Live.pending}건", color = c.onSurfaceVariant, fontSize = 20.sp)
+        }
+    }
+
+    /** 출발 전 목소리 등록(T37). 주차 중이고 기록 중일 때만, 이 차가 참가시킨 사람 가운데 아직 등록하지 않은 사람. */
+    @OptIn(ExperimentalLayoutApi::class)
+    @Composable
+    private fun EnrollCard(t: Trip) {
+        val todo = t.people.filter { it.id in s.ours && it.id !in voiced }
+        val e = enrolling
+        if (carStatus.restricted || !s.recording || (todo.isEmpty() && e == null && voiceNote.isEmpty())) return
+        val c = MaterialTheme.colorScheme
+        Card {
+            Text("출발 전 목소리 등록", fontSize = 30.sp, fontWeight = FontWeight.Bold)
+            if (e != null) {
+                Text("${e.name}, 아래 두 문장을 읽어 주세요")
+                ENROLL_LINES.forEach { Text(it, fontSize = 30.sp, fontWeight = FontWeight.Bold) }
+            } else if (todo.isNotEmpty()) {
+                Text("누가 말했는지 알아보려고 한 사람씩 두 문장을 읽어요. 목소리는 대조용 값만 서버에 남아요", color = c.onSurfaceVariant, fontSize = 20.sp)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    todo.forEach { p -> OutlinedButton({ enroll(p) }, Modifier.heightIn(min = 64.dp)) { Text(p.name) } }
+                }
+            }
+            if (voiceNote.isNotEmpty()) Text(voiceNote, color = c.onSurfaceVariant, fontSize = 20.sp)
         }
     }
 
@@ -802,7 +1029,7 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun BriefCard(b: Brief) {
         val items = todoList.filter { !it.done && (b.place == null || it.place == b.place) }
-        Card {
+        Card(Tone.Accent) {
             Text(if (b.place != null) "${b.place}에서 할 일" else "도착해서 할 일", fontSize = 36.sp, fontWeight = FontWeight.Bold)
             items.forEach { item ->
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -844,7 +1071,7 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun OfferCard(o: Offer) {
         val c = MaterialTheme.colorScheme
-        Card {
+        Card(Tone.Accent) {
             when (o.stage) {
                 Offer.Stage.ASKING -> {
                     Text("${o.stop?.spoken}에 들를까요?", fontSize = 36.sp, fontWeight = FontWeight.Bold)
@@ -870,7 +1097,7 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun Controls(t: Trip) {
+    private fun Consent() {
         val c = MaterialTheme.colorScheme
         Card {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -885,6 +1112,12 @@ class MainActivity : ComponentActivity() {
             if (s.recording && !muted && Live.mic == Mic.ON && handoff.state == Handoff.State.OFF && shortAt < 0)
                 OutlinedButton({ handoff.give(wake = false) }, Modifier.heightIn(min = 72.dp)) { Text("Gleo 쓰기", fontSize = 26.sp) }
         }
+    }
+
+    /** 연결 상태와(주차 중) 진단 줄·새 여행 만들기. */
+    @Composable
+    private fun Controls(t: Trip) {
+        val c = MaterialTheme.colorScheme
         Card {
             if (s.online) Text("서버에 연결됐어요", color = c.tertiary)
             else Text("연결이 끊겼어요 · 마지막으로 확인한 정보예요", color = c.error)
@@ -894,13 +1127,17 @@ class MainActivity : ComponentActivity() {
             }
         }
         if (!carStatus.restricted) OutlinedButton(::newTrip, Modifier.heightIn(min = 64.dp), enabled = !s.agreed && !s.switchOn && !s.busy) { Text("새 여행 만들기") }
+        if (!carStatus.restricted) OutlinedButton(::dropRawNow, Modifier.heightIn(min = 64.dp)) { Text("이 차에 둔 원음 지우기") }
+    }
+
+    /** 기록 상태 머리의 바탕: 기록 중은 빨강 기운, Gleo로 멈춤·기다림·막힘은 노랑 기운, 꺼짐은 보통 카드. */
+    private fun statusTone() = when {
+        s.recording && (muted || handoff.state != Handoff.State.OFF) -> Tone.Wait // Gleo로 멈춤·잠시 멈춤(T41)
+        s.recording && Live.mic == Mic.ON -> Tone.Rec
+        s.recording && (Live.mic == Mic.BLOCKED || Live.mic == Mic.FAILED) || s.waiting -> Tone.Wait
+        else -> Tone.Plain
     }
 
     @Composable
-    private fun Card(content: @Composable () -> Unit) {
-        val c: ColorScheme = MaterialTheme.colorScheme
-        Surface(Modifier.fillMaxWidth(), RoundedCornerShape(20.dp), color = c.surface, border = BorderStroke(1.dp, c.outline)) {
-            Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) { content() }
-        }
-    }
+    private fun Card(tone: Tone = Tone.Plain, content: @Composable () -> Unit) = CarCard(tone) { content() }
 }

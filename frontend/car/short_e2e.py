@@ -83,6 +83,7 @@ class Proxy(http.server.BaseHTTPRequestHandler):
 
 
 def main(apk):
+    for i, (_, lines) in enumerate(SCENES): Proxy.clips[i] = clip(lines)  # 미리 만든다. 요청 때 합성하면 차의 읽기 제한(5초)을 넘었다(11/14 4회차)
     srv = http.server.ThreadingHTTPServer(("0.0.0.0", SHORT_PORT), Proxy); threading.Thread(target=srv.serve_forever, daemon=True).start()
     threading.Thread(target=e2e.heartbeat, daemon=True).start()
     note("apk", sha256=e2e.hashlib.sha256(open(apk, "rb").read()).hexdigest(), fake=FAKE)
@@ -101,7 +102,8 @@ def main(apk):
     check("숏폼 장면 1을 그 자리에서 재생: 진행·장면 이름", any(t.startswith("1 / 2") and "바다 이야기" in t for t in ui))
     if FAKE: check("참가자 토큰(Bearer)으로 구성과 클립을 받음", served and all(s["bearer"] for s in served), served=served)
     time.sleep(1.5); ui = texts(); note("ui", texts=ui)
-    check("자막과 말한 사람(이름, 못 붙인 사람은 자리)", "아빠, 바다는 왜 짜?" in ui and "하은" in ui or "바닷물에 소금이 녹아 있어서 그래" in ui and "운전석" in ui, texts=ui)
+    card = next((ui[i + 1:i + 3] for i, t in enumerate(ui) if t.startswith("1 / 2")), [])  # 숏폼 카드: 진행 다음이 말한 사람, 그다음이 자막
+    check("자막과 말한 사람(이름, 못 붙인 사람은 자리)", card in (["하은", "아빠, 바다는 왜 짜?"], ["운전석", "바닷물에 소금이 녹아 있어서 그래"]), card=card)
     check("재생하는 동안 우리 수음은 멈춤(재생 소리가 기록에 들어가지 않게) · '기록 잠시 멈춤'", not gl.ours_recording() and "기록 잠시 멈춤" in ui)
     gear("Drive"); time.sleep(3); ui = texts(); shot("2-drive-hidden"); note("ui", texts=ui)
     check("주행 중에는 숏폼 카드를 가리고 재생을 닫음(수음은 다시)", not any(t.startswith("1 / 2") or t == "숏폼 보기" for t in ui) and gl.ours_recording())

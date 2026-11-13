@@ -69,7 +69,34 @@ class Server(base: String) {
         JSONObject(call("GET", "/api/trips/$code/utterances?device=" + java.net.URLEncoder.encode(device, "UTF-8"), null, token)!!).getJSONArray("items")
             .let { a -> (0 until a.length()).map { a.getJSONObject(it).getLong("seq") }.toSet() }
 
-    private fun call(method: String, path: String, body: JSONObject?, token: String? = null): String? {
+    /**
+     * 확정한 장면의 원음 클립 올리기(T76, POST /recordings). wav는 16 kHz 모노, from은 첫 표본 시각(epoch ms), generation은 녹음할 때의 동의 세대.
+     * 거절은 ApiError: 400·404·409·413은 버리고, 401·403·503은 나중에 다시(api-media 계약).
+     */
+    fun recording(code: String, token: String, moment: String, generation: Int, from: Long, wav: ByteArray) {
+        call("POST", "/api/trips/$code/recordings?moment=" + java.net.URLEncoder.encode(moment, "UTF-8") + "&generation=$generation&from=$from", wav, token)
+    }
+
+    /** 출발 전 목소리 등록(#65): 그 참가자 본인의 토큰으로, 녹음 동의가 켜져 있을 때만. wav는 16 kHz 모노 1~20초. */
+    fun voice(code: String, id: String, token: String, wav: ByteArray) {
+        call("POST", "/api/trips/$code/participants/$id/voice", wav, token)
+    }
+
+    /**
+     * 발화 목소리 대조(#65). row는 1 앞줄·2 뒷줄, 모르면 null(모든 참가자가 후보). device·seq를 주면 서버가 그 발화 줄에 화자를 붙인다.
+     * 찾은 참가자(확신이 기준보다 낮으면 null)와 확신도.
+     */
+    fun voiceMatch(code: String, token: String, row: Int?, device: String, seq: Long, wav: ByteArray): Speaker =
+        JSONObject(call("POST", "/api/trips/$code/voice-match?" + (row?.let { "row=$it&" } ?: "") + "device=" + java.net.URLEncoder.encode(device, "UTF-8") + "&seq=$seq", wav, token)!!)
+            .let { Speaker(if (it.isNull("participantId")) null else it.getString("participantId"), it.optDouble("confidence", 0.0)) }
+
+    /** 사람이 고친 말한 사람을 서버 기록에도(#65, PATCH /utterances/:device/:seq). 그 기기로 올린 참가자의 토큰. null이면 모름. */
+    fun fixSpeaker(code: String, token: String, device: String, seq: Long, participantId: String?) {
+        call("PATCH", "/api/trips/$code/utterances/" + java.net.URLEncoder.encode(device, "UTF-8") + "/$seq",
+            JSONObject().put("participantId", participantId ?: JSONObject.NULL), token)
+    }
+
+    private fun call(method: String, path: String, body: Any?, token: String? = null): String? {
         val c = URL(base + path).openConnection() as HttpURLConnection
         try {
             c.requestMethod = method // 안드로이드의 HttpURLConnection은 PATCH를 받는다
@@ -78,8 +105,9 @@ class Server(base: String) {
             token?.let { c.setRequestProperty("Authorization", "Bearer $it") } // 토큰은 머리말로만(주소에 넣지 않음, Pleos 보안 가이드)
             if (body != null) {
                 c.doOutput = true
-                c.setRequestProperty("Content-Type", "application/json")
-                c.outputStream.use { it.write(body.toString().toByteArray()) }
+                val bytes = if (body is ByteArray) body.also { c.setFixedLengthStreamingMode(it.size) } else body.toString().toByteArray()
+                c.setRequestProperty("Content-Type", if (body is ByteArray) "audio/wav" else "application/json")
+                c.outputStream.use { it.write(bytes) }
             }
             val code = c.responseCode
             if (code == 304) return null

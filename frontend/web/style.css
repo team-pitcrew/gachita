@@ -1,34 +1,44 @@
-/* 가치타 모바일 화면.
-   색: 민준님 웹 시제품의 보라를 강조색 하나로 쓰고, 무채색은 같은 보랏빛 회색으로 맞춘다.
-   모서리: 카드 20px, 단추·입력·칩 14px, 상태 표시만 알약 모양.
-   대비는 frontend/contrast.test.mjs가 검사한다. */
+/* 가치타 모바일 화면(T20, 디자인 1급 문서 11/14).
+   캐릭터: 지민님 '말랑' 10종 원본 시트에서 잘라 쓴 조각(chars/<값>.svg). 다시 그리지 않는다.
+   색: 시트에서 뽑은 민트 #60C090이 상징색(바이올렛은 쓰지 않음). 바탕·글자는 k-style-ui-ux derive.py(--tone warm)의 미색·먹색.
+   민트 바탕(--accent-fill)은 흰 바탕과 2.2:1이라 위 글자는 먹색(--on-accent), 민트 글자·링은 짙은 민트(--accent)를 쓴다.
+   시안: https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n
+   규칙(k-style): 칩 선택은 먹색, 주 단추만 민트, 숫자는 먹색, 이모지·이름 글자 아바타 없음.
+   모서리: 카드 24px, 단추·입력·칩 16px, 상태 표시만 알약 모양. 대비는 contrast.test.mjs가 검사한다. */
 :root {
-  --bg: #f6f5f9;
+  --bg: #f6f4f1;
   --surface: #ffffff;
-  --ink: #1f1d2b;
-  --ink-2: #5a5669;
-  --line: #e4e1eb;
-  --accent: #5b47b0;
-  --accent-soft: #efebfa;
-  --on-accent: #ffffff;
+  --surface-2: #f1eee9;
+  --ink: #28221b;
+  --ink-2: #5a5044;
+  --line: #edeae6;
+  --accent: #2b7a53;
+  --accent-fill: #60c090;
+  --accent-soft: #e4f4ec;
+  --on-accent: #28221b;
   --rec: #b3261e;
-  --ok: #1b7350;
-  --r-card: 20px;
-  --r-ctl: 14px;
+  --ok: #2b7a53;
+  --warn: #8c6400;
+  --r-card: 24px;
+  --r-ctl: 16px;
   --pad: 20px;
+  --mascot: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22%3E%3Cpath d=%22M14 22C14 16.5 18.5 12 24 12H40C45.5 12 50 16.5 50 22V24H54C56.2 24 58 25.8 58 28V44C58 48.4 54.4 52 50 52H14C9.6 52 6 48.4 6 44V28C6 25.8 7.8 24 10 24H14V22Z%22 fill=%22%23fff%22 stroke=%22%2328221B%22 stroke-width=%223.5%22 stroke-linejoin=%22round%22/%3E%3Ccircle cx=%2224%22 cy=%2236%22 r=%223.2%22 fill=%22%2328221B%22/%3E%3Ccircle cx=%2240%22 cy=%2236%22 r=%223.2%22 fill=%22%2328221B%22/%3E%3Cpath d=%22M29 43Q32 45.5 35 43%22 fill=%22none%22 stroke=%22%2328221B%22 stroke-width=%222.6%22 stroke-linecap=%22round%22/%3E%3C/svg%3E");
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #17161f;
-    --surface: #22202d;
-    --ink: #ece9f3;
-    --ink-2: #aaa5ba;
-    --line: #383549;
-    --accent: #b6a6ee;
-    --accent-soft: #2f2a47;
-    --on-accent: #17161f;
-    --rec: #ff9288;
-    --ok: #74d3a8;
+    --bg: #12110f;
+    --surface: #1c1a17;
+    --surface-2: #26231f;
+    --ink: #f4f1ec;
+    --ink-2: #b5ada2;
+    --line: #34302a;
+    --accent: #7fddb2;
+    --accent-fill: #6fd3a6;
+    --accent-soft: #1c3a2d;
+    --on-accent: #12110f;
+    --rec: #ff8a80;
+    --ok: #7fddb2;
+    --warn: #f5c766;
   }
 }
 
@@ -55,13 +65,13 @@ main {
 h1 {
   margin: 12px 0 0;
   font-size: 28px;
-  line-height: 1.3;
+  line-height: 1.36;
   font-weight: 700;
   letter-spacing: -0.02em;
 }
 h2 {
   margin: 0;
-  font-size: 19px;
+  font-size: 20px;
   font-weight: 700;
   letter-spacing: -0.01em;
 }
@@ -76,9 +86,21 @@ small,
   font-size: 15px;
   color: var(--ink-2);
 }
+/* 가치타 본체 마스코트(차 모양). 가족 캐릭터와 다른 실루엣으로 둔다. */
 .brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   font-weight: 700;
-  color: var(--accent);
+  font-size: 19px;
+  color: var(--ink);
+}
+.brand::before {
+  content: "";
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  background: var(--accent-soft) center / 26px no-repeat var(--mascot);
 }
 
 /* 배치 */
@@ -157,9 +179,10 @@ button:active {
 }
 button.primary {
   min-height: 56px;
-  background: var(--accent);
+  background: var(--accent-fill);
   color: var(--on-accent);
   font-size: 18px;
+  font-weight: 700;
 }
 button.plain {
   background: none;
@@ -254,9 +277,9 @@ legend {
   cursor: inherit;
 }
 .chip:has(input:checked) {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-  color: var(--accent);
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--surface);
 }
 .chip:has(input:focus-visible) {
   outline: 3px solid var(--accent);
@@ -270,14 +293,30 @@ legend {
 .chip small {
   font-weight: 500;
 }
+.chips:has(input[name="character"]) {
+  grid-template-columns: repeat(5, 1fr);
+}
+.chip:has(input[name="character"]) {
+  min-height: 96px;
+  align-content: end;
+  padding: 60px 2px 6px;
+  font-size: 14px;
+  background-image: var(--face, url("/chars/basic.svg"));
+  background-position: center 8px;
+  background-size: 48px;
+  background-repeat: no-repeat;
+}
+.chip:has(input:checked) small {
+  color: inherit;
+}
 
 /* 좌석 배치: 위가 차 앞쪽 */
 .car {
   display: grid;
   gap: 10px;
   padding: 16px;
-  border-radius: 28px 28px var(--r-card) var(--r-card);
-  background: var(--surface);
+  border-radius: 36px 36px var(--r-card) var(--r-card);
+  background: var(--surface-2);
 }
 .car > .meta {
   text-align: center;
@@ -301,7 +340,7 @@ legend {
   cursor: default;
 }
 .car.readonly .chip.me {
-  border-color: var(--accent);
+  border: 3px solid var(--accent);
   background: var(--accent-soft);
   color: var(--accent);
 }
@@ -313,7 +352,7 @@ legend {
 
 /* 여행 상태 */
 .state {
-  font-size: 30px;
+  font-size: 28px;
   font-weight: 700;
   letter-spacing: -0.02em;
 }
@@ -324,7 +363,7 @@ legend {
   min-height: 30px;
   padding: 0 12px;
   border-radius: 999px;
-  background: var(--bg);
+  background: var(--surface-2);
   color: var(--ink-2);
   font-size: 14px;
   font-weight: 600;
@@ -411,8 +450,14 @@ dialog {
   color: var(--ink);
 }
 dialog::backdrop {
-  background: rgb(23 22 31 / 0.5);
+  background: rgb(18 17 15 / 0.5);
 }
+.captions-dialog { max-height: 90dvh; overflow: auto; }
+.captions-heading { position: sticky; top: 0; background: var(--bg); padding-block: .4rem; z-index: 1; }
+.captions-dialog .card { margin-block: .6rem; }
+.captions-dialog textarea { box-sizing: border-box; width: 100%; padding: .75rem; border: 1px solid var(--line); border-radius: var(--r-ctl); font: inherit; color: var(--ink); background: var(--surface); resize: vertical; }
+.captions-dialog p { overflow-wrap: anywhere; }
+.captions-list { list-style: none; padding: 0; }
 dialog form {
   display: grid;
   gap: 18px;
@@ -442,19 +487,55 @@ li .between {
   gap: 12px;
 }
 
-/* 프로필 얼굴: 사진, 없으면 캐릭터나 이름 첫 글자 */
+/* 프로필 얼굴: 내 사진, 없으면 원본 캐릭터 조각(카드 바탕까지 원본 그대로라 두 테마에서 스티커처럼 보인다).
+   알 수 없는 값(옛 동물 값 포함)은 기본 캐릭터. 그림은 chars/에 한 장씩 둔다. */
 .avatar {
   flex: none;
-  display: grid;
-  place-items: center;
   width: 56px;
   height: 56px;
   border-radius: 50%;
   overflow: hidden;
-  background: var(--accent-soft);
-  color: var(--accent);
-  font-size: 28px;
-  font-weight: 700;
+  background: center / cover no-repeat var(--face, url("/chars/basic.svg"));
+}
+.c-basic,
+.chip:has(input[name="character"][value="basic"]) {
+  --face: url("/chars/basic.svg");
+}
+.c-cap,
+.chip:has(input[name="character"][value="cap"]) {
+  --face: url("/chars/cap.svg");
+}
+.c-glasses,
+.chip:has(input[name="character"][value="glasses"]) {
+  --face: url("/chars/glasses.svg");
+}
+.c-travel,
+.chip:has(input[name="character"][value="travel"]) {
+  --face: url("/chars/travel.svg");
+}
+.c-game,
+.chip:has(input[name="character"][value="game"]) {
+  --face: url("/chars/game.svg");
+}
+.c-sport,
+.chip:has(input[name="character"][value="sport"]) {
+  --face: url("/chars/sport.svg");
+}
+.c-pet,
+.chip:has(input[name="character"][value="pet"]) {
+  --face: url("/chars/pet.svg");
+}
+.c-camping,
+.chip:has(input[name="character"][value="camping"]) {
+  --face: url("/chars/camping.svg");
+}
+.c-office,
+.chip:has(input[name="character"][value="office"]) {
+  --face: url("/chars/office.svg");
+}
+.c-healing,
+.chip:has(input[name="character"][value="healing"]) {
+  --face: url("/chars/healing.svg");
 }
 .avatar img {
   width: 100%;
@@ -466,27 +547,54 @@ li .between {
   align-items: center;
   gap: 16px;
 }
+/* 내 사진 넣기: 파일 고르기 단추를 먹색 알약으로(글자는 브라우저가 정한다) */
 input[type="file"] {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: none;
   font: inherit;
+  font-size: 15px;
+  color: var(--ink-2);
   max-width: 100%;
 }
 
+/* 받은 공유와 공유 내용 확인(T81) */
+.shares-dialog { max-height: calc(100dvh - 24px); overflow-y: auto; }
+.shares-dialog h1 { font-size: 1.4rem; margin: 0; }
+.shares-dialog > .between { gap: 16px; margin-bottom: 20px; }
+.shares-list { list-style: none; padding: 0; }
+.shares-list > li { display: block; }
+.shares-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.shares-actions > button { flex: 1; }
+.shares-actions > .share-icon { flex: none; }
+button.share-icon { width: 48px; min-width: 48px; min-height: 48px; padding: 12px; display: inline-flex; align-items: center; justify-content: center; }
+button.share-icon.primary { width: 56px; min-width: 56px; }
+.share-icon svg { width: 24px; height: 24px; }
+.shares-tools { justify-content: flex-end; }
+.shares-caption { white-space: pre-wrap; overflow-wrap: anywhere; }
+.shares-dialog textarea { width: 100%; padding: 12px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--bg); color: var(--ink); font: inherit; resize: vertical; }
+.shares-target { display: flex; align-items: center; gap: 12px; min-height: 48px; padding: 8px 0; }
+.shares-target input[type="checkbox"] { flex: none; width: 22px; height: 22px; }
+.shares-dialog fieldset { border: 1px solid var(--line); border-radius: var(--r-ctl); padding: 12px; }
 /* 숏폼 9:16 재생(T43, 시안 P8). 영상처럼 늘 어두운 화면이라 어두운 토큰을 이 안에서만 쓴다. */
 .short {
-  --bg: #17161f;
-  --surface: #22202d;
-  --ink: #ece9f3;
-  --ink-2: #aaa5ba;
-  --line: #383549;
-  --accent: #b6a6ee;
-  --accent-soft: #2f2a47;
-  --on-accent: #17161f;
+  --bg: #12110f;
+  --surface: #1c1a17;
+  --surface-2: #26231f;
+  --ink: #f4f1ec;
+  --ink-2: #b5ada2;
+  --line: #34302a;
+  --accent: #7fddb2;
+  --accent-fill: #6fd3a6;
+  --accent-soft: #1c3a2d;
+  --on-accent: #12110f;
   position: fixed;
   inset: 0;
   z-index: 10;
   display: grid;
   place-items: center;
-  background: #0d0c14;
+  background: #0b0a09;
   color: var(--ink);
 }
 .short > div {
@@ -497,7 +605,7 @@ input[type="file"] {
   grid-template-rows: auto auto 1fr auto auto;
   gap: 16px;
   padding: calc(16px + env(safe-area-inset-top)) var(--pad) calc(16px + env(safe-area-inset-bottom));
-  background: linear-gradient(#2a2640, #120f1c);
+  background: linear-gradient(#1c3a2d, #12110f 60%); /* 민트 기운에서 따뜻한 검정으로 */
 }
 .segs {
   display: flex;
@@ -542,9 +650,55 @@ input[type="file"] {
   flex: 1;
 }
 
+/* 동승 연결 QR(#71). 카메라가 읽게 테마와 관계없이 흰 바탕·검은 칸(T20 개편도 이 색을 유지) */
+.qr {
+  display: block;
+  width: min(100%, 300px);
+  margin: 0 auto;
+  border-radius: var(--r-ctl);
+}
+.qr.expired {
+  opacity: 0.2;
+}
+.center {
+  text-align: center;
+}
+
 /* 내 기록본과 후보는 긴 내용도 닫기 단추를 유지한다. 앱의 색·글자 토큰을 그대로 쓴다. */
 .records-dialog { max-height: 90dvh; overflow-y: auto; }
 .records-heading { position: sticky; top: -24px; z-index: 1; background: var(--surface); padding-block: 8px; }
 .records-heading h1 { font-size: 24px; margin: 0; }
 .records-list { list-style: none; padding: 0; display: grid; gap: 16px; }
 .records-list .what { overflow-wrap: anywhere; }
+
+/* 기록·공유 모달 안의 결과·오류 줄(#toast는 모달 뒤에 가려진다) */
+.records-note,
+.shares-note {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: var(--r-ctl);
+  background: var(--accent-soft);
+}
+.records-note.alert,
+.shares-note.alert {
+  color: var(--rec);
+}
+.shares-note p {
+  margin: 0 0 8px;
+}
+input[type="file"]:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+input[type="file"]::file-selector-button {
+  min-height: 44px;
+  margin-right: 10px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--ink);
+  color: var(--surface);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}

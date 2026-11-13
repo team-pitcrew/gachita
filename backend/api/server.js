@@ -11,12 +11,14 @@ import { createServer } from "node:http";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { profilesDb, tripsDb } from "./db.js";
+import { createShare, sharedResults } from "./result-shares.js";
 import { errFields, log } from "./log.js";
 import { asrReady, contextOf, retranscribe, toWav } from "./providers/asr.js";
 import { clipStore } from "./providers/clips.js";
 import { googleIdentity, googlePublicConfig } from "./providers/google.js";
 import { cues, momentSpan, suggest } from "./scenes.js";
 import { embed, matchThreshold, similarity, wavMono } from "./providers/voice.js";
+import { rideLinks, redeemRideLink } from "./ride-links.js";
 
 const WEB = fileURLToPath(new URL("../../frontend/web/", import.meta.url));
 const TRIPS_SQL = fileURLToPath(new URL("trips.sql", import.meta.url));
@@ -24,12 +26,13 @@ const PROFILES_SQL = fileURLToPath(new URL("profiles.sql", import.meta.url));
 const LINKS_SQL = fileURLToPath(new URL("profiles-2-links.sql", import.meta.url));
 const UTTERANCES_SQL = fileURLToPath(new URL("trips-2-utterances.sql", import.meta.url));
 const RECORDINGS_SQL = fileURLToPath(new URL("trips-3-recordings.sql", import.meta.url));
+const CAPTIONS_SQL = fileURLToPath(new URL("trips-6-captions.sql", import.meta.url));
 const ASR_SQL = fileURLToPath(new URL("trips-4-asr.sql", import.meta.url));
+const TRIP_VOICE_SQL = fileURLToPath(new URL("trips-5-voice.sql", import.meta.url));
 const ALBUM_SQL = fileURLToPath(new URL("profiles-3-moments.sql", import.meta.url));
 const GROUPS_SQL = fileURLToPath(new URL("profiles-4-groups.sql", import.meta.url));
 const VOICE_SQL = fileURLToPath(new URL("profiles-5-voice.sql", import.meta.url));
 const NO_PREFS_SQL = fileURLToPath(new URL("profiles-6-no-prefs.sql", import.meta.url));
-const INVITE_BASE = process.env.INVITE_BASE_URL ?? "https://gachita.mangowhois.ai/j"; // QR에 담는 초대 주소(ADR-0009·0010)
 const PHOTO_MAX = 1_000_000; // 프로필 사진 상한. 형식은 매직 바이트로만 확인한다(다시 그리기는 T46 화면, ADR-0009 위험)
 const TTL_MS = 48 * 60 * 60 * 1000; // 기획서 v4가 초기 제안으로 적은 보관 기간
 const MAX_BODY = 10_000;
@@ -53,12 +56,14 @@ const NEXT = {
 };
 const MIME = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".json": "application/json", ".webmanifest": "application/manifest+json" };
 
+const RETIRED_GROUP = "그룹 초대는 종료됐어요. 탑승자 폰에서 동승 연결 QR을 열고, 주차 중인 차에서 읽어 주세요.";
+
 const fail = (status, error) => {
   throw { status, error };
 };
 
 // 오류 종류(T71): 응답의 type과 로그의 err.type. 상태에서 정하는 닫힌 목록이라 클라이언트는 문장이 아니라 종류로 가른다.
-const ERROR_TYPE = { 400: "invalid", 401: "unauthenticated", 403: "forbidden", 404: "not_found", 405: "method_not_allowed", 409: "conflict", 413: "too_large", 502: "unavailable", 503: "unavailable", 504: "unavailable" };
+const ERROR_TYPE = { 400: "invalid", 401: "unauthenticated", 403: "forbidden", 404: "not_found", 405: "method_not_allowed", 409: "conflict", 410: "gone", 413: "too_large", 502: "unavailable", 503: "unavailable", 504: "unavailable" };
 // DB에 닿지 않거나(연결 끊김·거절, 연결 수 초과) 질의 시간 제한(57014, T26)에 걸린 것: 다시 해도 되는 503.
 // Postgres 오류 번호 08xxx 연결, 53xxx 자원 부족, 57014 질의 취소, 57P0x 서버 종료·시작 중.
 const DB_DOWN = /^(08|53|57014|57P0)/;
@@ -71,7 +76,7 @@ export function classify(e) {
 }
 
 // 로그의 경로 틀: 정한 낱말이 아닌 마디(여행 코드, id, 초대 코드)는 :p로 가린다. 웹 파일은 /(web) 하나로.
-const ROUTE_WORDS = new Set(["api", "config", "trips", "participants", "requests", "moments", "utterances", "transcript", "voice-match", "recordings", "scene-suggestions", "shortform", "profiles", "me", "links", "google", "feed", "tokens", "photo", "voice", "groups", "members", "invites", "j"]);
+const ROUTE_WORDS = new Set(["api", "config", "trips", "participants", "requests", "moments", "utterances", "transcript", "captions", "voice-match", "recordings", "scene-suggestions", "shortform", "profiles", "me", "links", "google", "feed", "tokens", "photo", "voice", "groups", "members", "invites", "j"]);
 const routeOf = (pathname) =>
   pathname === "/healthz" ? pathname : pathname.startsWith("/api/") ? `/${pathname.split("/").filter(Boolean).map((s) => (ROUTE_WORDS.has(s) ? s : ":p")).join("/")}` : "/(web)";
 // ALB가 붙이는 추적 id(X-Amzn-Trace-Id)를 그대로 쓴다. 없거나 모양이 이상하면 새로.
@@ -102,6 +107,10 @@ export async function migrate() {
   await tripsDb().query(await readFile(UTTERANCES_SQL, "utf8"));
   await tripsDb().query(await readFile(RECORDINGS_SQL, "utf8"));
   await tripsDb().query(await readFile(ASR_SQL, "utf8"));
+  await tripsDb().query(await readFile(new URL("trips-5-ride-links.sql", import.meta.url), "utf8"));
+  await tripsDb().query(await readFile(TRIP_VOICE_SQL, "utf8"));
+  await tripsDb().query(await readFile(CAPTIONS_SQL, "utf8"));
+  await tripsDb().query(await readFile(new URL("trips-7-result-shares.sql", import.meta.url), "utf8"));
   await profilesDb().query(await readFile(PROFILES_SQL, "utf8"));
   await profilesDb().query(await readFile(LINKS_SQL, "utf8"));
   await profilesDb().query(await readFile(ALBUM_SQL, "utf8"));
@@ -181,7 +190,12 @@ const asUtterance = (r) => ({
   seq: Number(r.seq),
   at: Number(r.at),
   text: r.text,
+  displayText: r.edited_text ?? r.asr_text ?? r.text,
+  editedText: r.edited_text ?? null,
+  editVersion: Number(r.edit_version ?? 0),
+  ...(r.edited_by ? { editedBy: r.edited_by, editedAt: new Date(r.edited_at).getTime() } : {}),
   seatArea: r.seat_area,
+  ...(r.participant_id ? { participantId: r.participant_id } : {}),
   ...(r.profile_id ? { profileId: r.profile_id } : {}),
   ...(r.confidence !== null ? { confidence: r.confidence } : {}),
   ...(r.lat !== null ? { lat: r.lat, lng: r.lng } : {}),
@@ -193,7 +207,7 @@ async function profileById(id) {
     "SELECT id, name, consent_default, provider, character, (photo IS NOT NULL) AS has_photo FROM profiles WHERE id = $1",
     [id]
   );
-  return asProfile(rows[0]);
+  return rows[0] ? asProfile(rows[0]) : null;
 }
 
 // Authorization: Bearer <토큰>. 머리말이 없으면 null(손님), 틀린 토큰이면 401.
@@ -249,6 +263,10 @@ async function profiles(req, seg, b) {
     return [201, { ...p, hasPhoto: false, links: [], token }]; // 토큰은 이때 한 번만 준다. 서버에는 해시만 남는다.
   }
   if (seg[0] !== "me") fail(404, "없는 경로");
+  if (seg[1] === "shares" && !seg[3]) {
+    if (m !== (seg[2] ? "DELETE" : "GET")) fail(405, seg[2] ? "DELETE만 됨" : "GET만 됨");
+    return sharedResults((await profileOf(req)) ?? fail(401, "프로필 토큰이 필요함"), m, seg[2]);
+  }
   if (seg[1] === "links" && seg[2] === "google") return googleLink(req, m, b);
   if (seg[1] === "feed" && !seg[2]) {
     // 자기 피드: 발화(여행이 살아 있는 동안)와 장면 앨범(여행이 닫힌 뒤에도 남는 복사본)을
@@ -271,6 +289,19 @@ async function profiles(req, seg, b) {
       ...moments.rows.map((r) => ({ kind: "moment", id: r.id, tripCode: r.trip_code, at: Number(r.at), label: r.label, ...(r.lat !== null ? { lat: r.lat, lng: r.lng } : {}) })),
     ].sort((a, b) => b.at - a.at);
     return [200, { items: items.slice(0, 100) }];
+  }
+  if (seg[1] === "moments" && !seg[2]) {
+    // 한 여행의 내 앨범 장면(T81 공유 후보). 피드와 달리 발화와 섞지도 100개로 자르지도 않는다 — 여행당 장면은 500개가 상한이다.
+    // 앨범 복사본이라 여행이 닫힌 뒤에도 나온다(공유할 수 있는 기간은 부르는 쪽이 여행 시각으로 본다).
+    if (m !== "GET") fail(405, "GET만 됨");
+    const me = (await profileOf(req)) ?? fail(401, "프로필 토큰이 필요함");
+    const trip = new URL(req.url, "http://localhost").searchParams.get("trip") ?? "";
+    if (!/^[A-Za-z2-9]{6}$/.test(trip)) fail(400, "trip: 여행 코드 6자");
+    const { rows } = await profilesDb().query(
+      "SELECT id, trip_code, at, lat, lng, label FROM profile_moments WHERE profile_id = $1 AND trip_code = $2 ORDER BY at, id",
+      [me.id, trip.toUpperCase()]
+    );
+    return [200, { items: rows.map((r) => ({ id: r.id, tripCode: r.trip_code, at: Number(r.at), label: r.label, ...(r.lat !== null ? { lat: r.lat, lng: r.lng } : {}) })) }];
   }
   if (seg[1] === "moments" && seg[2] && !seg[3]) {
     // 앨범에 남은 장면 복사본을 지운다. 여행의 moments에는 영향이 없다.
@@ -363,7 +394,7 @@ export async function verifyGoogleLink(profileId, providerUserId) {
 
 async function googleLink(req, m, b) {
   if (m === "POST") {
-    const identity = await googleIdentity(text(b.code, 500, "code"), text(b.redirectUri, 500, "redirectUri"));
+    const identity = await googleIdentity(text(b.code, 500, "code"), text(b.redirectUri, 500, "redirectUri"), b.codeVerifier);
     const db = profilesDb();
     const { rows: found } = await db.query("SELECT id FROM profiles WHERE provider = 'google' AND provider_user_id = $1", [identity.providerUserId]);
     const me = await profileOf(req);
@@ -408,17 +439,23 @@ async function googleLink(req, m, b) {
   fail(405, "POST, DELETE만 됨");
 }
 
-// 목소리 등록·지우기(ADR-0019). 원본 음성은 대조용 값으로만 바꿔 저장하고 어디에도 남기지 않는다.
+// 등록 음성(WAV)을 받아 대조용 값으로 바꾼다. 원본은 어디에도 남기지 않는다(ADR-0019).
+async function enrollment(req) {
+  const { samples } = wavMono(await readRaw(req, 1_500_000)); // WAV 파싱 실패는 400으로 돌아온다
+  const seconds = samples.length / 16000;
+  // ponytail: 임베딩이 이벤트 루프에서 동기로 돈다(20초 ≈ 65 ms). 등록은 문장 몇 개면 되므로 20초로 묶는다.
+  if (seconds < 1 || seconds > 20) fail(400, "등록 음성은 1~20초");
+  return { vector: embed(samples), seconds };
+}
+const enrolled = ({ vector, seconds }) => [200, { seconds: Math.round(seconds * 10) / 10, dims: vector.length }];
+
+// 프로필의 목소리 등록·지우기(ADR-0019).
 async function voicePrint(req, m, profileId) {
   if (m === "DELETE") {
     await profilesDb().query("DELETE FROM voice_prints WHERE profile_id = $1", [profileId]);
     return [204];
   }
-  const { samples } = wavMono(await readRaw(req, 1_500_000)); // WAV 파싱 실패는 400으로 돌아온다
-  const seconds = samples.length / 16000;
-  // ponytail: 임베딩이 이벤트 루프에서 동기로 돈다(20초 ≈ 65 ms). 등록은 문장 몇 개면 되므로 20초로 묶는다.
-  if (seconds < 1 || seconds > 20) fail(400, "등록 음성은 1~20초");
-  const vector = embed(samples);
+  const { vector, seconds } = await enrollment(req);
   // 본문을 받는 사이 프로필이 지워졌으면 외래 키가 막는다(23503) — 지워진 프로필의 값이 남지 않게.
   await profilesDb()
     .query(
@@ -427,57 +464,97 @@ async function voicePrint(req, m, profileId) {
       [profileId, vector, seconds]
     )
     .catch((e) => (e?.code === "23503" ? fail(404, "없는 프로필") : Promise.reject(e)));
-  return [200, { seconds: Math.round(seconds * 10) / 10, dims: vector.length }];
+  return enrolled({ vector, seconds });
 }
 
-// 발화 대조(ADR-0008·0019): 발화 음성과 좌석 구역을 받아 등록된 목소리와 비교해
-// 프로필과 확신도를 돌려준다. 확신이 낮으면 '모름'(profileId: null).
-// 원본 음성은 저장하지 않고, 찾으면 그 발화 줄의 profile_id를 채운다(ADR-0014).
+// 여행 참가자의 목소리 등록(T38). 차의 가족은 손님 참가자라 프로필 등록값이 없다 — 여행마다 둔다.
+// 본인의 참가자 토큰으로, 녹음에 동의한 동안만. 값은 동의가 꺼지거나 여행이 지워질 때(48시간) 함께 지운다.
+async function participantVoice(code, id, req) {
+  if (req.method !== "POST") fail(405, "POST만 됨");
+  const check = (trip) => {
+    const p = trip.participants.find((x) => x.id === id) ?? fail(404, "없는 참가자");
+    if (participantOf(req, trip) !== p) fail(403, "목소리는 본인만 등록할 수 있음");
+    if (!p.consent) fail(409, "녹음에 동의한 뒤 등록함");
+    return trip.generation ?? 1;
+  };
+  // 본문(최대 1.5 MB)을 받고 계산하는 동안은 여행 줄을 잠그지 않는다(voiceMatch와 같은 까닭).
+  // 저장할 때 잠그고 다시 보되, 동의 세대까지 같아야 한다 — 그사이 동의를 껐다 다시 켰으면(세대가 오름)
+  // 철회 전에 시작한 등록이 되살아나지 않게. 세대는 누구의 철회로도 오르니, 그때는 다시 등록한다.
+  const generation = await withTrip(code, false, check);
+  const print = await enrollment(req);
+  await withTrip(code, true, async (trip, client) => {
+    if (check(trip) !== generation) fail(409, "등록하는 사이 동의가 바뀜. 다시 등록함");
+    await client.query(
+      `INSERT INTO trip_voice_prints (trip_code, participant_id, vector, seconds) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (trip_code, participant_id) DO UPDATE SET vector = $3, seconds = $4, updated_at = now()`,
+      [trip.code, id, print.vector, print.seconds]
+    );
+  });
+  return enrolled(print);
+}
+
+// 발화 대조(ADR-0008·0019): 발화 음성과 좌석 구역(앞줄·뒷줄)을 받아 그 줄 참가자의 등록 목소리와 비교해
+// 참가자와 확신도를 돌려준다. 확신이 낮으면 '모름'(participantId: null).
+// 원본 음성은 저장하지 않고, 찾으면 그 발화 줄의 participant_id(프로필 참가자면 profile_id도)를 채운다(ADR-0014).
 // 여행 문서를 바꾸지 않으므로 여행 줄을 잠그지 않는다 — 본문(최대 1 MB)을 받고 계산하는 동안
 // 같은 여행의 동의 바꾸기를 막으면, 업로드가 느릴 때 동의 철회가 2초 제한(T26)에 걸려 실패한다.
-async function voiceMatch(trip, req, query) {
+async function voiceMatch(code, req, query) {
   if (req.method !== "POST") fail(405, "POST만 됨");
   // 녹음에 동의한 참가자만 — 동의하지 않은 사람이 목소리로 남을 찾아보는 길이 되지 않게.
-  const caller = participantOf(req, trip);
-  if (!caller.consent) fail(403, "녹음에 동의한 참가자만 대조할 수 있음");
+  const consenting = (trip) => {
+    const caller = participantOf(req, trip);
+    return caller.consent ? caller : fail(403, "녹음에 동의한 참가자만 대조할 수 있음");
+  };
+  await withTrip(code, false, consenting);
   const { samples } = wavMono(await readRaw(req, 1_000_000));
   const seconds = samples.length / 16000;
   // ponytail: 임베딩은 이벤트 루프에서 동기로 돈다(10초 ≈ 30 ms, 60초 ≈ 185 ms). 발화는 보통 2~4초라 10초로 묶는다.
   if (seconds < 0.5 || seconds > 10) fail(400, "발화 음성은 0.5~10초");
-  // 후보: 그 좌석 구역에 앉은 프로필 참가자. 구역을 모르면(T37) 이 여행의 프로필 참가자 모두.
-  const seatArea = query.get("seatArea") ? oneOf(query.get("seatArea"), SEATS, "seatArea") : null;
-  const candidates = trip.participants.filter((p) => p.profileId && (!seatArea || p.seat === seatArea)).map((p) => p.profileId);
+  // 본문을 받는 동안 동의·자리가 바뀌었을 수 있으니 최신 여행으로 다시 보고 후보를 정한다(잠그지 않고 읽기만).
+  const trip = await withTrip(code, false, (t) => t);
+  const caller = consenting(trip);
+  // 후보: 그 줄(row 1 앞줄, 2 뒷줄 — 차량 앱의 좌석 구역 판정, T37)에 앉은, 녹음에 동의한 참가자. 줄을 모르면 그 줄 조건만 뺀다.
+  // 값은 이 여행에 등록한 것을 먼저, 없으면 그 사람 프로필의 등록값을 쓴다 — 동의하지 않은 사람의 이름은 발화에 붙지 않는다.
+  const row = query.get("row") ? oneOf(query.get("row"), ["1", "2"], "row") : null;
+  const seated = trip.participants.filter((p) => p.consent && (!row || p.seat.startsWith(`ROW_${row}_`)));
   const threshold = matchThreshold();
-  const { rows: prints } = candidates.length
-    ? await profilesDb().query("SELECT profile_id, vector FROM voice_prints WHERE profile_id = ANY($1)", [candidates])
+  const { rows: own } = seated.length
+    ? await tripsDb().query("SELECT participant_id, vector FROM trip_voice_prints WHERE trip_code = $1 AND participant_id = ANY($2)", [trip.code, seated.map((p) => p.id)])
     : { rows: [] };
-  if (!prints.length) return [200, { profileId: null, confidence: 0, threshold, applied: false }];
+  const ownOf = new Map(own.map((r) => [r.participant_id, r.vector]));
+  const profileIds = seated.filter((p) => p.profileId && !ownOf.has(p.id)).map((p) => p.profileId);
+  const { rows: fromProfiles } = profileIds.length
+    ? await profilesDb().query("SELECT profile_id, vector FROM voice_prints WHERE profile_id = ANY($1)", [profileIds])
+    : { rows: [] };
+  const printOf = new Map(fromProfiles.map((r) => [r.profile_id, r.vector]));
+  const candidates = seated.map((p) => [p, ownOf.get(p.id) ?? printOf.get(p.profileId)]).filter(([, v]) => v);
+  if (!candidates.length) return [200, { participantId: null, profileId: null, confidence: 0, threshold, applied: false }];
   const vector = embed(samples);
   let best = null;
   let bestSim = -1;
-  for (const r of prints) {
-    const s = similarity(vector, r.vector);
+  for (const [p, v] of candidates) {
+    const s = similarity(vector, v);
     if (s > bestSim) {
       bestSim = s;
-      best = r.profile_id;
+      best = p;
     }
   }
-  const matched = best && bestSim >= threshold ? best : null;
+  const matched = bestSim >= threshold ? best : null;
   let applied = false;
   if (matched && query.get("device") && query.get("seq")) {
-    // 찾았으면 그 발화 줄의 profile_id를 채운다(ADR-0014). 발화가 아직 안 왔다면 채우지 않고 결과만 돌려준다.
+    // 찾았으면 그 발화 줄에 화자를 채운다(ADR-0014). 발화가 아직 안 왔다면 채우지 않고 결과만 돌려준다.
     // 그 발화를 올린 기기(참가자)만, 아직 화자가 없는 줄에만 붙인다 — 남의 줄에 이름을 붙이거나 바꿔 지우지 못하게.
     const device = text(query.get("device"), 40, "device");
     const seq = int(Number(query.get("seq")), 1, 1_000_000_000, "seq");
     const { rowCount } = await tripsDb().query(
-      `UPDATE utterances u SET profile_id = $2 FROM utterance_acks a
-       WHERE u.trip_code = $1 AND u.device = $3 AND u.seq = $4 AND u.profile_id IS NULL
+      `UPDATE utterances u SET participant_id = $2, profile_id = $6 FROM utterance_acks a
+       WHERE u.trip_code = $1 AND u.device = $3 AND u.seq = $4 AND u.participant_id IS NULL AND u.profile_id IS NULL AND NOT u.speaker_by_hand
          AND a.trip_code = u.trip_code AND a.device = u.device AND a.participant_id = $5`,
-      [trip.code, matched, device, seq, caller.id]
+      [trip.code, matched.id, device, seq, caller.id, matched.profileId ?? null]
     );
     applied = rowCount > 0;
   }
-  return [200, { profileId: matched, confidence: Math.round(bestSim * 1000) / 1000, threshold, applied }];
+  return [200, { participantId: matched?.id ?? null, profileId: matched?.profileId ?? null, confidence: Math.round(bestSim * 1000) / 1000, threshold, applied }];
 }
 
 // 녹음 클립(T76, docs/api/voice.md): 사람이 장면으로 고른 구간의 원음. 장면 하나에 클립 하나라 클립 id는 장면 id다.
@@ -744,154 +821,6 @@ async function deleteGroups(db, ids) {
   await db.query("DELETE FROM groups WHERE id = ANY($1::text[])", [ids]);
 }
 
-// 가족·동승자 그룹과 QR 초대(ADR-0009, T45). 모든 경로의 인증은 프로필 토큰이다.
-const GROUP_KIND = ["family", "crew"];
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-async function groups(req, seg, b) {
-  const m = req.method;
-  const db = profilesDb();
-  if (!seg[0]) {
-    if (m !== "POST") fail(405, "POST만 됨");
-    const me = (await profileOf(req)) ?? fail(401, "프로필 토큰이 필요함");
-    const g = { id: randomUUID().slice(0, 8), kind: oneOf(b.kind ?? "family", GROUP_KIND, "kind"), name: b.name === undefined ? "" : text(b.name, 40, "name"), ownerId: me.id };
-    await db.query("INSERT INTO groups (id, kind, name, owner_id) VALUES ($1, $2, $3, $4)", [g.id, g.kind, g.name, g.ownerId]);
-    await db.query("INSERT INTO group_members (group_id, profile_id) VALUES ($1, $2)", [g.id, me.id]);
-    return [201, { ...g, members: [{ profileId: me.id, name: me.name, character: me.character, isOwner: true }] }];
-  }
-  const [id, sub, arg, leaf] = seg;
-  // 인증보다 먼저 못 쓰는 메서드를 가른다(없는 경로·메서드는 404·405로 답한다).
-  if (leaf !== undefined && (sub !== "members" || leaf !== "voice" || seg[4] !== undefined)) fail(404, "없는 경로");
-  if (!sub && m !== "GET" && m !== "DELETE") fail(405, "GET, DELETE만 됨");
-  if (sub === "members" && !arg && m !== "POST") fail(405, "POST만 됨");
-  if (sub === "members" && arg && !leaf && m !== "DELETE") fail(405, "DELETE만 됨");
-  if (leaf && m !== "POST" && m !== "DELETE") fail(405, "POST, DELETE만 됨");
-  if (sub === "invites" && !arg && m !== "POST" && m !== "GET") fail(405, "POST, GET만 됨");
-  if (sub === "invites" && arg && m !== "DELETE") fail(405, "DELETE만 됨");
-  if (sub && sub !== "members" && sub !== "invites") fail(404, "없는 경로");
-  if (sub === "members" && arg && !UUID.test(arg)) fail(404, "없는 구성원");
-  const me = (await profileOf(req)) ?? fail(401, "프로필 토큰이 필요함");
-  const { rows: found } = await db.query("SELECT id, kind, name, owner_id FROM groups WHERE id = $1", [id]);
-  const group = found[0] ?? fail(404, "없는 그룹");
-  const isOwner = group.owner_id === me.id;
-  const isMember = isOwner || (await db.query("SELECT 1 FROM group_members WHERE group_id = $1 AND profile_id = $2", [id, me.id])).rows.length > 0;
-  const memberRows = () =>
-    db.query(
-      `SELECT m.profile_id, p.name, p.character, (p.photo IS NOT NULL) AS has_photo, g.owner_id
-       FROM group_members m JOIN profiles p ON p.id = m.profile_id JOIN groups g ON g.id = m.group_id
-       WHERE m.group_id = $1 ORDER BY m.joined_at`,
-      [id]
-    );
-
-  if (!sub) {
-    if (m === "GET") {
-      if (!isMember) fail(403, "구성원만 볼 수 있음");
-      const { rows } = await memberRows();
-      return [200, { id: group.id, kind: group.kind, name: group.name, ownerId: group.owner_id, members: rows.map((r) => ({ profileId: r.profile_id, name: r.name, character: r.character, hasPhoto: r.has_photo, isOwner: r.owner_id === r.profile_id })) }];
-    }
-    // 그룹을 지워도 계정 있는 구성원의 기록본과 앨범은 프로필 소유라 그대로 남는다(ADR-0009).
-    // 대표가 만든 아이 프로필은 함께 지운다.
-    if (!isOwner) fail(403, "대표만 지울 수 있음");
-    await inProfilesTx((tx) => deleteGroups(tx, [id]));
-    return [204];
-  }
-
-  if (sub === "members" && !arg) {
-    // 계정 없는 구성원(아이) 프로필을 대표가 만든다. 토큰은 없다 — 대표의 기기가 참가시킨다.
-    if (!isOwner) fail(403, "대표만 구성원을 만들 수 있음");
-    const p = { id: randomUUID(), name: text(b.name, 20, "name"), character: b.character === undefined ? "" : text(b.character, 20, "character") };
-    await db.query("INSERT INTO profiles (id, name, consent_default, character, managed_by) VALUES ($1, $2, false, $3, $4)", [p.id, p.name, p.character, me.id]);
-    await db.query("INSERT INTO group_members (group_id, profile_id) VALUES ($1, $2)", [id, p.id]);
-    return [201, { profileId: p.id, name: p.name, character: p.character, isOwner: false }];
-  }
-  if (leaf) {
-    // 계정 없는 구성원(아이)의 목소리는 그 아이를 만든 대표가 대신 등록하고 지운다(ADR-0009·0019).
-    // 보호자 동의 문구는 등록 화면(T37·T46)에 붙인다.
-    if (!isOwner) fail(403, "대표만 아이의 목소리를 등록할 수 있음");
-    const { rows: kid } = await db.query(
-      "SELECT 1 FROM profiles p JOIN group_members gm ON gm.profile_id = p.id WHERE p.id = $1 AND gm.group_id = $2 AND p.managed_by = $3",
-      [arg, id, me.id]
-    );
-    if (!kid[0]) fail(404, "이 그룹에서 대표가 만든 구성원이 아님");
-    return voicePrint(req, m, arg);
-  }
-  if (sub === "members" && arg) {
-    if (!isOwner && arg !== me.id) fail(403, "대표만 내보낼 수 있음");
-    if (arg === group.owner_id) fail(409, "대표는 그룹을 지워야 나갈 수 있음");
-    const { rowCount } = await db.query("DELETE FROM group_members WHERE group_id = $1 AND profile_id = $2", [id, arg]);
-    if (!rowCount) fail(404, "없는 구성원");
-    // 대표가 만든 아이 프로필은 내보내면 지울 사람이 없어지므로 함께 지운다. 계정 있는 구성원의 기록은 그대로다.
-    const { rows: kid } = await db.query("SELECT id FROM profiles WHERE id = $1 AND managed_by = $2", [arg, group.owner_id]);
-    if (kid[0]) await inProfilesTx((tx) => deleteProfiles(tx, [arg]));
-    return [204];
-  }
-
-  if (sub === "invites" && !arg) {
-    if (m === "POST") {
-      if (!isOwner) fail(403, "대표만 초대를 만들 수 있음");
-      const code = randomBytes(12).toString("base64url");
-      const maxUses = b.maxUses === undefined ? 5 : int(b.maxUses, 0, 100, "maxUses");
-      const minutes = b.expiresInMinutes === undefined ? 60 : int(b.expiresInMinutes, 1, 1440, "expiresInMinutes");
-      const expiresAt = Date.now() + minutes * 60_000;
-      await db.query("INSERT INTO invites (code, group_id, max_uses, expires_at) VALUES ($1, $2, $3, to_timestamp($4 / 1000.0))", [code, id, maxUses, expiresAt]);
-      return [201, { code, url: `${INVITE_BASE}/${code}`, expiresAt, maxUses }]; // QR에 담을 주소(ADR-0009)
-    }
-    if (!isOwner) fail(403, "대표만 봄");
-    const { rows } = await db.query("SELECT code, max_uses, uses, expires_at, cancelled_at FROM invites WHERE group_id = $1 ORDER BY created_at DESC", [id]);
-    return [200, { invites: rows.map((r) => ({ code: r.code, url: `${INVITE_BASE}/${r.code}`, maxUses: r.max_uses, uses: r.uses, expiresAt: r.expires_at.getTime(), cancelled: r.cancelled_at !== null })) }];
-  }
-  if (sub === "invites" && arg) {
-    if (!isOwner) fail(403, "대표만 취소할 수 있음");
-    const { rowCount } = await db.query("UPDATE invites SET cancelled_at = now() WHERE code = $1 AND group_id = $2 AND cancelled_at IS NULL", [arg, id]);
-    if (!rowCount) fail(404, "없는 초대");
-    return [204];
-  }
-  fail(404, "없는 경로");
-}
-
-// 초대 수락. QR 주소(/j/<코드>)로 들어온 폰 브라우저가 부른다(ADR-0009).
-async function acceptInvite(req, code, b) {
-  const db = profilesDb();
-  // 프로필 토큰이 있으면 있던 프로필로, 없으면 새 프로필을 만들어 이 기기 토큰을 준다.
-  // 입력과 토큰은 횟수를 쓰기 전에 본다 — 거절된 수락이 횟수를 쓰지 않게.
-  const me = await profileOf(req);
-  const profile = me ?? { id: randomUUID(), name: text(b.name, 20, "name"), consentDefault: false, character: b.character === undefined ? "" : text(b.character, 20, "character"), links: [] };
-  const device = b.device === undefined ? "" : text(b.device, 20, "device");
-  // 이미 구성원이면(QR을 다시 찍음) 횟수를 쓰지 않는다.
-  const { rows: member } = me
-    ? await db.query("SELECT i.group_id FROM invites i JOIN group_members m ON m.group_id = i.group_id WHERE i.code = $1 AND m.profile_id = $2", [code, me.id])
-    : { rows: [] };
-  // 횟수 소진·만료·취소와의 경합은 UPDATE 조건으로 막는다(마지막 한 번을 두 명이 못 쓴다).
-  const { rows } = member[0]
-    ? { rows: member }
-    : await db.query(
-        `UPDATE invites SET uses = uses + 1
-         WHERE code = $1 AND cancelled_at IS NULL AND expires_at > now() AND (max_uses = 0 OR uses < max_uses)
-         RETURNING group_id`,
-        [code]
-      );
-  if (!rows[0]) {
-    const { rows: check } = await db.query("SELECT cancelled_at, expires_at, (max_uses = 0 OR uses < max_uses) AS usable FROM invites WHERE code = $1", [code]);
-    if (!check[0]) fail(404, "없는 초대");
-    fail(409, check[0].cancelled_at ? "취소된 초대" : new Date(check[0].expires_at).getTime() <= Date.now() ? "만료된 초대" : "쓸 수 있는 횟수가 다한 초대");
-  }
-  const token = me ? null : randomBytes(32).toString("base64url");
-  if (!me) {
-    // 첫 토큰은 옛 칸에도(POST /profiles와 같은 까닭)
-    await db.query("INSERT INTO profiles (id, token_hash, name, consent_default, character) VALUES ($1, $2, $3, false, $4)", [profile.id, tokenHash(token), profile.name, profile.character]);
-    await issueToken(profile.id, device, token);
-  }
-  await db.query("INSERT INTO group_members (group_id, profile_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", [rows[0].group_id, profile.id]);
-  const { rows: g } = await db.query("SELECT id, kind, name FROM groups WHERE id = $1", [rows[0].group_id]);
-  // 진행 중인 그룹 여행이 있으면 코드만 알려 준다. 자리는 본인이 골라 기존 참가 경로로 들어온다 —
-  // 동의·기록·자리 겹침 규칙이 그 경로 한 곳에만 있다(ADR-0009: 수락한 사람은 자리만 고르면 된다).
-  const { rows: trips } = await tripsDb().query(
-    `SELECT code FROM trips WHERE doc->>'groupId' = $1 AND created_at > now() - interval '48 hours'
-     AND (doc->>'status') IN ('boarding', 'driving') ORDER BY created_at DESC LIMIT 1`,
-    [rows[0].group_id]
-  );
-  return [200, { group: g[0], profile: { ...profile, hasPhoto: me?.hasPhoto ?? false }, ...(token ? { token } : {}), ...(trips[0] ? { trip: { code: trips[0].code } } : {}) }];
-}
-
 // 여행 한 줄을 읽어 fn에 넘긴다. 바꾸는 요청이면 그 줄을 잠그고, 끝나면 문서를 다시 쓴다.
 async function withTrip(code, write, fn) {
   const client = await tripsDb().connect();
@@ -914,18 +843,11 @@ async function withTrip(code, write, fn) {
   }
 }
 
-async function trips(req, [code, sub, id], b, query) {
+async function trips(req, [code, sub, id, leaf, ...rest], b, query) {
   const m = req.method;
   if (!code) {
     if (m !== "POST") fail(405, "POST만 됨");
-    // 그룹 여행(ADR-0009): 대표가 그룹을 지정하면 초대를 수락한 구성원이 이 여행 코드를 받아 자리를 골라 참가한다.
-    let groupId = null;
-    if (b.groupId !== undefined) {
-      groupId = text(b.groupId, 8, "groupId");
-      const me = await profileOf(req);
-      const { rows } = me ? await profilesDb().query("SELECT id FROM groups WHERE id = $1 AND owner_id = $2", [groupId, me.id]) : { rows: [] };
-      if (!rows[0]) fail(403, "그룹의 대표만 그룹 여행을 만들 수 있음");
-    }
+    if (b.groupId !== undefined) fail(410, RETIRED_GROUP);
     const trip = {
       code: "",
       title: b.title === undefined ? "" : text(b.title, 40, "title"),
@@ -937,7 +859,6 @@ async function trips(req, [code, sub, id], b, query) {
       moments: [],
       version: 1,
       createdAt: Date.now(),
-      ...(groupId ? { groupId } : {}),
     };
     await sweep(); // 여행을 만들 때마다 묵은 여행을 치운다(10분마다도 돈다)
     for (;;) {
@@ -946,10 +867,39 @@ async function trips(req, [code, sub, id], b, query) {
       if (rowCount) return [201, trip];
     }
   }
-  if (sub === "voice-match" && !id) return voiceMatch(await withTrip(code, false, (trip) => trip), req, query);
+  if (rest.length || (leaf !== undefined && !(sub === "participants" && leaf === "voice") && sub !== "utterances" && sub !== "captions")) fail(404, "없는 경로");
+  if (sub === "captions") {
+    if (!id || !leaf || rest.length) fail(404, "자막 경로에 기기와 순번이 필요함");
+    if (m !== "PATCH") fail(405, "PATCH만 됨");
+    let device;
+    try { device = decodeURIComponent(id); } catch { fail(400, "device: 잘못된 URI 인코딩"); }
+    device = text(device, 40, "device");
+    if (!/^[1-9][0-9]*$/.test(leaf)) fail(400, "seq: 양의 정수");
+    const sequence = int(Number(leaf), 1, 1_000_000_000, "seq");
+    return withTrip(code, true, async (trip, client) => {
+      const caller = participantOf(req, trip);
+      if (!caller.consent) fail(403, "녹음에 동의한 참가자만 고칠 수 있음");
+      const generation = int(b.generation, 1, 2_147_483_647, "generation");
+      if (generation !== (trip.generation ?? 1)) fail(409, "동의 세대가 바뀜 — 기록본을 다시 읽어 주세요");
+      const expected = int(b.expectedVersion, 0, 2_147_483_646, "expectedVersion");
+      const edited = b.text === null ? null : text(b.text, 500, "text");
+      const args = [trip.code, device, sequence, generation];
+      const live = "trip_code = $1 AND device = $2 AND seq = $3 AND generation = $4 AND text <> ''";
+      if (!(await client.query(`SELECT 1 FROM utterances WHERE ${live}`, args)).rowCount) fail(404, "없는 발화");
+      const { rows } = await client.query(
+        `UPDATE utterances SET edited_text = $5, edit_version = edit_version + 1, edited_by = $6, edited_at = now()
+         WHERE ${live} AND edit_version = $7 RETURNING *`, [...args, edited, caller.id, expected]
+      );
+      if (!rows[0]) fail(409, "다른 사람이 먼저 고침 — 기록본을 다시 읽어 주세요");
+      return [200, { generation, utterance: asUtterance(rows[0]) }];
+    });
+  }
+  if (sub === "voice-match" && !id) return voiceMatch(code, req, query);
   if (sub === "recordings") return recordings(code, id, req, query);
+  if (sub === "participants" && m === "POST" && !id && b.profileId !== undefined) fail(410, RETIRED_GROUP);
+  if (leaf === "voice") return participantVoice(code, id, req);
   const profile = sub === "participants" && m === "POST" && !id ? await profileOf(req) : null;
-  const result = await withTrip(code, m !== "GET", (trip, client) => handle(trip, { req, m, sub, id, b, query, profile }, client));
+  const result = await withTrip(code, m !== "GET", (trip, client) => handle(trip, { req, m, sub, id, leaf, b, query, profile }, client));
   if (sub === "participants" && m === "PATCH") void sweepClips(); // 동의 철회가 적은 클립을 커밋 뒤에 버킷에서 지운다
   // 커밋 뒤에: 클립보다 늦게 온 발화를 다시 받아 적는다(T75)
   if (sub === "utterances" && m === "POST") requeueRetranscribe(String(code).toUpperCase()).catch((e) => log("warn", "clip_retranscribe_failed", { err: errFields(e) }));
@@ -972,7 +922,11 @@ export async function sweep() {
   void sweepClips();
 }
 
-async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
+async function handle(trip, { req, m, sub, id, leaf, b, query, profile }, client) {
+  if (sub === "shares" && !id) {
+    if (m !== "POST") fail(405, "POST만 됨");
+    return createShare(client, trip, participantOf(req, trip), b);
+  }
   const changed = (status, data) => {
     trip.version++;
     return [status, data];
@@ -1003,26 +957,10 @@ async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
   if (sub === "participants") {
     const seatFree = (seat, self) => trip.participants.every((p) => p === self || p.seat !== seat);
     if (m === "POST" && !id) {
-      // 대표가 그룹의 계정 없는 구성원(아이) 프로필로 참가시킬 수 있다(ADR-0009).
-      let kidOf = null;
-      if (b.profileId !== undefined) {
-        if (!profile) fail(401, "프로필 토큰이 필요함");
-        if (typeof b.profileId !== "string" || !UUID.test(b.profileId)) fail(400, "profileId: 프로필 id");
-        // 내가 만든 계정 없는 구성원(아이)만 — 계정 있는 어른의 자리와 동의는 그 사람이 정한다.
-        const { rows: kid } = await profilesDb().query(
-          `SELECT p.id, p.name FROM profiles p
-           JOIN group_members gm ON gm.profile_id = p.id
-           JOIN groups g ON g.id = gm.group_id
-           WHERE p.id = $1 AND g.owner_id = $2 AND p.managed_by = $2 LIMIT 1`,
-          [b.profileId, profile.id]
-        );
-        if (!kid[0]) fail(403, "내가 만든 계정 없는 구성원만 참가시킬 수 있음");
-        kidOf = kid[0];
-      }
-      // 같은 프로필(대표가 참가시킨 아이도)이 다시 참가하면 이미 있는 참가자를 돌려준다(폰을 바꿨거나 토큰을 잃었을 때).
+      // 같은 프로필이 다시 참가하면 이미 있는 참가자를 돌려준다(폰을 바꿨거나 토큰을 잃었을 때).
       // 참가자 토큰은 문서에 해시만 남으니 이 기기에 쓸 토큰을 새로 만들어 준다. 앞서 준 토큰도 최근 4개까지 산다(T68) —
       // 남이 끈 동의를 본인이 다시 켜려면 토큰이 있어야 하니, 잃었으면 다시 참가해 받는다.
-      const again = profile && trip.participants.find((p) => p.profileId === (kidOf ?? profile).id);
+      const again = profile && trip.participants.find((p) => p.profileId === profile.id);
       if (again) {
         const token = randomBytes(32).toString("base64url");
         again.olderTokenHashes = [...(again.olderTokenHashes ?? []), again.tokenHash].slice(-4);
@@ -1030,11 +968,9 @@ async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
         return changed(200, { ...asParticipant(again), token });
       }
       const seat = oneOf(b.seat, SEATS, "seat");
-      const p = kidOf
-        ? { name: kidOf.name, consent: b.consent === undefined ? false : bool(b.consent, "consent"), profileId: kidOf.id } // 아이는 동의 기본값 꺼짐
-        : profile
-          ? { name: profile.name, consent: b.consent === undefined ? profile.consentDefault : bool(b.consent, "consent"), profileId: profile.id }
-          : { name: text(b.name, 20, "name"), consent: bool(b.consent, "consent") };
+      const p = profile
+        ? { name: profile.name, consent: b.consent === undefined ? profile.consentDefault : bool(b.consent, "consent"), profileId: profile.id }
+        : { name: text(b.name, 20, "name"), consent: bool(b.consent, "consent") };
       if (!seatFree(seat)) fail(409, "이미 다른 사람이 앉은 자리");
       // 참가자 토큰(프로필·손님 모두)은 이때 한 번씩 준다. 음성 경로의 인증에 쓴다(ADR-0007).
       const token = randomBytes(32).toString("base64url");
@@ -1058,6 +994,9 @@ async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
         const was = p.consent;
         p.consent = consent;
         if (!consent) trip.recording = false;
+        // 동의가 꺼지면 이 여행에 등록한 목소리 값도 바로 지운다(T38, ADR-0019). 꺼져 있다 켜질 때도 지운다 —
+        // 배포 중 옛 파드가 끄기를 받아 남긴 값이 다시 켠 뒤에 쓰이지 않게(다시 켰으면 다시 등록한다).
+        if (!consent || !was) await client.query("DELETE FROM trip_voice_prints WHERE trip_code = $1 AND participant_id = $2", [trip.code, p.id]);
         // 켜져 있던 동의를 끊을 때만 세대를 올린다. 받아 둔 발화도 못 쓰게 한다(ADR-0007). 이미 꺼진 것을 다시 꺼도 그대로.
         if (was && !consent) await bumpGeneration(trip, client);
       }
@@ -1124,6 +1063,33 @@ async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
     return changed(201, moment);
   }
 
+  if (sub === "utterances" && id) {
+    // 사람이 고친 화자(T37): 차 화면에서 '모름'이나 틀린 이름을 고친다. 그 기기 이름으로 발화를 올린 참가자만 —
+    // 올리기의 기기 주인 규칙과 같다. 사람이 고친 것이 대조보다 우선이라 이미 붙은 화자도 바꾸고,
+    // 고친 줄(speaker_by_hand)은 뒤늦게 끝난 대조가 다시 채우지 않는다('모름'으로 고친 것도).
+    if (m !== "PATCH" || leaf === undefined) fail(405, "PATCH /utterances/:device/:seq만 됨");
+    const caller = participantOf(req, trip);
+    // 기기 이름은 올리기 본문의 글자 그대로라 공백·한글이 있을 수 있다. 주소의 마디를 한 번 풀어 맞춘다.
+    let raw;
+    try {
+      raw = decodeURIComponent(id);
+    } catch {
+      fail(400, "device: 잘못된 주소 인코딩");
+    }
+    const device = text(raw, 40, "device");
+    const seq = int(Number(leaf), 1, 1_000_000_000, "seq");
+    if (b.participantId !== null && typeof b.participantId !== "string") fail(400, "participantId: 이 여행의 참가자 id 또는 null");
+    const who = b.participantId === null ? null : (trip.participants.find((p) => p.id === b.participantId) ?? fail(400, "participantId: 이 여행의 참가자 id 또는 null"));
+    if (who && !who.consent) fail(409, "녹음에 동의하지 않은 참가자의 이름은 붙이지 않음");
+    const { rows: ack } = await client.query("SELECT participant_id FROM utterance_acks WHERE trip_code = $1 AND device = $2", [trip.code, device]);
+    if (ack[0] && ack[0].participant_id !== caller.id) fail(403, "그 기기로 올린 참가자만 고침");
+    const { rows } = await client.query(
+      `UPDATE utterances SET participant_id = $4, profile_id = $5, speaker_by_hand = true WHERE trip_code = $1 AND device = $2 AND seq = $3 AND text <> ''
+       RETURNING device, seq, at, text, asr_text, seat_area, participant_id, profile_id, confidence, lat, lng`,
+      [trip.code, device, seq, who?.id ?? null, who?.profileId ?? null]
+    );
+    return rows[0] ? [200, asUtterance(rows[0])] : fail(404, "없는 발화");
+  }
   if (sub === "utterances") {
     // 발화 묶음 올리기·기록본 동기화(ADR-0007·ADR-0014). 인증은 참가자 토큰이다.
     if (m !== "GET" && m !== "POST" && m !== "DELETE") fail(405, "GET, POST, DELETE만 됨");
@@ -1134,6 +1100,8 @@ async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
       // 그 앞에서 멈춰 차량이 같은 묶음을 끝없이 다시 보낸다(ADR-0007).
       const current = trip.generation ?? 1;
       const device = text(b.device, 40, "device");
+      // `.`·`..`는 주소 마디로 쓰면 URL 정규화로 사라져(자막·화자 고치기 경로) 그 발화를 다시 가리킬 수 없다 — 받지 않는다(Astra, #202).
+      if (device === "." || device === "..") fail(400, "device: . 과 .. 은 쓸 수 없음");
       // 기기 이름은 처음 올린 참가자의 것이다. 다른 참가자가 같은 이름으로 순번을 먼저 차지해 진짜 발화를 밀어내지 못하게.
       const { rows: ack } = await client.query("SELECT last_seq, participant_id FROM utterance_acks WHERE trip_code = $1 AND device = $2", [trip.code, device]);
       if (ack[0] && ack[0].participant_id !== caller.id) fail(403, "다른 참가자가 올리는 기기");
@@ -1198,7 +1166,7 @@ async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
         params.push(device, int(Number(query.get("after") ?? 0), 0, 1_000_000_000, "after"));
         where += " AND device = $2 AND seq > $3";
       }
-      const { rows } = await client.query(`SELECT device, seq, at, text, seat_area, profile_id, confidence, lat, lng FROM utterances WHERE ${where} ORDER BY at`, params);
+      const { rows } = await client.query(`SELECT device, seq, at, text, asr_text, edited_text, edit_version, edited_by, edited_at, seat_area, participant_id, profile_id, confidence, lat, lng FROM utterances WHERE ${where} ORDER BY at`, params);
       return [200, { generation: trip.generation ?? 1, recording: trip.recording, items: rows.map(asUtterance) }];
     }
     if (m === "DELETE") {
@@ -1207,7 +1175,7 @@ async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
       // 줄은 지우지 않고 내용만 비운다: 순번에 빈자리가 있던 기기가 같은 순번을 다시 보내도(멱등 키에 걸려) 되살아나지 않게.
       if (!caller.profileId) fail(403, "프로필로 참가한 사람의 글만 지울 수 있음");
       const { rowCount } = await client.query(
-        "UPDATE utterances SET text = '', asr_text = NULL, seat_area = NULL, confidence = NULL, lat = NULL, lng = NULL WHERE trip_code = $1 AND profile_id = $2 AND text <> ''",
+        "UPDATE utterances SET text = '', asr_text = NULL, edited_text = NULL, edit_version = 0, edited_by = NULL, edited_at = NULL, seat_area = NULL, confidence = NULL, lat = NULL, lng = NULL WHERE trip_code = $1 AND profile_id = $2 AND text <> ''",
         [trip.code, caller.profileId]
       );
       return [200, { deleted: rowCount }];
@@ -1218,7 +1186,7 @@ async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
   const lines = async () => {
     if (m !== "GET") fail(405, "GET만 됨");
     if (!participantOf(req, trip).consent) fail(403, "녹음에 동의한 참가자만 볼 수 있음");
-    const { rows } = await client.query("SELECT device, seq, at, text, asr_text, seat_area, profile_id, confidence, lat, lng FROM utterances WHERE trip_code = $1 AND text <> '' ORDER BY at", [trip.code]);
+    const { rows } = await client.query("SELECT device, seq, at, text, asr_text, edited_text, edit_version, edited_by, edited_at, seat_area, participant_id, profile_id, confidence, lat, lng FROM utterances WHERE trip_code = $1 AND text <> '' ORDER BY at", [trip.code]);
     return rows.map(asUtterance);
   };
 
@@ -1246,6 +1214,7 @@ async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
     const byProfile = new Map(trip.participants.filter((p) => p.profileId).map((p) => [p.profileId, p.id]));
     return [200, {
       title: trip.title,
+      generation: trip.generation ?? 1,
       cast: trip.participants.map((p) => ({ participantId: p.id, name: p.name, character: character.get(p.profileId) ?? "", seat: p.seat })),
       // 이 조회 중에 새 장면·클립이 들어오면 클립 줄이 여행 문서보다 새로울 수 있다 — 문서에 없는 장면의 클립은 다음 조회에서 보인다.
       scenes: clips.flatMap((r) => {
@@ -1258,7 +1227,7 @@ async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
           clip: `/api/trips/${trip.code}/recordings/${r.moment_id}`, // 같은 주소, 참가자 토큰 머리말로 받는다(ADR-0021)
           startAt: Number(r.start_at),
           seconds: r.seconds,
-          cues: cues(all, Number(r.start_at), r.seconds).map(({ profileId, ...c }) => ({ ...c, participantId: byProfile.get(profileId) ?? null })),
+          cues: cues(all, Number(r.start_at), r.seconds).map(({ profileId, ...c }) => ({ ...c, participantId: c.participantId ?? byProfile.get(profileId) ?? null })),
           ...(moment.lat !== undefined ? { lat: moment.lat, lng: moment.lng } : {}),
         }];
       }),
@@ -1268,7 +1237,7 @@ async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
   fail(404, "없는 경로");
 }
 
-// 확장자 없는 주소는 화면이다: 그 폴더의 index.html(/demo), 없으면 웹앱 첫 화면 — 초대 주소 /j/<코드>처럼 웹앱이 주소를 읽는다.
+// 확장자 없는 주소는 화면이다: 그 폴더의 index.html(/demo), 없으면 웹앱 첫 화면 — Google 로그인 콜백처럼 웹앱이 주소를 읽는다.
 // 웹 파일은 쓸 때마다 다시 확인하게 한다(no-cache + ETag). 지시가 없으면 Cloudflare가 4시간 캐시해
 // 배포 뒤에도 옛 app.js가 쓰인다. 바뀌지 않았으면 304라 다시 받지 않는다.
 // ponytail: 파일 이름에 해시를 붙이는 빌드는 두지 않는다(빌드 없는 웹앱). 파일이 커지면 그때.
@@ -1326,6 +1295,7 @@ export const server = createServer(async (req, res) => {
       return send(200, { ok: true });
     }
     if (seg[0] === "api") {
+      if (seg[1] === "groups" || seg[1] === "j") fail(410, RETIRED_GROUP);
       if (seg[1] === "config" && !seg[2]) {
         if (req.method !== "GET") fail(405, "GET만 됨");
         return send(200, googlePublicConfig());
@@ -1335,15 +1305,13 @@ export const server = createServer(async (req, res) => {
       // 목소리 등록(…/voice)·발화 대조는 이진 본문(WAV)이다 — JSON으로 먼저 읽지 않는다.
       const binary = req.method === "POST" && (seg.at(-1) === "voice" || (seg[1] === "trips" && (seg[3] === "voice-match" || seg[3] === "recordings")));
       const body = !binary && (req.method === "POST" || req.method === "PATCH") ? await readBody(req, big ? 1_000_000 : MAX_BODY) : {};
+      if (seg[1] === "ride-links") return send(...(await rideLinks(req, seg.slice(2), { profileOf })));
+      if (seg[1] === "trips" && seg[2] && seg[3] === "ride-links" && !seg[4])
+        return send(...(await redeemRideLink(req, seg[2], body, { profileById, seats: SEATS })));
       if (seg[1] === "profiles") {
         const r = await profiles(req, seg.slice(2), body);
         if (Buffer.isBuffer(r[1])) return void sendRaw(r[0], r[1], r[2]); // 사진 같은 이진 응답
         return send(...r);
-      }
-      if (seg[1] === "groups") return send(...(await groups(req, seg.slice(2), body)));
-      if (seg[1] === "j" && seg[2] && !seg[3]) {
-        if (req.method !== "POST") fail(405, "POST만 됨");
-        return send(...(await acceptInvite(req, seg[2], body)));
       }
       if (seg[1] === "trips") {
         const r = await trips(req, seg.slice(2), body, url.searchParams);
@@ -1352,13 +1320,16 @@ export const server = createServer(async (req, res) => {
       }
       fail(404, "없는 경로");
     }
-    if (req.method !== "GET") fail(405, "GET만 됨");
     let path;
     try {
       path = decodeURIComponent(url.pathname);
     } catch {
       fail(400, "잘못된 주소");
     }
+    if (path === "/j" || path.startsWith("/j/")) {
+      return sendRaw(410, Buffer.from(`<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>동승 연결 안내 · 가치타</title><h1>동승 연결 방법이 바뀌었어요</h1><p>${RETIRED_GROUP}</p><a href="/">가치타 열기</a></html>`), "text/html; charset=utf-8");
+    }
+    if (req.method !== "GET") fail(405, "GET만 됨");
     await serveFile(path, req, res);
   } catch (e) {
     const { status, type, message } = classify(e);

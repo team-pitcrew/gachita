@@ -50,13 +50,15 @@ export function createRecords({ getProfile, getProfileToken, getTrip, getPartici
       toast("프로필이나 기록 동의가 바뀌어 기록 화면을 닫았어요.");
     }
   };
+  // 저장·삭제의 결과와 오류는 모달 안에 둔다(모달이 최상위 레이어라 #toast는 그 뒤에 가려진다).
   const shell = (s, ...content) => {
     if (!valid(s)) return;
     dialog.replaceChildren(
       h("div", { className: "between records-heading" }, h("h1", { id: "records-title" }, s.mode === "feed" ? "내 기록본" : "장면 후보"), button("닫기", close, "plain")),
-      ...content,
+      ...[s.note && h("p", { role: s.note.alert ? "alert" : "status", className: s.note.alert ? "records-note alert" : "records-note" }, s.note.text), ...content].filter(Boolean),
     );
   };
+  const note = (s, text, alert = false) => (s.note = { text, alert });
   const show = (s) => {
     stopFeed();
     state = s;
@@ -108,6 +110,7 @@ export function createRecords({ getProfile, getProfileToken, getTrip, getPartici
   async function erase(s, item, control) {
     if (!valid(s) || s.pending.has(item.id) || !confirm("내 앨범에서 이 장면을 지울까요? 다른 사람의 앨범과 여행의 장면은 그대로예요.")) return;
     s.pending.add(item.id);
+    s.note = null;
     control.disabled = true;
     try {
       await api("DELETE", `/profiles/me/moments/${encodeURIComponent(item.id)}`, null, s.token).catch((e) => { if (e.status !== 404) throw e; });
@@ -115,9 +118,9 @@ export function createRecords({ getProfile, getProfileToken, getTrip, getPartici
       s.deleted.add(item.id);
       s.items = s.items.filter((entry) => entry.kind !== "moment" || entry.id !== item.id);
       s.snapshot = JSON.stringify(s.items);
+      note(s, "내 앨범에서 장면을 지웠어요.");
       feedView(s);
-      toast("내 앨범에서 장면을 지웠어요.");
-    } catch (e) { if (valid(s)) toast(errorText(e)); }
+    } catch (e) { if (valid(s)) (note(s, errorText(e), true), feedView(s)); }
     finally {
       s.pending.delete(item.id);
       if (valid(s) && s.controls.has(item.id)) s.controls.get(item.id).disabled = false;
@@ -142,6 +145,21 @@ export function createRecords({ getProfile, getProfileToken, getTrip, getPartici
     );
   }
 
+  async function reloadScenes(s, text) {
+    try {
+      const { items } = await participantRequest("GET", "/scene-suggestions");
+      if (!valid(s)) return;
+      s.items = items;
+      note(s, text, true);
+    } catch (e) {
+      if (!valid(s)) return;
+      s.items = []; // 확인되지 않은 후보를 다시 누르지 않게 비운다
+      note(s, `${text} (후보도 읽지 못했어요: ${errorText(e)})`, true);
+    }
+    scenesView(s);
+    await onSaved();
+  }
+
   async function openScenes() {
     const trip = getTrip();
     const me = getParticipant();
@@ -162,16 +180,23 @@ export function createRecords({ getProfile, getProfileToken, getTrip, getPartici
   async function choose(s, item, label, control) {
     if (!valid(s) || s.pending.has(item)) return;
     s.pending.add(item);
+    s.note = null;
     control.disabled = true;
     try {
       await participantRequest("POST", "/moments", chosenMoment(item, label));
       if (!valid(s)) return;
       s.items = s.items.filter((entry) => entry !== item);
       s.labels.delete(item);
+      note(s, "장면을 남겼어요. 차가 연결되면 그 구간의 소리를 준비해요.");
       scenesView(s);
-      toast("장면을 남겼어요. 차가 연결되면 그 구간의 소리를 준비해요.");
       await onSaved();
-    } catch (e) { if (valid(s)) toast(errorText(e)); }
+    } catch (e) {
+      if (!valid(s)) return;
+      // 서버가 저장하고 응답만 잃었을 수 있다(끊김·5xx). 후보를 다시 읽으면 이미 남은 구간은 서버가 빼 주므로,
+      // 그대로 다시 누르게 두지 않고 새 후보로 바꾼다(같은 구간이 두 번 저장되지 않게).
+      if (e.status === 0 || e.status >= 500) await reloadScenes(s, "저장 결과를 확인하지 못했어요. 후보를 다시 읽었어요. 남은 장면은 여행 화면에서 확인해 주세요.");
+      else (note(s, errorText(e), true), scenesView(s));
+    }
     finally {
       s.pending.delete(item);
       if (valid(s) && s.controls.has(item)) s.controls.get(item).disabled = false;
