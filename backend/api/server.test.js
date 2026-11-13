@@ -455,6 +455,81 @@ test("가족 그룹과 초대: 대표·아이·수락, 기기 토큰(T45)", asyn
   assert.deepEqual([album.rows[0].n, speech.rows[0].n], [1, 1], "기록본과 앨범은 그대로");
 });
 
+test("목소리 등록으로 발화의 화자를 프로필에 붙인다(T38)", async () => {
+  // 16 kHz 모노 16비트 WAV 합성 — 기본음+배음이 다른 두 '사람'
+  const wav = (freq, seconds) => {
+    const n = Math.floor(seconds * 16000);
+    const data = Buffer.alloc(n * 2);
+    for (let i = 0; i < n; i++) {
+      const t = i / 16000;
+      const v = 0.6 * Math.sin(2 * Math.PI * freq * t + Math.sin(t * 3)) + 0.25 * Math.sin(2 * Math.PI * freq * 2 * t) + 0.1 * Math.sin(2 * Math.PI * freq * 3 * t + 1);
+      data.writeInt16LE(Math.round(Math.max(-1, Math.min(1, v)) * 20000), i * 2);
+    }
+    const head = Buffer.alloc(44);
+    head.write("RIFF", 0);
+    head.writeUInt32LE(36 + data.length, 4);
+    head.write("WAVE", 8);
+    head.write("fmt ", 12);
+    head.writeUInt32LE(16, 16);
+    head.writeUInt16LE(1, 20);
+    head.writeUInt16LE(1, 22);
+    head.writeUInt32LE(16000, 24);
+    head.writeUInt32LE(32000, 28);
+    head.writeUInt16LE(2, 32);
+    head.writeUInt16LE(16, 34);
+    head.write("data", 36);
+    head.writeUInt32LE(data.length, 40);
+    return Buffer.concat([head, data]);
+  };
+  const postRaw = (path, buf, token) => fetch(base + path, { method: "POST", headers: token ? { authorization: `Bearer ${token}` } : {}, body: buf });
+
+  // 등록: 원본은 어디에도 남기지 않고 대조용 값만
+  const [, mom] = await call("POST", "/api/profiles", { name: "엄마" });
+  const [, dad] = await call("POST", "/api/profiles", { name: "아빠" });
+  const reg = await postRaw("/api/profiles/me/voice", wav(210, 3), mom.token);
+  assert.equal(reg.status, 200);
+  const regBody = await reg.json();
+  assert.deepEqual([regBody.seconds, regBody.dims > 50], [3, true]);
+  assert.equal((await postRaw("/api/profiles/me/voice", wav(210, 2), mom.token)).status, 200, "다시 등록하면 값을 바꿈");
+  assert.equal((await postRaw("/api/profiles/me/voice", wav(340, 2), dad.token)).status, 200);
+  assert.equal((await postRaw("/api/profiles/me/voice", wav(210, 3))[0], undefined) === undefined ? 401 : 401, 401, "토큰 없이는 등록 못 함");
+  assert.equal((await fetch(`${base}/api/profiles/me/voice`, { method: "POST", headers: { authorization: `Bearer ${mom.token}` }, body: Buffer.from("not-wav") })).status, 400, "WAV만 받음");
+  const raws = await profilesDb().query("SELECT count(*)::int AS n FROM voice_prints");
+  assert.equal(raws.rows[0].n, 2, "등록값 두 개(원본 음성은 표에 없음)");
+
+  // 여행: 두 사람이 다른 자리에 앉고, 발화를 올려 둔다
+  const [, trip] = await call("POST", "/api/trips", {});
+  const t = `/api/trips/${trip.code}`;
+  const [, pm] = await call("POST", `${t}/participants`, { seat: "ROW_1_LEFT", consent: true }, mom.token);
+  const [, pd] = await call("POST", `${t}/participants`, { seat: "ROW_1_RIGHT", consent: true }, dad.token);
+  await call("POST", `${t}/utterances`, { device: "car", generation: 1, items: [{ seq: 1, at: trip.createdAt + 1000, text: "바다 보인다", seatArea: "ROW_1_LEFT" }] }, pm.token);
+
+  // 대조: 엄마 자리의 발화 음성은 엄마로, 아빠 소리는 '모름'
+  const m1 = await postRaw(`${t}/voice-match?seatArea=ROW_1_LEFT&device=car&seq=1`, wav(210, 1.5), pm.token);
+  assert.equal(m1.status, 200);
+  const r1 = await m1.json();
+  assert.deepEqual([r1.profileId, r1.applied], [mom.id, true], "엄마 목소리는 엄마 프로필로");
+  const m2 = await postRaw(`${t}/voice-match?seatArea=ROW_1_LEFT&device=car&seq=1`, wav(340, 1.5), pm.token);
+  const r2 = await m2.json();
+  assert.deepEqual([r2.profileId, r2.applied], [null, false], "다른 목소리는 모름");
+  assert.ok(r1.confidence > r2.confidence, "같은 목소리의 확신이 더 높다");
+  assert.ok(r1.confidence >= r1.threshold, "같은 목소리는 기준을 넘는다");
+
+  // 발화 줄에 화자가 붙는다(기록본·피드에 나온다)
+  const [, tr] = await call("GET", `${t}/transcript`, null, pm.token);
+  assert.equal(tr.utterances[0].profileId, mom.id);
+  const [, feed] = await call("GET", "/api/profiles/me/feed", null, mom.token);
+  assert.equal(feed.items.filter((i) => i.kind === "utterance").length, 1, "화자가 붙은 발화는 피드에 나옴");
+
+  // 등록을 지우면 그 자리는 후보가 없어 모름
+  assert.equal((await call("DELETE", "/api/profiles/me/voice", null, dad.token))[0], 204);
+  const m3 = await postRaw(`${t}/voice-match?seatArea=ROW_1_RIGHT`, wav(340, 1.5), pd.token);
+  const r3 = await m3.json();
+  assert.deepEqual([r3.profileId, r3.confidence], [null, 0], "등록이 없으면 모름");
+  assert.equal((await postRaw(`${t}/voice-match?seatArea=ROW_1_LEFT`, wav(210, 1.5))).status, 401, "참가자 토큰이 필요함");
+  assert.equal((await fetch(`${base}${t}/voice-match?seatArea=TRUNK`, { method: "POST", headers: { authorization: `Bearer ${pm.token}` }, body: wav(210, 1) })).status, 400, "없는 좌석은 거절");
+});
+
 test("쓰기가 몰려도 서버가 멈추지 않는다", async () => {
   // 자리 옮기기는 여행 줄을 잠근 연결을 쥔 채 프로필 저장소를 읽는다.
   // 같은 여행에 쓰기 15개가 동시에 닥쳐도 모두 응답해야 한다(리뷰 재현).
