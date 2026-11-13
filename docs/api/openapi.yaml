@@ -33,6 +33,106 @@ tags:
   - name: 그룹
   - name: 상태 확인
 paths:
+  /api/ride-links:
+    post:
+      tags: [참가자]
+      summary: 폰의 1회용 동승 연결 QR 발급
+      description: |
+        프로필 토큰으로 발급합니다. 5분 유효한 code와 별개의 participantToken을 폰에만 줍니다.
+        qr은 {type: gachita-ride, version: 1, code}를 직렬화한 JSON 문자열이며 참가자/프로필 토큰이 없습니다.
+        폰은 participantToken을 보관했다가 조회 결과가 linked이면 그 여행의 참가자 토큰으로 씁니다.
+        서버는 code와 participantToken의 해시만 저장하며 모든 응답은 no-store입니다.
+      security: [{ profileToken: [] }]
+      responses:
+        "201":
+          description: 폰이 보관할 연결 정보. 참가자 토큰은 이 응답에서만 줍니다.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, code, expiresAt, participantToken, qr]
+                properties:
+                  id: { type: string, format: uuid }
+                  code: { type: string, minLength: 43, maxLength: 43 }
+                  expiresAt: { type: integer, description: 만료 시각(epoch ms) }
+                  participantToken: { type: string, description: 폰에만 보관. QR과 차에 보내지 않음 }
+                  qr: { type: string, description: QR에 담을 JSON 문자열 }
+        "401": { $ref: "#/components/responses/Error" }
+  /api/ride-links/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [참가자]
+      summary: 발급한 폰이 동승 연결 결과 확인
+      description: |
+        발급한 프로필만 읽습니다. 다른 프로필, 취소·만료·없는 연결은 404입니다.
+        pending에는 id/status/expiresAt, linked에는 tripCode/participant가 더 있습니다.
+        상환 뒤 결과를 5분 동안 읽을 수 있습니다. 참가자 토큰은 다시 내주지 않습니다.
+        폰은 발급 때 받은 participantToken으로 본인의 기록 동의를 켭니다.
+      security: [{ profileToken: [] }]
+      responses:
+        "200":
+          description: 대기 중 또는 연결된 여행/참가자. no-store.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, status, expiresAt]
+                properties:
+                  id: { type: string, format: uuid }
+                  status: { type: string, enum: [pending, linked] }
+                  expiresAt: { type: integer }
+                  tripCode: { type: string }
+                  participant: { $ref: "#/components/schemas/Participant" }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [참가자]
+      summary: 폰에서 미사용 동승 연결 취소
+      security: [{ profileToken: [] }]
+      responses:
+        "204": { description: 취소됨 }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { description: 이미 차에 연결됐으므로 취소하지 않음 }
+  /api/trips/{code}/ride-links:
+    parameters: [{ $ref: "#/components/parameters/code" }]
+    post:
+      tags: [참가자]
+      summary: 주차 중 차가 폰의 QR을 읽어 참가자를 연결
+      description: |
+        차가 만든 여행 코드와 QR의 code, 운전자가 고른 seat를 보냅니다.
+        boarding/parked에서만 연결하며 차량은 별도로 CarUxRestrictions를 확인합니다.
+        동의는 항상 false이고 참가자 토큰은 차 응답과 여행 조회에 나오지 않습니다.
+        같은 QR은 원자적으로 한 번만 소진합니다. 동시/재사용·자리 충돌·이미 참가한 프로필은 409,
+        만료/없는 QR·없는 프로필·만료 여행은 404입니다. 자리 충돌은 QR을 소진하지 않습니다.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code, seat]
+              properties:
+                code: { type: string, minLength: 43, maxLength: 43 }
+                seat: { $ref: "#/components/schemas/Seat" }
+      responses:
+        "201":
+          description: 참가자 연결됨. 폰이 조회해 자신의 동의를 켜야 합니다.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [tripCode, participant]
+                properties:
+                  tripCode: { type: string }
+                  participant: { $ref: "#/components/schemas/Participant" }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /api/config:
     get:
       tags: [프로필]
@@ -53,6 +153,110 @@ paths:
                 additionalProperties: false
                 properties:
                   googleClientId: { type: string, description: 구글 공개 Client ID. 로그인을 시작할 수 없으면 빈 문자열 }
+  /api/trips/{code}/shares:
+    parameters:
+      - { name: code, in: path, required: true, schema: { type: string } }
+    post:
+      tags: [장면]
+      summary: 선택한 내 장면과 확인한 문구를 같은 여행 동승자에게 공유
+      description: |
+        본인 프로필 앨범의 장면만 공유합니다. 기록에 동의한 프로필 참가자가 같은 여행의 다른 프로필 참가자를 고릅니다.
+        옛 그룹의 관리 대상 프로필은 자기 프로필 토큰으로 수신·회수할 수 없어 보내기와 받기 모두 제외합니다(403).
+        녹음 동의와 별도로 내용·대상을 미리 본 뒤 명시적으로 실행해야 합니다. 원음·클립·참가 토큰은 복사하지 않습니다.
+        위치는 includeLocation=true일 때만 포함합니다. 공유는 여행 생성 후 48시간까지 유효합니다.
+        동의 세대 변경 시 공유 행을 지우고, 원본 앨범·프로필이 삭제되면 조회에서 제외합니다.
+        HTTP 응답은 공유 생성 확인이며 상대방의 수신·열람을 증명하지 않습니다.
+      security: [{ participantToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [momentId, recipientIds, caption, includeLocation, generation]
+              properties:
+                momentId: { type: string, pattern: "^[A-Za-z0-9_-]{1,40}$", description: 내 앨범의 장면 id. 그 밖의 글자는 400 }
+                recipientIds: { type: array, minItems: 1, maxItems: 4, uniqueItems: true, items: { type: string }, description: 같은 여행의 참가자 ID. 프로필이 있고 동의한 다른 사람만 가능 }
+                caption: { type: string, maxLength: 500, description: 사용자가 직접 확인한 문구. 빈 문자열도 가능 }
+                includeLocation: { type: boolean, description: 위치 없는 장면에서 true이면 400 }
+                generation: { type: integer, minimum: 1 }
+      responses:
+        "201":
+          description: 공유 생성. id·장면 정보·시각과 수신자 수만 반환하며 여행 코드나 토큰은 없음
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, at, label, caption, createdAt, expiresAt, recipientCount]
+                properties:
+                  id: { type: string, format: uuid }
+                  at: { type: integer }
+                  label: { type: string }
+                  caption: { type: string }
+                  lat: { type: number }
+                  lng: { type: number }
+                  createdAt: { type: integer, description: epoch ms }
+                  expiresAt: { type: integer, description: 여행 생성 시각 + 48시간의 epoch ms }
+                  recipientCount: { type: integer }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/profiles/me/shares:
+    get:
+      tags: [프로필]
+      summary: 받은 공유와 보낸 공유 읽기
+      description: |
+        프로필 토큰으로 본인에게 보냈거나 본인이 보낸 공유만 반환합니다. 최근 200개 중 유효한 것만 최신순으로 내보냅니다.
+        동의 세대·여행 만료·양쪽 프로필·원본 앨범·현재 참가 동의를 다시 확인합니다. 캐시하지 않습니다.
+        응답에는 여행 코드, 원음/클립 주소, 참가자 토큰이 없습니다. 받은 사람에게 다른 수신자 목록은 보이지 않습니다.
+      security: [{ profileToken: [] }]
+      responses:
+        "200":
+          description: 유효한 공유 목록
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, direction, sender, at, label, caption, createdAt, expiresAt]
+                      properties:
+                        id: { type: string, format: uuid }
+                        direction: { enum: [sent, received] }
+                        sender:
+                          type: object
+                          required: [name, character]
+                          properties: { name: { type: string }, character: { type: string } }
+                        recipients:
+                          type: array
+                          description: 보낸 사람에게만 현재 유효한 받는 사람을 표시
+                          items: { type: object, properties: { name: { type: string }, character: { type: string } } }
+                        at: { type: integer }
+                        label: { type: string }
+                        caption: { type: string }
+                        lat: { type: number }
+                        lng: { type: number }
+                        createdAt: { type: integer }
+                        expiresAt: { type: integer }
+        "401": { $ref: "#/components/responses/Error" }
+  /api/profiles/me/shares/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    delete:
+      tags: [프로필]
+      summary: 내가 보낸 공유 회수
+      description: 공유 행을 지웁니다. 받는 사람에게 보이지 않으며 원본 앨범은 그대로 남습니다. 이미 보거나 별도로 저장한 내용까지 되돌리는 기능은 아닙니다.
+      security: [{ profileToken: [] }]
+      responses:
+        "204": { description: 회수됨 }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { description: 없거나 보낸 사람이 아님 }
   /healthz:
     get:
       tags: [상태 확인]
@@ -387,7 +591,7 @@ paths:
               type: object
               required: [device, items]
               properties:
-                device: { type: string, minLength: 1, maxLength: 40, description: 발화를 올리는 기기의 이름(차량 앱이 정함) }
+                device: { type: string, minLength: 1, maxLength: 40, not: { enum: [".", ".."] }, description: "발화를 올리는 기기의 이름(차량 앱이 정함). `.`·`..`은 400 — 자막·화자 고치기 주소(`/{device}/{seq}`)가 URL 정규화로 사라지지 않게" }
                 generation: { type: integer, minimum: 1, description: 발화마다 세대를 적지 않았을 때 모든 발화의 세대. 둘 다 없으면 400 }
                 items:
                   type: array
@@ -453,14 +657,14 @@ paths:
   /api/trips/{code}/utterances/{device}/{seq}:
     parameters:
       - { $ref: "#/components/parameters/code" }
-      - { name: device, in: path, required: true, schema: { type: string }, description: 발화를 올린 기기 }
+      - { name: device, in: path, required: true, schema: { type: string }, description: "발화를 올린 기기. 올릴 때의 글자 그대로를 주소 인코딩(공백·한글). 잘못된 인코딩은 400" }
       - { name: seq, in: path, required: true, schema: { type: integer }, description: 그 기기가 매긴 순번 }
     patch:
       tags: [기록본]
       summary: 발화의 화자 고치기
       description: |
         차 화면에서 사람이 '모름'이나 틀린 이름을 고칩니다(T37). **그 기기 이름으로 발화를 올린 참가자의 토큰**으로만 합니다(올리기의 기기 주인 규칙과 같음).
-        사람이 고친 것이 화자 대조보다 우선이라 이미 붙은 화자도 바꿉니다. `participantId: null`이면 '모름'으로 되돌립니다.
+        사람이 고친 것이 화자 대조보다 우선이라 이미 붙은 화자도 바꿉니다. `participantId: null`이면 '모름'으로 되돌립니다. 고친 줄은 뒤늦게 끝난 대조가 다시 채우지 않습니다('모름'으로 고친 것도).
         그 참가자가 프로필 참가자이면 `profileId`도 함께 붙고(피드에 나옴), 아니면 비웁니다. 녹음에 동의하지 않은 참가자의 이름은 붙이지 않습니다(409).
       security: [{ participantToken: [] }]
       requestBody:
@@ -479,6 +683,47 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "405": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/trips/{code}/captions/{device}/{seq}:
+    parameters:
+      - { $ref: "#/components/parameters/code" }
+      - { name: device, in: path, required: true, schema: { type: string, minLength: 1, maxLength: 40 }, description: "발화 기기 이름. encodeURIComponent로 인코딩합니다" }
+      - { name: seq, in: path, required: true, schema: { type: integer, minimum: 1, maximum: 1000000000 } }
+    patch:
+      tags: [기록본]
+      summary: 자막 수정본 저장 또는 초기화
+      description: |
+        해당 여행의 동의한 참가자가 고칩니다. 원문 text·자동 asrText는 보존합니다.
+        expectedVersion이 현재 editVersion과 다르거나 generation이 현재 동의 세대와 다르면 409입니다.
+        초기 버전은 0이며 저장과 null 초기화 모두 버전을 하나 올립니다. 충돌하면 기록본을 다시 읽고 사용자가 재확인합니다.
+        없는 발화·자기 글 삭제로 비운 발화·만료 여행은 404입니다. 수정본과 마지막 편집자/시각은 발화와 함께 철회·만료·삭제됩니다.
+      security: [{ participantToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text, expectedVersion, generation]
+              properties:
+                text: { type: [string, "null"], minLength: 1, maxLength: 500, description: "trim 후 1~500자. null은 수동 수정본 초기화(ASR 또는 원문으로 표시)" }
+                expectedVersion: { type: integer, minimum: 0, maximum: 2147483646 }
+                generation: { type: integer, minimum: 1, maximum: 2147483647 }
+      responses:
+        "200":
+          description: 저장한 발화와 현재 동의 세대
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [generation, utterance]
+                properties:
+                  generation: { type: integer }
+                  utterance: { $ref: "#/components/schemas/Utterance" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
   /api/trips/{code}/transcript:
     parameters: [{ $ref: "#/components/parameters/code" }]
@@ -617,7 +862,7 @@ paths:
         값은 이 여행에 등록한 것(`POST /participants/{id}/voice`)을 먼저, 없으면 그 사람 프로필의 등록값을 씁니다. 손님 참가자도 화자가 붙습니다.
         `row`를 모르면 빼고 부릅니다. 그러면 이 여행의 참가자 모두가 후보입니다.
         발화 음성은 0.5~10초, 1 MB까지이고 저장하지 않습니다. 녹음에 동의한 참가자만 부릅니다(아니면 403).
-        `device`와 `seq`를 함께 주면 찾았을 때 그 발화 줄의 화자를 채웁니다(기록본·피드에 나옴). 발화를 먼저 올린 뒤, 그 발화를 올린 기기(참가자)가 부릅니다. 이미 화자가 있는 줄은 바꾸지 않습니다.
+        `device`와 `seq`를 함께 주면 찾았을 때 그 발화 줄의 화자를 채웁니다(기록본·피드에 나옴). 발화를 먼저 올린 뒤, 그 발화를 올린 기기(참가자)가 부릅니다. 이미 화자가 있는 줄과 사람이 화자를 고친 줄은 바꾸지 않습니다.
         여행 줄을 잠그지 않으므로 업로드가 느려도 같은 여행의 동의 바꾸기를 막지 않습니다. 후보와 호출자의 동의는 본문을 다 받은 뒤의 최신 여행으로 정합니다.
       security: [{ participantToken: [] }]
       parameters:
@@ -702,9 +947,10 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [title, cast, scenes]
+                required: [title, generation, cast, scenes]
                 properties:
                   title: { type: string }
+                  generation: { type: integer, description: 자막 저장 시 보낼 동의 세대 }
                   cast:
                     type: array
                     items:
@@ -731,12 +977,19 @@ paths:
                           type: array
                           items:
                             type: object
-                            required: [start, end, text, raw, participantId, seatArea]
+                            required: [start, end, text, raw, device, seq, editVersion, editedText, participantId, seatArea]
                             properties:
                               start: { type: number, description: 클립 안의 초 }
                               end: { type: number }
-                              text: { type: string, description: 다시 받아 적은 글(T75), 없으면 Pleos 원문 }
+                              text: { type: string, description: 수동 수정본(T80) → ASR(T75) → Pleos 원문 순 }
                               raw: { type: string, description: Pleos 원문 }
+                              device: { type: string }
+                              seq: { type: integer }
+                              editedText: { type: [string, "null"] }
+                              editVersion: { type: integer, minimum: 0 }
+                              asrText: { type: string, description: 재전사 결과가 있을 때만 }
+                              editedBy: { type: string, description: 마지막 저장/초기화 참가자 id. 편집 이후만 }
+                              editedAt: { type: integer, description: 마지막 저장/초기화 시각(epoch ms). 편집 이후만 }
                               participantId: { type: [string, "null"], description: 화자 대조로 붙은 참가자. 모르면 null }
                               seatArea: { oneOf: [{ $ref: "#/components/schemas/Seat" }, { type: "null" }] }
                         lat: { type: number }
@@ -1128,11 +1381,16 @@ components:
       allOf:
         - $ref: "#/components/schemas/UtteranceInput"
         - type: object
-          required: [device]
+          required: [device, displayText, editedText, editVersion]
           properties:
             device: { type: string }
             participantId: { type: string, description: 서버의 화자 대조(T38)가 붙인 참가자(손님 포함). 아직 없으면 생략 }
             profileId: { type: string, format: uuid, description: 화자가 프로필 참가자일 때 그 프로필. 아니면 생략 }
+            displayText: { type: string, description: 수동 수정본 → ASR → Pleos 원문 순으로 고른 표시 글 }
+            editedText: { type: [string, "null"], description: 수동 수정본. 없거나 초기화하면 null }
+            editVersion: { type: integer, minimum: 0, description: 초기값 0. 저장/초기화마다 증가 }
+            editedBy: { type: string, description: 마지막 저장/초기화 참가자 id. 편집 이후만 }
+            editedAt: { type: integer, description: 마지막 저장/초기화 시각(epoch ms). 편집 이후만 }
             asrText: { type: string, description: "고른 장면 클립의 소리로 다시 받아 적은 글(T75). 있을 때만 — 기록본과 장면 후보의 발화에. text(Pleos 원문)는 그대로" }
     Transcript:
       type: object
