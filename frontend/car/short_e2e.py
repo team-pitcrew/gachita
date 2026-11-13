@@ -52,6 +52,7 @@ class Proxy(http.server.BaseHTTPRequestHandler):
     down = False  # 참이면 답하지 않고 연결을 닫는다(차 쪽에서 보면 망이 끊김)
     slow = False  # 참이면 클립을 30초 동안 조금씩 보낸다(받는 중에 그만두는지 보려고)
     cut = None  # 느린 클립을 보내다 차가 연결을 끊은 때(time.time())
+    tried = []  # 숏폼 구성·클립 요청 시도. 망을 끊어 답하지 않는 동안에도 센다(served는 답한 것만)
 
     def log_message(self, *a): pass
 
@@ -89,6 +90,7 @@ class Proxy(http.server.BaseHTTPRequestHandler):
         return True
 
     def forward(self):
+        if re.match(r"^/api/trips/\w+/(shortform|recordings/\w+)$", self.path): Proxy.tried.append(self.path)
         if Proxy.down: return
         if self.fake(): return
         n = int(self.headers.get("Content-Length") or 0); data = self.rfile.read(n) if n else None
@@ -178,33 +180,36 @@ def main(apk):
     ui = cap.wait_texts(lambda u: "기록 꺼짐" in u, 10); shot("5b-recording-off"); note("ui", texts=ui)
     check("동의 철회 뒤 기록 꺼짐이고 실제 수음도 멈춤", not stage_visible(ui) and "기록 꺼짐" in ui and not gl.ours_recording())
 
-    # 클립을 받는 중에 동의를 끄면 다 받기를 기다리지 않고 연결을 끊고 받던 파일을 지운다. 동의 끄기 요청은 받기 뒤에 서지 않는다(Astra #238 재리뷰)
-    tap_switch(); cap.wait_texts(lambda u: "● 기록 중" in u, 15)
-    Proxy.slow = True; Proxy.cut = None
-    open_short(); time.sleep(4)  # 구성은 바로, 클립은 30초에 걸쳐 온다
-    part = [f for f in adb("exec-out", "run-as", PKG, "--user", "10", "ls", "cache").split() if f.startswith("short")]
-    t0 = time.time(); tap_switch(); time.sleep(4); ui = texts(); shot("6-off-while-downloading"); note("ui", texts=ui)
-    left = [f for f in adb("exec-out", "run-as", PKG, "--user", "10", "ls", "cache").split() if f.startswith("short")]
-    code = re.search(r"/api/trips/(\w+)/", served[0]["path"]).group(1)
-    off = not any(p["consent"] for p in json.load(urllib.request.urlopen(f"{UP}/api/trips/{code}", timeout=5))["participants"])
-    cut = round(Proxy.cut - t0, 1) if Proxy.cut else None  # 화면 읽기·탭 지연 포함(1회차 3.6초). 고치기 전에는 30초를 다 받아 끊기지 않았다
-    check("클립을 받는 중에 동의를 끄면 연결을 끊고 받던 파일을 지우며, 서버의 동의 끄기는 받기를 기다리지 않음",
-          bool(part) and not left and cut is not None and cut < 10 and off, part=part, left=left, cut_s=cut, server_off=off)
-    Proxy.slow = False
-    tap_text("함께 타는 중"); cap.wait_texts(lambda u: "기록 꺼짐" in u, 10)
+    if FAKE:  # 아래 두 단계는 가짜 프록시(느린 클립·끊긴 망)에 기댄다. FAKE=0이면 건너뛴다
+        # 클립을 받는 중에 동의를 끄면 다 받기를 기다리지 않고 연결을 끊고 받던 파일을 지운다. 동의 끄기 요청은 받기 뒤에 서지 않는다(Astra #238 재리뷰)
+        tap_switch(); cap.wait_texts(lambda u: "● 기록 중" in u, 15)
+        Proxy.slow = True; Proxy.cut = None
+        open_short(); time.sleep(4)  # 구성은 바로, 클립은 30초에 걸쳐 온다
+        part = [f for f in adb("exec-out", "run-as", PKG, "--user", "10", "ls", "cache").split() if f.startswith("short")]
+        t0 = time.time(); tap_switch(); time.sleep(4); ui = texts(); shot("6-off-while-downloading"); note("ui", texts=ui)
+        left = [f for f in adb("exec-out", "run-as", PKG, "--user", "10", "ls", "cache").split() if f.startswith("short")]
+        code = re.search(r"/api/trips/(\w+)/", Proxy.tried[0]).group(1)
+        off = not any(p["consent"] for p in json.load(urllib.request.urlopen(f"{UP}/api/trips/{code}", timeout=5))["participants"])
+        cut = round(Proxy.cut - t0, 1) if Proxy.cut else None  # 화면 읽기·탭 지연 포함(1회차 3.6초). 고치기 전에는 30초를 다 받아 끊기지 않았다
+        check("클립을 받는 중에 동의를 끄면 연결을 끊고 받던 파일을 지우며, 서버의 동의 끄기는 받기를 기다리지 않음",
+              bool(part) and not left and cut is not None and cut < 10 and off, part=part, left=left, cut_s=cut, server_off=off)
+        Proxy.slow = False
+        tap_text("함께 타는 중"); cap.wait_texts(lambda u: "기록 꺼짐" in u, 10)
 
-    # 망이 끊긴 채 차에서 동의를 꺼도 서버 답을 기다리지 않고 숏폼을 닫고 클립을 지운다. 철회가 서버에 닿기 전에는 새 숏폼도 받지 않는다
-    tap_switch(); cap.wait_texts(lambda u: "● 기록 중" in u, 15)
-    open_short(); ui = cap.wait_texts(lambda u: scene_visible(u, 1, "바다 이야기"), 15)
-    tap_text("일시정지"); time.sleep(1)  # 멈춘 채 끄면 클립이 캐시에 남던 경우(Astra #238)
-    cached = [f for f in adb("exec-out", "run-as", PKG, "--user", "10", "ls", "cache").split() if f.startswith("short")]
-    Proxy.down = True; note("net", down=True)
-    tap_switch(); time.sleep(3); ui = texts(); shot("6-offline-off"); note("ui", texts=ui)
-    left = [f for f in adb("exec-out", "run-as", PKG, "--user", "10", "ls", "cache").split() if f.startswith("short")]
-    check("망이 끊긴 채 동의를 꺼도 쇼츠를 바로 닫고 받은 클립이 남지 않음", cached and not left and not stage_visible(ui), cached=cached, left=left)
-    n = len(served); tap_text("생성된 쇼츠 보기"); time.sleep(3); ui = texts(); note("ui", texts=ui)
-    check("철회가 서버에 닿기 전에는 쇼츠를 다시 받지 않음", len(served) == n and not stage_visible(ui), served=served[n:])
-    Proxy.down = False; note("net", down=False)
+        # 망이 끊긴 채 차에서 동의를 꺼도 서버 답을 기다리지 않고 숏폼을 닫고 클립을 지운다. 철회가 서버에 닿기 전에는 새 숏폼도 받지 않는다
+        tap_switch(); cap.wait_texts(lambda u: "● 기록 중" in u, 15)
+        open_short(); ui = cap.wait_texts(lambda u: scene_visible(u, 1, "바다 이야기"), 15)
+        tap_text("일시정지"); time.sleep(1)  # 멈춘 채 끄면 클립이 캐시에 남던 경우(Astra #238)
+        cached = [f for f in adb("exec-out", "run-as", PKG, "--user", "10", "ls", "cache").split() if f.startswith("short")]
+        Proxy.down = True; note("net", down=True)
+        tap_switch(); time.sleep(3); ui = texts(); shot("6-offline-off"); note("ui", texts=ui)
+        left = [f for f in adb("exec-out", "run-as", PKG, "--user", "10", "ls", "cache").split() if f.startswith("short")]
+        check("망이 끊긴 채 동의를 꺼도 쇼츠를 바로 닫고 받은 클립이 남지 않음", cached and not left and not stage_visible(ui), cached=cached, left=left)
+        # 시도 수로 본다: 끊긴 동안엔 답이 없어 served가 늘지 않고 재생 화면도 안 열리므로 그것만 보면 막지 않아도 통과했다(Astra #242)
+        n = len(Proxy.tried); tapped = tap_text("생성된 쇼츠 보기"); time.sleep(3); ui = texts(); note("ui", texts=ui)
+        check("철회가 서버에 닿기 전에는 쇼츠를 다시 받지 않음(다시 열기를 눌러도 요청 시도 0건)",
+              n > 0 and tapped and len(Proxy.tried) == n and not stage_visible(ui), tried_before=n, tapped=tapped, new=Proxy.tried[n:])
+        Proxy.down = False; note("net", down=False)
 
     (OUT / "results.json").write_text(json.dumps(e2e.log, ensure_ascii=False, indent=1))
     fails = [x for x in e2e.log if x["step"] == "check" and not x["ok"]]
