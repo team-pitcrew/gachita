@@ -199,6 +199,34 @@ class CaptureTest {
         assertEquals(setOf("seq", "generation"), up2.sent[0][0].keys().asSequence().toSet()); assertEquals(1, up2.sent[0][0].getInt("generation"))
     }
 
+    @Test fun 지운_발화가_묶음보다_많아도_세대_1로_되살아난_뒤_새_발화가_나감() { // 철회로 120건을 지움 → 서버가 세대 1, lastSeq 0으로 되살아남
+        val o = Outbox(tmp.root, "ABC123")
+        repeat(120) { o.add(d(it + 1), null) }
+        o.see(2); o.see(1)
+        val later = System.currentTimeMillis() + 1_000
+        repeat(30) { o.add(Draft(later + it, later + it + 500, "새 말 $it", 0, 0), null) }
+        val up = Fake { 0 }
+        o.flush(up, "dev-1", max = 20)
+        o.flush(up, "dev-1", max = 20)
+        o.flush(up, "dev-1", max = 20) // 보낼 것이 없으면 부르지 않음
+        assertEquals(listOf((121L..140L).toList(), (141L..150L).toList()), up.sent.map { b -> b.map { it.getLong("seq") } })
+    }
+
+    @Test fun 철회한_글을_파일에서_못_지웠으면_다음_조회와_다시_켤_때_다시_지움() {
+        val dir = tmp.root
+        val o = Outbox(dir, "ABC123")
+        o.add(d(1), Fix(37.5, 127.0, 1_000))
+        val tmpFile = java.io.File(dir, "utterances-ABC123.jsonl.tmp").apply { mkdir() } // 임시 파일 자리에 폴더: 바꾸기가 실패함
+        assertTrue(o.see(2))
+        assertTrue(java.io.File(dir, "utterances-ABC123.jsonl").readText().contains("말 1")) // 아직 파일에 남음
+        val later = System.currentTimeMillis() + 1_000
+        o.add(Draft(later, later + 500, "새 말", 0, 0), null) // 새 세대 발화가 쌓임
+        assertTrue(Outbox(dir, "ABC123").recent(5).none { it.text == "말 1" }) // 다시 켜면 옛 세대 글은 비움
+        tmpFile.delete()
+        o.see(2) // 다음 조회에서 다시 바꿈
+        assertFalse(java.io.File(dir, "utterances-ABC123.jsonl").readText().contains("말 1"))
+    }
+
     @Test fun 보낼_것이_없어도_서버_순번을_다시_받아_내려가면_그_뒤를_다시_보냄() { // 서버 DB가 백업에서 되살아남(ADR-0014 2절)
         val o = Outbox(tmp.root, "ABC123")
         repeat(5) { o.add(d(it + 1), null) }

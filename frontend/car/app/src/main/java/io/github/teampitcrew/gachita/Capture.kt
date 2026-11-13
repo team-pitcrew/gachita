@@ -157,6 +157,8 @@ class Outbox(dir: File, val trip: String) {
         private set
     private var before = 1 // 바로 앞 세대
     private var bumpedAt = 0L // 세대가 오른 것을 안 시각
+    private var dirty = false // 메모리에서는 지웠는데 파일을 아직 바꾸지 못함(공간 부족 등). 조회마다 다시 한다
+    private var sent = 0L // 이번 실행에서 보낸 마지막 순번. 보낼 수 없는 지운 발화 뒤로 나아가는 데만 쓴다
 
     init {
         if (file.exists()) {
@@ -165,7 +167,21 @@ class Outbox(dir: File, val trip: String) {
         }
         acked = runCatching { ackFile.readText().trim().toLong() }.getOrDefault(0L)
         generation = items.maxOfOrNull { it.generation } ?: 1
+        // 지난번에 지우다 파일을 바꾸지 못했으면 여기서 다시: 가장 새 세대보다 옛 세대의 글은 늘 비어 있어야 한다
+        if (items.any { it.generation < generation && it.text.isNotEmpty() }) blankBelow(generation)
     }
+
+    private fun blankBelow(g: Int) {
+        for (i in items.indices) if (items[i].generation < g && items[i].text.isNotEmpty()) items[i] = items[i].copy(text = "", lat = null, lng = null)
+        dirty = !rewrite()
+    }
+
+    /** 임시 파일에 다 쓴 뒤 이름을 바꾼다. 둘 중 하나라도 실패하면 false(앞의 파일이 남음). */
+    private fun rewrite(): Boolean = runCatching {
+        val tmp = File(file.path + ".tmp")
+        tmp.writeText(items.joinToString("") { it.json().toString() + "\n" })
+        tmp.renameTo(file)
+    }.getOrDefault(false)
 
     private val said get() = items.filter { it.text.isNotEmpty() }
     val size: Int @Synchronized get() = said.size
@@ -189,13 +205,12 @@ class Outbox(dir: File, val trip: String) {
 
     /** 서버 여행의 동의 세대. 올라갔으면 옛 세대 발화의 내용을 지운다(임시 파일에 다 쓴 뒤 이름을 바꿈). 지운 것이 있으면 true. */
     @Synchronized fun see(g: Int): Boolean {
+        if (dirty) dirty = !rewrite() // 지난번에 바꾸지 못한 파일(철회한 글이 남아 있음)
         if (g < generation) generation = g // 서버 DB를 백업에서 되살림: 서버의 세대를 따른다(넘는 세대로 보내면 400)
         if (g <= generation) return false
         before = generation; generation = g; bumpedAt = System.currentTimeMillis()
         if (items.none { it.generation < g && it.text.isNotEmpty() }) return false
-        for (i in items.indices) if (items[i].generation < g) items[i] = items[i].copy(text = "", lat = null, lng = null)
-        val tmp = File(file.path + ".tmp") // 바꾸지 못하면 앞의 파일이 남는다. 다시 켜면 세대를 다시 받아 또 지운다
-        runCatching { tmp.writeText(items.joinToString("") { it.json().toString() + "\n" }); tmp.renameTo(file) }
+        blankBelow(g)
         return true
     }
 
@@ -204,10 +219,17 @@ class Outbox(dir: File, val trip: String) {
      * always면 보낼 것이 없어도 빈 묶음으로 서버의 lastSeq를 받는다(서버 DB가 되살아나 순번이 내려갔으면 그 뒤부터 다시 보내게, ADR-0014 2절).
      */
     fun flush(up: Uplink, device: String, max: Int = 100, always: Boolean = false) {
-        val (batch, g) = synchronized(this) { items.filter { it.seq > acked }.take(max) to generation }
+        val batch = synchronized(this) {
+            // 서버가 세대 1로 되살아나 지운 발화를 보낼 수 없으면 lastSeq가 그 앞에서 멈춘다. 그때는 이번 실행에서 보낸 데 뒤부터 보내
+            // 지운 발화가 묶음 크기보다 많아도 새 발화가 나가게 한다. 보통은 받은 데(acked) 뒤부터 다시 보낸다(ADR-0014).
+            val first = items.firstOrNull { it.seq > acked }
+            val from = if (first != null && first.wire(generation) == null) maxOf(acked, sent) else acked
+            items.asSequence().filter { it.seq > from }.mapNotNull { u -> u.wire(generation)?.let { u.seq to it } }.take(max).toList()
+        }
         if (batch.isEmpty() && !always) return
-        val got = up.send(device, JSONArray(batch.mapNotNull { it.wire(g) }))
+        val got = up.send(device, JSONArray(batch.map { it.second }))
         synchronized(this) {
+            sent = if (got < acked) got else maxOf(sent, batch.lastOrNull()?.first ?: 0) // 서버 순번이 내려가면 그 뒤부터 다시
             if (got != acked) { acked = got; ackFile.writeText(got.toString()) }
         }
     }
