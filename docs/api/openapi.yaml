@@ -553,14 +553,14 @@ paths:
   /api/trips/{code}/utterances/{device}/{seq}:
     parameters:
       - { $ref: "#/components/parameters/code" }
-      - { name: device, in: path, required: true, schema: { type: string }, description: 발화를 올린 기기 }
+      - { name: device, in: path, required: true, schema: { type: string }, description: "발화를 올린 기기. 올릴 때의 글자 그대로를 주소 인코딩(공백·한글). 잘못된 인코딩은 400" }
       - { name: seq, in: path, required: true, schema: { type: integer }, description: 그 기기가 매긴 순번 }
     patch:
       tags: [기록본]
       summary: 발화의 화자 고치기
       description: |
         차 화면에서 사람이 '모름'이나 틀린 이름을 고칩니다(T37). **그 기기 이름으로 발화를 올린 참가자의 토큰**으로만 합니다(올리기의 기기 주인 규칙과 같음).
-        사람이 고친 것이 화자 대조보다 우선이라 이미 붙은 화자도 바꿉니다. `participantId: null`이면 '모름'으로 되돌립니다.
+        사람이 고친 것이 화자 대조보다 우선이라 이미 붙은 화자도 바꿉니다. `participantId: null`이면 '모름'으로 되돌립니다. 고친 줄은 뒤늦게 끝난 대조가 다시 채우지 않습니다('모름'으로 고친 것도).
         그 참가자가 프로필 참가자이면 `profileId`도 함께 붙고(피드에 나옴), 아니면 비웁니다. 녹음에 동의하지 않은 참가자의 이름은 붙이지 않습니다(409).
       security: [{ participantToken: [] }]
       requestBody:
@@ -717,7 +717,7 @@ paths:
         값은 이 여행에 등록한 것(`POST /participants/{id}/voice`)을 먼저, 없으면 그 사람 프로필의 등록값을 씁니다. 손님 참가자도 화자가 붙습니다.
         `row`를 모르면 빼고 부릅니다. 그러면 이 여행의 참가자 모두가 후보입니다.
         발화 음성은 0.5~10초, 1 MB까지이고 저장하지 않습니다. 녹음에 동의한 참가자만 부릅니다(아니면 403).
-        `device`와 `seq`를 함께 주면 찾았을 때 그 발화 줄의 화자를 채웁니다(기록본·피드에 나옴). 발화를 먼저 올린 뒤, 그 발화를 올린 기기(참가자)가 부릅니다. 이미 화자가 있는 줄은 바꾸지 않습니다.
+        `device`와 `seq`를 함께 주면 찾았을 때 그 발화 줄의 화자를 채웁니다(기록본·피드에 나옴). 발화를 먼저 올린 뒤, 그 발화를 올린 기기(참가자)가 부릅니다. 이미 화자가 있는 줄과 사람이 화자를 고친 줄은 바꾸지 않습니다.
         여행 줄을 잠그지 않으므로 업로드가 느려도 같은 여행의 동의 바꾸기를 막지 않습니다. 후보와 호출자의 동의는 본문을 다 받은 뒤의 최신 여행으로 정합니다.
       security: [{ participantToken: [] }]
       parameters:
