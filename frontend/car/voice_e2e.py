@@ -81,7 +81,7 @@ def main(apk, n):
     check("주차 중 기록이 시작되면 목소리 등록 카드에 이 차의 가족 넷", "출발 전 목소리 등록" in ui and all(x in ui for x in VOICE))
     # 1. 출발 전 목소리 등록: 사람마다 단추를 누르고 그 목소리로 두 문장을 넣는다
     for name in VOICE:
-        tap_text(name); time.sleep(0.5)
+        tap_text(name, last=False); time.sleep(0.5)  # 등록 카드의 단추(좌석 지도의 이름 글보다 앞)
         inj.play(f"enroll-{name}")
         ui = wait_texts(lambda u: any(t.endswith("목소리를 등록했어요") or "등록하지 못했어요" in t for t in u), 20); note("ui", texts=ui)
         check(f"{name} 목소리 등록", f"{name} 목소리를 등록했어요" in ui, ui=[t for t in ui if "등록" in t])

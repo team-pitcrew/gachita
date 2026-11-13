@@ -865,9 +865,11 @@ class MainActivity : ComponentActivity() {
                 Text("일행 ${t.people.size}명", Modifier.weight(1f), fontSize = 30.sp, fontWeight = FontWeight.Bold)
                 Text("차 앞쪽 ▲", color = c.onSurfaceVariant)
             }
-            // 방금 받아 적은 말의 좌석 구역(T37이 채움)을 그 줄의 바탕으로 보인다. 모르면 강조하지 않는다.
+            // 방금 받아 적은 말의 좌석 구역(T37)을 그 줄의 바탕으로, 말한 사람(대조·고침, T37)을 그 사람의 캐릭터로 보인다. 모르면 강조하지 않는다.
+            heardTick // 말한 사람이 바뀌면 다시 그린다
+            val last = Live.recent.lastOrNull()?.takeIf { s.recording }
             SeatMap(
-                t.people, Live.recent.lastOrNull()?.seatZone?.takeIf { s.recording }, size = if (compact) 56.dp else 80.dp,
+                t.people, last?.seatZone, highlight = last?.let { u -> speakers?.takeIf { it.trip == t.code }?.get(u.seq)?.who }, size = if (compact) 56.dp else 80.dp,
                 note = if (compact) null else { p -> if (p.consent) "동의" to c.tertiary else if (s.waitsFor(p)) "동의 대기" to c.secondary else "동의 전" to c.onSurfaceVariant },
             )
         }
