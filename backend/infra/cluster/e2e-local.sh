@@ -239,15 +239,16 @@ done
 waves=$((SECONDS - root_at))
 log 6/7 "모든 앱 Synced·Healthy: 뿌리 앱을 넣고 ${waves}초"
 
-# 순서: 물결 n의 앱이 처음 보이기 전에 그보다 앞 물결의 앱이 모두 Healthy로 보였어야 한다(waves.log의 줄 순서로 본다)
+# 순서: 물결 n의 앱이 처음 보이기 전에 그보다 앞 물결의 앱이 모두 Synced·Healthy로 보였어야 한다(waves.log의 줄 순서로 본다).
+# 첫 동기화 전 잠깐의 OutOfSync/Healthy는 세지 않는다. 그것을 Healthy로 받아 다음 물결이 일찍 시작하던 결함을 잡는 검사다
 table=$(awk -F'\t' '
   $2 == "root" { next }
   !($3 in wave) { wave[$3] = $2; seen[$3] = $1; if (!($2 in first)) first[$2] = NR }
-  $5 == "Healthy" && !($3 in hrow) { hrow[$3] = NR; htime[$3] = $1 }
+  $4 == "Synced" && $5 == "Healthy" && !($3 in hrow) { hrow[$3] = NR; htime[$3] = $1 }
   END {
     for (a in wave) {
       for (w in first) if (w + 0 > wave[a] + 0 && !((a in hrow) && hrow[a] < first[w])) {
-        print "물결 " w "이 " a "(물결 " wave[a] ")가 Healthy가 되기 전에 시작했습니다" > "/dev/stderr"; bad = 1
+        print "물결 " w "이 " a "(물결 " wave[a] ")가 Synced·Healthy가 되기 전에 시작했습니다" > "/dev/stderr"; bad = 1
       }
       printf "| %s | %s | %s | %s |\n", wave[a], a, seen[a], ((a in htime) ? htime[a] : "-")
     }
@@ -271,7 +272,7 @@ log 7/7 "/healthz: $healthz"
 
 {
   printf '### 물결 E2E 통과 (%s)\n\n' "$SHA"
-  printf '| 물결 | 앱 | 처음 보임(UTC) | Healthy(UTC) |\n|---|---|---|---|\n%s\n\n' "$table"
+  printf '| 물결 | 앱 | 처음 보임(UTC) | Synced·Healthy(UTC) |\n|---|---|---|---|\n%s\n\n' "$table"
   printf -- '- 뿌리 앱을 넣고 모든 앱(%s개) Synced·Healthy까지 %d분 %d초. 스크립트 전체 %d분 %d초\n' \
     "$want" $((waves / 60)) $((waves % 60)) $((SECONDS / 60)) $((SECONDS % 60))
   printf -- '- `http://gachita-api.gachita.svc.cluster.local/healthz`: %s\n' "$healthz"

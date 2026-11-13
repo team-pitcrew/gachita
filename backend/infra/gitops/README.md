@@ -16,7 +16,7 @@ backend/infra/gitops/
 
 ## 올라오는 순서
 
-구축 6단계가 뿌리 앱 하나를 넣으면, 뿌리 앱이 `bootstrap/`의 앱을 물결 순서로 만듭니다. 앞 물결의 앱이 모두 Healthy가 된 뒤에 다음 물결로 갑니다.
+구축 6단계가 뿌리 앱 하나를 넣으면, 뿌리 앱이 `bootstrap/`의 앱을 물결 순서로 만듭니다. 앞 물결의 앱이 모두 Synced·Healthy가 된 뒤에 다음 물결로 갑니다(첫 동기화 전 잠깐의 OutOfSync/Healthy는 세지 않음, `cluster/argocd/argocd-cm.yaml`).
 
 | 물결 | 앱 | 무엇 |
 |---|---|---|

@@ -9,6 +9,8 @@ data:
   # 이유: 자식 앱이 첫 동기화 전에 잠깐 OutOfSync/Healthy로 보여 다음 물결이 일찍 시작됐다(11/13 infra-e2e의 waves,
   # API가 DB보다 먼저 떠 db-urls 없이 재시작). 11/13 실제 계정에서도 API가 DB보다 먼저 떠 4번 재시작했다.
   # 위험: 영원히 OutOfSync로 남는 앱이 있으면 뿌리 앱이 끝나지 않는다(구축 7단계가 그 앱 이름을 남김).
+  # 자식 앱 정의가 깨져(sync Unknown) 뿌리 앱의 동기화가 걸려 있으면, 고친 판을 넣은 뒤 그 동기화를 끊어야 들어간다:
+  #   kubectl -n argocd patch application root --type json -p '[{"op":"remove","path":"/operation"}]'
   resource.customizations.health.argoproj.io_Application: |
     hs = {}
     hs.status = "Progressing"
