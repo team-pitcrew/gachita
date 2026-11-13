@@ -623,7 +623,7 @@ class MainActivity : ComponentActivity() {
                     }
                 } else {
                     // 한 칸에서는 주행 중에 누를 수 있는 유일한 조작(기록 동의 끄기)이 스크롤 밖으로 밀리지 않게 아래에 붙인다
-                    Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(24.dp)) { Summary(t); People(t); Counts(t); Controls(t) }
+                    Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(24.dp)) { Summary(t); People(t, compact = carStatus.restricted); Counts(t); Controls(t) }
                     Consent()
                 }
             }
@@ -676,9 +676,12 @@ class MainActivity : ComponentActivity() {
         if (s.recording || Live.count > 0) Heard()
     }
 
-    /** 일행 자리 지도. 자리는 지도의 위치가 말해 주므로 이름 아래에는 동의만 적는다. */
+    /**
+     * 일행 자리 지도. 자리는 지도의 위치가 말해 주므로 이름 아래에는 동의만 적는다.
+     * compact(좁은 창 주행 중): 캐릭터를 줄이고 동의 줄을 빼서 부탁 수와 기록 동의가 한 화면에 들어오게 한다.
+     */
     @Composable
-    private fun People(t: Trip) {
+    private fun People(t: Trip, compact: Boolean = false) {
         val c = MaterialTheme.colorScheme
         Card {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -686,9 +689,10 @@ class MainActivity : ComponentActivity() {
                 Text("차 앞쪽 ▲", color = c.onSurfaceVariant)
             }
             // 방금 받아 적은 말의 좌석 구역(T37이 채움)을 그 줄의 바탕으로 보인다. 모르면 강조하지 않는다.
-            SeatMap(t.people, Live.recent.lastOrNull()?.seatZone?.takeIf { s.recording }) { p ->
-                if (p.consent) "동의" to c.tertiary else if (s.waitsFor(p)) "동의 대기" to c.secondary else "동의 전" to c.onSurfaceVariant
-            }
+            SeatMap(
+                t.people, Live.recent.lastOrNull()?.seatZone?.takeIf { s.recording }, size = if (compact) 56.dp else 80.dp,
+                note = if (compact) null else { p -> if (p.consent) "동의" to c.tertiary else if (s.waitsFor(p)) "동의 대기" to c.secondary else "동의 전" to c.onSurfaceVariant },
+            )
         }
     }
 

@@ -170,10 +170,10 @@ private val BACK = listOf(Seat.ROW_2_LEFT, Seat.ROW_2_CENTER, Seat.ROW_2_RIGHT)
 /**
  * 일행을 차의 자리 모양(앞줄 둘, 뒷줄 셋)으로 놓는다. zone(0 앞줄, 1 뒷줄, 모르면 null)은 방금 받아 적은 말의 좌석 구역이고
  * 그 줄의 바탕을 바꾼다. highlight는 목소리 대조가 맞춘 참가자 id이고 그 사람만 민트 링으로 짚는다(frontend/spec/car.md 2절, T37이 넘김).
- * note는 이름 아래 한 줄(자리, 동의 상태 등)을 호출하는 쪽이 정한다.
+ * note는 이름 아래 한 줄(동의 상태 등)을 호출하는 쪽이 정하고, null이면 그 줄을 그리지 않는다(좁은 창 주행 중).
  */
 @Composable
-fun SeatMap(people: List<Person>, zone: Int?, highlight: String? = null, size: Dp = 80.dp, note: (Person) -> Pair<String, Color>) {
+fun SeatMap(people: List<Person>, zone: Int?, highlight: String? = null, size: Dp = 80.dp, note: ((Person) -> Pair<String, Color>)?) {
     val c = MaterialTheme.colorScheme
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(40.dp)).background(c.surfaceVariant).padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         for ((row, seats) in listOf(0 to FRONT, 1 to BACK)) {
@@ -190,8 +190,7 @@ fun SeatMap(people: List<Person>, zone: Int?, highlight: String? = null, size: D
                         } else {
                             Character(seat.ordinal, size, ring = p.id == highlight)
                             Text(p.name, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            val (text, color) = note(p)
-                            Text(text, color = color, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            note?.invoke(p)?.let { (text, color) -> Text(text, color = color, maxLines = 1, overflow = TextOverflow.Ellipsis) }
                         }
                     }
                 }
