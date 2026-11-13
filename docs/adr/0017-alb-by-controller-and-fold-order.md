@@ -1,6 +1,6 @@
 # ADR-0017: ALB는 AWS Load Balancer Controller가 만들고, 펴기·접기는 그 의존성 순서로 한다
 
-* **상태:** 제안, 2026-11-13 (ADR-0016 채택에 맞춤)
+* **상태:** 제안, 2026-11-13 (ADR-0016 채택에 맞춤, 실제 계정에서 펴고 접어 확인)
   * 채택(지환, 11/13): 들어오는 길은 ALB, ALB는 AWS Load Balancer Controller가 만들고 그 컨트롤러는 Argo CD로 관리한다. Traefik은 쓰지 않는다. 기획안과 요구사항을 넘는 구성은 하지 않는다.
   * 제안(이 문서): 자원마다 누가 만드는지의 경계, 펴기·접기의 순서와 그 순서를 지키는 검사.
 * **관련:** T53(#90, 펴기·접기 워크플로), T51(#88), T52(#89), T54(#91), T24, T27, ADR-0016(채택, PR #103: 기본 배치·Postgres 하나·ALB 선택), ADR-0011(OIDC), ADR-0012(구축 단계), ADR-0013(물결)
@@ -84,13 +84,32 @@ external-dns(Cloudflare 토큰을 클러스터에 넣게 됨), ALB의 WAF·접�
 | 4 | T51(#88) | 남는 묶음 분리(버킷 둘, ACM과 검증 레코드, 요청 수 제한 규칙). #77에 같이 넣음 |
 | 5 | GitOps(T27) | ALB 컨트롤러 앱(물결 3), Traefik·cloudflared 제거, GatewayClass `gateway.k8s.aws/alb`, `LoadBalancerConfiguration`(이름 고정, internet-facing, `sourceRanges`), API 서비스 NodePort와 포트 규칙 예외 하나, Postgres 하나(ADR-0016) |
 | 6 | T52(#89) | 백업이 있으면 복구로 펴기, 접기 전 마지막 백업. 로컬에서 S3 호환 저장소로 확인 |
-| 7 | T53(#90) | `infra-up`·`infra-down` 워크플로가 2·3절의 순서와 검사를 그대로 |
-| 8 | 처음 접었다 펴기 | 실제 계정에서 펴기 → 확인 → 접기 → 남은 것 확인 → 다시 펴기. 비용·시간을 PR에 |
+| 7 | T53(#90) | `backend/infra/infra.sh up|down`과 `infra` 워크플로가 2·3절의 순서와 검사를 그대로 |
+| 8 | 처음 접었다 펴기 | 11/13에 함(아래 '실제 계정에서 펴고 접은 것'). 실제 GitHub·Cloudflare 경로는 아래 사람 몫이 끝난 뒤 |
 
-**처음 접었다 펴기 전에 사람이 할 것:** Cloudflare API 토큰(터널이 빠져 DNS 편집만)과 계정·영역 번호, 이미지 받기 토큰(`read:packages`)을 `gh secret set`/`gh variable set`으로 넣기, 배포 키 승인, `account/`와 상태 버킷 처음 한 번.
+**실제 GitHub·Cloudflare 경로로 펴기 전에 사람이 할 것:** 저장소 읽기 자격(배포 키가 조직 설정으로 막혀 있어 허용하거나 다른 자격을 정함), Cloudflare API 토큰(mangowhois.ai DNS 편집과 영역 WAF 편집)과 영역 번호, 이미지 받기 토큰(`read:packages`)을 `gh secret set`/`gh variable set`으로 넣기, 저장소 변수 셋(역할 ARN 둘, 상태 버킷). `account/`와 상태 버킷은 11/13에 만들었다.
 
 ## 결과
 
 - ALB가 Terraform 밖에 생기는 대신 펴기·접기에 순서가 생기고, 그 순서는 워크플로(T53)가 지킨다.
 - 컨트롤러 물결이 하나 뒤로 간다(웹훅 뒤). Postgres와 같은 물결이라 전체 시간은 거의 같다.
-- 확인하지 못한 것: v3.6 컨트롤러의 Gateway API가 EKS가 아닌 K3s, 인스턴스 대상, Cilium의 kube-proxy 대체에서 도는지(안 되면 같은 컨트롤러에 Ingress), 컨트롤러가 Gateway를 지울 때 걸리는 시간, ALB의 네트워크 카드가 풀리는 시간. 모두 처음 접었다 펴기에서 잰다.
+- 레코드 단계를 묶음으로 나누지 않고 같은 묶음을 두 번 적용한다(ALB를 태그로 찾았을 때만 레코드). Postgres는 다시 펼 때 백업에서 복구한다(T52).
+
+### 실제 계정에서 펴고 접은 것(2026-11-13, 계정 721622471953, `backend/infra/infra.sh`)
+
+펴기 → 접기 → 다시 펴기(복구) → 접기를 돌렸다. Cloudflare 토큰과 GHCR 토큰이 없어(사람 몫) 레코드와 Cloudflare 경유 확인은 하지 않았다. 대신 ALB에 직접 대고 확인했다.
+
+| 무엇 | 결과 |
+|---|---|
+| 컨트롤러(v3.6.2)의 Gateway API가 K3s·인스턴스 대상·Cilium kube-proxy 대체에서 | 돈다. 파드 신원 웹훅이 넣은 자격으로 VPC를 이름 태그로 찾고, ALB `gachita-dev`(internet-facing, 영역 둘), HTTPS 443(인증서는 호스트 이름으로 찾음), 대상 그룹(노드 NodePort, `/healthz`)을 만들고 노드를 넣음. 대상 healthy |
+| 물결 3 배치 | 컨트롤러 파드에 `AWS_ROLE_ARN`·`AWS_WEB_IDENTITY_TOKEN_FILE`이 들어감 |
+| ALB를 거친 E2E | 12단계 통과(경로 탈출 요청 하나는 API의 404 대신 ALB가 400으로 먼저 막음). 다른 호스트 404 |
+| 격리 | 포트 규칙이 `gachita`의 다른 NodePort를 거절. `pg_hba`가 `profiles`→`trips`, `trips`→`profiles`를 거절. DB 주소는 `db-rw.gachita-db.svc.cluster.local` |
+| 접기 | 마지막 전체 백업 21초 → edge 앱 지우기부터 ALB가 사라지기까지 약 35초 → 접는 묶음 22개 destroy 약 40초. 컨트롤러가 ALB·대상 그룹·보안 그룹을 모두 지워 VPC 삭제가 막히지 않음 |
+| 다시 펴기(복구) | 사람 손 없이 17분 44초(구축 1~6단계 약 6분, 물결과 확인 약 11분). 6단계가 백업을 보고 `recover`를 고름. 접기 전 데이터(`trips` 2건, `profiles` 1건)가 그대로이고 새 타임라인(2)으로 WAL 보관이 이어짐 |
+
+실제로 돌려서 찾아 고친 것: IAM이 OIDC 제공자를 만들 때 발급자 문서를 읽음(남는 묶음이 올리게 함), Ansible이 공개 키 JSON을 파이썬 표기로 올림, zsh 수식자로 깨진 역할 ARN, SSM 명령이 sh라 pipefail 실패, 백업 사이드카 128Mi에서 OOMKilled(256Mi/512Mi로), 태그 검색 API가 지운 자원을 몇 분 넘게 보여 줌(서비스마다 직접 물음).
+
+**사람이 정할 것:** 이 저장소는 조직 설정으로 배포 키가 막혀 있다(`Deploy keys are disabled for this repository`). 그래서 이번 확인은 노드 안의 git 서버(`git://gitserver.argocd.svc.cluster.local/gachita.git`, 쿠버네티스 DNS)로 했다. 실제 GitHub 경로로 펴려면 배포 키 허용이나 다른 읽기 자격(GitHub App, 저장소 하나만 읽는 토큰)을 정해야 한다.
+
+- 확인하지 못한 것: Cloudflare → ALB(레코드, Full(strict), 요청 수 제한 규칙), ACM 발급(이번엔 자체 서명 인증서를 잠시 넣음), GHCR에서 이미지 받기(같은 커밋을 빌드해 노드에 넣음), `infra` 워크플로를 GitHub에서 돌리기(develop에 병합되어야 함).

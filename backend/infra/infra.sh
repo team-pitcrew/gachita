@@ -199,7 +199,7 @@ down() {
       for t in $(lbc_resources elasticloadbalancing:targetgroup); do
         aws elbv2 describe-target-groups --target-group-arns "$t" --query 'TargetGroups[].TargetGroupArn' --output text 2>/dev/null || true
       done
-    } | grep -v '^None$' | xargs)
+    } | { grep -v '^None$' || true; } | xargs)
     [ -z "$left" ] && break
     sleep 10
   done
