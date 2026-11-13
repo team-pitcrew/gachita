@@ -460,14 +460,18 @@ function tripView(me) {
   const patch = (path, body) => () => act(() => call("PATCH", t + path, body));
   // 켜기는 본인의 참가자 토큰으로만 된다(끄기는 누구나). 서버가 이 폰의 토큰을 잊었으면(다른 곳에서 다섯 번 넘게
   // 다시 참가) 프로필로 들어온 사람은 다시 참가해 새 토큰으로 한 번 더 켠다. 손님은 다시 받을 길이 없다.
+  // 누른 여행·참가자를 고정한다: 응답을 기다리는 사이 다른 여행으로 옮겨도 그 여행의 토큰을 건드리지 않는다.
   const consentOn = () =>
     act(async () => {
-      const on = () => api("PATCH", `/trips${t}/participants/${me.id}`, { consent: true }, myToken());
+      const c = trip.code;
+      const mine = profile && me.profileId === profile.id;
+      const on = () => api("PATCH", `/trips/${c}/participants/${me.id}`, { consent: true }, store(`${c}:token`));
       await on()
         .catch(async (e) => {
-          if (e.status !== 401 || !profile || me.profileId !== profile.id) throw e;
-          store(`${trip.code}:token`, null);
+          if (e.status !== 401 || !mine || trip?.code !== c) throw e; // 화면이 바뀌었으면 다시 하지 않는다
+          store(`${c}:token`, null);
           await claim();
+          if (trip?.code !== c) throw e;
           await on();
         })
         .catch((e) => {
@@ -595,3 +599,6 @@ fillDraft();
 if (back) Object.assign(pdraft, back); // 구글에서 실패·취소로 돌아오면 쓰던 입력을 되돌린다
 refresh(true);
 navigator.serviceWorker?.register("/sw.js").catch(() => {}); // 홈 화면 설치와 끊겼을 때의 마지막 화면(T6)
+// 처음 설치되는 방문에서는 여행을 워커가 맡기 전에 읽었고 그 뒤 폴링은 304라 캐시에 여행이 없다.
+// 워커가 이 화면을 맡는 순간 한 번 더 읽어 끊겼을 때 보일 여행을 남긴다.
+navigator.serviceWorker?.addEventListener("controllerchange", () => refresh(true));
