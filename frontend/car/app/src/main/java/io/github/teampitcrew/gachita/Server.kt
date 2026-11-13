@@ -51,7 +51,15 @@ class Server(base: String) {
         JSONObject(call("GET", "/api/trips/$code/utterances?device=" + java.net.URLEncoder.encode(device, "UTF-8"), null, token)!!).getJSONArray("items")
             .let { a -> (0 until a.length()).map { a.getJSONObject(it).getLong("seq") }.toSet() }
 
-    private fun call(method: String, path: String, body: JSONObject?, token: String? = null): String? {
+    /**
+     * 확정한 장면의 원음 클립 올리기(T76, POST /recordings). wav는 16 kHz 모노, from은 첫 표본 시각(epoch ms), generation은 녹음할 때의 동의 세대.
+     * 거절은 ApiError: 400·404·409·413은 버리고, 401·403·503은 나중에 다시(api-media 계약).
+     */
+    fun recording(code: String, token: String, moment: String, generation: Int, from: Long, wav: ByteArray) {
+        call("POST", "/api/trips/$code/recordings?moment=" + java.net.URLEncoder.encode(moment, "UTF-8") + "&generation=$generation&from=$from", wav, token)
+    }
+
+    private fun call(method: String, path: String, body: Any?, token: String? = null): String? {
         val c = URL(base + path).openConnection() as HttpURLConnection
         try {
             c.requestMethod = method // 안드로이드의 HttpURLConnection은 PATCH를 받는다
@@ -60,8 +68,9 @@ class Server(base: String) {
             token?.let { c.setRequestProperty("Authorization", "Bearer $it") } // 토큰은 머리말로만(주소에 넣지 않음, Pleos 보안 가이드)
             if (body != null) {
                 c.doOutput = true
-                c.setRequestProperty("Content-Type", "application/json")
-                c.outputStream.use { it.write(body.toString().toByteArray()) }
+                val bytes = if (body is ByteArray) body.also { c.setFixedLengthStreamingMode(it.size) } else body.toString().toByteArray()
+                c.setRequestProperty("Content-Type", if (body is ByteArray) "audio/wav" else "application/json")
+                c.outputStream.use { it.write(bytes) }
             }
             val code = c.responseCode
             if (code == 304) return null

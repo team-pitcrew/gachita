@@ -11,7 +11,7 @@ import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
-// 차 안에 두는 민감정보(받아 적은 글, 할 일, 저장한 여행, 참가자 토큰)의 암호화와 보관 기간(T69, 단위 테스트 VaultTest.kt).
+// 차 안에 두는 민감정보(받아 적은 글, 할 일, 저장한 여행, 참가자 토큰, 원음)의 암호화와 보관 기간(T69·T63, 단위 테스트 VaultTest.kt).
 // Pleos 앱 보안 가이드: 기기에 저장하는 민감정보는 저장 위치와 관계없이 암호화하고 키는 Android Keystore에 둔다.
 
 const val KEEP_MS = 48L * 60 * 60 * 1000 // 여행을 만든 뒤 48시간. 보관 시계는 이것 하나뿐(ADR-0007)
@@ -72,8 +72,8 @@ class Seal(private val key: SecretKey) {
     }
 }
 
-/** 여행 하나에 딸린 차 안 파일: 보관함(utterances-<코드>.jsonl·.acked·.tmp)과 할 일(todos-<코드>.json·.tmp). */
-private val TRIP_FILE = Regex("^(?:utterances|todos)-([A-Z0-9]+)\\.")
+/** 여행 하나에 딸린 차 안 파일: 보관함(utterances-<코드>.jsonl·.acked·.tmp), 할 일(todos-<코드>.json·.tmp), 원음(audio-<코드>-…raw, T63), 올린 장면(clips-<코드>.done). */
+private val TRIP_FILE = Regex("^(?:utterances|todos|audio|clips)-([A-Z0-9]+)[.-]")
 
 fun tripFiles(dir: File, code: String): List<File> = dir.listFiles().orEmpty().filter { TRIP_FILE.find(it.name)?.groupValues?.get(1) == code }
 

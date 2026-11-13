@@ -57,11 +57,18 @@ adb shell am start --user 10 -n io.github.teampitcrew.gachita/.MainActivity --es
 ## 수음과 받아쓰기(T36)
 
 - **언제:** 기록 상태가 '기록 중'(모두 동의, 주차 중 시작)이고 우리 화면이 앞일 때 마이크 포그라운드 서비스(`CaptureService`)를 시작합니다. 화면 뒤에서는 서비스를 시작할 수 없어(T10) 앱을 열 때 시작합니다. 동의가 빠지면 그 자리에서 `AudioRecord`를 멈추고 마이크를 놓습니다. 수음 중에는 화면이 뒤에 있어도 10초마다 서버의 동의를 확인합니다.
-- **어떻게:** `AudioRecord`(MIC, 16 kHz 2채널)를 0.1초씩 읽어 좌+우 모노로 `SpeechToText.sendAudio()`에 넣습니다. STT가 마이크를 여는 `request()`는 쓰지 않습니다. 원음은 저장하지 않습니다.
+- **어떻게:** `AudioRecord`(MIC, 16 kHz 2채널)를 0.1초씩 읽어 좌+우 모노로 `SpeechToText.sendAudio()`에 넣습니다. STT가 마이크를 여는 `request()`는 쓰지 않습니다. 같은 모노 소리를 원음 파일로 암호화해 둡니다(아래 T63).
 - **발화:** 첫 중간 결과 − 1초에서 최종 결과까지를 한 건으로 묶어 `files/utterances-<여행 코드>.jsonl`에 순번(여행·기기마다 1부터)과 함께 한 줄씩 씁니다. 필드는 서버에 올리는 칸(순번 `seq`, 시작 시각 `at`, 글자 `text`, 동의 세대 `generation`, 위치 `lat`·`lng`)과 차에만 두는 칸(여행, 끝 시각, 원음 구간, 좌석 구역 `seatZone`: T37이 채우고 서버 `seatArea`와는 T37에서 맞춤). 위치는 기록 중에 10초마다 내비에 물어 둔 값(`getCurrentLocationInfo`)이고 30초보다 오래됐거나 모르면 비웁니다. 기어는 서버에 칸이 없어 적지 않습니다. 화면에는 방금 받아 적은 말 두 줄만 보입니다(자동 스크롤 없음).
 - **막힘:** `isClientSilenced`, 값이 모두 0인 조각 1초, `read()`가 2초 넘게 돌아오지 않음 중 하나면 '기록 멈춤'.
 - **올리기:** 10초 조회 때 `POST /api/trips/{code}/utterances {device, items}` → `{lastSeq}`(`docs/api/openapi.yaml`). 서버가 빠짐없이 받았다고 한 순번 뒤의 것만 100건씩 보내고, 못 보내면(끊김, 동의하지 않은 사람이 있어 403) 보관함에 두었다 다음 조회에 다시 보냅니다. 서버가 준 값이 차의 확인 순번보다 작으면(DB를 백업에서 되살림) 그 값으로 내립니다(ADR-0014 2절). 인증은 이 차가 참가시킨 사람 가운데 id가 가장 앞인 사람의 참가자 토큰입니다(서버는 기기를 처음 올린 참가자에 묶음). `device`는 설치 때 만든 무작위 값입니다.
 - **동의 철회:** 여행의 `generation`이 오른 것(철회)을 알게 되면 그때까지 쌓인 순번의 글과 위치를 모두 지우고 그 경계 순번을 보관함 상태 파일(`.acked`, 암호화)에 남깁니다. 다시 켜도 그 경계로만 지웁니다(세대를 견주지 않음: 서버 DB가 되살아나 세대가 오르내려도 철회 전 글은 남지 않고 철회 뒤 글은 지워지지 않게). 서버에는 지운 순번을 `{seq, generation}`(앞 세대)만 보내 확인받습니다(ADR-0014 2절).
+
+## 원음과 장면 클립(T63)
+
+- **쌓기:** 수음 한 번(서비스 시작~끝, 같은 동의 세대)이 파일 하나 `files/audio-<여행>-<세대>-<첫 표본 시각>.raw`입니다. STT에 넣은 16 kHz 모노를 0.1초 묶음마다 AES-256-GCM으로 암호화해 이어 씁니다(1시간 약 115 MB). 데이터 키는 파일마다 새로 만들어 Keystore 키(T69)로 감싸 파일 머리에 둡니다. 시각은 첫 표본 시각 + 표본 수 ÷ 16 ms입니다(`Raw.kt`).
+- **클립:** 10초 조회 때 여행의 `moments`(사람이 확정한 장면)를 보고, 아직 올리지 않은 장면의 구간(장면의 `from`~`to`, 없으면 `at` 앞 20초 ~ 뒤 10초, 60초까지)을 잘라 16 kHz 모노 WAV로 `POST /api/trips/{code}/recordings?moment=&generation=&from=`(T76, `Authorization` 머리말)에 올립니다. 구간이 끝나고 3초 뒤부터, 모두 동의한 동안만. 400·404·409·413은 다시 하지 않고 401·403·503·끊김은 5분 뒤 다시. 올린 장면은 `clips-<여행>.done`.
+- **지우기:** 만든 뒤 48시간(T69 `sweep`), 동의 세대가 오르면 옛 세대 파일, '이 차에 둔 원음 지우기'(주차 중에 보임. 지난 원음만 지우고 기록은 이어 감: 동의 철회와 다른 요청, ADR-0007). 남은 공간이 500 MB 아래면 다른 원음 파일을 오래된 것부터 지우고, 그래도 모자라면 원음만 남기지 않습니다.
+- 차 앱이 켜져 있을 때만 올립니다. 원음 전체는 차 밖으로 보내지 않습니다.
 
 ## 차 안 보관과 지우기(T69)
 
@@ -102,6 +109,8 @@ adb shell am start --user 10 -n io.github.teampitcrew.gachita/.MainActivity --es
 
 Gleo와 마이크 주고받기(T41)는 `python3 frontend/car/gleo_e2e.py <APK> <저장소 밖 폴더>`입니다. 호출어 → 멈춤 → 운전대 버튼 대신 `cmd voiceinteraction show` → Gleo가 듣고 잠듦 → 다시 수음 → 이어 넣은 말이 받아 적힘, 버튼 없이 시간 초과, 'Gleo 쓰기', Gleo 함수 두 개를 봅니다. Gleo가 듣는 동안에는 소리를 넣지 않습니다(에뮬레이터가 멈춘 적이 있음). 준비는 `capture_e2e.py`와 같습니다.
 
+원음과 장면 클립(T63)은 `GACHITA_PORT=<서버 포트> python3 frontend/car/clip_e2e.py <APK> <저장소 밖 폴더> [분]`입니다. 서버는 클립 API(T76)를 가짜 S3(`AWS_ENDPOINT_URL_S3=http://127.0.0.1:9787`, `CLIPS_BUCKET=clips`)에 붙여 띄웁니다(스크립트 머리 주석). [분]을 주면 그만큼 더 넣으며 CPU·메모리·원음 크기를 잽니다.
+
 수음과 받아쓰기는 `python3 frontend/car/capture_e2e.py <APK> <저장소 밖 폴더> [분]`입니다. 에뮬레이터를 `-grpc 8556 -grpc-use-token -audio none`으로 켜 두면 macOS 합성 음성으로 만든 가족 대화를 gRPC `injectAudio`로 가상 마이크에 넣고(호스트 마이크는 쓰지 않음), 내비를 앞에 둔 기어 D에서 보관함에 쌓인 발화를 넣은 문장과 맞춰 봅니다. 30초마다 CPU·메모리를 재고, 내비가 앞일 때 시스템 마이크 차단(`cmd sensor_privacy`) → '기록 멈춤', 동의 끄기 → 마이크 놓음, 앱 다시 켜기 → 순번 이어짐까지 확인합니다. 공용 DB를 다른 시험이 비울 수 있으면 따로 띄운 서버를 `GACHITA_PORT`로 줍니다. 넣은 문장과 받아 적은 문장은 `transcript.tsv`에 나란히 남습니다.
 
 `e2e.py`의 스크립트는 설치 → 기어 D에서 여행 만들기가 가려지고 앞 화면이 우리 앱(차단 화면 아님) → 여행 만들기(가족 4명) → 폰 참가자 한 명이 API로 참가 → 기어 D에서 동의 켜기(안 켜짐) → 기어 P에서 켜기(차 참가자만 켜지고 폰 참가자는 '동의 대기') → 폰이 자기 토큰으로 켬(기록 중) → 기어 D에서 유지 → 끄기(바로 멈춤) → 반쪽 폭(841) 순서로 화면을 캡처하고, 단계마다 서버의 여행(`GET /api/trips/{코드}`)을 함께 적어 `results.json`에 판정을 남깁니다. 실패가 있으면 종료 코드 1입니다.
@@ -115,6 +124,7 @@ Gleo와 마이크 주고받기(T41)는 `python3 frontend/car/gleo_e2e.py <APK> <
 | `Todos.kt` | 도착 브리핑(T40)에서 화면·SDK와 무관한 것: 할 일 뽑기, 도착 판정, 차 안 저장(단위 테스트 `TodosTest.kt`) |
 | `Gleo.kt` | Gleo와 마이크 주고받기(T41): 호출어 변형 목록과 찾기(단위 테스트 `GleoTest.kt`), 넘기고 오디오 포커스로 돌려받기(`Handoff`) |
 | `assets/schema.json` | Gleo 함수 목록(T40·T41). 이름을 바꾸면 `MainActivity`의 `GLEO_*`와 매니페스트의 intent-filter도 같이 |
+| `Raw.kt` | 원음 파일 쓰기·자르기, 장면 구간, WAV(T63, 단위 테스트 `RawTest.kt`) |
 | `Vault.kt` | 차 안 파일의 암호화(Android Keystore AES-GCM)와 48시간 지우기(단위 테스트 `VaultTest.kt`) |
 | `Trip.kt` | 여행 응답 해석과 기록 동의 규칙(단위 테스트 `TripTest.kt`) |
 | `Server.kt` | 가치타 API 호출(`docs/api/openapi.yaml`) |
@@ -125,5 +135,6 @@ Gleo와 마이크 주고받기(T41)는 `python3 frontend/car/gleo_e2e.py <APK> <
 | `e2e.py` | 위의 로컬 E2E(여행과 기록 동의) |
 | `arrival_e2e.py` | 도착 브리핑 E2E(T40) |
 | `waypoint_e2e.py` | 부탁을 경유지로 E2E(T9). `e2e.py`·`capture_e2e.py`의 도구를 같이 씀 |
+| `clip_e2e.py` | 원음과 장면 클립 E2E(T63). 가짜 S3를 열고 `capture_e2e.py`의 도구를 같이 씀 |
 | `capture_e2e.py` | 수음과 받아쓰기 E2E(T36). `e2e.py`의 도구를 같이 씀 |
 | `gleo_e2e.py` | Gleo와 마이크 주고받기 E2E(T41). `capture_e2e.py`의 도구를 같이 씀 |
