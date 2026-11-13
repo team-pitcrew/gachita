@@ -60,7 +60,7 @@ jobs:
         run: |
           if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then tag=$INPUT_TAG; why="지정(되돌리기 포함)"; else tag=${RUN_SHA::12}; why="develop 병합 ${RUN_SHA::12}"; fi
           printf '%s' "$tag" | grep -Eq '^[0-9a-f]{12}$' || { echo "::error::태그는 커밋 SHA 앞 12자(소문자 16진수)입니다: $tag"; exit 1; }
-          current=$(sed -n 's/^[[:space:]]*newTag:[[:space:]]*\([^[:space:]#]*\).*/\1/p' "$OVERLAY")
+          current=$(sed -n 's/^[[:space:]]*newTag:[[:space:]]*\([^[:space:]#]*\).*/\1/p' "$OVERLAY" | tr -d '"') # 태그는 따옴표 안에 있다(make deploy-tag)
           echo "tag=$tag" >> "$GITHUB_OUTPUT"; echo "why=$why" >> "$GITHUB_OUTPUT"; echo "current=$current" >> "$GITHUB_OUTPUT"
           echo "지금 $current → 바꿀 $tag ($why)"
       - name: 이미지가 GHCR에 있는지
