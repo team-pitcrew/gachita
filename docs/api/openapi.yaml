@@ -1,13 +1,13 @@
 openapi: 3.1.0
 info:
   title: 가치타 API
-  version: 0.7.0
+  version: 0.8.0
   summary: 여행 세션, 기기 프로필, 부탁, 장면, 기록본, 가족 그룹, 화자 대조
   description: |
     웹앱(frontend/web)과 차량 앱(frontend/car)이 부르는 API입니다. 구현은 backend/api/server.js입니다.
 
     - 모든 본문은 JSON이고 10 KB를 넘으면 413입니다. 발화 묶음 올리기(`/utterances`)만 1 MB까지 받습니다.
-    - 오류는 `{ "error": "이유" }`로 옵니다.
+    - 오류는 `{ "error": "이유", "type": "종류" }`로 옵니다. 클라이언트는 문장이 아니라 `type`으로 가릅니다(T71).
     - 기기 프로필 토큰이 있으면 `Authorization: Bearer <토큰>`으로 보냅니다. 기기 프로필 자체에는 로그인이 없습니다.
     - 구글 OAuth로 프로필을 찾아 이어 받을 수 있습니다(ADR-0006). 현대 계정 연동은 아직 없습니다(ADR-0004).
     - 여행은 만든 뒤 48시간까지 읽을 수 있습니다. 발화도 같은 시계에 지워지고, 사람이 장면으로 확정한 것만 프로필 앨범에 남습니다(ADR-0007·ADR-0014).
@@ -122,8 +122,9 @@ paths:
         토큰 없이 부르면 그 계정의 프로필을 찾아 들어갑니다. 있으면 이 기기에 쓸 토큰을 하나 더 돌려주고(다른 기기의 토큰은 그대로, ADR-0009), 없으면 프로필을 새로 만듭니다.
         찾아 들어가기는 갱신 순간에 연결을 다시 확인합니다 — 요청 중 연결이 바뀌었으면 토큰을 주지 않고 401로 끝냅니다.
         코드는 서버가 구글과 바꾸므로 클라이언트 비밀 값은 클라이언트에 없습니다(ADR-0006).
-        `redirectUri`는 우리 출처만 받습니다(T27): `https://gachita.mangowhois.ai`와 로컬 개발(`http://localhost`·`http://127.0.0.1`의 아무 포트). 다른 주소는 구글을 부르지 않고 400입니다.
-        오류는 나눠 옵니다: 400 입력 오류(허용하지 않는 `redirectUri` 포함), 401 코드 거절 또는 연결 변경, 500 서버의 클라이언트 설정 오류, 502 제공자 응답 오류, 503 제공자 일시 장애·연결 실패, 504 제공자 응답 시간 초과.
+        `redirectUri`는 우리 콜백 하나만 받습니다(T27): `https://gachita.mangowhois.ai/oauth/google/callback`, 또는 로컬 개발 `http://localhost`·`http://127.0.0.1`(아무 포트)의 같은 경로. 다른 주소는 구글을 부르지 않고 400입니다. 서버는 이 콜백 경로에 웹앱을 내줍니다.
+        **PKCE(S256)가 필수입니다.** 웹은 인가 요청에 `code_challenge`(= BASE64URL(SHA-256(verifier)))와 `code_challenge_method=S256`, `state`를 붙이고, 받은 코드와 함께 `codeVerifier`를 보냅니다. 서버가 토큰 교환에 `code_verifier`로 넘깁니다. 공개 Client ID는 `GET /api/config`에서 읽습니다.
+        오류는 나눠 옵니다: 400 입력 오류(허용하지 않는 `redirectUri`, 없거나 형식이 틀린 `codeVerifier`), 401 코드 거절(맞지 않는 `codeVerifier` 포함) 또는 연결 변경, 401 코드 거절 또는 연결 변경, 500 서버의 클라이언트 설정 오류, 502 제공자 응답 오류, 503 제공자 일시 장애·연결 실패, 504 제공자 응답 시간 초과.
       security: [{}, { profileToken: [] }]
       requestBody:
         required: true
@@ -131,10 +132,11 @@ paths:
           application/json:
             schema:
               type: object
-              required: [code, redirectUri]
+              required: [code, redirectUri, codeVerifier]
               properties:
                 code: { type: string, minLength: 1, maxLength: 500, description: 구글이 redirect 주소로 돌려준 인증 코드 }
-                redirectUri: { type: string, minLength: 1, maxLength: 500, description: "코드를 받을 때 쓴 주소. https://gachita.mangowhois.ai 또는 http://localhost·127.0.0.1의 주소를 정규형으로(사용자 정보 없이). 구글에 등록된 값과 같아야 함" }
+                redirectUri: { type: string, minLength: 1, maxLength: 500, description: "코드를 받을 때 쓴 주소. https://gachita.mangowhois.ai/oauth/google/callback, 또는 http://localhost·127.0.0.1의 같은 경로(정규형, 쿼리 없이). 구글에 등록된 값과 같아야 함" }
+                codeVerifier: { type: string, pattern: "^[A-Za-z0-9._~-]{43,128}$", description: "PKCE code_verifier(RFC 7636). 인가 요청에 보낸 code_challenge의 원래 값" }
       responses:
         "200": { description: 연결했거나 찾아 들어간 프로필, content: { application/json: { schema: { $ref: "#/components/schemas/ProfileMaybeToken" } } } }
         "201": { description: 계정으로 새로 만든 프로필, content: { application/json: { schema: { $ref: "#/components/schemas/ProfileMaybeToken" } } } }
@@ -265,6 +267,33 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+  /api/trips/{code}/participants/{id}/voice:
+    parameters: [{ $ref: "#/components/parameters/code" }, { $ref: "#/components/parameters/id" }]
+    post:
+      tags: [참가자]
+      summary: 여행 참가자의 목소리 등록
+      description: |
+        차의 가족처럼 프로필 없는 손님도 화자를 붙일 수 있게 이 여행에 목소리를 등록합니다(T38, ADR-0019). 본문과 응답은 `/profiles/me/voice`와 같습니다(WAV, 1~20초, 1.5 MB). 문장 둘(약 7초)을 권합니다.
+        **그 참가자 본인의 참가자 토큰**으로만 합니다(없거나 틀리면 401, 다른 참가자의 토큰이면 403). 그 참가자의 녹음 동의가 꺼져 있으면 409입니다.
+        본문을 받는 사이 동의 세대가 바뀌었으면(누군가 동의를 끔) 저장하지 않고 409입니다. 동의를 다시 확인한 뒤 다시 등록합니다.
+        원본 음성은 저장하지 않고 대조용 값만 여행 저장소에 둡니다. 다시 등록하면 값을 바꿉니다. 그 참가자의 동의가 꺼지면(누가 끄든) 바로 지우고, 꺼져 있던 동의가 다시 켜질 때도 지웁니다(다시 등록). 여행을 만든 뒤 48시간이 지나면 쓰이지 않고, 여행을 치울 때 함께 지웁니다.
+      security: [{ participantToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/octet-stream: { schema: { type: string, format: binary } }
+      responses:
+        "200":
+          description: 등록함
+          content:
+            application/json:
+              schema: { type: object, required: [seconds, dims], properties: { seconds: { type: number }, dims: { type: integer } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
   /api/trips/{code}/requests:
     parameters: [{ $ref: "#/components/parameters/code" }]
     post:
@@ -421,6 +450,36 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+  /api/trips/{code}/utterances/{device}/{seq}:
+    parameters:
+      - { $ref: "#/components/parameters/code" }
+      - { name: device, in: path, required: true, schema: { type: string }, description: 발화를 올린 기기 }
+      - { name: seq, in: path, required: true, schema: { type: integer }, description: 그 기기가 매긴 순번 }
+    patch:
+      tags: [기록본]
+      summary: 발화의 화자 고치기
+      description: |
+        차 화면에서 사람이 '모름'이나 틀린 이름을 고칩니다(T37). **그 기기 이름으로 발화를 올린 참가자의 토큰**으로만 합니다(올리기의 기기 주인 규칙과 같음).
+        사람이 고친 것이 화자 대조보다 우선이라 이미 붙은 화자도 바꿉니다. `participantId: null`이면 '모름'으로 되돌립니다.
+        그 참가자가 프로필 참가자이면 `profileId`도 함께 붙고(피드에 나옴), 아니면 비웁니다. 녹음에 동의하지 않은 참가자의 이름은 붙이지 않습니다(409).
+      security: [{ participantToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [participantId]
+              properties:
+                participantId: { type: [string, "null"], description: 이 여행의 참가자 id. null이면 모름 }
+      responses:
+        "200": { description: 고친 발화, content: { application/json: { schema: { $ref: "#/components/schemas/Utterance" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "405": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /api/trips/{code}/transcript:
     parameters: [{ $ref: "#/components/parameters/code" }]
     get:
@@ -553,15 +612,16 @@ paths:
       tags: [기록본]
       summary: 발화 대조(화자 붙이기)
       description: |
-        이진 본문(발화 음성 WAV)과 `seatArea`를 받아, 그 자리에 앉은 참가자 가운데 목소리를 등록한 사람과 비교해
-        프로필과 확신도를 돌려줍니다(ADR-0008·0019). 가장 높은 확신이 기준을 넘어야 하고, 아니면 `profileId: null`('모름').
-        `seatArea`를 모르면(T37 판정이 '모름') 빼고 부릅니다. 그러면 이 여행의 프로필 참가자 모두가 후보입니다.
+        이진 본문(발화 음성 WAV)과 좌석 구역 `row`(1 앞줄, 2 뒷줄 — 차량 앱의 판정, T37)를 받아, 그 줄에 앉은, 녹음에 동의한 참가자 가운데 목소리 값이 있는 사람과 비교해
+        참가자와 확신도를 돌려줍니다(ADR-0008·0019). 가장 높은 확신이 기준을 넘어야 하고, 아니면 `participantId: null`('모름').
+        값은 이 여행에 등록한 것(`POST /participants/{id}/voice`)을 먼저, 없으면 그 사람 프로필의 등록값을 씁니다. 손님 참가자도 화자가 붙습니다.
+        `row`를 모르면 빼고 부릅니다. 그러면 이 여행의 참가자 모두가 후보입니다.
         발화 음성은 0.5~10초, 1 MB까지이고 저장하지 않습니다. 녹음에 동의한 참가자만 부릅니다(아니면 403).
         `device`와 `seq`를 함께 주면 찾았을 때 그 발화 줄의 화자를 채웁니다(기록본·피드에 나옴). 발화를 먼저 올린 뒤, 그 발화를 올린 기기(참가자)가 부릅니다. 이미 화자가 있는 줄은 바꾸지 않습니다.
-        여행 줄을 잠그지 않으므로 업로드가 느려도 같은 여행의 동의 바꾸기를 막지 않습니다.
+        여행 줄을 잠그지 않으므로 업로드가 느려도 같은 여행의 동의 바꾸기를 막지 않습니다. 후보와 호출자의 동의는 본문을 다 받은 뒤의 최신 여행으로 정합니다.
       security: [{ participantToken: [] }]
       parameters:
-        - { name: seatArea, in: query, schema: { $ref: "#/components/schemas/Seat" }, description: 모르면 뺌 }
+        - { name: row, in: query, schema: { type: string, enum: ["1", "2"] }, description: "좌석 구역. 1은 앞줄(ROW_1_*), 2는 뒷줄(ROW_2_*). 모르면 뺌" }
         - { name: device, in: query, schema: { type: string }, description: 화자를 채울 발화의 기기 }
         - { name: seq, in: query, schema: { type: integer }, description: 화자를 채울 발화의 순번 }
       requestBody:
@@ -575,9 +635,10 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [profileId, confidence, threshold, applied]
+                required: [participantId, profileId, confidence, threshold, applied]
                 properties:
-                  profileId: { type: [string, "null"], format: uuid, description: 못 찾으면 null('모름') }
+                  participantId: { type: [string, "null"], description: 찾은 참가자. 못 찾으면 null('모름') }
+                  profileId: { type: [string, "null"], format: uuid, description: 찾은 참가자의 프로필. 손님이거나 모름이면 null }
                   confidence: { type: number, description: 가장 높았던 코사인 유사도 }
                   threshold: { type: number, description: 확신 기준(초안 0.9, 조정 중) }
                   applied: { type: boolean, description: 발화 줄에 화자를 채웠는지 }
@@ -1070,7 +1131,8 @@ components:
           required: [device]
           properties:
             device: { type: string }
-            profileId: { type: string, format: uuid, description: 서버의 화자 대조(T38)가 붙인 프로필. 아직 없으면 생략 }
+            participantId: { type: string, description: 서버의 화자 대조(T38)가 붙인 참가자(손님 포함). 아직 없으면 생략 }
+            profileId: { type: string, format: uuid, description: 화자가 프로필 참가자일 때 그 프로필. 아니면 생략 }
             asrText: { type: string, description: "고른 장면 클립의 소리로 다시 받아 적은 글(T75). 있을 때만 — 기록본과 장면 후보의 발화에. text(Pleos 원문)는 그대로" }
     Transcript:
       type: object
