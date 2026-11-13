@@ -13,8 +13,9 @@ adb install --user 10 -r -g app/build/outputs/apk/debug/app-debug.apk
 adb shell am start --user 10 -n io.github.teampitcrew.gachita/.MainActivity --es server http://10.0.2.2:8787
 ```
 
-- 서버는 저장소 루트에서 `make run`(http://localhost:8787). 에뮬레이터에서 Mac은 `10.0.2.2`입니다.
-- 서버 주소는 첫 화면의 '서버 주소'나 `--es server <주소>`로 바꾸고, 앱이 기억합니다.
+- 기본 서버는 실서비스 `https://gachita.mangowhois.ai`입니다(T27). release는 https만 씁니다.
+- 로컬 서버는 저장소 루트에서 `make run`(http://localhost:8787)이고, 에뮬레이터에서 Mac은 `10.0.2.2`입니다. 평문 http(10.0.2.2·localhost·127.0.0.1)는 디버그 빌드에만 열려 있어(`src/debug/res/xml/network_security_config.xml`) release로는 로컬 서버에 닿지 않습니다.
+- 서버 주소는 첫 화면의 '서버 주소'(디버그 빌드는 `--es server <주소>`도)로 바꿉니다. 앱은 여행을 만들 때 쓴 주소를 기억해 다음부터 기본값보다 앞세웁니다. 예전 빌드로 `http://10.0.2.2:8787`을 기억한 기기에 release를 덮어 깔면 그 주소가 남아 연결이 막히니, '서버 주소'를 고치거나 앱 데이터를 지웁니다(`adb shell pm clear --user 10 io.github.teampitcrew.gachita`).
 - 기어 값은 Cold boot한 에뮬레이터에서만 읽힙니다(`docs/emulator/README.md`).
 - 마이크 권한(`RECORD_AUDIO`)과 알림 권한(`POST_NOTIFICATIONS`, 화면 뒤에서 '기록 멈춤'을 알림으로 보임)은 처음 기록할 때 함께 묻습니다. `-g`로 설치하면 미리 허용됩니다.
 
