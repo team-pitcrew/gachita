@@ -6,6 +6,7 @@
 #   backend/infra/cluster/e2e-local.sh    기록(waves.log, summary.md, local-overrides.diff)은 E2E_OUT(기본: 새 임시 폴더)
 #
 # 필요한 것: docker, kubectl, jq, yq(mikefarah v4), git, ansible(뿌리 앱을 구축 6단계와 같은 template 모듈로 그림), 인터넷.
+# 리눅스에서는 커널 모듈 br_netfilter(sudo modprobe br_netfilter. Docker Desktop은 이미 올라와 있음).
 # 끝나면 성공·실패와 관계없이 만든 컨테이너와 이미지를 지운다. AWS·Cloudflare에는 닿지 않는다.
 #
 # 대상은 작업 중인 커밋(HEAD)이다. 커밋하지 않은 변경은 들어가지 않는다. 실제 구축과 다른 것:
@@ -146,6 +147,9 @@ log 3/7 "K3s $k3s 한 대(Docker). traefik·servicelb 끔(실제와 같음), 네
 docker run -d --name "$id-k3s" --hostname "$id-k3s" --privileged -p 127.0.0.1::6443 \
   "rancher/k3s:${k3s/+/-}" server --disable=traefik --disable=servicelb --disable-network-policy >/dev/null
 retry 60 docker exec "$id-k3s" test -s /etc/rancher/k3s/k3s.yaml
+# 같은 노드에서 파드 → 서비스 → 파드의 응답이 iptables를 거쳐야 한다. 없으면 클러스터 DNS부터 닿지 않는다
+docker exec "$id-k3s" test -e /proc/sys/net/bridge/bridge-nf-call-iptables ||
+  fail "커널 모듈 br_netfilter가 없습니다(리눅스: sudo modprobe br_netfilter)"
 port=$(docker port "$id-k3s" 6443/tcp | head -1)
 docker exec "$id-k3s" cat /etc/rancher/k3s/k3s.yaml | sed "s#https://127.0.0.1:6443#https://127.0.0.1:${port##*:}#" > "$KUBECONFIG"
 retry 60 kubectl wait --for=condition=Ready node --all --timeout=5s

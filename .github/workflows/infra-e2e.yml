@@ -54,9 +54,12 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7
-      # docker, kubectl, jq, yq, git은 실행기에 있다. ansible-core는 뿌리 앱 템플릿을 그린다(구축 6단계와 같은 모듈)
-      - name: ansible-core
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq ansible-core
+      # docker, kubectl, jq, yq, git은 실행기에 있다. ansible-core는 뿌리 앱 템플릿을 그린다(구축 6단계와 같은 모듈).
+      # br_netfilter가 없으면 K3s 안에서 같은 노드의 서비스 응답이 iptables를 거치지 않아 클러스터 DNS가 닿지 않는다
+      - name: ansible-core, br_netfilter
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq ansible-core
+          if ! lsmod | grep -q '^br_netfilter'; then echo "br_netfilter가 없어 올립니다"; sudo modprobe br_netfilter; fi
       - name: 물결 E2E
         run: E2E_OUT="$RUNNER_TEMP/e2e" backend/infra/cluster/e2e-local.sh
       - name: 요약
