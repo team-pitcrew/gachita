@@ -176,7 +176,7 @@ down() {
         case $p in completed) echo "백업 $n 완료"; exit 0 ;; failed) kubectl -n gachita-db get backup/$n -o jsonpath="{.status.error}"; exit 1 ;; esac
         sleep 5
       done
-      exit 1' || fail "마지막 백업이 끝나지 않았습니다. 데이터를 지키려면 접지 않습니다(고친 뒤 다시). 들어오는 길은 닫혀 있습니다. 다시 열려면 서버에서 kubectl -n argocd patch application root --type merge -p '{\"spec\":{\"syncPolicy\":{\"automated\":{\"prune\":true,\"selfHeal\":true}}}}'"
+      exit 1' || fail "마지막 백업이 끝나지 않았습니다. 데이터를 지키려면 접지 않습니다(고친 뒤 다시). 들어오는 길은 닫혀 있습니다. 다시 열려면 서버에서 kubectl -n argocd patch application root --type merge -p '{\"spec\":{\"syncPolicy\":{\"automated\":{\"prune\":true,\"selfHeal\":true}}}}' 뒤 infra.sh up(ALB가 새 주소로 생기므로 5/6이 레코드를 고침)"
   fi
 
   log 4/5 "접는 묶음 destroy(레코드 포함). 남는 묶음은 건드리지 않는다"

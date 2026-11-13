@@ -68,6 +68,7 @@ gh secret set ARGOCD_DEPLOY_KEY    -R team-pitcrew/gachita < gachita-deploy   # 
 gh secret set GOOGLE_CLIENT_ID     -R team-pitcrew/gachita    # 없어도 서버는 뜸
 gh secret set GOOGLE_CLIENT_SECRET -R team-pitcrew/gachita
 gh secret set CLOUDFLARE_API_TOKEN -R team-pitcrew/gachita    # mangowhois.ai: DNS 편집, 영역 WAF(요청 수 제한 규칙) 편집
+gh secret set CLOUDFLARE_API_TOKEN_READ -R team-pitcrew/gachita   # PR 계획용: mangowhois.ai Zone·DNS 읽기만(쓰기 토큰은 PR에 주지 않음)
 gh variable set CLOUDFLARE_ZONE_ID -R team-pitcrew/gachita --body <mangowhois.ai 영역 번호>
 gh workflow run infra-secrets -R team-pitcrew/gachita --ref develop   # GitHub 비밀 값 → SSM
 ```
