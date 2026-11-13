@@ -775,6 +775,24 @@
 
 위험: 구축 다시 돌리기는 서버를 바꾼다. 같은 결과가 되게 짠 단계만 부른다.
 
+### T84 4노드 전환 제어와 기존 서버를 보존하는 Terraform·agent 구축을 준비한다 (P1) · backend-infra
+
+왜: 기존 단일 서버와 데이터를 유지하면서 플랫폼 1대·앱 2대·데이터 1대로 역할을 분리합니다. [이슈 #241](https://github.com/team-pitcrew/gachita/issues/241)과 [가치타 프로젝트](https://github.com/orgs/team-pitcrew/projects/1)에서 추적합니다.
+
+- [ ] P01 전환 상태와 GitOps 동결·재개, 기존 단일 노드 운영 명령 보호
+- [ ] 기본값이 꺼진 private subnet·AZ별 NAT·SG·agent IAM·EC2 3대 선언
+- [ ] server와 분리한 agent 구축, SSM 전용 토큰·보안 설정·배치 대기 taint
+- [ ] 보호 장치 실패 경로 테스트, Terraform 모의 계획·실제 계획 검토, Ansible 구문·make check·CI
+- [ ] 준비 범위와 실제 적용 이후의 인수 조건을 문서화하고 이슈·프로젝트·PR 연결
+
+설계: [4노드 전환 준비와 실행 조건](../backend/infra/migration/README.md). 기존 서버 주소와 user-data, GitOps 배치, DB PVC를 유지합니다.
+
+하지 않는 것: 실제 Terraform apply, 노드 생성, 운영 GitOps 동결, 토큰 전달, DB·트래픽·제어 노드 이전은 별도 실행 작업입니다. EBS CSI는 P04에서 추가합니다.
+
+완료 기준: 기본 계획에서 기존 자원을 변경하지 않으며 agent 활성화 계획은 허용된 자원 추가만 포함합니다. 실패·재시도·보존 조건 검사가 통과하고 PR의 검증 결과로 확인할 수 있습니다. 4노드 Ready는 아직 완료로 표시하지 않습니다.
+
+위험: agent를 켜면 EC2·NAT·EIP·EBS 비용이 생깁니다. 전환 기록을 지워 기존 down/restore를 강제로 사용하지 않습니다.
+
 ## 5단계: 제출
 
 ### T13 시연 영상 · release APK · README (P0) · frontend-app · 선행 T7, T9, T36, T40
