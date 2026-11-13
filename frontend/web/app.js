@@ -294,30 +294,40 @@ function home() {
 const RIDE_KEY = "gachita:ride"; // sessionStorage: 새로 고쳐도 기다리던 연결을 잇는다
 let ride = JSON.parse(sessionStorage.getItem(RIDE_KEY) ?? "null"); // { id, qr, expiresAt, token }
 const keepRide = (r) => ((ride = r), r ? sessionStorage.setItem(RIDE_KEY, JSON.stringify(r)) : sessionStorage.removeItem(RIDE_KEY));
+// 띄운 QR을 거둔다. 204·404면 거둠(true), 409면 그사이 차가 읽은 것이라 그 여행으로 간다(false).
+// 그 밖의 오류(끊김·503)는 던져 연결 정보와 토큰을 남긴다 — 다시 누르면 된다.
+async function withdraw() {
+  const r = ride;
+  const gone = await mine("DELETE", `/ride-links/${r.id}`).then(
+    () => true,
+    (e) => (e.status === 404 ? true : e.status === 409 ? false : Promise.reject(e)),
+  );
+  if (!gone) return (await pollRide(), false);
+  if (ride === r) keepRide(null);
+  return true;
+}
+// 새로 띄우기: 앞 QR이 이미 읽혔으면 새로 띄우지 않고 그 여행으로 간다(앞 연결의 토큰을 덮지 않게)
 const startRide = () =>
   act(async () => {
-    if (ride) await mine("DELETE", `/ride-links/${ride.id}`).catch(() => {}); // 새로 띄우면 앞 QR은 거둔다
+    if (ride && !(await withdraw())) return;
     const r = await mine("POST", "/ride-links", {});
     keepRide({ id: r.id, qr: r.qr, expiresAt: r.expiresAt, token: r.participantToken });
   });
-// 닫기: 아직 아무 차도 읽지 않았으면 거두고, 그사이 차가 읽었으면(409) 그 여행으로 간다
-const cancelRide = () =>
-  act(async () => {
-    const gone = await mine("DELETE", `/ride-links/${ride.id}`).then(() => true, (e) => e.status !== 409);
-    if (gone) keepRide(null);
-    else await pollRide();
-  });
-// 차가 읽었는지 2초마다 본다. 만료 뒤에도 잠깐(차가 막 읽었을 수 있음) 더 보고, 그다음엔 '새로 띄우기'만 보인다.
+const cancelRide = () => act(withdraw);
+// 차가 읽었는지 2초마다 본다. 끝은 서버가 정한다: linked면 그 여행으로, 404(만료·거둠)면 접는다.
+// 폰이 잠들었다 깨도 서버가 연결 결과를 5분 남겨 두니 그때 이어 간다. 묻는 사이 새로 띄웠으면 옛 답은 버린다.
 async function pollRide() {
-  if (!ride || Date.now() > ride.expiresAt + 10_000) return;
-  const r = await mine("GET", `/ride-links/${ride.id}`).catch((e) => (e.status === 404 ? { status: "gone" } : null));
-  if (r?.status === "gone") keepRide(null);
-  if (r?.status !== "linked") return !code() && !typing() && render(); // 남은 시간을 다시 그린다
-  store(r.tripCode, r.participant.id);
-  store(`${r.tripCode}:token`, ride.token);
+  const r = ride;
+  if (!r) return;
+  const res = await mine("GET", `/ride-links/${r.id}`).catch((e) => (e.status === 404 ? { status: "gone" } : null));
+  if (ride !== r) return;
+  if (res?.status === "gone") (keepRide(null), toast("QR이 만료됐어요. 다시 띄워 주세요."));
+  if (res?.status !== "linked") return !code() && !typing() && render(); // 남은 시간을 다시 그린다
+  store(res.tripCode, res.participant.id);
+  store(`${res.tripCode}:token`, r.token);
   keepRide(null);
-  toast(`${SEAT[r.participant.seat] ?? "차"}에 탔어요`);
-  location.hash = r.tripCode;
+  toast(`${SEAT[res.participant.seat] ?? "차"}에 탔어요`);
+  location.hash = res.tripCode;
 }
 
 // QR을 SVG로 그린다(innerHTML 없이). 카메라가 읽게 테마와 관계없이 흰 바탕에 검은 칸, 둘레 4칸을 비운다.
