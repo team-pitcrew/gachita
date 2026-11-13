@@ -67,13 +67,14 @@ gh secret set GHCR_PULL_TOKEN      -R team-pitcrew/gachita    # 클래식 토큰
 gh secret set ARGOCD_REPO_TOKEN    -R team-pitcrew/gachita    # fine-grained 토큰, 이 저장소 하나의 Contents·Metadata 읽기만(아래)
 gh secret set GOOGLE_CLIENT_ID     -R team-pitcrew/gachita    # 없어도 서버는 뜸
 gh secret set GOOGLE_CLIENT_SECRET -R team-pitcrew/gachita
+gh secret set ASR_TOKEN            -R team-pitcrew/gachita    # 재전사(T75) 상현님 Nemotron ASR 토큰. 없으면 보내지 않음
 gh secret set CLOUDFLARE_API_TOKEN -R team-pitcrew/gachita    # mangowhois.ai: DNS 편집, 영역 WAF(요청 수 제한 규칙) 편집
 gh secret set CLOUDFLARE_API_TOKEN_READ -R team-pitcrew/gachita   # PR 계획용: mangowhois.ai Zone·DNS·Zone WAF 읽기만(쓰기 토큰은 PR에 주지 않음)
 gh variable set CLOUDFLARE_ZONE_ID -R team-pitcrew/gachita --body <mangowhois.ai 영역 번호>
 gh workflow run infra-secrets -R team-pitcrew/gachita --ref develop   # GitHub 비밀 값 → SSM
 ```
 
-- **저장소 읽기 자격:** 조직 설정으로 배포 키가 막혀 있어(2026-11-13, `Deploy keys are disabled for this repository`) 이 저장소 하나만 읽는 fine-grained 토큰을 HTTPS로 씁니다(T24, 11/14). 첫 부팅이 SSM에서 받아 파일(600)에 두고, git은 자격 도우미로, Argo CD는 저장소 자격(`argocd/gachita-repo`)으로 읽습니다. 토큰은 만료(지금 것은 2026-12-14)가 있어 바꿀 때는 같은 이름으로 다시 넣고 `infra-secrets`를 돌린 뒤 서버에서 `gachita-converge --tags argocd`를 돌립니다.
+- **저장소 읽기 자격:** 조직 설정으로 배포 키가 막혀 있어(2026-11-13, `Deploy keys are disabled for this repository`) 이 저장소 하나만 읽는 fine-grained 토큰을 HTTPS로 씁니다(T24, 11/14). 첫 부팅이 SSM에서 받아 파일(600)에 두고, git은 자격 도우미로, Argo CD는 저장소 자격(`argocd/gachita-repo`)으로 읽습니다. 토큰은 만료(지금 것은 2026-12-14)가 있어 바꿀 때는 같은 이름으로 다시 넣고 `infra-secrets`를 돌린 뒤 `ops` 워크플로의 `converge`(단계 `argocd`)를 돌립니다. 모든 비밀 값의 길과 바꾸는 법은 [ADR-0012](../../../docs/adr/0012-cluster-build-and-node-size.md#결정)의 표 한 곳에 둡니다.
 - Cloudflare 영역의 SSL/TLS 모드는 Full(strict)이어야 합니다. ALB는 443만 엽니다(영역 전체 설정이라 Terraform이 바꾸지 않음).
 
 ## 만들기 전에 (develop에 병합해 둘 것)

@@ -1,5 +1,6 @@
 package io.github.teampitcrew.gachita
 
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 
@@ -11,25 +12,53 @@ const val LEAD_MS = 1_000L // 첫 중간 결과는 말 시작 0.4~0.8초 뒤에 
 const val ZERO_CHUNKS = 10 // 값이 모두 0인 조각이 1초 이어지면 막힘
 const val STALL_MS = 2_000L // read()가 2초 넘게 돌아오지 않으면 막힘
 
+const val FIX_MS = 30_000L // 이보다 오래된 위치는 발화에 붙이지 않는다(위치는 10초마다 묻는다)
+
+/** 내비가 알려 준 위치와 그때의 시각(epoch ms). */
+data class Fix(val lat: Double, val lng: Double, val at: Long)
+
 /**
  * 받아 적은 말 한 건. 시각은 epoch ms. 원음 구간은 이번 수음 시작부터 센 샘플 위치(ms)이고 원음 자체는 두지 않는다(T12).
- * seatZone은 자리만 둔다(T37이 채움). 위치(FusedLocation)는 아직 붙이지 않는다.
+ * generation은 받아 적을 때의 동의 세대(서버 여행의 generation). seatZone(0 앞줄, 1 뒷줄, 모르면 null)은 T37이 채운다.
+ * 서버에 올리는 칸(wire)은 POST /api/trips/{code}/utterances의 items와 같고, 끝 시각·원음 구간·좌석 구역은 차에만 둔다.
+ * ponytail: 서버 seatArea는 좌석 하나라 구역(줄)을 넣을 칸이 없다. T37에서 서버와 맞추면 wire에 더한다.
  */
 data class Utterance(
     val seq: Long, val trip: String, val startedAt: Long, val endedAt: Long, val text: String,
-    val audioFromMs: Long, val audioToMs: Long, val gear: String?, val seatZone: Int? = null,
+    val audioFromMs: Long, val audioToMs: Long, val generation: Int,
+    val lat: Double? = null, val lng: Double? = null, val seatZone: Int? = null,
 ) {
-    fun json(): JSONObject = JSONObject().put("seq", seq).put("trip", trip).put("started_at", startedAt).put("ended_at", endedAt)
-        .put("text", text).put("seat_zone", seatZone ?: JSONObject.NULL).put("gear", gear ?: JSONObject.NULL)
-        .put("audio", JSONObject().put("from_ms", audioFromMs).put("to_ms", audioToMs))
+    /** 보관함의 한 줄(차 안). */
+    fun json(): JSONObject = JSONObject().put("seq", seq).put("trip", trip).put("at", startedAt).put("endedAt", endedAt).put("text", text)
+        .put("audioFromMs", audioFromMs).put("audioToMs", audioToMs).put("generation", generation).apply {
+            if (lat != null && lng != null) put("lat", lat).put("lng", lng)
+            seatZone?.let { put("seatZone", it) }
+        }
+
+    /**
+     * 서버에 올리는 모양. 지금 세대(current)보다 옛 세대면 내용 없이 순번과 세대만(ADR-0014 2절).
+     * 서버가 묶음 전체를 400으로 거절하면 확인 순번이 그 앞에서 멈추므로, 서버 검사에 걸리지 않게 다듬는다:
+     * 글은 500자에서 자르되 이모지를 반으로 가르지 않고, 세대는 서버의 지금 세대를 넘지 않는다(DB를 되살려 세대가 내려간 경우).
+     * 글을 지운 발화(동의 철회)는 지금 세대로는 보낼 수 없어(서버가 글을 요구) 앞 세대로 순번만 보내 확인받고,
+     * 서버가 세대 1로 되살아나 앞 세대가 없으면 보내지 않는다(null). 그러면 같은 묶음의 다른 발화는 막히지 않는다.
+     */
+    fun wire(current: Int): JSONObject? {
+        val g = minOf(generation, current)
+        if (text.isBlank() && g >= current) return if (current > 1) JSONObject().put("seq", seq).put("generation", current - 1) else null
+        val o = JSONObject().put("seq", seq).put("generation", g)
+        if (g < current) return o
+        val t = text.trim()
+        o.put("at", startedAt).put("text", if (t.length <= 500) t else t.take(if (t[499].isHighSurrogate()) 499 else 500))
+        if (lat != null && lng != null) o.put("lat", lat).put("lng", lng)
+        return o
+    }
 
     companion object {
         fun parse(line: String): Utterance = JSONObject(line).let { o ->
-            val a = o.getJSONObject("audio")
             Utterance(
-                o.getLong("seq"), o.getString("trip"), o.getLong("started_at"), o.getLong("ended_at"), o.getString("text"),
-                a.getLong("from_ms"), a.getLong("to_ms"), if (o.isNull("gear")) null else o.getString("gear"),
-                if (o.isNull("seat_zone")) null else o.getInt("seat_zone"),
+                o.getLong("seq"), o.getString("trip"), o.getLong("at"), o.getLong("endedAt"), o.optString("text"),
+                o.getLong("audioFromMs"), o.getLong("audioToMs"), o.getInt("generation"),
+                if (o.has("lat")) o.getDouble("lat") else null, if (o.has("lng")) o.getDouble("lng") else null, if (o.has("seatZone")) o.getInt("seatZone") else null,
             )
         }
     }
@@ -103,26 +132,37 @@ class Blockage(startedAt: Long) {
     }
 }
 
-/** 보관함의 발화를 서버로 보내는 쪽. 서버가 1부터 빠짐없이 받은 마지막 순번을 돌려주고, 못 보냈으면 null. */
+/** 보관함의 발화를 서버로 보내는 쪽(POST /api/trips/{code}/utterances). 서버가 1부터 빠짐없이 받은 마지막 순번(lastSeq). 못 보내면 던진다. */
 fun interface Uplink {
-    fun send(trip: String, device: String, items: List<Utterance>): Long?
+    fun send(device: String, items: JSONArray): Long
 }
-
-/** 발화 저장 API(T39)가 생기기 전까지 꽂아 두는 쪽: 보내지 않고 보관함에 쌓아 둔다. */
-val KEEP = Uplink { _, _, _ -> null }
 
 /**
  * 보관함: 여행 하나의 발화를 순번(1부터)과 함께 앱 저장소에 한 줄씩(JSON lines) 쌓는다. 앱을 다시 켜면 파일에서 이어 읽는다.
- * acked는 서버가 1부터 빠짐없이 받았다고 한 마지막 순번(ADR-0014 초안, PR #82)이고, 그 뒤의 것만 보낸다.
+ * acked는 서버가 1부터 빠짐없이 받았다고 한 마지막 순번(lastSeq)이고, 그 뒤의 것만 보낸다.
+ * 서버가 돌려준 값이 acked보다 작으면(DB를 백업에서 되살림) 그 값으로 내리고 그 뒤부터 다시 보낸다(ADR-0014 2절).
+ * 동의 철회(서버 여행의 세대가 오름)를 알게 되면 그때까지 쌓인 순번의 글과 위치를 모두 지우고 그 경계 순번을 파일(.wiped)에 남긴다.
+ * 다시 켜도 그 경계로만 지운다(세대를 견주지 않음: 서버 DB가 되살아나 세대가 오르내려도 철회 전 글은 남지 않고, 철회 뒤 글은 지워지지 않게).
+ * 서버에는 지운 순번을 글 없이 순번과 세대만 보내 확인받는다.
  * 쓰기(수음 서비스, 메인 스레드)와 보내기(통신 스레드)가 갈라져 있어 목록은 잠금 안에서만 만진다. 보내는 동안은 잠그지 않는다.
- * ponytail: 여행마다 파일 하나, 지우지 않는다. 차 안 보관 기간은 T12·T39에서 정하면 넣는다.
+ * ponytail: 여행마다 파일 하나, 지우지 않는다. 암호화와 48시간 뒤 지우기는 T69.
  */
 class Outbox(dir: File, val trip: String) {
     private val file = File(dir, "utterances-$trip.jsonl")
     private val ackFile = File(dir, "utterances-$trip.acked")
+    private val wipedFile = File(dir, "utterances-$trip.wiped")
+    private var wiped = 0L // 동의 철회로 글을 지운 마지막 순번
     private val items = mutableListOf<Utterance>()
     var acked = 0L
         private set
+
+    /** 지금 동의 세대. 새 발화에 붙인다. 화면이 서버 여행을 받을 때마다 see()로 맞춘다. */
+    @Volatile var generation = 1
+        private set
+    private var before = 1 // 바로 앞 세대
+    private var bumpedAt = 0L // 세대가 오른 것을 안 시각
+    private var dirty = false // 메모리에서는 지웠는데 파일을 아직 바꾸지 못함(공간 부족 등). 조회마다 다시 한다
+    private var sent = 0L // 이번 실행에서 보낸 마지막 순번. 보낼 수 없는 지운 발화 뒤로 나아가는 데만 쓴다
 
     init {
         if (file.exists()) {
@@ -130,27 +170,74 @@ class Outbox(dir: File, val trip: String) {
             if (file.length() > 0 && !file.readText().endsWith("\n")) file.appendText("\n") // 끊긴 줄 뒤에 붙여 쓰지 않게
         }
         acked = runCatching { ackFile.readText().trim().toLong() }.getOrDefault(0L)
+        wiped = runCatching { wipedFile.readText().trim().toLong() }.getOrDefault(0L)
+        generation = items.maxOfOrNull { it.generation } ?: 1 // 새 발화에 붙일 값. 서버 여행을 받으면 see()가 맞춘다
+        wipe() // 지난번에 지우다 파일을 바꾸지 못했으면 여기서 다시
     }
 
-    val size: Int @Synchronized get() = items.size
+    /** 경계 순번까지의 글과 위치를 지우고 파일을 바꾼다. 바꾸지 못하면 표시를 남겨 다음 see()에서 다시. 지운 것이 있으면 true. */
+    private fun wipe(): Boolean {
+        if (items.none { it.seq <= wiped && it.text.isNotEmpty() }) return false
+        for (i in items.indices) if (items[i].seq <= wiped) items[i] = items[i].copy(text = "", lat = null, lng = null)
+        dirty = !rewrite()
+        return true
+    }
+
+    /** 임시 파일에 다 쓴 뒤 이름을 바꾼다. 둘 중 하나라도 실패하면 false(앞의 파일이 남음). */
+    private fun rewrite(): Boolean = runCatching {
+        val tmp = File(file.path + ".tmp")
+        tmp.writeText(items.joinToString("") { it.json().toString() + "\n" })
+        tmp.renameTo(file)
+    }.getOrDefault(false)
+
+    private val said get() = items.filter { it.text.isNotEmpty() }
+    val size: Int @Synchronized get() = said.size
     val pending: Int @Synchronized get() = items.count { it.seq > acked }
 
-    @Synchronized fun recent(n: Int): List<Utterance> = items.takeLast(n)
+    @Synchronized fun recent(n: Int): List<Utterance> = said.takeLast(n)
 
-    @Synchronized fun add(d: Draft, gear: String?): Utterance {
-        val u = Utterance((items.lastOrNull()?.seq ?: 0) + 1, trip, d.startedAt, d.endedAt, d.text, d.audioFromMs, d.audioToMs, gear)
+    /**
+     * 위치는 발화 끝에서 FIX_MS 안에 받은 것만 붙인다. 세대가 오른 것을 알기 전에 시작한 말(동의 철회 사이에 한 말일 수 있음)은
+     * 앞 세대로, 글 없이 남긴다(폰에서 끄고 10초 조회 안에 다시 켜 기록이 이어진 경우).
+     */
+    @Synchronized fun add(d: Draft, fix: Fix?): Utterance {
+        val old = d.startedAt < bumpedAt
+        val f = fix?.takeIf { !old && kotlin.math.abs(d.endedAt - it.at) <= FIX_MS }
+        val u = Utterance((items.lastOrNull()?.seq ?: 0) + 1, trip, d.startedAt, d.endedAt, if (old) "" else d.text, d.audioFromMs, d.audioToMs,
+            if (old) before else generation, f?.lat, f?.lng)
         file.appendText(u.json().toString() + "\n")
         items += u
         return u
     }
 
-    /** 받지 않은 것을 max건까지 보낸다. 통신 스레드에서 부른다. 보낸 뒤 서버가 받았다고 한 데까지 acked를 올린다. */
-    fun flush(up: Uplink, device: String, max: Int = 100) {
-        val batch = synchronized(this) { items.filter { it.seq > acked }.take(max) }
-        if (batch.isEmpty()) return
-        val got = up.send(trip, device, batch) ?: return
+    /** 서버 여행의 동의 세대. 올라갔으면 옛 세대 발화의 내용을 지운다(임시 파일에 다 쓴 뒤 이름을 바꿈). 지운 것이 있으면 true. */
+    @Synchronized fun see(g: Int): Boolean {
+        if (dirty) dirty = !rewrite() // 지난번에 바꾸지 못한 파일(철회한 글이 남아 있음)
+        if (g < generation) generation = g // 서버 DB를 백업에서 되살림: 서버의 세대를 따른다(넘는 세대로 보내면 400)
+        if (g <= generation) return false
+        before = generation; generation = g; bumpedAt = System.currentTimeMillis()
+        val last = items.lastOrNull()?.seq ?: 0
+        if (last > wiped) { wiped = last; runCatching { wipedFile.writeText(last.toString()) } }
+        return wipe()
+    }
+
+    /**
+     * 받지 않은 것을 max건까지 보낸다. 통신 스레드에서 부른다. 보낸 뒤 서버가 받았다고 한 데까지로 acked를 맞춘다.
+     * always면 보낼 것이 없어도 빈 묶음으로 서버의 lastSeq를 받는다(서버 DB가 되살아나 순번이 내려갔으면 그 뒤부터 다시 보내게, ADR-0014 2절).
+     */
+    fun flush(up: Uplink, device: String, max: Int = 100, always: Boolean = false) {
+        val batch = synchronized(this) {
+            // 서버가 세대 1로 되살아나 지운 발화를 보낼 수 없으면 lastSeq가 그 앞에서 멈춘다. 그때는 이번 실행에서 보낸 데 뒤부터 보내
+            // 지운 발화가 묶음 크기보다 많아도 새 발화가 나가게 한다. 보통은 받은 데(acked) 뒤부터 다시 보낸다(ADR-0014).
+            val first = items.firstOrNull { it.seq > acked }
+            val from = if (first != null && first.wire(generation) == null) maxOf(acked, sent) else acked
+            items.asSequence().filter { it.seq > from }.mapNotNull { u -> u.wire(generation)?.let { u.seq to it } }.take(max).toList()
+        }
+        if (batch.isEmpty() && !always) return
+        val got = up.send(device, JSONArray(batch.map { it.second }))
         synchronized(this) {
-            if (got > acked) { acked = got; ackFile.writeText(got.toString()) }
+            sent = if (got < acked) got else maxOf(sent, batch.lastOrNull()?.first ?: 0) // 서버 순번이 내려가면 그 뒤부터 다시
+            if (got != acked) { acked = got; ackFile.writeText(got.toString()) }
         }
     }
 }

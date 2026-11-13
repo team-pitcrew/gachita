@@ -15,6 +15,32 @@
         },
         "component": "activity"
       }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "GACHITA_PAUSE_RECORDING",
+        "description": "Pause recording the family's conversation in the car. Consent stays on and nothing is deleted. Use this when the user asks to stop or pause the trip recording.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        },
+        "component": "activity"
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "GACHITA_RESUME_RECORDING",
+        "description": "Resume recording the family's conversation in the car after it was paused. Use this when the user asks to continue or restart the trip recording.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        },
+        "component": "activity"
+      }
     }
   ]
 }
