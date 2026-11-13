@@ -436,7 +436,7 @@ test("발화를 기록본으로 저장하고 프로필 피드로 읽는다(T39)"
   assert.ok(q.id);
   const [, tr] = await call("GET", `${t}/transcript`, null, pa.token);
   assert.deepEqual(tr.utterances.map((u) => u.text), ["강릉 얼마나 남았어?", "휴게소 가자", "바다는 왜 짜?", "콜라 사줘"]);
-  assert.deepEqual(tr.utterances[2], { device: "car", seq: 3, at: at(3), text: "바다는 왜 짜?", seatArea: "ROW_2_LEFT", profileId: meB.id, confidence: 0.9, lat: 37.7, lng: 128.9 });
+  assert.deepEqual(tr.utterances[2], { device: "car", seq: 3, at: at(3), text: "바다는 왜 짜?", displayText: "바다는 왜 짜?", editedText: null, editVersion: 0, seatArea: "ROW_2_LEFT", profileId: meB.id, confidence: 0.9, lat: 37.7, lng: 128.9 });
   assert.equal(tr.utterances[1].seatArea, null);
   assert.equal(tr.requests.length, 1);
   assert.deepEqual(tr.todos, []);
@@ -1040,6 +1040,9 @@ test("장면 규칙의 가장자리: 한 순간에 몰린 2만 줄, 같은 시�
   // 두 자리에서 같은 시각에 말하면 자막이 겹쳐 보인다(0초짜리로 사라지지 않음)
   const both = cues([{ at: t0, text: "와", seatArea: "ROW_1_LEFT" }, { at: t0, text: "우와", seatArea: "ROW_2_LEFT" }], t0 - 1000, 10);
   assert.deepEqual(both.map((c) => [c.start, c.end]), [[1, 2], [1, 2]]);
+  const guest = cues([{ at: t0, text: "손님도 바다가 보여", participantId: "matched-guest", seatArea: "ROW_2_RIGHT" }], t0, 3)[0];
+  assert.equal(guest.participantId, "matched-guest", "T38이 대조한 손님 참가자 id를 프로필 없이도 숏폼에 보존");
+  assert.equal(both[0].participantId, null, "화자 id가 없으면 좌석만으로 만들지 않음");
 });
 
 test("고른 장면 클립을 Nemotron으로 다시 받아 적고, 실패하면 원문 자막으로 남는다(T75)", async () => {
@@ -1469,5 +1472,113 @@ test("명세(docs/api/openapi.yaml)와 서버의 경로가 같다", async () => 
       const documented = ops[method] ? Object.keys(ops[method].responses).map(Number) : [404, 405];
       assert.ok(documented.includes(res.status), `${method.toUpperCase()} ${path} → ${res.status}, 명세에는 ${documented.join("·")}`);
     }
+  }
+});
+
+test("수동 자막은 동의한 여행 참가자만 고치며 동시 수정·세대·만료를 구분한다(T80)", async () => {
+  const [, trip] = await call("POST", "/api/trips", {});
+  const t = `/api/trips/${trip.code}`;
+  const [, a] = await join(trip.code, "지우", "ROW_1_LEFT");
+  const [, b] = await join(trip.code, "하늘", "ROW_2_LEFT", false);
+  const device = "차 / 기기%";
+  const path = `${t}/captions/${encodeURIComponent(device)}/1`;
+  const edit = (text, expectedVersion = 0, token = a.token, generation = 1) => call("PATCH", path, { text, expectedVersion, generation }, token);
+  assert.equal((await edit("수정", 0, b.token))[0], 403);
+  await call("PATCH", `${t}/participants/${b.id}`, { consent: true }, b.token);
+  const item = { seq: 1, at: trip.createdAt + 1000, text: "원래 말", generation: 1 };
+  assert.equal((await call("POST", `${t}/utterances`, { device, items: [item] }, a.token))[0], 200);
+  // `.`·`..`는 주소 마디로 쓰면 URL 정규화로 사라져 자막을 고칠 수 없으므로 올릴 때 거절한다(Astra)
+  for (const odd of [".", ".."]) assert.equal((await call("POST", `${t}/utterances`, { device: odd, items: [item] }, a.token))[0], 400);
+  const [, otherTrip] = await call("POST", "/api/trips", {});
+  const [, other] = await join(otherTrip.code, "다른 여행", "ROW_1_LEFT");
+  assert.equal((await edit("수정", 0, other.token))[0], 401);
+  assert.equal((await call("PATCH", path, { text: "수정", expectedVersion: 0, generation: 1 }))[0], 401);
+  for (const bad of ["", " ", "가".repeat(501), 3, "\0", "\ud800"])
+    assert.equal((await edit(bad))[0], 400);
+  for (const patch of [{ expectedVersion: -1 }, { expectedVersion: 0.5 }, { expectedVersion: "0" }, { generation: undefined }, { text: undefined }])
+    assert.equal((await call("PATCH", path, { text: "수정", expectedVersion: 0, generation: 1, ...patch }, a.token))[0], 400);
+  assert.equal((await edit("수정", 0, a.token, 2))[0], 409);
+  assert.equal((await call("PATCH", `${t}/captions/%GG/1`, {}, a.token))[0], 400);
+  assert.equal((await call("PATCH", `${t}/captions/car/1/extra`, {}, a.token))[0], 404);
+  const replies = await Promise.all([edit(" 첫 수정 "), edit("다른 수정", 0, b.token)]);
+  assert.deepEqual(replies.map(([s]) => s).sort(), [200, 409]);
+  const saved = replies.find(([s]) => s === 200)[1].utterance;
+  assert.equal(saved.editVersion, 1);
+  assert.equal(saved.text, item.text);
+  assert.equal(saved.displayText, saved.editedText);
+  assert.ok([a.id, b.id].includes(saved.editedBy) && Number.isInteger(saved.editedAt));
+  const row = (await call("GET", `${t}/transcript`, null, a.token))[1].utterances[0];
+  assert.deepEqual(row, saved, "다른 요청에서도 동일한 수정본·버전");
+  const sync = (await call("GET", `${t}/utterances`, null, b.token))[1].items[0];
+  assert.deepEqual(sync, saved, "차량 동기화에도 원문과 수정본을 분리");
+  const [, reset] = await edit(null, 1, b.token);
+  assert.deepEqual([reset.utterance.editedText, reset.utterance.editVersion, reset.utterance.displayText], [null, 2, item.text]);
+  await edit("철회 대상", 2);
+  await call("PATCH", `${t}/participants/${b.id}`, { consent: false });
+  assert.equal((await edit("옛 요청", 3))[0], 409);
+  assert.equal((await edit("미동의", 3, b.token, 2))[0], 403);
+  assert.equal((await edit("지워진 말", 3, a.token, 2))[0], 404);
+  assert.equal((await tripsDb().query("SELECT count(*)::int AS n FROM utterances WHERE trip_code = $1", [trip.code])).rows[0].n, 0);
+  await call("PATCH", `${t}/participants/${b.id}`, { consent: true }, b.token);
+  await call("POST", `${t}/utterances`, { device, items: [{ ...item, seq: 2, generation: 2 }] }, a.token);
+  const second = `${t}/captions/${encodeURIComponent(device)}/2`;
+  assert.equal((await call("PATCH", second, { text: "만료 대상", expectedVersion: 0, generation: 2 }, b.token))[0], 200);
+  await tripsDb().query("UPDATE trips SET created_at = now() - interval '49 hours' WHERE code = $1", [trip.code]);
+  assert.equal((await call("PATCH", second, { text: "만료 뒤", expectedVersion: 1, generation: 2 }, b.token))[0], 404);
+  assert.equal((await call("GET", `${t}/transcript`, null, a.token))[0], 404);
+  await sweep();
+  assert.equal((await tripsDb().query("SELECT count(*)::int AS n FROM utterances WHERE trip_code = $1", [trip.code])).rows[0].n, 0);
+});
+
+test("늦은 ASR은 수동 자막을 덮지 않고 초기화·자기 글 삭제는 숏폼에도 반영한다(T80)", async () => {
+  const [, trip] = await call("POST", "/api/trips", {});
+  const t = `/api/trips/${trip.code}`;
+  const [, profile] = await call("POST", "/api/profiles", { name: "지우" });
+  const [, a] = await call("POST", `${t}/participants`, { seat: "ROW_1_LEFT", consent: true }, profile.token);
+  const [, b] = await join(trip.code, "하늘", "ROW_2_LEFT");
+  const original = "서와야 바다 봐";
+  const item = { seq: 1, at: trip.createdAt + 1000, text: original, generation: 1 };
+  await call("POST", `${t}/utterances`, { device: "car", items: [item] }, a.token);
+  await tripsDb().query("UPDATE utterances SET profile_id = $2 WHERE trip_code = $1", [trip.code, profile.id]);
+  const [, moment] = await call("POST", `${t}/moments`, { at: item.at, from: trip.createdAt, to: trip.createdAt + 5000 });
+  const path = `${t}/captions/car/1`;
+  const edit = (text, expectedVersion) => call("PATCH", path, { text, expectedVersion, generation: 1 }, b.token);
+  Object.assign(process.env, { ASR_URL: `http://127.0.0.1:${fakeAsr.address().port}/asr/v1`, ASR_TOKEN: "test-asr-token", ASR_GAP_MS: "20" });
+  let saved;
+  asr.onCall = async () => { saved = await edit("서아야 저 바다를 봐", 0); };
+  try {
+    assert.equal((await fetch(`${base}${t}/recordings?moment=${moment.id}&generation=1&from=${trip.createdAt}`, { method: "POST", headers: { authorization: `Bearer ${a.token}` }, body: wav(200, 5) })).status, 201);
+    let row;
+    for (let i = 0; i < 300; i++) {
+      row = (await call("GET", `${t}/transcript`, null, a.token))[1].utterances[0];
+      if (row.asrText) break;
+      await new Promise((ok) => setTimeout(ok, 20));
+    }
+    assert.equal(saved[0], 200);
+    assert.deepEqual([row.text, row.asrText, row.editedText, row.displayText, row.editVersion], [original, "서아야 바다 봐.", "서아야 저 바다를 봐", "서아야 저 바다를 봐", 1]);
+    const form = (await call("GET", `${t}/shortform`, null, a.token))[1];
+    const cue = form.scenes[0].cues[0];
+    assert.equal(form.generation, 1);
+    assert.deepEqual([cue.device, cue.seq, cue.text, cue.raw, cue.asrText, cue.editVersion, cue.editedBy], ["car", 1, row.displayText, original, row.asrText, 1, b.id]);
+    assert.equal((await edit(null, 1))[1].utterance.displayText, row.asrText);
+    assert.equal((await call("GET", `${t}/shortform`, null, a.token))[1].scenes[0].cues[0].text, row.asrText);
+    await edit("삭제 대상 수정본", 2);
+    assert.equal((await call("DELETE", `${t}/utterances`, null, a.token))[1].deleted, 1);
+    assert.equal((await edit("되살리기", 3))[0], 404);
+    await call("POST", `${t}/utterances`, { device: "car", items: [item] }, a.token);
+    assert.equal((await call("GET", `${t}/transcript`, null, a.token))[1].utterances.length, 0);
+    assert.equal((await call("GET", `${t}/shortform`, null, a.token))[1].scenes[0].cues.length, 0);
+    const gone = (await tripsDb().query("SELECT text, asr_text, edited_text, edit_version, edited_by, edited_at FROM utterances WHERE trip_code = $1", [trip.code])).rows[0];
+    assert.deepEqual(gone, { text: "", asr_text: null, edited_text: null, edit_version: 0, edited_by: null, edited_at: null });
+    // 혼재 배포/되돌린 이미지의 옛 DELETE SQL도 새 수정 칸을 남기지 않아야 한다.
+    delete process.env.ASR_URL; // 다음 발화에 새 비동기 작업을 시작하지 않는다.
+    await call("POST", `${t}/utterances`, { device: "car", items: [{ ...item, seq: 2 }] }, a.token);
+    await call("PATCH", `${t}/captions/car/2`, { text: "구 서버에서도 지울 수정본", expectedVersion: 0, generation: 1 }, b.token);
+    await tripsDb().query("UPDATE utterances SET text = '', asr_text = NULL WHERE trip_code = $1 AND seq = 2", [trip.code]);
+    const oldDelete = (await tripsDb().query("SELECT edited_text, edit_version, edited_by, edited_at FROM utterances WHERE trip_code = $1 AND seq = 2", [trip.code])).rows[0];
+    assert.deepEqual(oldDelete, { edited_text: null, edit_version: 0, edited_by: null, edited_at: null });
+  } finally {
+    asr.onCall = null;
+    delete process.env.ASR_URL; delete process.env.ASR_TOKEN; delete process.env.ASR_GAP_MS;
   }
 });
