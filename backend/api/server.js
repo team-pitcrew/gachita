@@ -25,6 +25,7 @@ const PROFILES_SQL = fileURLToPath(new URL("profiles.sql", import.meta.url));
 const LINKS_SQL = fileURLToPath(new URL("profiles-2-links.sql", import.meta.url));
 const UTTERANCES_SQL = fileURLToPath(new URL("trips-2-utterances.sql", import.meta.url));
 const RECORDINGS_SQL = fileURLToPath(new URL("trips-3-recordings.sql", import.meta.url));
+const CAPTIONS_SQL = fileURLToPath(new URL("trips-5-captions.sql", import.meta.url));
 const ASR_SQL = fileURLToPath(new URL("trips-4-asr.sql", import.meta.url));
 const TRIP_VOICE_SQL = fileURLToPath(new URL("trips-5-voice.sql", import.meta.url));
 const ALBUM_SQL = fileURLToPath(new URL("profiles-3-moments.sql", import.meta.url));
@@ -73,7 +74,7 @@ export function classify(e) {
 }
 
 // 로그의 경로 틀: 정한 낱말이 아닌 마디(여행 코드, id, 초대 코드)는 :p로 가린다. 웹 파일은 /(web) 하나로.
-const ROUTE_WORDS = new Set(["api", "config", "trips", "participants", "requests", "moments", "utterances", "transcript", "voice-match", "recordings", "scene-suggestions", "shortform", "profiles", "me", "links", "google", "feed", "tokens", "photo", "voice", "groups", "members", "invites", "j"]);
+const ROUTE_WORDS = new Set(["api", "config", "trips", "participants", "requests", "moments", "utterances", "transcript", "captions", "voice-match", "recordings", "scene-suggestions", "shortform", "profiles", "me", "links", "google", "feed", "tokens", "photo", "voice", "groups", "members", "invites", "j"]);
 const routeOf = (pathname) =>
   pathname === "/healthz" ? pathname : pathname.startsWith("/api/") ? `/${pathname.split("/").filter(Boolean).map((s) => (ROUTE_WORDS.has(s) ? s : ":p")).join("/")}` : "/(web)";
 // ALB가 붙이는 추적 id(X-Amzn-Trace-Id)를 그대로 쓴다. 없거나 모양이 이상하면 새로.
@@ -106,6 +107,7 @@ export async function migrate() {
   await tripsDb().query(await readFile(ASR_SQL, "utf8"));
   await tripsDb().query(await readFile(new URL("trips-5-ride-links.sql", import.meta.url), "utf8"));
   await tripsDb().query(await readFile(TRIP_VOICE_SQL, "utf8"));
+  await tripsDb().query(await readFile(CAPTIONS_SQL, "utf8"));
   await profilesDb().query(await readFile(PROFILES_SQL, "utf8"));
   await profilesDb().query(await readFile(LINKS_SQL, "utf8"));
   await profilesDb().query(await readFile(ALBUM_SQL, "utf8"));
@@ -185,6 +187,10 @@ const asUtterance = (r) => ({
   seq: Number(r.seq),
   at: Number(r.at),
   text: r.text,
+  displayText: r.edited_text ?? r.asr_text ?? r.text,
+  editedText: r.edited_text ?? null,
+  editVersion: Number(r.edit_version ?? 0),
+  ...(r.edited_by ? { editedBy: r.edited_by, editedAt: new Date(r.edited_at).getTime() } : {}),
   seatArea: r.seat_area,
   ...(r.participant_id ? { participantId: r.participant_id } : {}),
   ...(r.profile_id ? { profileId: r.profile_id } : {}),
@@ -997,7 +1003,33 @@ async function trips(req, [code, sub, id, leaf, ...rest], b, query) {
       if (rowCount) return [201, trip];
     }
   }
-  if (rest.length || (leaf !== undefined && !(sub === "participants" && leaf === "voice") && sub !== "utterances")) fail(404, "없는 경로");
+  if (rest.length || (leaf !== undefined && !(sub === "participants" && leaf === "voice") && sub !== "utterances" && sub !== "captions")) fail(404, "없는 경로");
+  if (sub === "captions") {
+    if (!id || !leaf || rest.length) fail(404, "자막 경로에 기기와 순번이 필요함");
+    if (m !== "PATCH") fail(405, "PATCH만 됨");
+    let device;
+    try { device = decodeURIComponent(id); } catch { fail(400, "device: 잘못된 URI 인코딩"); }
+    device = text(device, 40, "device");
+    if (!/^[1-9][0-9]*$/.test(leaf)) fail(400, "seq: 양의 정수");
+    const sequence = int(Number(leaf), 1, 1_000_000_000, "seq");
+    return withTrip(code, true, async (trip, client) => {
+      const caller = participantOf(req, trip);
+      if (!caller.consent) fail(403, "녹음에 동의한 참가자만 고칠 수 있음");
+      const generation = int(b.generation, 1, 2_147_483_647, "generation");
+      if (generation !== (trip.generation ?? 1)) fail(409, "동의 세대가 바뀜 — 기록본을 다시 읽어 주세요");
+      const expected = int(b.expectedVersion, 0, 2_147_483_646, "expectedVersion");
+      const edited = b.text === null ? null : text(b.text, 500, "text");
+      const args = [trip.code, device, sequence, generation];
+      const live = "trip_code = $1 AND device = $2 AND seq = $3 AND generation = $4 AND text <> ''";
+      if (!(await client.query(`SELECT 1 FROM utterances WHERE ${live}`, args)).rowCount) fail(404, "없는 발화");
+      const { rows } = await client.query(
+        `UPDATE utterances SET edited_text = $5, edit_version = edit_version + 1, edited_by = $6, edited_at = now()
+         WHERE ${live} AND edit_version = $7 RETURNING *`, [...args, edited, caller.id, expected]
+      );
+      if (!rows[0]) fail(409, "다른 사람이 먼저 고침 — 기록본을 다시 읽어 주세요");
+      return [200, { generation, utterance: asUtterance(rows[0]) }];
+    });
+  }
   if (sub === "voice-match" && !id) return voiceMatch(code, req, query);
   if (sub === "recordings") return recordings(code, id, req, query);
   if (leaf === "voice") return participantVoice(code, id, req);
@@ -1273,7 +1305,7 @@ async function handle(trip, { req, m, sub, id, leaf, b, query, profile }, client
         params.push(device, int(Number(query.get("after") ?? 0), 0, 1_000_000_000, "after"));
         where += " AND device = $2 AND seq > $3";
       }
-      const { rows } = await client.query(`SELECT device, seq, at, text, seat_area, participant_id, profile_id, confidence, lat, lng FROM utterances WHERE ${where} ORDER BY at`, params);
+      const { rows } = await client.query(`SELECT device, seq, at, text, asr_text, edited_text, edit_version, edited_by, edited_at, seat_area, participant_id, profile_id, confidence, lat, lng FROM utterances WHERE ${where} ORDER BY at`, params);
       return [200, { generation: trip.generation ?? 1, recording: trip.recording, items: rows.map(asUtterance) }];
     }
     if (m === "DELETE") {
@@ -1282,7 +1314,7 @@ async function handle(trip, { req, m, sub, id, leaf, b, query, profile }, client
       // 줄은 지우지 않고 내용만 비운다: 순번에 빈자리가 있던 기기가 같은 순번을 다시 보내도(멱등 키에 걸려) 되살아나지 않게.
       if (!caller.profileId) fail(403, "프로필로 참가한 사람의 글만 지울 수 있음");
       const { rowCount } = await client.query(
-        "UPDATE utterances SET text = '', asr_text = NULL, seat_area = NULL, confidence = NULL, lat = NULL, lng = NULL WHERE trip_code = $1 AND profile_id = $2 AND text <> ''",
+        "UPDATE utterances SET text = '', asr_text = NULL, edited_text = NULL, edit_version = 0, edited_by = NULL, edited_at = NULL, seat_area = NULL, confidence = NULL, lat = NULL, lng = NULL WHERE trip_code = $1 AND profile_id = $2 AND text <> ''",
         [trip.code, caller.profileId]
       );
       return [200, { deleted: rowCount }];
@@ -1293,7 +1325,7 @@ async function handle(trip, { req, m, sub, id, leaf, b, query, profile }, client
   const lines = async () => {
     if (m !== "GET") fail(405, "GET만 됨");
     if (!participantOf(req, trip).consent) fail(403, "녹음에 동의한 참가자만 볼 수 있음");
-    const { rows } = await client.query("SELECT device, seq, at, text, asr_text, seat_area, participant_id, profile_id, confidence, lat, lng FROM utterances WHERE trip_code = $1 AND text <> '' ORDER BY at", [trip.code]);
+    const { rows } = await client.query("SELECT device, seq, at, text, asr_text, edited_text, edit_version, edited_by, edited_at, seat_area, participant_id, profile_id, confidence, lat, lng FROM utterances WHERE trip_code = $1 AND text <> '' ORDER BY at", [trip.code]);
     return rows.map(asUtterance);
   };
 
@@ -1321,6 +1353,7 @@ async function handle(trip, { req, m, sub, id, leaf, b, query, profile }, client
     const byProfile = new Map(trip.participants.filter((p) => p.profileId).map((p) => [p.profileId, p.id]));
     return [200, {
       title: trip.title,
+      generation: trip.generation ?? 1,
       cast: trip.participants.map((p) => ({ participantId: p.id, name: p.name, character: character.get(p.profileId) ?? "", seat: p.seat })),
       // 이 조회 중에 새 장면·클립이 들어오면 클립 줄이 여행 문서보다 새로울 수 있다 — 문서에 없는 장면의 클립은 다음 조회에서 보인다.
       scenes: clips.flatMap((r) => {

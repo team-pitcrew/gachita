@@ -580,6 +580,47 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
         "405": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+  /api/trips/{code}/captions/{device}/{seq}:
+    parameters:
+      - { $ref: "#/components/parameters/code" }
+      - { name: device, in: path, required: true, schema: { type: string, minLength: 1, maxLength: 40 }, description: "발화 기기 이름. encodeURIComponent로 인코딩합니다" }
+      - { name: seq, in: path, required: true, schema: { type: integer, minimum: 1, maximum: 1000000000 } }
+    patch:
+      tags: [기록본]
+      summary: 자막 수정본 저장 또는 초기화
+      description: |
+        해당 여행의 동의한 참가자가 고칩니다. 원문 text·자동 asrText는 보존합니다.
+        expectedVersion이 현재 editVersion과 다르거나 generation이 현재 동의 세대와 다르면 409입니다.
+        초기 버전은 0이며 저장과 null 초기화 모두 버전을 하나 올립니다. 충돌하면 기록본을 다시 읽고 사용자가 재확인합니다.
+        없는 발화·자기 글 삭제로 비운 발화·만료 여행은 404입니다. 수정본과 마지막 편집자/시각은 발화와 함께 철회·만료·삭제됩니다.
+      security: [{ participantToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text, expectedVersion, generation]
+              properties:
+                text: { type: [string, "null"], minLength: 1, maxLength: 500, description: "trim 후 1~500자. null은 수동 수정본 초기화(ASR 또는 원문으로 표시)" }
+                expectedVersion: { type: integer, minimum: 0, maximum: 2147483646 }
+                generation: { type: integer, minimum: 1, maximum: 2147483647 }
+      responses:
+        "200":
+          description: 저장한 발화와 현재 동의 세대
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [generation, utterance]
+                properties:
+                  generation: { type: integer }
+                  utterance: { $ref: "#/components/schemas/Utterance" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /api/trips/{code}/transcript:
     parameters: [{ $ref: "#/components/parameters/code" }]
     get:
@@ -802,9 +843,10 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [title, cast, scenes]
+                required: [title, generation, cast, scenes]
                 properties:
                   title: { type: string }
+                  generation: { type: integer, description: 자막 저장 시 보낼 동의 세대 }
                   cast:
                     type: array
                     items:
@@ -831,12 +873,19 @@ paths:
                           type: array
                           items:
                             type: object
-                            required: [start, end, text, raw, participantId, seatArea]
+                            required: [start, end, text, raw, device, seq, editVersion, editedText, participantId, seatArea]
                             properties:
                               start: { type: number, description: 클립 안의 초 }
                               end: { type: number }
-                              text: { type: string, description: 다시 받아 적은 글(T75), 없으면 Pleos 원문 }
+                              text: { type: string, description: 수동 수정본(T80) → ASR(T75) → Pleos 원문 순 }
                               raw: { type: string, description: Pleos 원문 }
+                              device: { type: string }
+                              seq: { type: integer }
+                              editedText: { type: [string, "null"] }
+                              editVersion: { type: integer, minimum: 0 }
+                              asrText: { type: string, description: 재전사 결과가 있을 때만 }
+                              editedBy: { type: string, description: 마지막 저장/초기화 참가자 id. 편집 이후만 }
+                              editedAt: { type: integer, description: 마지막 저장/초기화 시각(epoch ms). 편집 이후만 }
                               participantId: { type: [string, "null"], description: 화자 대조로 붙은 참가자. 모르면 null }
                               seatArea: { oneOf: [{ $ref: "#/components/schemas/Seat" }, { type: "null" }] }
                         lat: { type: number }
@@ -1228,11 +1277,16 @@ components:
       allOf:
         - $ref: "#/components/schemas/UtteranceInput"
         - type: object
-          required: [device]
+          required: [device, displayText, editedText, editVersion]
           properties:
             device: { type: string }
             participantId: { type: string, description: 서버의 화자 대조(T38)가 붙인 참가자(손님 포함). 아직 없으면 생략 }
             profileId: { type: string, format: uuid, description: 화자가 프로필 참가자일 때 그 프로필. 아니면 생략 }
+            displayText: { type: string, description: 수동 수정본 → ASR → Pleos 원문 순으로 고른 표시 글 }
+            editedText: { type: [string, "null"], description: 수동 수정본. 없거나 초기화하면 null }
+            editVersion: { type: integer, minimum: 0, description: 초기값 0. 저장/초기화마다 증가 }
+            editedBy: { type: string, description: 마지막 저장/초기화 참가자 id. 편집 이후만 }
+            editedAt: { type: integer, description: 마지막 저장/초기화 시각(epoch ms). 편집 이후만 }
             asrText: { type: string, description: "고른 장면 클립의 소리로 다시 받아 적은 글(T75). 있을 때만 — 기록본과 장면 후보의 발화에. text(Pleos 원문)는 그대로" }
     Transcript:
       type: object
