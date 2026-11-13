@@ -151,16 +151,17 @@ test("동의 켜기는 본인의 참가자 토큰으로만, 끄기와 자리는 
   assert.equal((await call("PATCH", `${t}/participants/${b.id}`, { seat: "ROW_1_RIGHT" }))[0], 200);
   assert.equal((await call("PATCH", `${t}/participants/nobody`, { consent: true }, a.token))[0], 404);
 
-  // 다시 참가해도 앞 기기의 토큰은 산다: 처음 것은 끝까지, 다시 받은 것은 최근 4개
+  // 다시 참가해도 앞 기기의 토큰은 산다: 가장 최근 것과 그 앞의 4개
   const [, me] = await call("POST", "/api/profiles", { name: "엄마" });
   const [, first] = await call("POST", `${t}/participants`, { seat: "ROW_1_LEFT", consent: false }, me.token);
-  const rejoins = [];
-  for (let i = 0; i < 5; i++) rejoins.push((await call("POST", `${t}/participants`, { seat: "ROW_1_LEFT" }, me.token))[1].token);
-  assert.equal(new Set([first.token, ...rejoins]).size, 6, "기기마다 다른 토큰");
-  assert.equal((await on(first, first.token))[0], 200, "처음 참가한 기기");
-  assert.equal((await on(first, rejoins[4]))[0], 200, "가장 최근에 다시 참가한 기기");
-  assert.equal((await on(first, rejoins[1]))[0], 200, "최근 4개 안");
-  assert.equal((await on(first, rejoins[0]))[0], 401, "다섯 번 전에 받은 토큰은 밀려남");
+  const tokens = [first.token];
+  for (let i = 0; i < 5; i++) tokens.push((await call("POST", `${t}/participants`, { seat: "ROW_1_LEFT" }, me.token))[1].token);
+  assert.equal(new Set(tokens).size, 6, "기기마다 다른 토큰");
+  for (const i of [5, 4, 1]) assert.equal((await on(first, tokens[i]))[0], 200, `토큰 ${i}`);
+  assert.equal((await on(first, tokens[0]))[0], 401, "다섯 번 전에 받은 토큰은 밀려남");
+  // 옛 파드(배포 중·되돌린 이미지)는 tokenHash만 읽는다: 거기 가장 최근 토큰이 있다
+  const doc = (await tripsDb().query("SELECT doc FROM trips WHERE code = $1", [trip.code])).rows[0].doc;
+  assert.equal(doc.participants.find((p) => p.id === first.id).tokenHash, createHash("sha256").update(tokens[5]).digest("hex"));
 });
 
 test("프로필: 발급, 토큰으로 본인 확인, 프로필로 참가하면 이름과 동의 기본값을 가져온다", async () => {
@@ -191,7 +192,7 @@ test("프로필: 발급, 토큰으로 본인 확인, 프로필로 참가하면 �
   // 저장은 Postgres에 한다: 서버가 돌려준 것과 표의 문서가 같다.
   // 참가자 토큰 해시는 문서 안에만 있는다(응답에는 절대 안 나간다).
   const stored = (await tripsDb().query("SELECT doc FROM trips WHERE code = $1", [trip.code])).rows[0].doc;
-  for (const p of stored.participants) delete p.tokenHash, delete p.rejoinTokenHashes;
+  for (const p of stored.participants) delete p.tokenHash, delete p.olderTokenHashes;
   assert.deepEqual(stored, (await call("GET", t))[1]);
 
   // 고치기와 지우기
@@ -517,7 +518,8 @@ test("가족 그룹과 초대: 대표·아이·수락, 기기 토큰(T45)", asyn
   const [, stranger] = await call("POST", "/api/profiles", { name: "모르는 사람" });
   assert.equal((await call("POST", `/api/trips/${trip.code}/participants`, { seat: "ROW_2_RIGHT", profileId: stranger.id }, mom.token))[0], 403, "내 그룹의 구성원만");
   assert.equal((await call("POST", `/api/trips/${trip.code}/participants`, { seat: "ROW_2_RIGHT", profileId: uncle.id }, mom.token))[0], 403, "계정 있는 어른의 자리와 동의는 그 사람이 정함");
-  assert.equal((await call("POST", `/api/trips/${trip.code}/participants`, { seat: "ROW_2_RIGHT", profileId: kid.profileId }, mom.token))[0], 409, "같은 아이를 두 자리에 앉히지 못함");
+  const [ckj2, kp2] = await call("POST", `/api/trips/${trip.code}/participants`, { seat: "ROW_2_RIGHT", profileId: kid.profileId }, mom.token);
+  assert.deepEqual([ckj2, kp2.id, kp2.seat], [200, kp.id, "ROW_2_LEFT"], "같은 아이를 다시 참가시키면 두 자리가 아니라 있던 참가자와 새 토큰(T68)");
   assert.equal((await call("POST", `/api/trips/${trip.code}/participants`, { seat: "ROW_2_RIGHT", profileId: "x" }, mom.token))[0], 400);
   await call("PATCH", `/api/trips/${trip.code}/participants/${kp.id}`, { consent: true }, kp.token); // 아이의 참가자 토큰은 참가시킨 보호자의 기기에
   assert.equal((await call("PATCH", `/api/trips/${trip.code}`, { status: "driving", recording: true }))[1].recording, true);

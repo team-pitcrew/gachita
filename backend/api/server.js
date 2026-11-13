@@ -138,17 +138,18 @@ async function issueToken(profileId, device = "", token = randomBytes(32).toStri
 }
 
 // 여행 문서의 참가자를 API가 돌려주는 모양으로 바꾼다. 참가자 토큰 해시는 절대 나가지 않는다.
-const asParticipant = ({ tokenHash, rejoinTokenHashes, ...p }) => p;
+// prefs는 좌석·공조 선호를 걷어내기(T68) 전에 만든 여행 문서에만 있다(48시간 보관 시계와 함께 사라짐).
+const asParticipant = ({ tokenHash, olderTokenHashes, prefs, ...p }) => p;
 const tripView = (trip) => ({ ...trip, participants: trip.participants.map(asParticipant) });
 
 // 참가자 토큰(ADR-0007·docs/api/voice.md). 여행·참가에 묶이고 문서에는 해시만 남는다.
 // 프로필 토큰과 별개다 — 발화 올리기·기록본·동의 켜기의 인증에 쓴다.
-// 처음 참가한 기기의 해시(tokenHash)와 다시 참가한 기기들의 해시(rejoinTokenHashes)를 따로 둔다 —
-// 배포하는 동안 함께 도는 옛 파드는 tokenHash만 읽는다.
+// 가장 최근에 준 토큰의 해시는 tokenHash, 그 앞의 것은 olderTokenHashes에 둔다(T68) —
+// 배포 중 함께 도는 옛 파드와 되돌린 이미지는 tokenHash만 읽으니, 그쪽에서도 가장 최근 기기는 통한다.
 const participantOf = (req, trip) => {
   const m = /^Bearer ([A-Za-z0-9_-]{40,})$/.exec(req.headers.authorization ?? "");
   const h = m && tokenHash(m[1]).toString("hex");
-  const p = h && trip.participants.find((x) => x.tokenHash === h || x.rejoinTokenHashes?.includes(h));
+  const p = h && trip.participants.find((x) => x.tokenHash === h || x.olderTokenHashes?.includes(h));
   return p ?? fail(401, "참가자 토큰이 필요함");
 };
 
@@ -763,16 +764,16 @@ async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
           [b.profileId, profile.id]
         );
         if (!kid[0]) fail(403, "내가 만든 계정 없는 구성원만 참가시킬 수 있음");
-        if (trip.participants.some((p) => p.profileId === kid[0].id)) fail(409, "이미 참가한 구성원");
         kidOf = kid[0];
       }
-      // 같은 프로필이 다시 참가하면 이미 있는 참가자를 돌려준다(폰을 바꿨거나 다시 열었을 때).
-      // 참가자 토큰은 문서에 해시만 남으니 이 기기에 쓸 토큰을 하나 더 만들어 준다. 앞서 준 토큰은 그대로 산다 —
-      // 처음 참가한 기기의 것은 여행이 끝날 때까지, 다시 참가해 받은 것은 최근 4개까지.
-      const again = !kidOf && profile && trip.participants.find((p) => p.profileId === profile.id);
+      // 같은 프로필(대표가 참가시킨 아이도)이 다시 참가하면 이미 있는 참가자를 돌려준다(폰을 바꿨거나 토큰을 잃었을 때).
+      // 참가자 토큰은 문서에 해시만 남으니 이 기기에 쓸 토큰을 새로 만들어 준다. 앞서 준 토큰도 최근 4개까지 산다(T68) —
+      // 남이 끈 동의를 본인이 다시 켜려면 토큰이 있어야 하니, 잃었으면 다시 참가해 받는다.
+      const again = profile && trip.participants.find((p) => p.profileId === (kidOf ?? profile).id);
       if (again) {
         const token = randomBytes(32).toString("base64url");
-        again.rejoinTokenHashes = [...(again.rejoinTokenHashes ?? []), tokenHash(token).toString("hex")].slice(-4);
+        again.olderTokenHashes = [...(again.olderTokenHashes ?? []), again.tokenHash].slice(-4);
+        again.tokenHash = tokenHash(token).toString("hex");
         return changed(200, { ...asParticipant(again), token });
       }
       const seat = oneOf(b.seat, SEATS, "seat");

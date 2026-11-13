@@ -190,7 +190,7 @@ paths:
         같은 프로필이 다시 참가하면 있던 참가자를 200으로 돌려줍니다. 토큰이 없으면 손님으로 `name`과 `consent`가 필요합니다.
         대표는 `profileId`로 **내 그룹의 계정 없는 구성원(아이)** 을 참가시킬 수 있습니다(ADR-0009) — 아이의 동의 기본값은 꺼짐이고, 아이의 참가자 토큰은 참가시킨 기기(보호자)가 받습니다.
         프로필·손님 모두 응답에 **참가자 토큰**을 함께 줍니다(ADR-0007). 동의 켜기, 발화 올리기, 기록본 같은 음성 경로의 인증에 씁니다. 서버에는 해시만 남습니다.
-        다시 참가하면 이 기기에 쓸 토큰을 새로 주고, 앞서 준 토큰도 그대로 씁니다 — 처음 참가할 때 받은 것은 여행이 끝날 때까지, 다시 참가해 받은 것은 최근 4개까지(T68).
+        다시 참가하면(같은 프로필, 또는 대표가 같은 아이를) 있던 참가자를 그대로 두고 이 기기에 쓸 토큰을 새로 줍니다. 앞서 준 토큰도 최근 4개까지 씁니다(T68). 토큰을 잃었으면 다시 참가해 받습니다. 손님은 다시 참가할 길이 없으니 참가시킨 기기가 토큰을 보관합니다.
         좌석·공조 선호(`prefs`)는 없습니다(11/13 계획). 보내도 무시합니다.
       security: [{}, { profileToken: [] }]
       requestBody:
@@ -204,9 +204,9 @@ paths:
                 seat: { $ref: "#/components/schemas/Seat" }
                 name: { type: string, minLength: 1, maxLength: 20, description: 손님일 때 필요 }
                 consent: { type: boolean, description: 손님일 때 필요 }
-                profileId: { type: string, format: uuid, description: 내가 만든 계정 없는 구성원(아이)으로 참가시킬 때. 대표만. 이미 참가했으면 409 }
+                profileId: { type: string, format: uuid, description: 내가 만든 계정 없는 구성원(아이)으로 참가시킬 때. 대표만. 이미 참가했으면 있던 참가자와 새 토큰(200) }
       responses:
-        "200": { description: 이미 참가한 프로필(이 기기의 참가자 토큰을 더 발급), content: { application/json: { schema: { $ref: "#/components/schemas/ParticipantWithToken" } } } }
+        "200": { description: 이미 참가한 프로필이나 아이(이 기기의 참가자 토큰을 새로 발급), content: { application/json: { schema: { $ref: "#/components/schemas/ParticipantWithToken" } } } }
         "201": { description: 참가함, content: { application/json: { schema: { $ref: "#/components/schemas/ParticipantWithToken" } } } }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
