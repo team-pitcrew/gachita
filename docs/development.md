@@ -95,6 +95,7 @@ gh pr merge --merge --match-head-commit <확인한 HEAD>
 | 브랜치 | 시작점 | PR 대상 | 뜻 |
 |---|---|---|---|
 | `feature/T번호-설명` | `develop` | `develop` | 작업 하나 |
+| `bot/deploy-tag` | `develop`(워크플로가 다시 만듦) | `develop` | dev 이미지 태그 바꾸기(`deploy-tag`, T56). 제목은 `[sync]` |
 | `release/vX.Y.Z` | `develop` | `main`, 그다음 `develop` | 확인한 범위를 내보낼 준비 |
 | `hotfix/T번호-설명` | `main` | `main`, 그다음 `develop` | 내보낸 판의 급한 수정 |
 
@@ -165,6 +166,7 @@ make deploy-tag TAG=<올린 태그>   # dev 환경의 태그를 바꾼다
 - 올라간 태그 보기: `gh api /orgs/team-pitcrew/packages/container/gachita-api/versions --jq '.[:5][] | {tags: .metadata.container.tags, created_at}'`
 - `make push`는 CI를 거치지 않고 로컬에서 올릴 때 씁니다. `make e2e`를 통과해야 올립니다.
 - 되돌릴 때는 `make deploy-tag`로 이전 태그를 다시 적어 PR로 올립니다.
+- 자동으로: develop에 병합돼 이미지가 올라가면 `deploy-tag` 워크플로가 그 태그로 바꾸는 PR(`bot/deploy-tag`, 제목 `[sync]`)을 엽니다. 되돌릴 때는 Actions → `deploy-tag` → Run workflow에 이전 태그를 넣습니다. 병합은 사람이 하고, 병합 뒤 실제 주소 E2E(`live-e2e`)가 돕니다(T56).
 - 클러스터가 선 뒤에는 실제 주소에 대고 같은 E2E를 돕니다: Actions → `live-e2e` → Run workflow(기본 주소 `https://gachita.mangowhois.ai`). 닿지 않으면 첫 단계에서 실패합니다(T54).
 - 이미지 저장소는 GHCR입니다. `gachita-api`는 조직의 비공개 패키지이고 이 저장소에 이어져 있습니다. 2026-11-13에 로컬에서 `make push`로 ARM64 이미지를 올려 확인했습니다.
 
