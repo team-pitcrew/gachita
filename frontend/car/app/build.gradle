@@ -6,6 +6,7 @@ android {
  compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
  kotlinOptions { jvmTarget = '17' }
  buildFeatures { compose true }
+ useLibrary 'android.car' // 주행 제한 값(CarUxRestrictionsManager). SDK의 optional/android.car.jar로 빌드하고 기기에 있는 것을 씀
 }
 dependencies {
  implementation platform('androidx.compose:compose-bom:2024.09.03')

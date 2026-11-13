@@ -158,7 +158,11 @@ class MainActivity : ComponentActivity() {
                     val w = if (debug) intent.getIntExtra("widthDp", 0) else 0
                     Surface(if (w > 0) Modifier.fillMaxHeight().width(w.dp) else Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                         val t = s.trip
-                        if (t == null) Setup() else TripScreen(t)
+                        when {
+                            t != null -> TripScreen(t)
+                            carStatus.driving -> SetupLocked()
+                            else -> Setup()
+                        }
                     }
                 }
             }
@@ -282,7 +286,18 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** 1682 × 1210 창은 두 칸, 반쪽(약 841 × 1210)은 한 칸에 기록 → 가족 → 부탁 → 조작 순서로 쌓는다(frontend/spec/car.md). */
+    /** 주행 제한 중에는 여행 만들기(가족 고르기·서버 주소 입력)가 설정·키보드라 가린다(T11, NO_SETUP). */
+    @Composable
+    private fun SetupLocked() {
+        Column(Modifier.fillMaxSize().padding(32.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
+            Text("여행 만들기", fontSize = 40.sp, fontWeight = FontWeight.Bold)
+            Card { Text("주차(P)한 뒤 여행을 만들 수 있어요", fontSize = 30.sp, fontWeight = FontWeight.Bold) }
+        }
+    }
+
+    /**
+     * 주행 제한 중(T11): 기록 상태 → 받아 적은 말 두 줄 → 일행 → 보관한 부탁 수 → 기록 끄기 → 연결 상태만 24sp 이상으로 보인다.
+     * 설명·진단 줄(20sp)과 새 여행 만들기는 가린다. 1682 × 1210 창은 두 칸, 반쪽(약 841 × 1210)은 한 칸에 기록 → 가족 → 부탁 → 조작 순서로 쌓는다(frontend/spec/car.md). */
     @Composable
     private fun TripScreen(t: Trip) {
         BoxWithConstraints(Modifier.fillMaxSize().padding(32.dp)) {
@@ -358,7 +373,7 @@ class MainActivity : ComponentActivity() {
             Live.recent.asReversed().forEach { u ->
                 Text("${hm.format(Date(u.startedAt))} · ${u.text}", maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
-            if (Live.pending > 0) Text("서버에 보내지 않고 이 차에 보관 중 ${Live.pending}건", color = c.onSurfaceVariant, fontSize = 20.sp)
+            if (Live.pending > 0 && !carStatus.driving) Text("서버에 보내지 않고 이 차에 보관 중 ${Live.pending}건", color = c.onSurfaceVariant, fontSize = 20.sp)
         }
     }
 
@@ -369,7 +384,7 @@ class MainActivity : ComponentActivity() {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("대화 기록 동의", fontSize = 30.sp, fontWeight = FontWeight.Bold)
-                    Text("기본값은 꺼짐 · 주차 중에만 켤 수 있어요", color = c.onSurfaceVariant, fontSize = 20.sp)
+                    if (!carStatus.driving) Text("기본값은 꺼짐 · 주차 중에만 켤 수 있어요", color = c.onSurfaceVariant, fontSize = 20.sp)
                 }
                 Switch(s.agreed, { if (it) turnOn() else turnOff() }, enabled = !s.busy)
             }
@@ -378,10 +393,12 @@ class MainActivity : ComponentActivity() {
         Card {
             if (s.online) Text("서버에 연결됐어요", color = c.tertiary)
             else Text("연결이 끊겼어요 · 마지막으로 확인한 정보예요", color = c.error)
-            Text("기어 ${s.gear ?: "모름"} · 내비 ${if (carStatus.navi) "연결됨" else "연결 안 됨"} · 음성 ${if (carStatus.voice) "준비됨" else "준비 안 됨"}", color = c.onSurfaceVariant, fontSize = 20.sp)
-            Text("여행 코드 ${t.code}", color = c.onSurfaceVariant, fontSize = 20.sp)
+            if (!carStatus.driving) {
+                Text("기어 ${s.gear ?: "모름"} · 내비 ${if (carStatus.navi) "연결됨" else "연결 안 됨"} · 음성 ${if (carStatus.voice) "준비됨" else "준비 안 됨"}", color = c.onSurfaceVariant, fontSize = 20.sp)
+                Text("여행 코드 ${t.code}", color = c.onSurfaceVariant, fontSize = 20.sp)
+            }
         }
-        OutlinedButton(::newTrip, Modifier.heightIn(min = 64.dp), enabled = !s.agreed && !s.busy) { Text("새 여행 만들기") }
+        if (!carStatus.driving) OutlinedButton(::newTrip, Modifier.heightIn(min = 64.dp), enabled = !s.agreed && !s.busy) { Text("새 여행 만들기") }
     }
 
     @Composable
