@@ -142,9 +142,12 @@ class MainActivity : ComponentActivity() {
     private var scanning by mutableStateOf(false)
     private var rideQr by mutableStateOf<String?>(null)
     private var rideNote by mutableStateOf("")
+    private var qrCam: QrCamera? = null // 열린 카메라. 주행 제한·화면 뒤에서는 composition을 기다리지 않고 바로 닫는다
     private val askCamera = registerForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
-        if (ok) scanning = true else rideNote = "카메라 권한이 없어 QR을 읽을 수 없어요"
+        if (!ok) rideNote = "카메라 권한이 없어 QR을 읽을 수 없어요" else if (!carStatus.restricted) scanning = true
     }
+
+    private fun closeCamera() { qrCam?.stop(); qrCam = null; scanning = false }
     private lateinit var device: String // 보관함의 기기 값. 설치 단위(ADR-0014의 device)
     /** 이 차가 참가시킨 사람의 참가자 토큰(id → 토큰). 그 사람의 동의 켜기와 발화 올리기에 쓴다(T68). 참가할 때 한 번만 온다. */
     private var tokens: Map<String, String> = emptyMap()
@@ -212,7 +215,7 @@ class MainActivity : ComponentActivity() {
         if (s.offPending) s.trip?.let { dropRawAll(it.code) } // 끈 뒤 지우기 전에 앱이 꺼졌으면 마저 지운다
         car = Car(this) {
             carStatus = it
-            if (it.restricted) scanning = false // 주행 중에는 카메라를 닫는다(T11). 카드도 그리지 않는다
+            if (it.restricted) closeCamera() // 주행 중에는 카메라를 닫는다(T11). 카드도 그리지 않는다
             val was = s.gear
             s = s.withGear(it.gear)
             if (was != null && was != "P" && it.gear == "P") arrive() // 앱을 켤 때 처음 읽은 P는 도착이 아니다
@@ -254,7 +257,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onStart() { super.onStart(); visible = true; main.removeCallbacks(tick); main.post(tick) }
-    override fun onStop() { visible = false; super.onStop() }
+    override fun onStop() { visible = false; closeCamera(); super.onStop() }
 
     override fun onResume() {
         super.onResume()
@@ -744,19 +747,21 @@ class MainActivity : ComponentActivity() {
     /** 읽은 QR의 사람을 고른 자리에 넣는다. 자리 충돌은 QR을 쓰지 않으므로 다른 자리로 다시 고를 수 있다. 동의는 그 사람의 폰에서만 켠다. */
     private fun seatRider(seat: Seat) {
         val t = s.trip ?: return
-        val code = rideQr?.let(::rideCode) ?: return
+        val qr = rideQr
+        val code = qr?.let(::rideCode) ?: return
         val url = server
         rideNote = "연결하고 있어요"
         bg({ Server(url).rideLink(t.code, code, seat) }) { r ->
             r.onSuccess { name ->
-                rideQr = null; rideNote = "$name 님을 ${seat.label}에 넣었어요 · 폰에서 기록에 동의하면 함께 기록해요"
+                if (rideQr == qr) rideQr = null // 그사이 다른 QR을 읽었으면 그대로 둔다
+                rideNote = "$name 님을 ${seat.label}에 넣었어요 · 폰에서 기록에 동의하면 함께 기록해요"
                 Log.i(TAG, "동승 연결 ${seat.name}")
                 refresh()
             }.onFailure { e ->
                 Log.i(TAG, "동승 연결 못 함 ${(e as? ApiError)?.status ?: "연결"}")
                 rideNote = when ((e as? ApiError)?.status) {
                     409 -> "자리가 찼거나 이미 연결한 QR이에요 · 다른 자리를 고르거나 폰에서 QR을 다시 띄워 주세요"
-                    404 -> { rideQr = null; "QR이 만료됐어요 · 폰에서 QR을 다시 띄워 주세요" }
+                    404 -> { if (rideQr == qr) rideQr = null; "QR이 만료됐어요 · 폰에서 QR을 다시 띄워 주세요" }
                     else -> "연결하지 못했어요 · ${reason(e)}"
                 }
                 refresh()
@@ -1091,7 +1096,7 @@ class MainActivity : ComponentActivity() {
                 scanning -> {
                     Text("폰의 동승 QR을 카메라에 보여 주세요", color = c.onSurfaceVariant)
                     Scanner()
-                    OutlinedButton({ scanning = false }, Modifier.heightIn(min = 64.dp)) { Text("닫기") }
+                    OutlinedButton(::closeCamera, Modifier.heightIn(min = 64.dp)) { Text("닫기") }
                 }
                 else -> {
                     Text(if (free.isEmpty()) "빈자리가 없어요" else "탑승자 폰의 동승 QR을 읽어 자리에 넣어요", color = c.onSurfaceVariant)
@@ -1106,15 +1111,15 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun Scanner() {
         val cam = remember {
-            QrCamera(this, onCode = { rideQr = it; scanning = false }, onFail = { rideNote = it; scanning = false })
+            QrCamera(this, onCode = { rideQr = it; closeCamera() }, onFail = { rideNote = it; closeCamera() }).also { qrCam = it }
         }
-        DisposableEffect(cam) { onDispose { cam.stop() } }
+        DisposableEffect(cam) { onDispose { cam.stop(); if (qrCam === cam) qrCam = null } }
         AndroidView({ ctx ->
             TextureView(ctx).apply {
                 surfaceTextureListener = object : TextureView.SurfaceTextureListener {
                     override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) { cam.size()?.let { st.setDefaultBufferSize(it.width, it.height) }; cam.start(Surface(st)) }
                     override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {}
-                    override fun onSurfaceTextureDestroyed(st: SurfaceTexture) = true
+                    override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean { cam.stop(); return true } // 표면을 놓기 전에 세션부터 닫는다
                     override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
                 }
             }
