@@ -54,15 +54,24 @@ GitHub 이슈가 티켓입니다. 제목은 `[T번호] 제목`이고, 라벨 셋
 
 ## 한 작업의 순서
 
+**플랜과 스펙 → 구현 → 로컬 E2E → CI → 병합 → 이미지 등록 → 배포**
+
 ```sh
+gh issue comment <번호> -R team-pitcrew/gachita --body-file plan.md   # 플랜과 스펙: 구현 전에 티켓에 댓글로
 make ticket-start T=T7 NAME=car-shell     # develop에서 feature/T7-car-shell을 만들어 올린다
 # 구현하고
 make check
+make e2e                                  # 로컬 E2E: 이미지를 띄워 여행 하나의 흐름을 HTTP로 확인한다
 git commit                                # 양식이 뜬다. 제목은 [T7] 무엇을 하는지
 make ticket-pr                            # 티켓 제목과 PR 양식으로 PR을 연다
-gh pr checks --watch
+gh pr checks --watch                      # CI: 검사 일곱 개
 gh pr merge --merge --match-head-commit <확인한 HEAD>
+# 이미지 등록은 develop에 병합되면 CI가 한다. 배포는 아래 '백엔드를 내보내는 법'
 ```
+
+- **플랜과 스펙**은 코드를 고치기 전에 티켓에 댓글로 남깁니다. 무엇을 어떻게 할지(입력과 출력, 조건, 실패했을 때의 동작)를 짧게 적습니다. 구현하면서 달라지면 PR의 '무엇을, 왜'에 달라진 점을 적습니다.
+- **로컬 E2E**는 이미지에 들어가는 것(`backend/api/`, `frontend/web/`)을 바꿨을 때 돌리고, 결과를 PR의 '확인한 것'에 붙입니다. 차량 앱은 에뮬레이터에서 확인합니다(CI에서는 에뮬레이터를 돌리지 못함).
+- **배포**는 클러스터가 선 뒤에 합니다(T24).
 
 에이전트는 `.claude/skills/ticket`의 순서를 따릅니다.
 
@@ -107,11 +116,12 @@ PR 양식의 다섯 칸은 Google SRE의 변경 관리에서 가져왔습니다(
 | `scope` | 항상 | 스크립트 테스트, 바뀐 파트 계산 |
 | `policy` | 항상 | PR 제목·브랜치 이름·대상 브랜치·커밋 제목, 비밀 값 검사(gitleaks) |
 | `frontend-spec` | `frontend/spec/`이 바뀜 | 화면 문서에 다섯 제목이 있는지, 링크가 깨졌는지 |
-| `frontend-app` | `frontend/web/`·`frontend/car/`가 바뀜 | 웹앱 검사. 차량 앱이 생기면 빌드와 단위 테스트 |
+| `frontend-app` | `frontend/web/`·`frontend/car/`가 바뀜. 스텝은 바뀐 쪽만 | 웹앱 검사(`frontend/web/`이 바뀜), 차량 앱 빌드와 단위 테스트(`frontend/car/`이 바뀜. 폴더가 생긴 뒤, Gradle 캐시) |
 | `backend-api` | `backend/api/`·`docs/api/`가 바뀜 | Postgres에 붙인 API 테스트(명세 대조 포함) |
 | `backend-infra` | `backend/infra/`가 바뀜 | Terraform 형식·정합성, 클러스터 선언 스키마 |
-| `package` | `backend/api/`·`frontend/web/`가 바뀜 | 이미지를 만들어 띄우고 `/healthz`와 웹앱이 200인지 |
+| `package` | `backend/api/`·`frontend/web/`·`.dockerignore`가 바뀜 | 이미지를 만들어 띄우고 그 이미지에 대고 E2E([`e2e.mjs`](../.github/scripts/e2e.mjs). 로컬 `make e2e`와 같은 스크립트) |
 
+- 일곱 개 뒤에 `publish` 잡이 있습니다. 필수 검사가 아니고 PR에서는 건너뜀으로 보입니다. `develop`에 병합된 뒤, 이미지에 들어가는 파일이 바뀌었고 같은 실행의 일곱 개가 모두 통과했으면 ARM64 이미지를 GHCR에 올립니다(아래 '백엔드를 내보내는 법').
 - 문서(`.md`)와 협업 설정(양식, 티켓 자동화, 훅)만 바뀌면 `scope`와 `policy`만 실제로 돕니다. 화면 문서(`frontend/spec/`)는 `frontend-spec`이 봅니다.
 - 검사 자체를 정하는 파일(`ci.yml`, `scope.py`, `spec_check.py`, `parts.json`, `Makefile`)이 바뀌면 전부 돕니다.
 - 무료 조직의 비공개 저장소라 GitHub가 이 검사를 강제하지 못합니다. PR 화면에서 일곱 개가 모두 초록색인 것을 보고 병합합니다.
@@ -128,15 +138,17 @@ PR 양식의 다섯 칸은 Google SRE의 변경 관리에서 가져왔습니다(
 
 ## 백엔드를 내보내는 법
 
-API와 웹앱은 이미지 하나(`ghcr.io/team-pitcrew/gachita-api`)로 묶습니다. 이미지는 로컬에서 만들어 올리고, 태그를 바꾸는 PR로 내보냅니다.
+API와 웹앱은 이미지 하나(`ghcr.io/team-pitcrew/gachita-api`)로 묶습니다. 로컬 E2E로 확인하고, `develop`에 병합되면 CI가 이미지를 올리고, 태그를 바꾸는 PR로 내보냅니다.
 
 ```sh
-make image-smoke                  # 이미지를 만들어 띄워 본다(/healthz, 웹앱)
-make push                         # 띄워 본 뒤 GHCR에 올린다. 태그는 커밋 SHA 앞 12자
+make e2e                          # 이미지를 만들어 일회용 Postgres와 띄우고 여행 하나의 흐름을 확인한다
+# PR을 병합하면 ci.yml의 publish 잡이 ARM64 이미지를 올린다. 태그는 커밋 SHA 앞 12자이고 실행 요약에 적힌다
 make deploy-tag TAG=<올린 태그>   # dev 환경의 태그를 바꾼다
 # 이 변경을 backend-infra 티켓의 PR로 올린다. 병합되면 Argo CD가 내보낸다
 ```
 
+- 올라간 태그 보기: `gh api /orgs/team-pitcrew/packages/container/gachita-api/versions --jq '.[:5][] | {tags: .metadata.container.tags, created_at}'`
+- `make push`는 CI를 거치지 않고 로컬에서 올릴 때 씁니다. `make e2e`를 통과해야 올립니다.
 - 되돌릴 때는 `make deploy-tag`로 이전 태그를 다시 적어 PR로 올립니다.
 - 이미지 저장소는 GHCR입니다. `gachita-api`는 조직의 비공개 패키지이고 이 저장소에 이어져 있습니다. 2026-11-13에 로컬에서 `make push`로 ARM64 이미지를 올려 확인했습니다.
 
@@ -145,7 +157,7 @@ make deploy-tag TAG=<올린 태그>   # dev 환경의 태그를 바꾼다
 | 어디서 | 무엇이 필요한가 | 상태 |
 |---|---|---|
 | 로컬 `make push` | 자기 `gh` 토큰의 `write:packages` | 지환의 토큰에 있음 |
-| `publish-api-image` 워크플로 | Actions 기본 토큰(`packages: write`). 비밀 값 없음 | 됨 |
+| `publish-api-image` 워크플로(병합 때 `ci.yml`의 `publish` 잡이 부름. 손으로도 돌림) | Actions 기본 토큰(`packages: write`, 그 잡에만). 비밀 값 없음 | 이 워크플로로 올린 기록 있음(11/12, 그때는 push로 돎). 병합 때 올리기는 T47 병합 뒤 확인 |
 | 클러스터가 이미지를 받을 때 | `read:packages`만 있는 클래식 토큰을 비밀 값 `GHCR_PULL_TOKEN`으로. `infra-secrets` 워크플로가 SSM으로 옮기고 External Secrets가 `gachita` 네임스페이스의 imagePullSecret으로 만듦([ADR-0012](adr/0012-cluster-build-and-node-size.md)) | 클러스터를 만들 때 필요(T24). 아직 없음 |
 | 워크플로가 프로젝트 보드에 쓸 때 | 비밀 값 `PROJECT_TOKEN`([프로젝트 보드](project-board.md)) | 아직 없음 |
 | `terraform` 워크플로(PR 계획, develop 수동 적용) | AWS 열쇠 없음. OIDC로 역할을 받음. 저장소 변수 `AWS_PLAN_ROLE_ARN`·`AWS_APPLY_ROLE_ARN`·`TF_STATE_BUCKET`([ADR-0011](adr/0011-aws-credentials-via-oidc.md)) | 역할을 아직 만들지 않음. 그동안은 "역할이 없어 건너뜀" |

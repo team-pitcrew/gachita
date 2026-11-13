@@ -77,6 +77,11 @@ class Numbering(unittest.TestCase):
         self.assertEqual(t.next_number(["[T1] 가", "[T15] 나", "번호 없음", "[T] 자리 표시", "[사후 검토] 다"]), 16)
         self.assertEqual(t.next_number([]), 1)
 
+    def test_planned_numbers_from_task_list(self):
+        text = "## 계획\n\n### T3 가 (P1) · backend-api\n\n본문의 ### T9는 제목이 아님\n### T12 나 (P0) · frontend-app · 선행 T3\n"
+        self.assertEqual(t.planned_numbers(text), [3, 12])
+        self.assertEqual(t.planned_numbers(""), [])
+
     def test_numbered_title(self):
         self.assertEqual(t.numbered_title("[T] 차량 앱 틀", 16), "[T16] 차량 앱 틀")
         self.assertEqual(t.numbered_title("[T]차량 앱 틀", 16), "[T16] 차량 앱 틀")

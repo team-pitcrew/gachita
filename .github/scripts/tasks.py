@@ -6,6 +6,7 @@
     python3 .github/scripts/tasks.py --apply --refresh   # 작업 목록을 고친 뒤: 체크한 것이 없는 열린 이슈의 본문도 다시 쓴다
 
 - 없는 T번호는 이슈 양식(.github/ISSUE_TEMPLATE/ticket.yml)과 같은 본문으로 만든다.
+- 같은 T번호의 이슈가 있어도 제목이 작업 목록과 다르면 다른 일로 보고 건드리지 않는다(경고만).
 - 이미 있는 이슈는 파트 라벨과 환경 라벨을 맞추고, 열린 이슈에 담당이 없으면 담당을 넣는다.
 - 본문은 옛 양식(칸이 모자란 것)이고 체크한 항목이 없는 열린 이슈만 새 양식으로 다시 쓴다. 그 밖의 본문과 체크는 건드리지 않는다.
 - --refresh를 주면 체크한 항목이 없는 열린 이슈의 본문을 작업 목록과 같게 다시 쓴다. 이슈에 손으로 덧붙인 글은 사라진다.
@@ -85,6 +86,10 @@ def plan(tasks, issues, config, refresh=False):
             actions.append(("create", {"title": f"[{t['id']}] {t['title']}", "body": body(t, parts),
                                        "labels": ["type:task", *want, t["priority"], "status:backlog"], "assignee": owner(t, config)}))
             continue
+        if issue["title"] != f"[{t['id']}] {t['title']}":
+            # 번호만 같고 다른 일일 수 있다(양식으로 만든 티켓이 먼저 그 번호를 받은 경우). 덮어쓰지 않고 알린다.
+            actions.append(("conflict", {"number": issue["number"], "title": issue["title"], "want": f"[{t['id']}] {t['title']}"}))
+            continue
         names = {l["name"] for l in issue["labels"]}
         add = [l for l in want if l not in names]
         stale = sorted(n for n in names if n.startswith("part:") and n != want[0])
@@ -121,6 +126,9 @@ def main():
             if apply:
                 gh("issue", "edit", str(a["number"]), *[x for label in a["add"] for x in ("--add-label", label)],
                    *[x for label in a["remove"] for x in ("--remove-label", label)])
+        elif kind == "conflict":
+            print(f"건너뜀: #{a['number']} '{a['title']}'의 제목이 작업 목록의 '{a['want']}'과 다릅니다. "
+                  "같은 작업이면 제목을 맞추고, 다른 작업이면 작업 목록의 번호를 바꿉니다", file=sys.stderr)
         elif kind == "body":
             print(("본문: " if apply else "본문 예정: ") + f"#{a['number']} 작업 목록대로")
             if apply:
