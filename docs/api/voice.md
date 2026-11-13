@@ -77,7 +77,7 @@
 
 | 요청 | 본문 | 하는 일 |
 |---|---|---|
-| `POST /api/trips/:code/recordings?moment=<장면 id>&generation=<세대>&from=<클립 시작 epoch ms>` | `audio/wav`(16 kHz·16비트 PCM·모노, 5,000,000 B까지) | 차가 자른 WAV를 다시 자르지 않고 클립 버킷에 둔다. 장면 하나에 클립 하나라 클립 id는 장면 id다. 같은 장면을 다시 보내면 저장하지 않고 200. 옛 세대(철회 전 소리)와 사람이 지운 클립은 409 |
+| `POST /api/trips/:code/recordings?moment=<장면 id>&generation=<세대>&from=<클립 시작 epoch ms>` | `audio/wav`(16 kHz·16비트 PCM·모노, 5,000,000 B까지) | 차가 자른 WAV를 다시 자르지 않고 클립 버킷에 둔다. 클립 구간은 그 장면의 구간 안이어야 한다(앞뒤 1초 여유, 밖이면 400). 장면 하나에 클립 하나라 클립 id는 장면 id다. 같은 장면을 다시 보내면 저장하지 않고 200. 옛 세대(철회 전 소리)와 사람이 지운 클립은 409 |
 | `GET /api/trips/:code/recordings/:id` | | 받은 WAV를 그대로, `Cache-Control: private, no-store`. 토큰은 머리말로만 — 웹은 `fetch` → blob → `<audio>`(클립 하나 약 0.5~1.1 MB, 15~35초). 서명한 S3 주소를 주지 않고, 별도 media 주소도 두지 않는다(ADR-0021, ADR-0020은 대체됨) |
 | `DELETE /api/trips/:code/recordings/:id` | | 버킷에서 바로 지우고 지운 표시를 남긴다(차가 다시 올려도 409). 받아 적은 글과 장면은 남는다(지우려면 각자의 삭제 경로) |
 

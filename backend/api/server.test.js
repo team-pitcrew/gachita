@@ -749,7 +749,7 @@ test("녹음 클립: 고른 장면의 원음을 받고, 재생하고, 바로 지
   const [, m1] = await call("POST", `${t}/moments`, { label: "웃음" });
   const [, m2] = await call("POST", `${t}/moments`, {});
   const auth = (token) => (token ? { authorization: `Bearer ${token}` } : {});
-  const from = Date.now() - 30_000; // 클립 첫 표본의 시각
+  const from = Date.now() - 5000; // 클립 첫 표본의 시각(구간 없는 장면은 at 앞 20초~뒤 10초 안이어야 함)
   const up = (moment, body, token, generation = 1) => fetch(`${base}${t}/recordings?moment=${moment}&generation=${generation}&from=${from}`, { method: "POST", headers: auth(token), body });
   const play = (id, token) => fetch(`${base}${t}/recordings/${id}`, { headers: auth(token) });
   const del = (id, token) => fetch(`${base}${t}/recordings/${id}`, { method: "DELETE", headers: auth(token) });
@@ -787,6 +787,10 @@ test("녹음 클립: 고른 장면의 원음을 받고, 재생하고, 바로 지
   assert.equal((await fetch(`${base}${t}/recordings?moment=${m2.id}&from=${from}`, { method: "POST", headers: auth(mom.token), body: clip })).status, 400, "세대가 필요");
   assert.equal((await fetch(`${base}${t}/recordings?moment=${m2.id}&generation=1`, { method: "POST", headers: auth(mom.token), body: clip })).status, 400, "클립 시작 시각이 필요");
   assert.equal((await up(m2.id, clip, mom.token, 2)).status, 400, "아직 없는 세대");
+  // 사람이 확정한 장면 구간의 소리만(구간 없는 장면은 at 앞 20초~뒤 10초, 앞뒤 1초 여유)
+  const outside = (start, body) => fetch(`${base}${t}/recordings?moment=${m2.id}&generation=1&from=${start}`, { method: "POST", headers: auth(mom.token), body });
+  assert.equal((await outside(m2.at - 25_000, clip)).status, 400, "구간 앞의 소리");
+  assert.equal((await outside(m2.at - 20_000, wav(200, 40))).status, 400, "구간보다 긴 소리");
   assert.equal(s3.objects.size, 1, "거절한 소리는 버킷에 남지 않음");
 
   // 지우기: 버킷에서 바로, 다시 올려도 되살아나지 않음. 장면은 그대로

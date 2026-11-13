@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import { profilesDb, tripsDb } from "./db.js";
 import { errFields, log } from "./log.js";
 import { clipStore } from "./providers/clips.js";
-import { cues, suggest } from "./scenes.js";
+import { cues, momentSpan, suggest } from "./scenes.js";
 import { googleIdentity } from "./providers/google.js";
 import { embed, matchThreshold, similarity, wavMono } from "./providers/voice.js";
 
@@ -546,7 +546,7 @@ async function recordings(code, id, req, query) {
   const check = async (trip, client) => {
     const caller = participantOf(req, trip);
     const momentId = text(query.get("moment") ?? undefined, 40, "moment");
-    if (!trip.moments.some((x) => x.id === momentId)) fail(404, "없는 장면");
+    const moment = trip.moments.find((x) => x.id === momentId) ?? fail(404, "없는 장면");
     const current = trip.generation ?? 1;
     // 녹음할 때의 동의 세대. 옛 세대는 철회 전의 소리라 받지 않는다 — 차는 버린다(ADR-0007).
     // 동의 확인보다 먼저 본다: 철회한 본인의 토큰으로 올려도 '나중에 다시'(403)가 아니라 '버림'(409)이 되게.
@@ -557,7 +557,7 @@ async function recordings(code, id, req, query) {
     if (!everyoneConsents(trip)) fail(403, "동의하지 않은 탑승자가 있어 올릴 수 없음"); // 발화 올리기와 같은 규칙
     const { rows } = await client.query("SELECT moment_id, start_at, bytes, seconds, deleted_at FROM recordings WHERE trip_code = $1 AND moment_id = $2", [trip.code, momentId]);
     if (rows[0]?.deleted_at) fail(409, "지운 클립은 다시 받지 않음");
-    return { caller, momentId, startAt, tripCode: trip.code, current, existing: rows[0] };
+    return { caller, momentId, moment, startAt, tripCode: trip.code, current, existing: rows[0] };
   };
   const before = await withTrip(code, false, check);
   if (before.existing) return [200, asRecording(before.existing)]; // 같은 장면을 다시 보냄(멱등)
@@ -566,6 +566,10 @@ async function recordings(code, id, req, query) {
   if (channels !== 1) fail(400, "모노 WAV만 됨");
   if (!samples.length) fail(400, "소리가 비어 있음");
   const seconds = Math.round(samples.length / 16) / 1000;
+  // 사람이 확정한 장면 구간의 소리만 받는다(ADR-0007). 구간이 없는 장면은 at 앞 20초~뒤 10초(scenes.js의 momentSpan).
+  // 차의 시계와 자르기 여유로 앞뒤 1초는 봐준다. 밖이면 버킷에 두기 전에 400 — 차는 버린다.
+  const span = momentSpan(before.moment);
+  if (before.startAt < span.from - 1000 || before.startAt + seconds * 1000 > span.to + 1000) fail(400, "장면 구간 밖의 소리");
   const key = `${before.tripCode}/${before.momentId}-${randomUUID().slice(0, 8)}.wav`;
   try {
     await store.put(key, raw); // 늦게 실패해도(제한 시간 뒤에 저장됨) 아래에서 키를 버린다
@@ -1127,9 +1131,11 @@ async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
     return [200, {
       title: trip.title,
       cast: trip.participants.map((p) => ({ participantId: p.id, name: p.name, character: character.get(p.profileId) ?? "", seat: p.seat })),
-      scenes: clips.map((r) => {
-        const moment = trip.moments.find((x) => x.id === r.moment_id); // 장면은 지워지지 않는다
-        return {
+      // 이 조회 중에 새 장면·클립이 들어오면 클립 줄이 여행 문서보다 새로울 수 있다 — 문서에 없는 장면의 클립은 다음 조회에서 보인다.
+      scenes: clips.flatMap((r) => {
+        const moment = trip.moments.find((x) => x.id === r.moment_id);
+        if (!moment) return [];
+        return [{
           momentId: r.moment_id,
           label: moment.label ?? "",
           at: moment.at,
@@ -1138,7 +1144,7 @@ async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
           seconds: r.seconds,
           cues: cues(all, Number(r.start_at), r.seconds).map(({ profileId, ...c }) => ({ ...c, participantId: byProfile.get(profileId) ?? null })),
           ...(moment.lat !== undefined ? { lat: moment.lat, lng: moment.lng } : {}),
-        };
+        }];
       }),
     }];
   }
