@@ -1,6 +1,6 @@
 # ADR-0020: 클립 영상은 media 하위 도메인에서 API가 흘려보낸다
 
-* **상태:** 제안, 2026-11-13 — 길(`media` 하위 도메인, Cloudflare 프록시 끔)은 지환님이 정함. 2절의 '영상 전용 ALB'는 비용 확인 대기
+* **상태:** 채택됨, 2026-11-14 — 길(`media` 하위 도메인, Cloudflare 프록시 끔, 11/13)과 영상 전용 ALB(11/14)를 지환님이 정함
 * **관련:** T64(#118), T63(#117), T43, T27(#33), [ADR-0013](0013-network-edge-and-isolation.md) 7절, [ADR-0014](0014-transcript-storage.md) 5절, [ADR-0015](0015-split-nodes-private-subnets-alb.md), [ADR-0017](0017-alb-by-controller-and-fold-order.md)
 
 ## 배경
@@ -35,7 +35,7 @@ ADR-0013 7절과 ADR-0014 5절은 클립을 S3 데이터 버킷에 두고 **API�
 기존 ALB(`gachita-dev`)는 그대로 Cloudflare 대역에서 오는 443만 받는다(ADR-0017, `sourceRanges`). 영상에는 **ALB를 하나 더 둔다**(Gateway `media`, 이름 고정 `gachita-dev-media`). 이 ALB는 443을 모든 곳에서 받고, 호스트 `media.gachita.mangowhois.ai`의 `/media/` 경로만 API로 보내며 나머지는 ALB가 404로 끝낸다.
 
 - 같은 ALB를 모든 곳에 열지 않는 이유: 보안 그룹은 ALB 단위라, 열면 `gachita.mangowhois.ai`도 호스트 이름만 맞추면 Cloudflare를 거치지 않고 닿는다(WAF와 요청 수 제한을 우회). Cloudflare가 붙이는 비밀 머리말로 가르는 방법은 그 값이 Git의 HTTPRoute에 들어가야 해서 쓰지 않는다.
-- 비용: 기존 ALB와 같은 크기다(ADR-0015의 어림, 상시로 켜 두면 월 약 $30). 접는 묶음이라 펴 있는 동안만 난다. **이 비용이 부담이면** 영상을 2차 발표 동안만 펴거나, 같은 ALB를 열고 위의 우회를 받아들이는 쪽으로 다시 정한다.
+- 비용: 기존 ALB와 같은 크기다(ADR-0015의 어림, 상시로 켜 두면 월 약 $30). 접는 묶음이라 펴 있는 동안만 난다. 지환님이 이 비용으로 정했다(11/14). 같은 ALB를 열어 우회를 받아들이는 안은 쓰지 않는다.
 - 접는 순서(ADR-0017 3절)에 이 Gateway도 같이 들어간다. 컨트롤러가 ALB와 보안 그룹을 지운 뒤에 Terraform이 지운다.
 
 ### 3. 인증서와 레코드
