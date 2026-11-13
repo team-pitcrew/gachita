@@ -1,0 +1,3 @@
+# actionlint가 자체 러너의 라벨을 알게 한다(T65, .github/runner)
+self-hosted-runner:
+  labels: [gachita]

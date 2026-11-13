@@ -1,5 +1,5 @@
-# 물결 0. Gateway API 표준 CRD v1.6.3(Traefik v3.7.17이 지원하는 판). 쿠버네티스 SIG-Network의 공식 배포.
-# Traefik 차트는 이 CRD를 싣지 않는다.
+# 물결 0. Gateway API 표준 CRD v1.6.3(AWS Load Balancer Controller v3.6이 쓰는 v1.6). 쿠버네티스 SIG-Network의 공식 배포.
+# 컨트롤러 차트는 자기 CRD(LoadBalancerConfiguration 등)만 싣고 이 CRD는 싣지 않는다.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:

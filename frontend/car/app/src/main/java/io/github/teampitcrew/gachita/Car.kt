@@ -19,19 +19,24 @@ import ai.pleos.playground.vehicle.constant.area.SeatValue
 import ai.pleos.playground.vehicle.constant.control.VehicleGear
 import ai.pleos.playground.vehicle.constant.unit.TemperatureUnit
 import ai.pleos.playground.vehicle.listener.GearSelectionListener
+import android.car.drivingstate.CarUxRestrictions
+import android.car.drivingstate.CarUxRestrictionsManager
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import java.util.Locale
 
-/** 차가 알려 준 것. gear는 "P", "D", "R", "N" 같은 글자이고 모르면 null. */
-data class CarStatus(val gear: String? = null, val navi: Boolean = false, val voice: Boolean = false, val naviEvent: String = "")
+/**
+ * 차가 알려 준 것. gear는 "P", "D", "R", "N" 같은 글자이고 모르면 null.
+ * restricted는 플랫폼이 주행 제한을 거는 중인지(CarUxRestrictions. 기어 D여도 오토 홀드면 풀릴 수 있음). 값을 받기 전이나 받지 못하면 제한으로 둔다(frontend/spec/car.md).
+ */
+data class CarStatus(val gear: String? = null, val navi: Boolean = false, val voice: Boolean = false, val naviEvent: String = "", val restricted: Boolean = true)
 
 data class Place(val lat: Double, val lng: Double, val name: String, val address: String = "")
 
 /**
- * Pleos Connect SDK를 감싼다: Vehicle(기어 · 공조), NaviHelper(순정 내비), TextToSpeech.
+ * Pleos Connect SDK를 감싼다: Vehicle(기어 · 공조), NaviHelper(순정 내비), TextToSpeech. 주행 제한 값은 AAOS CarUxRestrictionsManager에서 받는다.
  * 차박지도 앱(chabak-map/car, 11/10)의 Car.kt에서 옮겼다. 콜백은 모두 메인 스레드로 넘긴다.
  */
 class Car(ctx: Context, private val onChange: (CarStatus) -> Unit) {
@@ -40,6 +45,8 @@ class Car(ctx: Context, private val onChange: (CarStatus) -> Unit) {
     private val navi = NaviHelper(app)
     private var vehicle: Vehicle? = null
     private var tts: TextToSpeech? = null
+    private var aaos: android.car.Car? = null
+    private var ux: CarUxRestrictionsManager? = null
     private var status = CarStatus()
     private var savedTemp: Float? = null
 
@@ -57,6 +64,18 @@ class Car(ctx: Context, private val onChange: (CarStatus) -> Unit) {
         override fun onError(errorCode: NaviErrorCode) = naviEvent("내비 오류 ${errorCode.name}")
     }
 
+    /**
+     * 주행 제한(T11). Pleos 가이드대로 기어·속도로 직접 판단하지 않고 플랫폼 값만 따른다(북미 밖: 5 km/h 이하이고 P·주차 브레이크·오토 홀드면 풀림).
+     * ponytail: 제한 비트(NO_SETUP 64, NO_VIDEO 16 …)를 따로 보지 않고 '제한 중' 하나로 주행 화면을 그린다. 영상·키보드처럼 비트마다 다른 화면이 생기면 비트를 넘긴다.
+     */
+    private val uxListener = CarUxRestrictionsManager.OnUxRestrictionsChangedListener(::onUx)
+
+    private fun onUx(r: CarUxRestrictions?) {
+        val on = r?.isRequiresDistractionOptimization ?: true
+        Log.i(TAG, "주행 제한 ${if (on) "켜짐" else "꺼짐"} ${r?.activeRestrictions}")
+        update { it.copy(restricted = on) }
+    }
+
     private fun naviEvent(e: String) { Log.i(TAG, "내비: $e"); update { it.copy(naviEvent = e) } }
 
     fun start() {
@@ -64,6 +83,19 @@ class Car(ctx: Context, private val onChange: (CarStatus) -> Unit) {
             vehicle = Vehicle(app).also { it.initialize(); it.getGear().registerGearSelection(gearListener) }
         }.onFailure { Log.w(TAG, "Vehicle 초기화 실패", it) }
         readGear { }
+        // 차 서비스가 늦게 뜨거나 다시 뜨면 ready로 다시 불린다. 생명주기 리스너 없이 만들면 차 서비스가 죽을 때 우리 프로세스도 같이 죽는다(AOSP Car)
+        runCatching {
+            aaos = android.car.Car.createCar(app, main, android.car.Car.CAR_WAIT_TIMEOUT_DO_NOT_WAIT) { c, ready ->
+                ux = null
+                if (!ready) return@createCar onUx(null)
+                runCatching {
+                    ux = (c.getCarManager(android.car.Car.CAR_UX_RESTRICTION_SERVICE) as CarUxRestrictionsManager).also {
+                        it.registerListener(uxListener)
+                        onUx(it.currentCarUxRestrictions)
+                    }
+                }.onFailure { Log.w(TAG, "주행 제한 값을 받지 못함 · 제한된 화면으로 둠", it) }
+            }
+        }.onFailure { Log.w(TAG, "차 서비스에 붙지 못함 · 제한된 화면으로 둠", it) }
         runCatching {
             navi.initialize(
                 onConnected = { navi.addListener(naviListener); update { it.copy(navi = true) } },
@@ -83,6 +115,8 @@ class Car(ctx: Context, private val onChange: (CarStatus) -> Unit) {
     fun stop() {
         runCatching { vehicle?.getGear()?.unregisterGearSelection(gearListener) }
         runCatching { vehicle?.release() }
+        runCatching { ux?.unregisterListener() }
+        runCatching { aaos?.disconnect() }
         runCatching { navi.removeListener(naviListener); navi.release() }
         runCatching { tts?.release() }
     }

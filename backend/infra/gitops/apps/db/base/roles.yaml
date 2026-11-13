@@ -1,0 +1,42 @@
+# 프로필 데이터베이스와 그 소유 역할의 비밀 번호. 비밀 번호는 클러스터 안에서 한 번 만들고(refreshInterval 0: 다시 만들지 않음)
+# CloudNativePG가 managed.roles로 역할에 맞춘다. 접었다 펴면(복구 포함) 새로 만들고 다시 맞춘다.
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: profiles
+spec:
+  name: profiles
+  owner: profiles
+  cluster: { name: db }
+---
+apiVersion: generators.external-secrets.io/v1alpha1
+kind: Password
+metadata:
+  name: db-profiles
+spec:
+  length: 32
+  digits: 8
+  symbols: 0 # 주소(URL)에 그대로 넣는다
+  noUpper: false
+  allowRepeat: true
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: db-profiles
+spec:
+  refreshInterval: "0"
+  target:
+    name: db-profiles
+    creationPolicy: Owner
+    template:
+      type: kubernetes.io/basic-auth
+      data:
+        username: profiles
+        password: "{{ .password }}"
+  dataFrom:
+    - sourceRef:
+        generatorRef:
+          apiVersion: generators.external-secrets.io/v1alpha1
+          kind: Password
+          name: db-profiles

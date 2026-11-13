@@ -46,11 +46,26 @@ GitHub 이슈가 티켓입니다. 제목은 `[T번호] 제목`이고, 라벨 셋
 
 | 양식 | 칸 | 근거 |
 |---|---|---|
-| 작업 | 파트, 우선순위, 필요한 환경, 왜 하는가, 할 일, 하지 않는 것, 완료 기준, 위험과 되돌리기, 선행 작업 | 범위를 미리 긋고(하지 않는 것) 되돌릴 길을 정해 둔 변경이 안전합니다([Launch Checklist](https://sre.google/sre-book/launch-checklist/)) |
+| 작업 | 파트, 우선순위, 필요한 환경, 왜 하는가, 할 일, 하지 않는 것, 설계, 검토한 대안, 서비스 수준, 용량과 비용, 의존성과 장애 동작, 관측, 보안과 개인정보, 완료 기준, 위험과 되돌리기, 선행 작업. 설계부터 보안과 개인정보까지는 선택 | 범위를 미리 긋고(하지 않는 것) 되돌릴 길을 정해 둔 변경이 안전합니다([Launch Checklist](https://sre.google/sre-book/launch-checklist/)). 칸 순서는 구글 설계 문서(배경, 목표와 비목표, 설계, 대안, 교차 관심사: [Design Docs at Google](https://www.industrialempathy.com/posts/design-docs-at-google/))를 따르고, 서비스 수준은 [SLO 문서](https://sre.google/workbook/slo-document/)를 줄인 것입니다 |
 | 결함 | 파트, 심각도, 확인한 환경, 기대한 동작, 실제 동작, 재현 순서, 영향 범위, 처음 본 때와 알아챈 경로, 증거, 임시 조치, 짐작하는 원인 | 기대·실제·재현을 적고 본 것과 짐작을 나눕니다([Effective Troubleshooting](https://sre.google/sre-book/effective-troubleshooting/)). 원인보다 피해를 멈추는 것이 먼저입니다([Managing Incidents](https://sre.google/sre-book/managing-incidents/)) |
 | 사후 검토 | 요약, 영향, 근본 원인, 계기, 감지, 해결, 시간순 기록, 잘된 것, 잘못된 것, 운이 좋았던 것, 후속 조치 | [Postmortem Culture](https://sre.google/sre-book/postmortem-culture/)와 [예시](https://sre.google/sre-book/example-postmortem/) |
 
 결함의 심각도는 우선순위 라벨로 옮겨집니다(S0·S1 → P0, S2 → P1, S3 → P2).
+
+작업 양식의 선택 칸은 서버, 데이터, 모델, 외부 서비스에 닿는 일에 채웁니다. 문서 고치기 같은 작은 일은 비워 둡니다. 출시 점검표의 질문을 우리 크기에 맞춰 줄였습니다.
+
+| 칸 | 묻는 것 | 점검표 항목 |
+|---|---|---|
+| 설계 | 입력과 출력, 어디서 도는지, API와 저장하는 데이터의 모양, 핵심 판단 규칙 | Architecture |
+| 검토한 대안 | 다른 방법과 고르지 않은 이유 | (설계 문서) |
+| 서비스 수준 | 무엇을 재고 목표가 얼마인지, 어디서 어떻게 재는지, 지금 값과 근거 | Volume estimates, capacity, and performance |
+| 용량과 비용 | 요청 수, 데이터 크기, CPU·메모리·저장소, 한 달 비용, 열 배로 늘면 막히는 곳 | Machines, Growth issues |
+| 의존성과 장애 동작 | 기대는 것과, 그것이 느리거나 죽었을 때의 동작 | System reliability and failover, External dependencies |
+| 관측 | 로그·지표·알림, 볼 화면이나 명령 | Monitoring and server management |
+| 보안과 개인정보 | 다루는 데이터, 동의, 보관과 삭제, 밖으로 나가는 것, 권한 | Security |
+| 위험과 되돌리기 | 내보내는 순서와 되돌리는 방법 | Automation and manual tasks, Schedule and rollout planning |
+
+작업 목록(`docs/tasks.md`)에서는 같은 칸을 한 줄로 적습니다: `설계:`, `대안:`, `서비스 수준:`, `용량:`, `의존성:`, `관측:`, `보안:`. 이미 있는 티켓의 본문에 새 칸을 넣으려면 `python3 .github/scripts/tasks.py --apply --refresh`를 돌립니다(체크한 항목이 없는 열린 티켓의 본문을 작업 목록대로 다시 씁니다).
 
 ## 한 작업의 순서
 
@@ -80,6 +95,7 @@ gh pr merge --merge --match-head-commit <확인한 HEAD>
 | 브랜치 | 시작점 | PR 대상 | 뜻 |
 |---|---|---|---|
 | `feature/T번호-설명` | `develop` | `develop` | 작업 하나 |
+| `bot/deploy-tag` | `develop`(워크플로가 다시 만듦) | `develop` | dev 이미지 태그 바꾸기(`deploy-tag`, T56). 제목은 `[sync]` |
 | `release/vX.Y.Z` | `develop` | `main`, 그다음 `develop` | 확인한 범위를 내보낼 준비 |
 | `hotfix/T번호-설명` | `main` | `main`, 그다음 `develop` | 내보낸 판의 급한 수정 |
 
@@ -121,6 +137,8 @@ PR 양식의 다섯 칸은 Google SRE의 변경 관리에서 가져왔습니다(
 | `backend-infra` | `backend/infra/`가 바뀜 | Terraform 형식·정합성, 클러스터 선언 스키마 |
 | `package` | `backend/api/`·`frontend/web/`·`.dockerignore`가 바뀜 | 이미지를 만들어 띄우고 그 이미지에 대고 E2E([`e2e.mjs`](../.github/scripts/e2e.mjs). 로컬 `make e2e`와 같은 스크립트) |
 
+- `backend/infra/`가 바뀐 PR에서는 [`infra-e2e`](../.github/workflows/infra-e2e.yml)가 따로 돕니다. 필수 검사가 아니고, `backend-infra`가 보지 않는 폴더의 조립·스키마, Terraform `account/`·`persist/` 정합성, Ansible 구문과 로컬 K3s의 물결 E2E([`e2e-local.sh`](../backend/infra/cluster/e2e-local.sh))를 봅니다(T55).
+- **모든 잡은 자체 러너에서 돕니다(T65, 11/13부터).** GitHub 호스트 러너가 결제 문제로 잡을 시작하지 않아, 지환님의 Mac에 Lima Linux VM 셋(`gachita-runner-1..3`)을 두고 VM마다 러너 하나(라벨 `gachita`)를 붙였습니다. VM은 Mac 폴더를 보지 않고, 잡을 시작할 때마다 앞 잡이 남긴 컨테이너를 지웁니다. Mac이 잠들면 잡이 대기합니다. 다시 만들기와 지우기는 [`.github/runner/up.sh`](../.github/runner/up.sh)입니다. 호스트 러너로 돌아가려면 `runs-on`을 `ubuntu-latest`로 바꿉니다.
 - 일곱 개 뒤에 `publish` 잡이 있습니다. 필수 검사가 아니고 PR에서는 건너뜀으로 보입니다. `develop`에 병합된 뒤, 이미지에 들어가는 파일이 바뀌었고 같은 실행의 일곱 개가 모두 통과했으면 ARM64 이미지를 GHCR에 올립니다(아래 '백엔드를 내보내는 법').
 - 문서(`.md`)와 협업 설정(양식, 티켓 자동화, 훅)만 바뀌면 `scope`와 `policy`만 실제로 돕니다. 화면 문서(`frontend/spec/`)는 `frontend-spec`이 봅니다.
 - 검사 자체를 정하는 파일(`ci.yml`, `scope.py`, `spec_check.py`, `parts.json`, `Makefile`)이 바뀌면 전부 돕니다.
@@ -150,6 +168,8 @@ make deploy-tag TAG=<올린 태그>   # dev 환경의 태그를 바꾼다
 - 올라간 태그 보기: `gh api /orgs/team-pitcrew/packages/container/gachita-api/versions --jq '.[:5][] | {tags: .metadata.container.tags, created_at}'`
 - `make push`는 CI를 거치지 않고 로컬에서 올릴 때 씁니다. `make e2e`를 통과해야 올립니다.
 - 되돌릴 때는 `make deploy-tag`로 이전 태그를 다시 적어 PR로 올립니다.
+- 자동으로: develop에 병합돼 이미지가 올라가면 `deploy-tag` 워크플로가 그 태그로 바꾸는 PR(`bot/deploy-tag`, 제목 `[sync]`)을 엽니다. 되돌릴 때는 Actions → `deploy-tag` → Run workflow에 이전 태그를 넣습니다. 병합은 사람이 하고, 병합 뒤 실제 주소 E2E(`live-e2e`)가 돕니다(T56).
+- 클러스터가 선 뒤에는 실제 주소에 대고 같은 E2E를 돕니다: Actions → `live-e2e` → Run workflow(기본 주소 `https://gachita.mangowhois.ai`). 닿지 않으면 첫 단계에서 실패합니다(T54).
 - 이미지 저장소는 GHCR입니다. `gachita-api`는 조직의 비공개 패키지이고 이 저장소에 이어져 있습니다. 2026-11-13에 로컬에서 `make push`로 ARM64 이미지를 올려 확인했습니다.
 
 토큰과 권한은 이렇게 씁니다. 따로 만든 토큰은 `gh secret set`으로 저장소 비밀 값에 둡니다.
@@ -158,8 +178,9 @@ make deploy-tag TAG=<올린 태그>   # dev 환경의 태그를 바꾼다
 |---|---|---|
 | 로컬 `make push` | 자기 `gh` 토큰의 `write:packages` | 지환의 토큰에 있음 |
 | `publish-api-image` 워크플로(병합 때 `ci.yml`의 `publish` 잡이 부름. 손으로도 돌림) | Actions 기본 토큰(`packages: write`, 그 잡에만). 비밀 값 없음 | 이 워크플로로 올린 기록 있음(11/12, 그때는 push로 돎). 병합 때 올리기는 T47 병합 뒤 확인 |
-| 클러스터가 이미지를 받을 때 | `read:packages`만 있는 토큰 | 클러스터를 만들 때 필요(T24). 아직 없음 |
+| 클러스터가 이미지를 받을 때 | `read:packages`만 있는 클래식 토큰을 비밀 값 `GHCR_PULL_TOKEN`으로. `infra-secrets` 워크플로가 SSM으로 옮기고 External Secrets가 `gachita` 네임스페이스의 imagePullSecret으로 만듦([ADR-0012](adr/0012-cluster-build-and-node-size.md)) | 클러스터를 만들 때 필요(T24). 아직 없음 |
 | 워크플로가 프로젝트 보드에 쓸 때 | 비밀 값 `PROJECT_TOKEN`([프로젝트 보드](project-board.md)) | 아직 없음 |
+| `terraform` 워크플로(PR 계획, develop 수동 적용) | AWS 열쇠 없음. OIDC로 역할을 받음. 저장소 변수 `AWS_PLAN_ROLE_ARN`·`AWS_APPLY_ROLE_ARN`·`TF_STATE_BUCKET`([ADR-0011](adr/0011-aws-credentials-via-oidc.md)) | 역할을 아직 만들지 않음. 그동안은 "역할이 없어 건너뜀" |
 - 깨끗한 환경에서 다시 만들어야 할 때만 `publish-api-image` 워크플로를 손으로 돌립니다.
 - 클러스터가 아직 없어 '병합되면 내보낸다'는 실제로 본 적이 없습니다(T24).
 

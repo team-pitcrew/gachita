@@ -1,0 +1,42 @@
+# Cilium CNI. K3s의 helm-controller가 설치한다. bootstrap: true 는 노드가 준비되기 전(CNI가 없을 때)
+# 호스트 네트워크로 설치 작업을 돌리라는 뜻이다. Argo CD보다 먼저 있어야 하므로 Argo CD가 관리하지 않는다.
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: cilium
+  namespace: kube-system
+spec:
+  repo: https://helm.cilium.io/
+  chart: cilium
+  version: "{{ cilium_version }}"
+  targetNamespace: kube-system
+  bootstrap: true
+  valuesContent: |-
+    # kube-proxy 없이 서비스 라우팅을 eBPF로. kube-proxy가 없으므로 API 서버 주소를 직접 준다.
+    kubeProxyReplacement: true
+    k8sServiceHost: {{ node_ip }}
+    k8sServicePort: 6443
+    # K3s의 파드 대역과 맞춘다(Cilium 문서의 K3s 안내).
+    ipam:
+      operator:
+        clusterPoolIPv4PodCIDRList: ["{{ pod_cidr }}"]
+    # 노드가 하나라 운영자도 하나. 늘리면 2로.
+    operator:
+      replicas: 1
+      resources:
+        requests: { cpu: 20m, memory: 64Mi }
+        limits: { memory: 256Mi }
+    resources:
+      requests: { cpu: 100m, memory: 256Mi }
+      limits: { memory: 1Gi }
+    envoy:
+      resources:
+        requests: { cpu: 20m, memory: 64Mi }
+        limits: { memory: 256Mi }
+    # 흐름 보기(격리 확인용). 에이전트 안의 hubble 명령으로 본다. 릴레이와 UI는 끈다.
+    hubble:
+      enabled: true
+      relay:
+        enabled: false
+      ui:
+        enabled: false

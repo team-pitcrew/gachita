@@ -49,8 +49,8 @@ async function call(method, path, { body, raw, token } = {}) {
 }
 
 // 상태 코드가 맞는지 보고 JSON 본문을 돌려준다.
-function status(r, want) {
-  if (r.status !== want) fail(r.what, want, `${r.status} ${r.text.slice(0, 160)}`.trim());
+function status(r, want) { // want: 숫자 하나 또는 받아도 되는 것들
+  if (![want].flat().includes(r.status)) fail(r.what, [want].flat().join(" 또는 "), `${r.status} ${r.text.slice(0, 160)}`.trim());
   return r.json;
 }
 
@@ -149,7 +149,8 @@ step("잘못된 요청의 거절", async () => {
   status(await call("GET", "/api/trips/000000"), 404); // 코드에 0은 쓰지 않는다
   status(await call("POST", `${t}/participants`, { body: { name: "하늘", seat: "TRUNK", consent: true } }), 400);
   status(await call("PATCH", `${t}/requests/nothing`, { body: { status: "done" } }), 404);
-  status(await call("GET", "/..%2F..%2Fbackend%2Fapi%2Fserver.js"), 404);
+  // 실제 주소에서는 ALB가 경로 탈출 요청을 API에 닿기 전에 400으로 막는다(11/13 실제 계정). 어느 쪽이든 파일은 안 나감
+  status(await call("GET", "/..%2F..%2Fbackend%2Fapi%2Fserver.js"), [404, 400]);
 });
 
 step("웹앱 첫 화면과 정적 파일", async () => {
