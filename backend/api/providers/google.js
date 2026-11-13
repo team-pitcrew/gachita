@@ -8,6 +8,12 @@ const fail = (status, error) => {
 };
 const timeoutMs = () => Number(process.env.GOOGLE_TIMEOUT_MS ?? 5000);
 
+// 웹이 로그인 시작에 쓰는 공개 값만 준다. 교환에 필요한 설정이 없으면 시작하지 않게 한다.
+export function googlePublicConfig() {
+  const ready = process.env.GOOGLE_CLIENT_ID?.trim() && process.env.GOOGLE_CLIENT_SECRET?.trim();
+  return { googleClientId: ready ? process.env.GOOGLE_CLIENT_ID : "" };
+}
+
 // 제공자에게 요청해 [응답, 본문]을 받는다. 시간 제한을 넘기면 504, 연결이 안 되면 503,
 // 본문이 JSON이 아니면 502로 끝낸다.
 async function fetchJson(url, options) {

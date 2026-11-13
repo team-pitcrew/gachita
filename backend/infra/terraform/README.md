@@ -67,6 +67,7 @@ gh secret set GHCR_PULL_TOKEN      -R team-pitcrew/gachita    # 클래식 토큰
 gh secret set ARGOCD_REPO_TOKEN    -R team-pitcrew/gachita    # fine-grained 토큰, 이 저장소 하나의 Contents·Metadata 읽기만(아래)
 gh secret set GOOGLE_CLIENT_ID     -R team-pitcrew/gachita    # 없어도 서버는 뜸
 gh secret set GOOGLE_CLIENT_SECRET -R team-pitcrew/gachita
+gh secret set ASR_TOKEN            -R team-pitcrew/gachita    # 재전사(T75) 상현님 Nemotron ASR 토큰. 없으면 보내지 않음
 gh secret set CLOUDFLARE_API_TOKEN -R team-pitcrew/gachita    # mangowhois.ai: DNS 편집, 영역 WAF(요청 수 제한 규칙) 편집
 gh secret set CLOUDFLARE_API_TOKEN_READ -R team-pitcrew/gachita   # PR 계획용: mangowhois.ai Zone·DNS·Zone WAF 읽기만(쓰기 토큰은 PR에 주지 않음)
 gh variable set CLOUDFLARE_ZONE_ID -R team-pitcrew/gachita --body <mangowhois.ai 영역 번호>
