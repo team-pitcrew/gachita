@@ -1,8 +1,8 @@
 # ADR-0016: 동시 접속 100에서 SLO를 지키는 한 대를 기본으로, Postgres는 하나로, 그 이상은 워커를 붙여 늘린다
 
-* **상태:** 일부 채택, 일부 제안, 2026-11-13
-  * **채택(지환, 11/13):** Postgres는 하나로 잡는다. 기준선은 동시 접속 100에서 SLO를 지키는 크기다. 그 이상은 수평 확장으로 받고 여유분을 둔다. 들어오는 길은 ALB와 AWS Load Balancer Controller로 두고 Argo CD로 관리한다(Traefik은 뺀다).
-  * **제안(이 PR의 병합으로 정함):** SLO의 값, 기본 배치, 여유분의 크기, 늘리는 단계. ADR-0015(PR #81)의 노드 수·Postgres 복제·NAT와 'Traefik NodePort + Terraform 대상 그룹'을 대신하고 나머지는 그대로 쓴다.
+* **상태:** 채택됨, 2026-11-13
+  * **지환님이 먼저 정한 것(11/13):** Postgres는 하나로 잡는다. 기준선은 동시 접속 100에서 SLO를 지키는 크기다. 그 이상은 수평 확장으로 받고 여유분을 둔다. 들어오는 길은 ALB와 AWS Load Balancer Controller로 두고 Argo CD로 관리한다(Traefik은 뺀다).
+  * **이 문서가 제안하고 지환님이 받아들인 것(11/13, PR #103):** SLO의 값(가용성 99.5%), 기본 배치(한 대), 여유분의 크기, 늘리는 단계. ADR-0015(PR #81)의 노드 수·Postgres 복제·NAT와 'Traefik NodePort + Terraform 대상 그룹'을 대신하고 나머지는 그대로 쓴다.
 * **관련:** T60(#102), T24(#30), T26(#32), T27(#33), T28(#34), T39(PR #85), [ADR-0013](0013-network-edge-and-isolation.md), ADR-0012(PR #77), ADR-0014(PR #82), ADR-0015(PR #81)
 
 ## 배경
