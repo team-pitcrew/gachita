@@ -718,6 +718,13 @@ test("DB가 연결을 끊어도 서버가 살아 있고 다음 요청에서 다�
   assert.equal((await fetch(`${base}/healthz`)).status, 200, "처리기가 없으면 여기 오기 전에 프로세스가 죽는다");
 });
 
+test("글자 칸의 NUL 문자는 400으로 거른다(저장할 때 500이 되지 않게)", async () => {
+  assert.equal((await call("POST", "/api/trips", { title: "a\u0000b" }))[0], 400);
+  assert.equal((await call("POST", "/api/profiles", { name: "x\u0000" }))[0], 400);
+  const [, trip] = await call("POST", "/api/trips", {});
+  assert.equal((await join(trip.code, "민\u0000준", "ROW_1_LEFT"))[0], 400);
+});
+
 test("명세(docs/api/openapi.yaml)와 서버의 경로가 같다", async () => {
   // 표준 라이브러리에 YAML 읽기가 없어 ruby로 JSON으로 바꾼다(macOS와 CI 실행기에 기본으로 있음)
   const file = fileURLToPath(new URL("../../docs/api/openapi.yaml", import.meta.url));

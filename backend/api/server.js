@@ -52,8 +52,10 @@ const MIME = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css
 const fail = (status, error) => {
   throw { status, error };
 };
+// NUL 문자는 Postgres의 text·jsonb가 받지 않아(22021·22P05) 저장할 때 500이 된다. 받을 때 400으로 거른다.
 const text = (v, max, name) =>
-  typeof v === "string" && v.trim() && v.trim().length <= max ? v.trim() : fail(400, `${name}: 글자 1~${max}자`);
+  typeof v === "string" && v.includes("\0") ? fail(400, `${name}: NUL 문자는 쓸 수 없음`)
+  : typeof v === "string" && v.trim() && v.trim().length <= max ? v.trim() : fail(400, `${name}: 글자 1~${max}자`);
 const num = (v, min, max, name) =>
   typeof v === "number" && v >= min && v <= max ? v : fail(400, `${name}: ${min}~${max} 사이 숫자`);
 const int = (v, min, max, name) => (Number.isInteger(v) ? num(v, min, max, name) : fail(400, `${name}: 정수`));
