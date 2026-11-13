@@ -15,7 +15,9 @@ info:
     - 프로필 토큰은 기기마다 하나씩입니다 — 한 프로필을 차량과 폰에서 함께 쓸 수 있습니다(ADR-0009). 가족·동승자 그룹과 QR 초대도 있습니다.
     - 목소리 등록·발화 대조(ADR-0019)의 음성은 WAV(16 kHz PCM) 이진 본문입니다. 등록 음성 원본은 어디에도 저장하지 않고 대조용 값만 남습니다.
 
-    이 서버가 부르는 외부 API는 구글 OAuth(계정 연결을 켰을 때)뿐입니다. 예정과 결정 상태는 docs/api/external.md에 있습니다.
+    - 녹음 클립(`/recordings`)은 사람이 장면으로 고른 구간의 원음입니다. WAV(16 kHz·16비트·모노) 이진 본문을 5 MB까지 받아 클립 버킷(S3)에 두고, 받아 적은 글과 같은 참가자 토큰으로 듣고 지웁니다(T76).
+
+    이 서버가 부르는 외부 API는 구글 OAuth(계정 연결을 켰을 때)와 클립 버킷(S3, `CLIPS_BUCKET`이 있을 때)입니다. 예정과 결정 상태는 docs/api/external.md에 있습니다.
 servers:
   - url: http://localhost:8787
     description: 로컬(make run)
@@ -27,6 +29,7 @@ tags:
   - name: 부탁
   - name: 장면
   - name: 기록본
+  - name: 클립
   - name: 그룹
   - name: 상태 확인
 paths:
@@ -96,10 +99,11 @@ paths:
       summary: 구글 계정 연결 또는 계정으로 찾아 들어가기
       description: |
         프로필 토큰과 함께 부르면 내 프로필에 구글 계정을 묶습니다(이름은 그대로). 이미 다른 프로필에 묶인 계정이면 409입니다.
-        토큰 없이 부르면 그 계정의 프로필을 찾아 들어갑니다. 있으면 새 기기 토큰을 함께 돌려주고(이전 기기의 토큰은 못 쓰게 됨), 없으면 프로필을 새로 만듭니다.
+        토큰 없이 부르면 그 계정의 프로필을 찾아 들어갑니다. 있으면 이 기기에 쓸 토큰을 하나 더 돌려주고(다른 기기의 토큰은 그대로, ADR-0009), 없으면 프로필을 새로 만듭니다.
         찾아 들어가기는 갱신 순간에 연결을 다시 확인합니다 — 요청 중 연결이 바뀌었으면 토큰을 주지 않고 401로 끝냅니다.
         코드는 서버가 구글과 바꾸므로 클라이언트 비밀 값은 클라이언트에 없습니다(ADR-0006).
-        오류는 나눠 옵니다: 401 코드 거절 또는 연결 변경, 500 서버의 클라이언트 설정 오류, 502 제공자 응답 오류, 503 제공자 일시 장애·연결 실패, 504 제공자 응답 시간 초과.
+        `redirectUri`는 우리 출처만 받습니다(T27): `https://gachita.mangowhois.ai`와 로컬 개발(`http://localhost`·`http://127.0.0.1`의 아무 포트). 다른 주소는 구글을 부르지 않고 400입니다.
+        오류는 나눠 옵니다: 400 입력 오류(허용하지 않는 `redirectUri` 포함), 401 코드 거절 또는 연결 변경, 500 서버의 클라이언트 설정 오류, 502 제공자 응답 오류, 503 제공자 일시 장애·연결 실패, 504 제공자 응답 시간 초과.
       security: [{}, { profileToken: [] }]
       requestBody:
         required: true
@@ -110,7 +114,7 @@ paths:
               required: [code, redirectUri]
               properties:
                 code: { type: string, minLength: 1, maxLength: 500, description: 구글이 redirect 주소로 돌려준 인증 코드 }
-                redirectUri: { type: string, minLength: 1, maxLength: 500, description: 코드를 받을 때 쓴 주소. 구글에 등록된 값과 같아야 함 }
+                redirectUri: { type: string, minLength: 1, maxLength: 500, description: "코드를 받을 때 쓴 주소. https://gachita.mangowhois.ai 또는 http://localhost·127.0.0.1의 주소를 정규형으로(사용자 정보 없이). 구글에 등록된 값과 같아야 함" }
       responses:
         "200": { description: 연결했거나 찾아 들어간 프로필, content: { application/json: { schema: { $ref: "#/components/schemas/ProfileMaybeToken" } } } }
         "201": { description: 계정으로 새로 만든 프로필, content: { application/json: { schema: { $ref: "#/components/schemas/ProfileMaybeToken" } } } }
@@ -560,6 +564,69 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "413": { $ref: "#/components/responses/Error" }
+  /api/trips/{code}/recordings:
+    parameters: [{ $ref: "#/components/parameters/code" }]
+    post:
+      tags: [클립]
+      summary: 장면의 원음 클립 올리기
+      description: |
+        사람이 장면으로 고른 구간의 원음(T76, ADR-0007). 차량 앱이 자른 WAV(16 kHz·16비트 PCM·모노, 5,000,000 B까지)를 다시 자르지 않고 그대로 클립 버킷에 둡니다.
+        장면 하나에 클립 하나라 **클립 id는 장면 id**입니다. 같은 장면을 다시 보내면 저장하지 않고 `200`으로 같은 값을 줍니다.
+        녹음에 동의한 참가자만, 동의하지 않은 탑승자가 없을 때만 받습니다(`403`, 발화 올리기와 같은 규칙).
+        `generation`은 그 소리를 녹음할 때의 동의 세대(여행 읽기의 `generation`)입니다. 지금보다 옛 세대면 철회 전의 소리라 `409`입니다. 사람이 지운 클립을 다시 보내도 `409`입니다.
+        차는 `400`·`404`·`409`·`413`이면 그 클립을 버리고, `401`(다시 참가해 토큰을 받음)·`403`·`503`이면 나중에 다시 보냅니다.
+        클립 버킷(`CLIPS_BUCKET`)이 없는 환경이거나 버킷에 닿지 못하면 `503`입니다.
+      security: [{ participantToken: [] }]
+      parameters:
+        - { name: moment, in: query, required: true, schema: { type: string }, description: 이 여행의 장면 id }
+        - { name: generation, in: query, required: true, schema: { type: integer, minimum: 1 }, description: 녹음할 때의 동의 세대 }
+        - { name: from, in: query, required: true, schema: { type: integer }, description: "클립 첫 표본의 시각(epoch 밀리초, 차가 자른 구간의 시작). 숏폼 자막을 소리에 맞추는 기준(T43). 여행을 만들기 1분 전부터 지금+1분까지" }
+      requestBody:
+        required: true
+        content:
+          audio/wav: { schema: { type: string, format: binary } }
+      responses:
+        "200": { description: 이미 있음(다시 보냄), content: { application/json: { schema: { $ref: "#/components/schemas/Recording" } } } }
+        "201": { description: 남김, content: { application/json: { schema: { $ref: "#/components/schemas/Recording" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /api/trips/{code}/recordings/{id}:
+    parameters:
+      - { $ref: "#/components/parameters/code" }
+      - { name: id, in: path, required: true, schema: { type: string }, description: 클립 id(= 장면 id) }
+    get:
+      tags: [클립]
+      summary: 클립 듣기
+      description: |
+        받은 WAV 바이트를 그대로, `Cache-Control: private, no-store`로 줍니다. 기록본처럼 녹음에 동의한 참가자만 듣습니다(`403`).
+        토큰은 머리말로만 보냅니다 — 웹은 `fetch` → blob → `<audio>`로 재생합니다(클립 하나 약 0.5~1.1 MB). 서명한 S3 주소를 주지 않고, 별도 media 주소도 두지 않습니다(ADR-0020은 11/14 대체됨: 영상 파일이 없음).
+      security: [{ participantToken: [] }]
+      responses:
+        "200": { description: WAV 바이트, content: { audio/wav: { schema: { type: string, format: binary } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [클립]
+      summary: 클립 지우기
+      description: |
+        이 여행의 참가자라면 누구나 지웁니다(동의 끄기처럼 지우는 쪽은 넓게). 버킷에서 바로 지우고(버전 관리를 끈 버킷이라 남는 버전 없음) `204`.
+        지운 클립은 표시를 남겨 차가 다시 올려도 받지 않습니다(`409`, 동의를 철회했다 다시 켜도 여행이 닫힐 때까지). 받아 적은 글과 장면은 그대로입니다.
+        녹음 동의를 철회하면(켜져 있던 동의를 끔) 그 여행의 클립이 모두, 여행을 만든 뒤 48시간이 지나면 여행과 함께 지워집니다(커밋 뒤 버킷에서, 실패하면 10분마다 다시).
+        버킷을 기다리는 사이 같은 장면의 클립이 새로 올라왔으면(철회 → 다시 동의 → 다시 올림) 그 새 클립은 건드리지 않고 `409` — 다시 지우면 됩니다.
+      security: [{ participantToken: [] }]
+      responses:
+        "204": { description: 지움 }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
   /api/groups:
     post:
       tags: [그룹]
@@ -769,7 +836,7 @@ components:
     participantToken:
       type: http
       scheme: bearer
-      description: 여행 참가(POST /api/trips/{code}/participants) 응답이 돌려준 참가자 토큰. 음성 경로(발화·기록본)와 동의 켜기의 인증에 씀(ADR-0007, T68)
+      description: 여행 참가(POST /api/trips/{code}/participants) 응답이 돌려준 참가자 토큰. 음성 경로(발화·기록본·클립)와 동의 켜기의 인증에 씀(ADR-0007, T68)
   parameters:
     code: { name: code, in: path, required: true, schema: { type: string, pattern: "^[A-Za-z2-9]{6}$" }, description: 여행 코드. 대소문자를 가리지 않음 }
     id: { name: id, in: path, required: true, schema: { type: string } }
@@ -853,6 +920,15 @@ components:
         lat: { type: number, description: 위치 없는 장면은 아예 없음(ADR-0007) }
         lng: { type: number }
         label: { type: string }
+    Recording:
+      type: object
+      required: [id, momentId, startAt, seconds, bytes]
+      properties:
+        id: { type: string, description: 클립 id. 장면 id와 같음 }
+        momentId: { type: string }
+        startAt: { type: integer, description: 클립 첫 표본의 시각(epoch 밀리초) }
+        seconds: { type: number, description: 소리 길이(초) }
+        bytes: { type: integer, description: 받은 WAV 크기 }
     UtteranceInput:
       type: object
       required: [seq]

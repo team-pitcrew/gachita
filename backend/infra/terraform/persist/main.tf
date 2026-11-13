@@ -65,8 +65,7 @@ locals {
   edge    = var.cloudflare_zone_id != ""
 }
 
-# ---- 데이터 버킷: Postgres 백업(postgres/db/)과 나중의 클립·사진. 공개하지 않는다 ----
-# 개인 데이터는 CDN에 올리지 않는다. 내려받을 때는 API가 짧게 서명한 주소를 준다.
+# ---- 데이터 버킷: Postgres 백업(postgres/db/). 클립은 아래 클립 버킷. 공개하지 않는다 ----
 resource "aws_s3_bucket" "data" {
   bucket = "gachita-${var.env}-${local.account}"
 }
@@ -107,6 +106,59 @@ resource "aws_s3_bucket_lifecycle_configuration" "data" {
     }
     abort_incomplete_multipart_upload {
       days_after_initiation = 7
+    }
+  }
+}
+
+# ---- 클립 버킷: 사람이 고른 장면의 원음 클립만(T64, ADR-0014 5절). API 서비스 계정 역할만 읽고 쓴다(../iam.tf) ----
+# 버전 관리를 켜지 않는다. 그래서 지우면 바로 사라진다(동의 철회·삭제 요청). 데이터 버킷의 버전 관리(백업 보호)와 따로 두려고 버킷을 나눴다.
+# '바로 지움'은 API가 직접 한다. 수명 규칙은 남은 것(올리다 끊긴 것, 지우기 실패)을 치운다: 올린 뒤 2일을 다음 UTC 자정으로
+# 올려 만료하고 지우기는 비동기라, 객체는 최대 약 3일 남을 수 있다.
+resource "aws_s3_bucket" "clips" {
+  bucket = "gachita-${var.env}-clips-${local.account}"
+}
+
+resource "aws_s3_bucket_public_access_block" "clips" {
+  bucket                  = aws_s3_bucket.clips.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+# 꺼져 있음을 선언해 둔다. 누가 켜면 Disabled로 되돌릴 수 없어(Suspended만 됨) 이 묶음의 계획이 실패하는 것으로 드러난다.
+# 그동안 생긴 옛 버전은 아래 수명 규칙이 하루 뒤 지운다(API 역할에는 버전 지우기 권한이 없음)
+resource "aws_s3_bucket_versioning" "clips" {
+  bucket = aws_s3_bucket.clips.id
+  versioning_configuration {
+    status = "Disabled"
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "clips" {
+  bucket = aws_s3_bucket.clips.id
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "clips" {
+  bucket = aws_s3_bucket.clips.id
+
+  rule {
+    id     = "expire-clips"
+    status = "Enabled"
+    filter {}
+    expiration {
+      days = 2 # 여행 보관 48시간
+    }
+    noncurrent_version_expiration {
+      noncurrent_days = 1
+    }
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 1
     }
   }
 }
@@ -230,8 +282,13 @@ resource "cloudflare_ruleset" "ratelimit" {
 }
 
 output "data_bucket" {
-  description = "백업과 클립 버킷(접는 묶음이 이름으로 읽음)"
+  description = "백업 버킷(접는 묶음이 이름으로 읽음)"
   value       = aws_s3_bucket.data.bucket
+}
+
+output "clips_bucket" {
+  description = "클립 버킷(API 환경 변수 CLIPS_BUCKET, backend/infra/gitops/apps/api)"
+  value       = aws_s3_bucket.clips.bucket
 }
 
 output "oidc_bucket" {

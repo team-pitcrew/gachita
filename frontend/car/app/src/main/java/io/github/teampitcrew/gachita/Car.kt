@@ -21,10 +21,7 @@ import ai.pleos.playground.tts.constant.Mode
 import ai.pleos.playground.tts.listener.EventListener
 import ai.pleos.playground.tts.listener.OnInitializeListener
 import ai.pleos.playground.vehicle.Vehicle
-import ai.pleos.playground.vehicle.api.model.area.SeatArea
-import ai.pleos.playground.vehicle.constant.area.SeatValue
 import ai.pleos.playground.vehicle.constant.control.VehicleGear
-import ai.pleos.playground.vehicle.constant.unit.TemperatureUnit
 import ai.pleos.playground.vehicle.listener.GearSelectionListener
 import android.car.drivingstate.CarUxRestrictions
 import android.car.drivingstate.CarUxRestrictionsManager
@@ -43,7 +40,7 @@ data class CarStatus(val gear: String? = null, val navi: Boolean = false, val vo
 data class Place(val lat: Double, val lng: Double, val name: String, val address: String = "")
 
 /**
- * Pleos Connect SDK를 감싼다: Vehicle(기어 · 공조), NaviHelper(순정 내비), TextToSpeech. 주행 제한 값은 AAOS CarUxRestrictionsManager에서 받는다.
+ * Pleos Connect SDK를 감싼다: Vehicle(기어), NaviHelper(순정 내비), TextToSpeech. 주행 제한 값은 AAOS CarUxRestrictionsManager에서 받는다.
  * 차박지도 앱(chabak-map/car, 11/10)의 Car.kt에서 옮겼다. 콜백은 모두 메인 스레드로 넘긴다.
  */
 class Car(ctx: Context, private val onChange: (CarStatus) -> Unit) {
@@ -55,7 +52,6 @@ class Car(ctx: Context, private val onChange: (CarStatus) -> Unit) {
     private var aaos: android.car.Car? = null
     private var ux: CarUxRestrictionsManager? = null
     private var status = CarStatus()
-    private var savedTemp: Float? = null
     @Volatile private var ttsFrom = 0L // 우리 TTS가 말한 구간(epoch ms). 말하는 중이면 ttsTo = Long.MAX_VALUE
     @Volatile private var ttsTo = 0L
 
@@ -228,28 +224,6 @@ class Car(ctx: Context, private val onChange: (CarStatus) -> Unit) {
                 navi.requestRouteWithWaypoints(RouteWithWaypointsRequest(destination = to, waypoints = wps))
             }
         }.onFailure { Log.w(TAG, "경로 요청 실패", it) }.isSuccess
-    }
-
-    // ponytail: 공조는 옮겨만 두고 이 티켓에서는 부르지 않는다(T8). 적용 → 다시 읽어 확인 → 끝낼 때 처음 값으로 복원.
-    private val driver = SeatArea(SeatValue.ROW_1_LEFT)
-
-    /** 운전석 온도를 바꾸고 0.7초 뒤 다시 읽어 맞으면 true. 처음 값은 restoreTemp가 되돌린다. */
-    fun applyTemp(tempC: Float, done: (Boolean, String) -> Unit) {
-        val hvac = vehicle?.getHVAC() ?: return done(false, "Vehicle SDK에 붙지 못했어요")
-        fun say(ok: Boolean, m: String) = main.post { done(ok, m) }
-        hvac.getHvacTemperature(driver, TemperatureUnit.CELSIUS, { before ->
-            if (savedTemp == null) savedTemp = before
-            hvac.setHvacTemperature(driver, tempC, TemperatureUnit.CELSIUS, { _, _ ->
-                main.postDelayed({
-                    hvac.getHvacTemperature(driver, TemperatureUnit.CELSIUS, { after -> say(after == tempC, "$before℃ → 다시 읽은 값 $after℃") }, { e -> say(false, "다시 읽지 못함: ${e.message}") })
-                }, 700)
-            }, { e -> say(false, "적용 실패: ${e.message}") })
-        }, { e -> say(false, "읽지 못함: ${e.message}") })
-    }
-
-    fun restoreTemp(done: (Boolean, String) -> Unit) {
-        val t = savedTemp ?: return done(true, "바꾼 값이 없어요")
-        applyTemp(t) { ok, m -> if (ok) savedTemp = null; done(ok, m) }
     }
 
     companion object {

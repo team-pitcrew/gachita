@@ -44,7 +44,7 @@
 |---|---|---|---|
 | 1 | 남는 묶음 적용(보통 바뀔 것 없음) | 계정 묶음 | ACM 인증서 `ISSUED` |
 | 2 | 접는 묶음 적용(레코드는 아직 없음) | 1 | EC2 실행 중 |
-| 3 | 첫 부팅과 구축 1~6단계(K3s → Cilium → 발급자 공개 키 → Argo CD → 뿌리 앱) | 2(서버, 배포 키, 발급자 버킷) | 단계 기록 파일 `6-root.done`(SSM으로 읽음) |
+| 3 | 첫 부팅과 구축 1~6단계(K3s → Cilium → 발급자 공개 키 → Argo CD → 뿌리 앱) | 2(서버, 저장소 읽기 토큰, 발급자 버킷) | 단계 기록 파일 `6-root.done`(SSM으로 읽음) |
 | 4 | 물결 0~2: 규칙과 CRD → 운영자(cert-manager, CloudNativePG, External Secrets) → 파드 신원 웹훅, 백업 플러그인, 비밀 값 저장소 | 3 | 앱 Healthy |
 | 5 | 물결 3: **ALB 컨트롤러**와 Postgres(백업이 있으면 복구, T52) | 4의 **파드 신원 웹훅**(컨트롤러의 AWS 자격이 웹훅이 넣는 토큰에서 옴 — 웹훅보다 먼저 뜨면 자격 없이 뜸), cert-manager(웹훅 인증서), 2의 컨트롤러 역할·서브넷 태그, 3의 발급자 공개 키 | 앱 Healthy |
 | 6 | 물결 4: API(서비스는 NodePort) | 5의 Postgres | 앱 Healthy |
@@ -87,7 +87,7 @@ external-dns(Cloudflare 토큰을 클러스터에 넣게 됨), ALB의 WAF·접�
 | 7 | T53(#90) | `backend/infra/infra.sh up|down`과 `infra` 워크플로가 2·3절의 순서와 검사를 그대로 |
 | 8 | 처음 접었다 펴기 | 11/13에 함(아래 '실제 계정에서 펴고 접은 것'). 실제 GitHub·Cloudflare 경로는 아래 사람 몫이 끝난 뒤 |
 
-**실제 GitHub·Cloudflare 경로로 펴기 전에 사람이 할 것:** 저장소 읽기 자격(배포 키가 조직 설정으로 막혀 있어 허용하거나 다른 자격을 정함), Cloudflare API 토큰(mangowhois.ai DNS 편집과 영역 WAF 편집)과 영역 번호, 이미지 받기 토큰(`read:packages`)을 `gh secret set`/`gh variable set`으로 넣기, 저장소 변수 셋(역할 ARN 둘, 상태 버킷). `account/`와 상태 버킷은 11/13에 만들었다.
+**실제 GitHub·Cloudflare 경로로 펴기 전에 사람이 할 것:** 저장소 읽기 토큰(11/14에 넣음), Cloudflare API 토큰(mangowhois.ai DNS 편집과 영역 WAF 편집)과 영역 번호, 이미지 받기 토큰(`read:packages`)을 `gh secret set`/`gh variable set`으로 넣기, 저장소 변수 셋(역할 ARN 둘, 상태 버킷). `account/`와 상태 버킷은 11/13에 만들었다.
 
 ## 결과
 
@@ -110,6 +110,6 @@ external-dns(Cloudflare 토큰을 클러스터에 넣게 됨), ALB의 WAF·접�
 
 실제로 돌려서 찾아 고친 것: IAM이 OIDC 제공자를 만들 때 발급자 문서를 읽음(남는 묶음이 올리게 함), Ansible이 공개 키 JSON을 파이썬 표기로 올림, zsh 수식자로 깨진 역할 ARN, SSM 명령이 sh라 pipefail 실패, 백업 사이드카 128Mi에서 OOMKilled(256Mi/512Mi로), 태그 검색 API가 지운 자원을 몇 분 넘게 보여 줌(서비스마다 직접 물음).
 
-**사람이 정할 것:** 이 저장소는 조직 설정으로 배포 키가 막혀 있다(`Deploy keys are disabled for this repository`). 그래서 이번 확인은 노드 안의 git 서버(`git://gitserver.argocd.svc.cluster.local/gachita.git`, 쿠버네티스 DNS)로 했다. 실제 GitHub 경로로 펴려면 배포 키 허용이나 다른 읽기 자격(GitHub App, 저장소 하나만 읽는 토큰)을 정해야 한다.
+**저장소 읽기 자격:** 이 저장소는 조직 설정으로 배포 키가 막혀 있다(`Deploy keys are disabled for this repository`). 그래서 11/13의 확인은 노드 안의 git 서버(`git://gitserver.argocd.svc.cluster.local/gachita.git`)로 했다. 11/14에 이 저장소 하나만 읽는 토큰(HTTPS)으로 정해 Argo CD가 GitHub develop을 따라가게 옮겼다(T24).
 
 - 확인하지 못한 것: Cloudflare → ALB(레코드, Full(strict), 요청 수 제한 규칙), ACM 발급(이번엔 자체 서명 인증서를 잠시 넣음), GHCR에서 이미지 받기(같은 커밋을 빌드해 노드에 넣음), `infra` 워크플로를 GitHub에서 돌리기(develop에 병합되어야 함).
