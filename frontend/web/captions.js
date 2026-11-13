@@ -207,11 +207,14 @@ export function createCaptions({ getTrip, getParticipant, request, refreshTrip }
       s.latest = null;
       s.draft = shown(data.utterance);
       s.notice = text === null ? "수동 수정본을 지웠어요." : "변경을 저장했어요.";
-      await refreshTrip();
+      // 여행 재조회는 기다리지 않는다: 늦어져도 편집 잠금은 바로 풀고 자막 폴링(삭제·권한 확인)은 이어 간다.
+      // 동의 세대가 바뀌었으면 재조회가 끝난 뒤 앱의 render()가 sync()로 이 화면을 닫는다.
+      refreshTrip().catch(() => {});
     } catch (e) {
       if (e.status === 409 && valid(s)) {
-        await refreshTrip();
-        if (valid(s)) { s.conflict = true; s.error = "다른 사람이 고쳤거나 기록 동의가 바뀌었어요. 내 입력은 유지했어요. 최신 자막을 읽고 비교해 주세요."; }
+        s.conflict = true;
+        s.error = "다른 사람이 고쳤거나 기록 동의가 바뀌었어요. 내 입력은 유지했어요. 최신 자막을 읽고 비교해 주세요.";
+        refreshTrip().catch(() => {});
       } else await fail(s, e);
     } finally {
       s.busy = false;
