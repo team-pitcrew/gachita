@@ -137,7 +137,12 @@ class MainActivity : ComponentActivity() {
     /** 화면이 보이는 동안, 그리고 수음 중이면 화면 뒤에서도 조회해 폰에서 끈 동의를 반영한다. */
     private val tick = object : Runnable {
         private var n = 0
-        override fun run() { refresh(resync = ++n % RESYNC_EVERY == 0 || !s.online, prune = n % RESYNC_EVERY == 0); locate(); if (visible || s.recording) main.postDelayed(this, POLL_MS) }
+        override fun run() {
+            val every = ++n % RESYNC_EVERY == 0
+            if (every) expire() // 앱이 며칠 켜져 있어도 48시간이 지난 사본을 지운다
+            refresh(resync = every || !s.online, prune = every); locate()
+            if (visible || s.recording) main.postDelayed(this, POLL_MS)
+        }
     }
 
     /** 마이크(꼭 필요)와 알림(화면 뒤에서 '기록 멈춤'을 보이는 데 씀. 없으면 API 33부터 알림이 올라가지 않음)을 한 번에 묻는다. */
@@ -179,9 +184,9 @@ class MainActivity : ComponentActivity() {
         // 여행을 만든 뒤 48시간이 지난 차 안 사본을 지운다(T69). 시험용으로 보관 기간을 줄이는 --el keepMs는 디버그 빌드에서만
         val now = System.currentTimeMillis()
         val keepMs = if (debug) intent.getLongExtra("keepMs", KEEP_MS) else KEEP_MS
-        sweep(filesDir, Live.seal, now, keepMs)
+        sweep(filesDir, Live.seal(this), now, keepMs).forEach(Live::forget) // 서비스 때문에 프로세스가 살아 있던 경우
         // 저장한 여행과 참가자 토큰도 받아 적은 말(부탁)과 인증 값이라 암호화해 둔다. 열리지 않거나(키가 바뀜) 보관 기간이 지났으면 없는 것으로
-        fun unsealed(k: String) = prefs.getString(k, null)?.let { runCatching { Live.seal.unline(it) }.getOrNull() }
+        fun unsealed(k: String) = prefs.getString(k, null)?.let { runCatching { Live.seal(this).unline(it) }.getOrNull() }
         val saved = unsealed("trip")?.takeIf { j -> runCatching { now - parseTrip(j).createdAt <= keepMs }.getOrDefault(false) }
         if (saved == null) prefs.edit().remove("trip").remove("tokens").commit()
         tokens = unsealed("tokens")?.let { j -> JSONObject(j).let { o -> o.keys().asSequence().associateWith { o.getString(it) } } }.orEmpty()
@@ -255,7 +260,7 @@ class MainActivity : ComponentActivity() {
         if (!io.isShutdown) io.execute { val r = runCatching(work); main.post { done(r) } }
     }
 
-    private fun keep(got: Server.Got): Trip { prefs.edit().putString("trip", Live.seal.line(got.json)).apply(); return got.trip }
+    private fun keep(got: Server.Got): Trip { prefs.edit().putString("trip", Live.seal(this).line(got.json)).apply(); return got.trip }
 
     private fun reason(e: Throwable) = if (e is ApiError) "서버가 거절했어요(${e.message})" else "서버에 닿지 않아요"
 
@@ -272,7 +277,7 @@ class MainActivity : ComponentActivity() {
         }) { r ->
             r.onSuccess { (got, mine) ->
                 tokens = mine
-                prefs.edit().putString("tokens", Live.seal.line(JSONObject(mine).toString())).commit() // 다시 받을 수 없는 값이라 디스크에 쓰고 돌아온다
+                prefs.edit().putString("tokens", Live.seal(this).line(JSONObject(mine).toString())).commit() // 다시 받을 수 없는 값이라 디스크에 쓰고 돌아온다
                 s = Session(gear = s.gear, ours = mine.keys).withTrip(keep(got))
             }
                 .onFailure { s = s.copy(busy = false); error = "여행을 만들지 못했어요 · ${reason(it)}" }
@@ -312,7 +317,15 @@ class MainActivity : ComponentActivity() {
         }) { r ->
             uploading = false
             r.exceptionOrNull()?.let { Log.w(TAG, "발화 올리기 못 함 ${if (it is ApiError) it.message else "연결"}") } // 서버 거절(400 등)의 글에는 받아 적은 말이 없다
-            Live.show(box)
+            if (r.exceptionOrNull() is Gone) forget(t.code) else if (Live.box === box) Live.show(box) // 그사이 지운 여행은 다시 보이지 않게
+        }
+    }
+
+    /** 48시간이 지난 여행의 차 안 사본을 지운다. 지금 여행이면 기록을 멈추고 처음 화면으로. */
+    private fun expire() {
+        sweep(filesDir, Live.seal(this), System.currentTimeMillis()).forEach { code ->
+            Live.forget(code)
+            if (s.trip?.code == code) { newTrip(); error = "만든 지 48시간이 지난 여행이라 이 차에 남은 기록을 지웠어요" }
         }
     }
 
@@ -359,7 +372,7 @@ class MainActivity : ComponentActivity() {
 
     private fun newTrip() {
         prefs.edit().remove("trip").remove("tokens").commit()
-        sweep(filesDir, Live.seal, System.currentTimeMillis()).forEach(Live::forget)
+        sweep(filesDir, Live.seal(this), System.currentTimeMillis()).forEach(Live::forget)
         tokens = emptyMap()
         s = Session(gear = s.gear)
         offer = null; todos = null; todoList = emptyList(); brief = null
@@ -489,7 +502,7 @@ class MainActivity : ComponentActivity() {
 
     // ---- 도착 브리핑(T40) ----
 
-    private fun todosOf(code: String): Todos = todos?.takeIf { it.trip == code } ?: Todos(filesDir, code, Live.seal).also { todos = it; todoList = it.items }
+    private fun todosOf(code: String): Todos = todos?.takeIf { it.trip == code } ?: Todos(filesDir, code, Live.seal(this)).also { todos = it; todoList = it.items }
 
     /**
      * 기어가 P로 바뀐 때: 내비가 향하는 다음 곳(첫 경유지, 없으면 목적지)이 할 일의 장소면 그곳의 미완료 할 일을 알린다.

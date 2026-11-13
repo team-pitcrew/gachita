@@ -156,9 +156,17 @@ def logcat():
 
 
 def vault(code):
-    """차 안 파일 그대로(암호화돼 있어야 함): 보관함·상태 파일·할 일과 저장한 여행·토큰(환경설정)."""
-    files = [f"files/utterances-{code}.jsonl", f"files/utterances-{code}.acked", f"files/todos-{code}.json", "shared_prefs/car.xml"]
-    return "".join(adb("exec-out", "run-as", PKG, "--user", "10", "cat", f) for f in files)
+    """차 안 파일 그대로(암호화돼 있어야 함): 보관함·상태 파일과 저장한 여행·토큰(환경설정). 읽지 못한 파일이 있으면 빈 값(헛통과 막기)."""
+    import base64
+    out = {f: adb("exec-out", "run-as", PKG, "--user", "10", "cat", f) for f in (f"files/utterances-{code}.jsonl", f"files/utterances-{code}.acked", f"files/todos-{code}.json", "shared_prefs/car.xml")}
+    def sealed(line):  # Base64 봉투 한 줄: IV 12 + 태그 16바이트 이상
+        try: return len(base64.b64decode(line.strip(), validate=True)) >= 28
+        except Exception: return False
+    ok = all(sealed(l) for l in out[f"files/utterances-{code}.jsonl"].splitlines() if l.strip()) and out[f"files/utterances-{code}.jsonl"].strip() \
+        and sealed(out[f"files/utterances-{code}.acked"]) and "<map>" in out["shared_prefs/car.xml"] \
+        and (sealed(out[f"files/todos-{code}.json"]) or "No such file" in out[f"files/todos-{code}.json"])  # 할 일은 '…에서 …자' 말이 있을 때만 생김
+    note("vault", ok=bool(ok), sizes={k: len(v) for k, v in out.items()})
+    return "".join(out.values()) if ok else ""
 
 
 def lines(code):
@@ -268,7 +276,10 @@ def compare(meta, t_inj, offset, got):
     rows = []
     for u in meta["utterances"]:
         s = t_inj + u["start_s"] * 1000; e = t_inj + u["end_s"] * 1000
-        hit = [g for g in got if s - 1500 <= g["at"] - offset <= e]  # 서버 기록에는 시작 시각만 있다(끝 시각은 차에만)
+        # 서버 기록에는 시작 시각만 있다(끝 시각은 차에만). 다음 발화의 시작을 끝 대신 쓰고 넣은 문장 구간과 겹치면 그 문장의 발화로 본다
+        # (STT가 두 문장을 한 발화로 적어도 뒤 문장이 비지 않게)
+        ends = {g["seq"]: n["at"] for g, n in zip(got, got[1:])}
+        hit = [g for g in got if g["at"] - offset <= e + 1500 and ends.get(g["seq"], g["at"] + 6000) - offset >= s]
         text = " ".join(g["text"] for g in hit)
         n = norm(u["text"]); dist = edits(n, norm(text))
         rows.append({**u, "got": text, "seq": [g["seq"] for g in hit],
@@ -404,7 +415,7 @@ def main(apk, minutes):
     on = [c for c in capture_log[log1:] if c["line"].startswith("수음 ")]
     check("막힘이 풀리면 기록 중", "● 기록 중" in ui, log=[(round((c["device_ms"] - offset) / 1000 - t_block, 2), c["line"]) for c in on])
     inj.play("after"); time.sleep(3)
-    new = [u for u in wait_uploaded(code, phone, n0 + 1)["items"] if u["seq"] > n0]
+    new = [u for u in wait_uploaded(code, phone, lines(code))["items"] if u["seq"] > n0]
     check("풀린 뒤에 넣은 말은 다시 적힘", any(edits(norm(AFTER[1]), norm(g["text"])) <= 4 for g in new), got=[g["text"] for g in new])
     # 5. 동의 끄기: 바로 멈추고 마이크를 놓는다
     log2 = len(capture_log); t_off = time.time(); tap_switch()
@@ -420,10 +431,10 @@ def main(apk, minutes):
     save(code, offset, t_inj, total, rows, minutes)
     for _ in range(15):  # 끄기를 서버에 알린 뒤 받은 여행의 동의 세대로 옛 발화의 글을 지운다(ADR-0014 2절). 다음 조회까지 걸릴 수 있다
         ui = texts()
-        if not any(t.startswith("받아 적은 말 ") for t in ui): break
+        if "기록 꺼짐" in ui and not any(t.startswith("받아 적은 말 ") for t in ui): break
         time.sleep(1)
     note("ui", texts=ui)
-    check("동의를 끄면 보관함의 글이 빔(받아 적은 말 0건이라 카드가 사라짐, 순번 줄은 남음)", not any(t.startswith("받아 적은 말 ") for t in ui) and lines(code) >= n_local,
+    check("동의를 끄면 보관함의 글이 빔(기록 꺼짐 화면에 받아 적은 말 0건이라 카드가 사라짐, 순번 줄은 남음)", "기록 꺼짐" in ui and not any(t.startswith("받아 적은 말 ") for t in ui) and lines(code) >= n_local,
           lines=lines(code))
     try:
         t = server(code)

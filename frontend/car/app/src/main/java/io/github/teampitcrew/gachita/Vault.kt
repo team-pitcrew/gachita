@@ -5,6 +5,7 @@ import android.security.keystore.KeyProperties
 import java.io.File
 import java.security.KeyStore
 import java.util.Base64
+import android.util.Log
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -16,7 +17,9 @@ import javax.crypto.spec.GCMParameterSpec
 const val KEEP_MS = 48L * 60 * 60 * 1000 // 여행을 만든 뒤 48시간. 보관 시계는 이것 하나뿐(ADR-0007)
 
 /**
- * AES-256-GCM. 봉투는 IV 12바이트 + 암호문 + 태그 16바이트. 키는 앱 밖으로 꺼낼 수 없는 Android Keystore 키(단위 테스트는 소프트웨어 키).
+ * AES-256-GCM. 봉투는 IV 12바이트 + 암호문 + 태그 16바이트.
+ * 앱이 쓰는 키(keystore())는 데이터 키 하나를 앱 밖으로 꺼낼 수 없는 Android Keystore 키로 감싸 파일(vault.key)에 둔 것이다:
+ * 줄·묶음마다 Keystore(binder 호출)를 부르지 않고 앱을 켤 때 한 번만 푼다. 단위 테스트는 소프트웨어 키.
  * 앱 데이터를 지우거나 다시 깔면 키가 바뀌어 옛 파일은 열리지 않는다. 열리지 않는 줄·파일은 없는 것으로 다룬다.
  */
 class Seal(private val key: SecretKey) {
@@ -34,17 +37,37 @@ class Seal(private val key: SecretKey) {
         private const val GCM = "AES/GCM/NoPadding"
         private const val ALIAS = "gachita-vault"
 
-        /** 이 앱의 Keystore 키(처음이면 만든다). 메인 스레드에서 불러도 된다(키 하나를 읽거나 만듦). */
-        fun keystore(): Seal {
+        /**
+         * 이 앱의 키: dir/vault.key의 데이터 키를 Keystore 키로 풀어 쓴다(처음이면 둘 다 만든다).
+         * Keystore 키나 파일이 깨졌으면(OEM 업데이트 뒤 등) 둘 다 새로 만든다. 옛 파일은 열리지 않아 지워진다(sweep). 앱이 죽지 않게.
+         */
+        fun keystore(dir: File): Seal = runCatching { wrapped(dir, Seal(master())) }.getOrElse {
+            Log.w("GachitaVault", "키를 다시 만듦", it)
+            runCatching { KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.deleteEntry(ALIAS) }
+            File(dir, KEY_FILE).delete()
+            wrapped(dir, Seal(master()))
+        }
+
+        private const val KEY_FILE = "vault.key"
+
+        /** dir/vault.key의 데이터 키(master로 감쌈). 없으면 새로 만들어 둔다. 열리지 않으면 던진다. */
+        fun wrapped(dir: File, master: Seal): Seal {
+            val f = File(dir, KEY_FILE)
+            val raw = if (f.exists()) master.open(f.readBytes()) else KeyGenerator.getInstance("AES").apply { init(256) }.generateKey().encoded.also {
+                val tmp = File(dir, "$KEY_FILE.tmp"); tmp.writeBytes(master.close(it)); check(tmp.renameTo(f)) { "키 파일을 쓰지 못함" }
+            }
+            return Seal(javax.crypto.spec.SecretKeySpec(raw, "AES"))
+        }
+
+        private fun master(): SecretKey {
             val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-            val key = ks.getKey(ALIAS, null) as SecretKey? ?: KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore").run {
+            return ks.getKey(ALIAS, null) as SecretKey? ?: KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore").run {
                 init(
                     KeyGenParameterSpec.Builder(ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
                         .setBlockModes(KeyProperties.BLOCK_MODE_GCM).setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE).setKeySize(256).build()
                 )
                 generateKey()
             }
-            return Seal(key)
         }
     }
 }
@@ -58,11 +81,12 @@ fun tripFiles(dir: File, code: String): List<File> = dir.listFiles().orEmpty().f
 fun dropTrip(dir: File, code: String) = tripFiles(dir, code).forEach { it.delete() }
 
 /**
- * 여행을 만든 뒤 48시간이 지난 여행의 파일을 지운다. 만든 시각은 보관함이 적어 둔 여행의 createdAt이고(통신이 끊겨도 지울 수 있게),
- * 적힌 것이 없거나 열리지 않으면(키가 바뀜) 그 여행 파일 가운데 가장 늦게 고친 시각으로 잰다. 지운 여행 코드를 돌려준다.
+ * 여행을 만든 뒤 48시간이 지난 여행의 파일을 지운다. 만든 시각은 보관함이 적어 둔 여행의 createdAt이다(통신이 끊겨도 지울 수 있게).
+ * 적힌 것이 없거나 열리지 않으면(키가 바뀜, 암호화 전 빌드의 평문) 그 여행 파일은 읽을 수 없으니 바로 지운다. 지운 여행 코드를 돌려준다.
+ * 여행을 만들면 첫 조회에서 바로 만든 시각을 적으므로(Outbox.see) 쓰는 중인 여행이 여기 걸리지 않는다. 기기 시계로 잰다.
  */
 fun sweep(dir: File, seal: Seal, now: Long, keepMs: Long = KEEP_MS): List<String> =
     dir.listFiles().orEmpty().mapNotNull { TRIP_FILE.find(it.name)?.groupValues?.get(1) }.distinct().filter { code ->
-        val born = Outbox.createdAtOf(dir, code, seal) ?: tripFiles(dir, code).maxOf { it.lastModified() }
-        (now - born > keepMs).also { if (it) dropTrip(dir, code) }
+        val born = Outbox.createdAtOf(dir, code, seal)
+        (born == null || now - born > keepMs).also { if (it) dropTrip(dir, code) }
     }

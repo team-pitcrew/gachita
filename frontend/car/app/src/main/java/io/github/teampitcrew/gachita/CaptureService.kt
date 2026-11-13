@@ -45,12 +45,13 @@ object Live {
     var box: Outbox? = null
         private set
 
-    /** 차 안 파일을 잠그는 키(Android Keystore, T69). 보관함·할 일·저장한 여행·참가자 토큰이 같이 쓴다. */
-    val seal: Seal by lazy { Seal.keystore() }
+    /** 차 안 파일을 잠그는 키(Android Keystore로 감싼 데이터 키, T69). 보관함·할 일·저장한 여행·참가자 토큰이 같이 쓴다. 처음 부를 때 한 번 푼다. */
+    @Volatile private var key: Seal? = null
+    @Synchronized fun seal(ctx: Context): Seal = key ?: Seal.keystore(ctx.filesDir).also { key = it }
 
     /** 그 여행의 보관함. 앱을 다시 켜면 파일에서 이어 읽는다. */
     fun outbox(ctx: Context, trip: String): Outbox =
-        box?.takeIf { it.trip == trip } ?: Outbox(ctx.filesDir, trip, seal).also { box = it; show(it) }
+        box?.takeIf { it.trip == trip } ?: Outbox(ctx.filesDir, trip, seal(ctx)).also { box = it; show(it) }
 
     /** 여행의 차 안 파일을 지웠을 때(서버가 여행을 모름, 48시간). 그 여행의 보관함을 놓는다. */
     fun forget(trip: String) {

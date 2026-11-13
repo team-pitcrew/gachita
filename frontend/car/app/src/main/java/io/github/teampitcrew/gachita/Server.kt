@@ -44,11 +44,7 @@ class Server(base: String) {
     }
 
     /** 최신 여행. 보낸 version에서 바뀐 것이 없으면(304) null. 서버가 여행을 모르면(없음, 48시간 지남) Gone. */
-    fun trip(code: String, version: Int? = null): Got? = try {
-        call("GET", "/api/trips/$code" + (version?.let { "?v=$it" } ?: ""), null)?.let(::got)
-    } catch (e: ApiError) {
-        throw if (e.status == 404) Gone(code) else e
-    }
+    fun trip(code: String, version: Int? = null): Got? = call("GET", "/api/trips/$code" + (version?.let { "?v=$it" } ?: ""), null)?.let(::got)
 
     /** 서버에 글이 남아 있는 이 기기 발화의 순번(GET /utterances?device=). 참가자가 지운 글(비운 줄)은 빠진다. */
     fun keptSeqs(code: String, token: String, device: String): Set<Long> =
@@ -70,7 +66,10 @@ class Server(base: String) {
             val code = c.responseCode
             if (code == 304) return null
             val text = (if (code < 400) c.inputStream else c.errorStream)?.bufferedReader()?.use { it.readText() }.orEmpty()
-            if (code >= 400) throw ApiError(code, runCatching { JSONObject(text).getString("error") }.getOrDefault(text))
+            val error = runCatching { JSONObject(text).getString("error") }.getOrNull()
+            // 여행 경로에서 서버가 그 여행을 모른다고 할 때만 Gone(프록시의 404 쪽이나 '없는 참가자'로는 지우지 않음)
+            if (code == 404 && error in TRIP_GONE && path.startsWith("/api/trips/")) throw Gone(path.split("/")[3])
+            if (code >= 400) throw ApiError(code, error ?: text)
             return text
         } finally {
             c.disconnect()
@@ -80,6 +79,9 @@ class Server(base: String) {
 
 /** 서버가 거절함(4xx·5xx). 통신 자체가 안 된 것(IOException)과 구분해 '연결 끊김'으로 보지 않는다. */
 open class ApiError(val status: Int, message: String) : Exception("$status $message")
+
+/** 서버(withTrip)가 여행을 모를 때의 404 문구. 이것만 여행이 없어진 것으로 본다. */
+private val TRIP_GONE = setOf("없는 여행 코드", "보관 기간이 지난 여행")
 
 /** 서버가 여행을 모른다(404: 없음, 보관 48시간 지남). 차 안 사본도 지운다(T69). */
 class Gone(code: String) : ApiError(404, "없는 여행 $code")
