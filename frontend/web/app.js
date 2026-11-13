@@ -95,12 +95,17 @@ async function act(fn) {
 }
 
 // 다른 폰에서 이 프로필로 이미 참가한 여행이면 프로필 토큰으로 다시 참가해 이 폰의 참가자 토큰을 받는다.
-// 서버는 있던 참가자를 돌려주고 앞 폰의 토큰도 살려 둔다(T68). 참가자 id만 빌려 쓰면 동의를 켤 수 없다.
-async function claim() {
-  if ((myId() && myToken()) || !profile || !trip.participants.some((p) => p.profileId === profile.id)) return;
-  const p = await api("POST", `/trips/${trip.code}/participants`, {}, store("profile"));
-  store(trip.code, p.id);
-  store(`${trip.code}:token`, p.token);
+// 서버는 있던 참가자를 돌려주고 앞 폰의 토큰도 최근 4개까지 살려 둔다(T68). 참가자 id만 빌려 쓰면 동의를 켤 수 없다.
+// 다시 참가했으면 true. 겹쳐 불러도 한 번만 보낸다(보낼 때마다 토큰이 바뀐다).
+let claiming = null;
+const claim = () => (claiming ??= rejoin().finally(() => (claiming = null)));
+async function rejoin() {
+  const c = trip?.code;
+  if (!c || (store(c) && store(`${c}:token`)) || !profile || !trip.participants.some((p) => p.profileId === profile.id)) return false;
+  const p = await api("POST", `/trips/${c}/participants`, {}, store("profile"));
+  store(c, p.id);
+  store(`${c}:token`, p.token);
+  return true;
 }
 
 const typing = () => app.contains(document.activeElement) && /^(INPUT|SELECT)$/.test(document.activeElement.tagName);
@@ -111,10 +116,10 @@ async function refresh(force) {
     try {
       const next = await call("GET", `/${code()}${trip && !force ? `?v=${trip.version}` : ""}`);
       offline = false;
-      if (!next) return;
-      trip = next;
-      failed = "";
-      await claim().catch(() => {}); // 못 받으면 참가 화면이 보이고, 거기서 참가해도 같은 길로 간다
+      if (next) (trip = next), (failed = "");
+      // 못 받았으면 다음 폴링에서 다시 한다. 그동안은 참가 화면이 보이고, 거기서 참가해도 같은 참가자로 들어간다.
+      const claimed = await claim().catch(() => false);
+      if (!next && !claimed) return;
     } catch (e) {
       if (e.status === 0) {
         // 터널 같은 곳에서는 마지막 화면을 그대로 두고 계속 다시 묻는다
@@ -395,13 +400,22 @@ function tripView(me) {
   const seated = Object.fromEntries(trip.participants.map((p) => [p.seat, p]));
   const waiting = trip.status === "driving" ? trip.participants.filter((p) => !p.consent).map((p) => p.name) : [];
   const patch = (path, body) => () => act(() => call("PATCH", t + path, body));
-  // 켜기는 본인의 참가자 토큰으로만 된다(끄기는 누구나). 서버가 토큰을 모르면 이 폰은 켤 수 없다.
+  // 켜기는 본인의 참가자 토큰으로만 된다(끄기는 누구나). 서버가 이 폰의 토큰을 잊었으면(다른 곳에서 다섯 번 넘게
+  // 다시 참가) 프로필로 들어온 사람은 다시 참가해 새 토큰으로 한 번 더 켠다. 손님은 다시 받을 길이 없다.
   const consentOn = () =>
-    act(() =>
-      api("PATCH", `/trips${t}/participants/${me.id}`, { consent: true }, myToken()).catch((e) => {
-        throw e.status === 401 || e.status === 403 ? new Error(ONLY_HERE) : e;
-      }),
-    );
+    act(async () => {
+      const on = () => api("PATCH", `/trips${t}/participants/${me.id}`, { consent: true }, myToken());
+      await on()
+        .catch(async (e) => {
+          if (e.status !== 401 || !profile || me.profileId !== profile.id) throw e;
+          store(`${trip.code}:token`, null);
+          await claim();
+          await on();
+        })
+        .catch((e) => {
+          throw e.status === 401 || e.status === 403 ? new Error(ONLY_HERE) : e;
+        });
+    });
   const open = trip.requests.filter((r) => !CLOSED.includes(r.status));
   const rec = trip.recording ? ["기록 중", "rec"] : trip.status !== "driving" ? ["기록 안 함", ""] : waiting.length ? ["동의 대기", ""] : ["기록 일시정지", ""];
   const next = NEXT_TRIP[trip.status];
