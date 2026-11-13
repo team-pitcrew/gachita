@@ -1241,6 +1241,8 @@ async function handle(trip, { req, m, sub, id, leaf, b, query, profile }, client
       // 그 앞에서 멈춰 차량이 같은 묶음을 끝없이 다시 보낸다(ADR-0007).
       const current = trip.generation ?? 1;
       const device = text(b.device, 40, "device");
+      // `.`·`..`는 주소 마디로 쓰면 URL 정규화로 사라져(자막·화자 고치기 경로) 그 발화를 다시 가리킬 수 없다 — 받지 않는다(Astra, #202).
+      if (device === "." || device === "..") fail(400, "device: . 과 .. 은 쓸 수 없음");
       // 기기 이름은 처음 올린 참가자의 것이다. 다른 참가자가 같은 이름으로 순번을 먼저 차지해 진짜 발화를 밀어내지 못하게.
       const { rows: ack } = await client.query("SELECT last_seq, participant_id FROM utterance_acks WHERE trip_code = $1 AND device = $2", [trip.code, device]);
       if (ack[0] && ack[0].participant_id !== caller.id) fail(403, "다른 참가자가 올리는 기기");

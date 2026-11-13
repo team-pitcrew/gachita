@@ -1474,6 +1474,8 @@ test("수동 자막은 동의한 여행 참가자만 고치며 동시 수정·�
   await call("PATCH", `${t}/participants/${b.id}`, { consent: true }, b.token);
   const item = { seq: 1, at: trip.createdAt + 1000, text: "원래 말", generation: 1 };
   assert.equal((await call("POST", `${t}/utterances`, { device, items: [item] }, a.token))[0], 200);
+  // `.`·`..`는 주소 마디로 쓰면 URL 정규화로 사라져 자막을 고칠 수 없으므로 올릴 때 거절한다(Astra)
+  for (const odd of [".", ".."]) assert.equal((await call("POST", `${t}/utterances`, { device: odd, items: [item] }, a.token))[0], 400);
   const [, otherTrip] = await call("POST", "/api/trips", {});
   const [, other] = await join(otherTrip.code, "다른 여행", "ROW_1_LEFT");
   assert.equal((await edit("수정", 0, other.token))[0], 401);
