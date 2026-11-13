@@ -477,10 +477,10 @@ async function voiceMatch(trip, req, query) {
   const seconds = samples.length / 16000;
   // ponytail: 임베딩은 이벤트 루프에서 동기로 돈다(10초 ≈ 30 ms, 60초 ≈ 185 ms). 발화는 보통 2~4초라 10초로 묶는다.
   if (seconds < 0.5 || seconds > 10) fail(400, "발화 음성은 0.5~10초");
-  // 후보: 그 줄(row 1 앞줄, 2 뒷줄 — 차량 앱의 좌석 구역 판정, T37)에 앉은 참가자. 줄을 모르면 이 여행의 참가자 모두.
-  // 값은 이 여행에 등록한 것을 먼저, 없으면 그 사람 프로필의 등록값을 쓴다.
+  // 후보: 그 줄(row 1 앞줄, 2 뒷줄 — 차량 앱의 좌석 구역 판정, T37)에 앉은, 녹음에 동의한 참가자. 줄을 모르면 그 줄 조건만 뺀다.
+  // 값은 이 여행에 등록한 것을 먼저, 없으면 그 사람 프로필의 등록값을 쓴다 — 동의하지 않은 사람의 이름은 발화에 붙지 않는다.
   const row = query.get("row") ? oneOf(query.get("row"), ["1", "2"], "row") : null;
-  const seated = trip.participants.filter((p) => !row || p.seat.startsWith(`ROW_${row}_`));
+  const seated = trip.participants.filter((p) => p.consent && (!row || p.seat.startsWith(`ROW_${row}_`)));
   const threshold = matchThreshold();
   const { rows: own } = seated.length
     ? await tripsDb().query("SELECT participant_id, vector FROM trip_voice_prints WHERE trip_code = $1 AND participant_id = ANY($2)", [trip.code, seated.map((p) => p.id)])

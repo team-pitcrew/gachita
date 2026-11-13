@@ -1222,10 +1222,18 @@ test("손님 참가자도 여행에 목소리를 등록하면 화자가 붙는�
   assert.equal(r2.participantId, null, "앞줄 아빠의 목소리는 뒷줄 후보에서 모름");
   assert.equal((await (await postRaw(`${t}/voice-match?row=1`, wav(210, 1.5), a.token)).json()).participantId, a.id);
 
-  // 동의를 끄면(누가 끄든) 그 참가자의 값은 바로 지운다
+  // 동의를 끄면(누가 끄든) 그 참가자의 값은 바로 지우고, 대조 후보에서도 빠진다
   await call("PATCH", `${t}/participants/${b.id}`, { consent: false });
   assert.equal(await prints(b.id), 0);
   assert.equal(await prints(c.id), 1, "다른 사람의 값은 그대로");
+  const [, me] = await call("POST", "/api/profiles", { name: "삼촌" });
+  await postRaw("/api/profiles/me/voice", wav(260, 3), me.token);
+  const [, d] = await call("POST", `${t}/participants`, { seat: "ROW_1_RIGHT", consent: false }, me.token);
+  const r3 = await (await postRaw(`${t}/voice-match?row=1`, wav(260, 1.5), a.token)).json();
+  assert.equal(r3.participantId, null, "동의하지 않은 사람은 프로필 등록값이 있어도 후보가 아님");
+  await call("PATCH", `${t}/participants/${d.id}`, { consent: true }, d.token);
+  const r4 = await (await postRaw(`${t}/voice-match?row=1`, wav(260, 1.5), a.token)).json();
+  assert.deepEqual([r4.participantId, r4.profileId], [d.id, me.id], "동의하면 프로필 등록값으로 찾음");
 
   // 48시간이 지나 여행이 지워지면 값도 함께
   await tripsDb().query("UPDATE trips SET created_at = now() - interval '49 hours' WHERE code = $1", [trip.code]);
