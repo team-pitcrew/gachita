@@ -19,6 +19,7 @@ Terraform(AWS·Cloudflare) → 첫 부팅(user_data: 도구, 저장소 자격, �
 - 판은 `site.yml`의 `vars`와 `argocd/kustomization.yaml`의 주소 두 곳에만 있습니다.
 - 단계가 끝나면 `/var/lib/gachita/bootstrap/<번호>-<이름>.done`에 시각이 남습니다. 실패하면 로그의 마지막 `[n/7 이름]`이 멈춘 단계입니다.
 - 서버마다 다른 값(계정, 발급자 주소, 저장소·브랜치, 서비스 주소)은 Terraform이 `/etc/gachita/vars.yml`에 넣습니다. 인스턴스 번호와 가용 영역은 2단계가 IMDSv2에서 읽습니다.
+- 5~7단계는 계정 없이 로컬에서도 돌려 봅니다: [`e2e-local.sh`](e2e-local.sh)가 Docker 위 K3s 한 대에 Argo CD와 뿌리 앱을 넣고 물결을 기록한 뒤 `/healthz`를 봅니다. 인프라가 바뀐 PR마다 `infra-e2e` 워크플로가 같은 스크립트를 돕니다. 로컬에서 대신하거나 뺀 것은 스크립트 머리에 있습니다(T55).
 
 ## 다시 돌리기
 
