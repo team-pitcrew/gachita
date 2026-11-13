@@ -111,7 +111,8 @@ class MainActivity : ComponentActivity() {
             v.trip?.let { t ->
                 val box = Live.outbox(this, t.code)
                 if (box.see(t.generation, t.createdAt)) Live.show(box) // 동의 세대가 오르면 옛 세대 발화의 글을 지운다
-                dropRaw(filesDir, t.code, below = box.generation) // 옛 세대의 원음도(T63)
+                if (v.consented) Live.rawGen = box.generation // 원음은 모두 동의한 세대로만 남긴다(T63)
+                if ("${t.code}:${box.generation}" != rawSeen) { rawSeen = "${t.code}:${box.generation}"; dropRaw(filesDir, t.code, below = box.generation) } // 옛 세대의 원음은 지운다
             }
         }
     private var carStatus by mutableStateOf(CarStatus())
@@ -124,6 +125,7 @@ class MainActivity : ComponentActivity() {
     private var offers = 0L // 제안 번호. 늦게 온 콜백이 다른 제안을 건드리지 않게
     private var todos: Todos? = null // 지금 여행의 장소별 할 일(T40)
     private var clipping = false // 장면 클립을 올리는 중(T63)
+    private var rawSeen = "" // 옛 세대 원음을 지운 여행·세대. 세대가 바뀔 때만 파일 목록을 본다
     private var clipsAfter = 0L // 다시 해도 되는 실패(403·503·끊김) 뒤에는 이때까지 쉰다. 큰 원음 파일을 10초마다 다시 읽지 않게
     private var todoList by mutableStateOf(emptyList<Todo>())
     /** 보이고 있는 도착 브리핑. place가 null이면 모든 장소(Gleo로 부름). 주차해 주행 제한이 풀렸을 때만 그린다. */
@@ -355,7 +357,8 @@ class MainActivity : ComponentActivity() {
         val now = System.currentTimeMillis()
         if (clipping || now < clipsAfter || !s.consented) return
         val log = ClipLog(filesDir, t.code)
-        val todo = t.moments.filter { it.id !in log.done && it.window.last + 3_000 < now }
+        val done = log.done()
+        val todo = t.moments.filter { it.id !in done && it.window.last + 3_000 < now }
         if (todo.isEmpty()) return
         clipping = true
         val url = server; val dir = filesDir
@@ -365,7 +368,7 @@ class MainActivity : ComponentActivity() {
             for (m in todo) {
                 val w = m.window
                 val f = clipFile(files, w)
-                val pcm = f?.let { runCatching { it.cut(Live.seal, w.first, w.last) }.getOrNull() }
+                val pcm = f?.let { runCatching { it.cut(Live.seal(this), w.first, w.last) }.getOrNull() }
                 if (f == null || pcm == null) { log.add(m.id); Log.i(TAG, "장면 ${m.id}: 이 차에 그 구간의 원음이 없어 올리지 않음"); continue }
                 try {
                     api.recording(t.code, up, m.id, f.generation, maxOf(w.first, f.startedAt), wav(pcm))
@@ -386,8 +389,9 @@ class MainActivity : ComponentActivity() {
      */
     private fun dropRawNow() {
         val t = s.trip ?: return
-        if (CaptureService.running) Live.dropRaw = true else RawFile.of(filesDir, t.code).forEach { it.file.delete() }
-        s = s.copy(note = "이 차에 둔 지난 원음을 지웠어요")
+        val n = RawFile.of(filesDir, t.code).count { it.file.delete() } // 쓰던 파일도(닫히면 그 자리가 비워진다)
+        if (CaptureService.running) Live.rollRaw = t.code // 수음 스레드는 다음 묶음부터 새 파일에
+        s = s.copy(note = if (n > 0) "이 차에 둔 지난 원음을 지웠어요" else "이 차에 둔 원음이 없어요")
     }
 
     /** 서버가 모르는 여행(48시간이 지나 지워짐): 기록을 멈추고 이 차의 사본(보관함·할 일)을 지운 뒤 처음 화면으로. */

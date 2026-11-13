@@ -64,15 +64,27 @@ def env10(x):
 
 
 def match(clip, ref):
-    """클립 포락선과 넣은 소리(ref) 포락선이 가장 잘 맞는 자리: (상관, 짧은 쪽이 긴 쪽에서 시작하는 위치 초)."""
-    a = env10(clip); b = env10(ref)
-    if len(a) > len(b): a, b = b, a  # 짧은 쪽을 긴 쪽 위에서 민다
+    """클립 포락선과 넣은 소리(ref) 포락선이 가장 잘 맞는 자리: (상관, 클립 첫 표본이 넣은 소리에서 몇 초 자리인지. 넣은 소리 앞이면 음수)."""
+    a = env10(clip); b = env10(ref); sign = 1
+    if len(a) > len(b): a, b, sign = b, a, -1  # 짧은 쪽을 긴 쪽 위에서 민다
     a = (a - a.mean()) / (a.std() + 1e-9)
     best = (-1, 0)
     for i in range(0, len(b) - len(a) + 1):
         w = b[i:i + len(a)]; c = float((a * (w - w.mean()) / (w.std() + 1e-9)).mean())
-        if c > best[0]: best = (c, i / 100)
+        if c > best[0]: best = (c, sign * i / 100)
     return round(best[0], 3), round(best[1], 2)
+
+
+def raw_names():
+    return sorted(l.split()[-1] for l in raw_files())
+
+
+def clip_start(m, names):
+    """차가 자른 클립의 첫 표본 시각(기기 시계): 장면 구간 시작과 그 구간을 덮는 원음 파일 시작 가운데 늦은 쪽(Raw.kt와 같은 규칙)."""
+    w0 = m["at"] - 20_000
+    starts = sorted(int(n.split("-")[3].split(".")[0]) for n in names if n.startswith(f"audio-{m['code']}-"))
+    before = [t for t in starts if t <= w0]
+    return max(w0, before[-1]) if before else min(t for t in starts if t >= w0)
 
 
 def main(apk, minutes):
@@ -96,14 +108,15 @@ def main(apk, minutes):
     ui = wait_texts(lambda u: "● 기록 중" in u, 15)
     if not check("모두 동의하면 기록 중", "● 기록 중" in ui): raise SystemExit("수음이 열리지 않아 멈춥니다")
     # 1. 다섯 문장을 넣고 서버에 올라간 발화의 시각으로 장면 둘을 남긴다(폰에서 고른 것과 같은 요청)
-    inj.play("five"); time.sleep(2)
+    t_five = inj.play("five"); time.sleep(2)
     got = sorted(wait_uploaded(code, phone, 5, timeout=30)["items"], key=lambda u: u["seq"])
     note("heard", items=[(u["seq"], u["text"]) for u in got])
     picks = [got[2], got[4]] if len(got) >= 5 else got[-2:]
     moments = []
     for i, u in enumerate(picks):
         st, b = api("POST", f"/api/trips/{code}/moments", phone[1], {"at": u["at"], "label": f"장면 {i + 1}"})
-        moments.append(json.loads(b)); note("moment", status=st, id=moments[-1]["id"], at=u["at"], text=u["text"])
+        moments.append({**json.loads(b), "code": code}); note("moment", status=st, id=moments[-1]["id"], at=u["at"], text=u["text"])
+    names0 = raw_names()
     # 2. 차가 구간(시각 앞 20초 ~ 뒤 10초)이 끝난 뒤 다음 조회에서 잘라 올린다
     deadline = time.time() + 60
     while time.time() < deadline and len(s3) < len(moments): time.sleep(2)
@@ -111,22 +124,27 @@ def main(apk, minutes):
     check("확정한 장면마다 클립 하나가 API를 거쳐 클립 버킷에 있음", len(s3) == len(moments) and all(any(m["id"] in k for k in s3) for m in moments), keys=sorted(s3))
     ref = np.frombuffer(wave.open(str(OUT / "inputs" / "five.wav")).readframes(10 ** 9), dtype="<i2").reshape(-1, 2).astype(np.int32).sum(1)
     (OUT / "clips").mkdir(exist_ok=True); clips = []
+    offset = cap.clock_offset()
     for m in moments:
         st, b = api("GET", f"/api/trips/{code}/recordings/{m['id']}", phone[1])
         (OUT / "clips" / f"{m['id']}.wav").write_bytes(b)
         w = wave.open(io.BytesIO(b)); pcm = np.frombuffer(w.readframes(w.getnframes()), dtype="<i2")
         corr, at_s = match(pcm, ref)
+        # 클립 첫 표본의 기기 시각에서 넣기 시작 시각과 포락선 자리를 빼면 에뮬레이터가 소리를 늦게 넣는 시간만 남는다. 클립마다 같아야 시각이 맞다
+        delay = round((clip_start(m, names0) - offset - t_five) / 1000 - at_s, 2)
         clips.append({"id": m["id"], "status": st, "rate": w.getframerate(), "channels": w.getnchannels(), "bits": w.getsampwidth() * 8,
-                      "seconds": round(w.getnframes() / w.getframerate(), 2), "peak_dbfs": round(20 * np.log10(np.abs(pcm).max() / 32768 + 1e-9), 1), "corr": corr, "at_in_input_s": at_s})
+                      "seconds": round(w.getnframes() / w.getframerate(), 2), "peak_dbfs": round(20 * np.log10(np.abs(pcm).max() / 32768 + 1e-9), 1),
+                      "corr": corr, "at_in_input_s": at_s, "delay_s": delay})
     note("clips", clips=clips)
     check("받은 클립은 16 kHz 모노 16비트 WAV이고 말소리가 들어 있음", clips and all(c["rate"] == 16000 and c["channels"] == 1 and c["bits"] == 16 and c["peak_dbfs"] > -30 for c in clips), clips=clips)
     check("클립 소리가 넣은 대화와 맞음(10 ms 포락선 상관 0.6 이상)", clips and all(c["corr"] >= 0.6 for c in clips), corr=[c["corr"] for c in clips])
-    files = raw_files(); note("raw", files=files)
-    name = files[0].split()[-1] if files else None
-    blob = raw_bytes(name) if name else b""
+    delays = [c["delay_s"] for c in clips]
+    check("클립 시각이 맞음(클립마다 에뮬레이터 지연이 0.3초 안에서 같고 0~4초)", delays and max(delays) - min(delays) <= 0.3 and all(0 <= d <= 4 for d in delays), delays=delays)
+    names = raw_names(); note("raw", files=raw_files())
+    blob = b"".join(raw_bytes(n) for n in names)  # 클립을 자른 파일이 어느 것이든
     first = np.frombuffer(wave.open(str(OUT / "clips" / f"{moments[0]['id']}.wav")).readframes(10 ** 9), dtype="<i2")
     probe = first[len(first) // 2:len(first) // 2 + 32].tobytes()  # 클립 가운데 표본 32개(말소리)
-    check("차 안 원음 파일은 암호화돼 있음(받은 클립의 표본이 파일에 없음, WAV 머리 없음)", blob and probe not in blob and b"RIFF" not in blob[:64], file=name, bytes=len(blob))
+    check("차 안 원음 파일은 암호화돼 있음(받은 클립의 표본이 어느 파일에도 없음, WAV 머리 없음)", names and blob and probe not in blob and b"RIFF" not in blob, files=names, bytes=len(blob))
     # 3. 자원: 원음을 쌓으며 [분] 동안 더 넣는다(내비를 앞에 둔 기어 D)
     if minutes:
         adb("shell", "am", "start", "--user", "10", "-n", cap.NAVI); time.sleep(3); gear("Drive")
@@ -149,11 +167,11 @@ def main(apk, minutes):
         check(f"{minutes}분 동안 원음을 쌓으며 막힘 없음", not any("BLOCKED" in c["line"] or "녹음 끝" in c["line"] or "원음을 쓰지 못함" in c["line"] for c in window))
         gear("Park"); adb("shell", "am", "start", "--user", "10", "-n", f"{PKG}/.MainActivity"); time.sleep(3)
     # 4. 원음 지우기(기록 중): 지난 원음이 지워지고 그 뒤로는 새 파일에 이어 쓴다. 받아 적은 글과 동의는 그대로
-    before = raw_files()
+    before = raw_names()
     tap_text("이 차에 둔 원음 지우기"); time.sleep(3)
-    after = raw_files(); ui = texts(); note("raw.drop", before=before, after=after, ui=ui)
+    after = raw_names(); ui = texts(); note("raw.drop", before=before, after=after, ui=ui)
     check("원음 지우기: 지난 원음 파일이 지워지고 새 파일로 이어 씀(기록은 계속)", before and after and not set(before) & set(after) and "● 기록 중" in ui,
-          before=[l.split()[-1] for l in before], after=[l.split()[-1] for l in after])
+          before=before, after=after)
     # 5. 동의를 끄면 원음 파일이 모두 지워진다(동의 세대가 오름)
     tap_switch(); time.sleep(5)
     left = raw_files(); note("raw.off", files=left)

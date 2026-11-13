@@ -33,24 +33,52 @@ data class Moment(val id: String, val at: Long, val from: Long? = null, val to: 
 private val RAW_NAME = Regex("^audio-([A-Z0-9]+)-(\\d+)-(\\d+)\\.raw$")
 
 /**
- * 수음 한 번(서비스 시작부터 끝까지, 같은 동의 세대)이 파일 하나다: audio-<여행>-<세대>-<첫 표본 시각 epoch ms>.raw
+ * 수음 한 번(서비스 시작부터 끝까지, 같은 동의 세대, 시각이 어긋나지 않는 동안)이 파일 하나다: audio-<여행>-<세대>-<첫 표본 시각 epoch ms>.raw
  * 머리는 [길이 4바이트][Keystore 키(Seal)로 감싼 데이터 키], 그 뒤로 0.1초 묶음마다 [길이][IV+암호문+태그]. 묶음은 16 kHz 모노 16비트 PCM(STT에 넣은 것과 같음).
  * 데이터 키(AES-256)는 파일마다 새로 만들고 그 키만 Keystore 키로 감싼다. 0.1초마다 Keystore를 부르지 않게.
- * 시각은 첫 표본 시각 + 표본 수 ÷ 16(ms)으로 잰다. ponytail: 녹음 시계와 기기 시계의 어긋남은 고치지 않는다(1시간 시험에서 잼). 클립 앞뒤 여유로 덮는다.
+ * 시각은 첫 표본 시각(기기 시계) + 표본 수 ÷ 16(ms)으로 잰다. 쓰는 쪽이 묶음마다 기기 시계와 견줘 0.25초 넘게 어긋나면(읽기가 멈춤, 시계가 바뀜)
+ * 새 파일로 넘어가 시각을 다시 맞춘다(CaptureService.keep).
  */
 class RawWriter(dir: File, val trip: String, val generation: Int, val startedAt: Long, seal: Seal) : Closeable {
     val file = File(dir, "audio-$trip-$generation-$startedAt.raw")
     private val key = KeyGenerator.getInstance("AES").apply { init(256) }.generateKey()
     private val data = Seal(key)
+    private val head = seal.close(key.encoded) // 키를 먼저 감싼다: 실패하면 파일을 만들지 않는다
     private val out = DataOutputStream(BufferedOutputStream(FileOutputStream(file), 64 * 1024))
+    private val pending = java.io.ByteArrayOutputStream(RECORD_BYTES)
 
-    init { seal.close(key.encoded).let { out.writeInt(it.size); out.write(it) } }
+    /** 지금까지 받은 표본 수(쓰지 못하고 남은 것 포함). 다음 묶음의 시각 = startedAt + frames ÷ 16 ms. */
+    var frames = 0L
+        private set
 
-    /** 묶음마다 디스크까지 내보낸다. 수음 중에도 지난 장면을 바로 자를 수 있게. */
-    fun write(pcm: ByteArray) = data.close(pcm).let { out.writeInt(it.size); out.write(it); out.flush() }
+    init {
+        runCatching { out.writeInt(head.size); out.write(head); out.flush() }.onFailure { out.close(); file.delete(); throw it }
+    }
 
-    override fun close() = out.close()
+    /**
+     * 묶음(마지막만 빼고 언제나 0.1초 = 1,600표본)을 디스크까지 내보낸다. 수음 중에도 지난 장면을 바로 자를 수 있게.
+     * 짧게 읽힌 조각은 모아 다음 조각과 합친다(묶음 자리를 계산으로 바로 찾게).
+     */
+    fun write(pcm: ByteArray) {
+        frames += pcm.size / 2
+        pending.write(pcm)
+        val buf = pending.toByteArray()
+        var i = 0
+        while (buf.size - i >= RECORD_BYTES) { seal(buf.copyOfRange(i, i + RECORD_BYTES)); i += RECORD_BYTES }
+        pending.reset(); pending.write(buf, i, buf.size - i)
+        out.flush()
+    }
+
+    private fun seal(pcm: ByteArray) = data.close(pcm).let { out.writeInt(it.size); out.write(it) }
+
+    override fun close() {
+        runCatching { if (pending.size() > 0) seal(pending.toByteArray()) } // 꼬리만 짧은 묶음
+        out.close()
+    }
 }
+
+private const val RECORD_BYTES = CHUNK_FRAMES * 2
+private const val STRIDE = 4L + TAG_BYTES + RECORD_BYTES
 
 /** 원음 파일 하나. 이름에서 여행·세대·첫 표본 시각을 읽는다. */
 class RawFile(val file: File) {
@@ -59,10 +87,14 @@ class RawFile(val file: File) {
     val generation = m.groupValues[2].toInt()
     val startedAt = m.groupValues[3].toLong()
 
+    /** 이 파일이 덮는 끝 시각(어림, 꼬리의 짧은 묶음은 0.1초 안). 머리를 읽지 못하면 시작 시각. */
+    val endsAt: Long get() = runCatching {
+        RandomAccessFile(file, "r").use { f -> startedAt + (f.length() - 4 - f.readInt()) / STRIDE * 100 }
+    }.getOrDefault(startedAt)
+
     /**
      * [from, to](epoch ms)에 걸친 소리(16 kHz 모노 PCM). 이 파일에 그 시각이 없으면 null. 키가 바뀌어 열리지 않으면 던진다.
-     * 묶음은 거의 늘 0.1초(같은 길이)라 시작 묶음의 자리로 바로 건너뛰고, 그 자리의 길이가 맞지 않으면(짧게 읽힌 묶음이 있었음) 처음부터 길이만 읽으며 찾는다.
-     * 걸친 묶음만 푼다. 쓰다 끊긴 꼬리는 버린다.
+     * 묶음은 마지막만 빼고 0.1초라 시작 묶음의 자리로 바로 건너뛰고, 걸친 묶음만 푼다. 쓰다 끊긴 꼬리는 버린다.
      */
     fun cut(seal: Seal, from: Long, to: Long): ByteArray? {
         val a = maxOf(0, (from - startedAt) * RATE / 1000) // 표본 번호
@@ -70,27 +102,23 @@ class RawFile(val file: File) {
         if (b <= a) return null
         val pcm = java.io.ByteArrayOutputStream()
         RandomAccessFile(file, "r").use { f ->
-            val data = Seal(SecretKeySpec(seal.open(ByteArray(f.readInt()).also { f.readFully(it) }), "AES"))
-            val body = f.filePointer
-            val stride = 4L + TAG_BYTES + CHUNK_FRAMES * 2
-            val k = a / CHUNK_FRAMES
-            var pos = 0L
-            if (body + k * stride + 4 <= f.length()) {
-                f.seek(body + k * stride)
-                if (f.readInt() == (stride - 4).toInt()) { f.seek(body + k * stride); pos = k * CHUNK_FRAMES } else f.seek(body)
-            }
             try {
+                val data = Seal(SecretKeySpec(seal.open(ByteArray(f.readInt()).also { f.readFully(it) }), "AES"))
+                val k = a / CHUNK_FRAMES
+                val at = f.filePointer + k * STRIDE
+                if (at >= f.length()) return null // 이 파일이 끝난 뒤의 시각
+                f.seek(at)
+                var pos = k * CHUNK_FRAMES
                 while (pos < b) {
                     val n = f.readInt()
                     val frames = (n - TAG_BYTES) / 2L
-                    if (pos + frames <= a) { f.seek(f.filePointer + n); pos += frames; continue }
                     val chunk = data.open(ByteArray(n).also { f.readFully(it) })
                     val s = (maxOf(a, pos) - pos).toInt() * 2
                     val e = (minOf(b, pos + frames) - pos).toInt() * 2
-                    pcm.write(chunk, s, e - s)
+                    if (e > s) pcm.write(chunk, s, e - s)
                     pos += frames
                 }
-            } catch (_: EOFException) {} // 쓰다 끊긴 꼬리
+            } catch (_: EOFException) {} // 머리를 다 쓰기 전에 끊긴 파일, 쓰다 끊긴 꼬리
         }
         return pcm.toByteArray().takeIf { it.isNotEmpty() }
     }
@@ -101,16 +129,16 @@ class RawFile(val file: File) {
 }
 
 /**
- * 장면 구간의 원음이 있을 파일 하나: 구간 시작 전에 시작한 수음 가운데 가장 늦은 것, 없으면 구간 안에서 시작한 가장 이른 것.
- * ponytail: 구간이 수음 두 번에 걸치면(그 사이 서비스가 다시 시작됨) 한쪽만 자른다.
+ * 장면 구간의 원음이 있을 파일 하나: 구간과 가장 많이 겹치는 수음(파일의 끝은 길이로 어림). 겹치는 것이 없으면 null.
+ * ponytail: 구간이 수음 두 번에 걸치면(그 사이 서비스가 다시 시작됨) 많이 겹치는 쪽만 자른다.
  */
 fun clipFile(files: List<RawFile>, w: LongRange): RawFile? =
-    files.filter { it.startedAt <= w.first }.maxByOrNull { it.startedAt } ?: files.filter { it.startedAt in w }.minByOrNull { it.startedAt }
+    files.map { it to minOf(w.last, it.endsAt) - maxOf(w.first, it.startedAt) }.filter { it.second > 0 }.maxByOrNull { it.second }?.first
 
 /** 올리기를 마쳤거나 버린 장면 id(clips-<여행>.done, 한 줄에 하나). 장면 id는 민감정보가 아니라 평문으로 둔다. */
 class ClipLog(dir: File, trip: String) {
     private val file = File(dir, "clips-$trip.done")
-    val done: Set<String> get() = if (file.exists()) file.readLines().filter { it.isNotBlank() }.toSet() else emptySet()
+    fun done(): Set<String> = if (file.exists()) file.readLines().filter { it.isNotBlank() }.toSet() else emptySet()
     fun add(id: String) = file.appendText("$id\n")
 }
 

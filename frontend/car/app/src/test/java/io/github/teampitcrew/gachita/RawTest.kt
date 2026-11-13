@@ -47,11 +47,12 @@ class RawTest {
         assertTrue(runCatching { RawFile(file).cut(other, 1_000_000, 1_000_500) }.isFailure)
     }
 
-    @Test fun 짧게_읽힌_묶음이_있어도_처음부터_찾아_자름() {
+    @Test fun 짧게_읽힌_조각은_합쳐_묶음_길이를_맞춤() {
         val file = RawWriter(tmp.root, "ABC234", 1, 1_000_000L, TEST_SEAL).use { w ->
             w.write(chunk(0).copyOf(1_000)); repeat(10) { w.write(chunk(it + 1)) }; w.file // 첫 묶음만 500표본
         }
-        // 0.15초 = 2,400표본. 바로 건너뛴 자리(묶음 1)는 길이가 맞지 않아 처음부터 찾음: 묶음 0(0~500) · 1(500~2100) · 2(2100~3700)의 300번째
+        // 0.15초 = 2,400표본: 조각 0(0~500) · 1(500~2100) · 2(2100~3700)의 300번째. 묶음은 1,600표본씩이라 바로 건너뜀
+        assertEquals((4L + 60) + 10 * (4 + 28 + 3_200) + (4 + 28 + 1_000), file.length()) // 꼬리만 짧은 묶음
         val pcm = RawFile(file).cut(TEST_SEAL, 1_000_150, 1_000_250)!!
         assertEquals(20_300, sample(pcm, 0))
         assertEquals(1_600 * 2, pcm.size)
@@ -77,14 +78,23 @@ class RawTest {
         assertEquals(0L..60_000L, Moment("m", 50_000, 0, 90_000).window)
     }
 
-    @Test fun 구간_시작을_덮는_수음_파일을_고름() {
+    @Test fun 장면_구간과_가장_많이_겹치는_수음_파일을_고름() {
         val dir = tmp.root
-        val a = record(dir, 1, start = 1_000); val b = record(dir, 1, start = 5_000); record(dir, 1, start = 9_000, trip = "XYZ567")
+        val a = record(dir, 30, start = 1_000); val b = record(dir, 50, start = 5_000); record(dir, 50, start = 5_000, trip = "XYZ567")
         val files = RawFile.of(dir, "ABC234")
         assertEquals(2, files.size)
-        assertEquals(b, clipFile(files, 6_000L..7_000L)!!.file) // 시작 전에 시작한 가장 늦은 수음
-        assertEquals(a, clipFile(files, 0L..2_000L)!!.file) // 앞에 없으면 구간 안에서 시작한 가장 이른 것
-        assertNull(clipFile(files, 0L..500L))
+        assertEquals(4_000L, RawFile(a).endsAt)
+        assertEquals(b, clipFile(files, 6_000L..7_000L)!!.file) // 앞 수음(1~4초)은 구간 전에 끝남: 다시 시작한 수음에서
+        assertEquals(a, clipFile(files, 0L..2_000L)!!.file)
+        assertEquals(a, clipFile(files, 3_000L..5_200L)!!.file) // 두 수음에 걸치면 많이 겹치는 쪽
+        assertNull(clipFile(files, 4_100L..4_900L)) // 수음이 없던 사이
+        assertNull(RawFile(a).cut(TEST_SEAL, 4_100, 4_900)) // 파일이 끝난 뒤의 시각은 훑지 않고 null
+    }
+
+    @Test fun 키를_감싸지_못하면_파일을_남기지_않음() {
+        val bad = Seal(javax.crypto.spec.SecretKeySpec(ByteArray(7), "AES")) // 틀린 길이의 키
+        assertTrue(runCatching { RawWriter(tmp.root, "ABC234", 1, 1_000, bad) }.isFailure)
+        assertTrue(tmp.root.list()!!.isEmpty())
     }
 
     @Test fun 동의_세대가_바뀌면_옛_세대_원음만_지우고_48시간은_여행_파일과_같이() {
@@ -93,7 +103,7 @@ class RawTest {
         ClipLog(dir, "ABC234").add("m1")
         assertEquals(1, dropRaw(dir, "ABC234", below = 2))
         assertEquals(listOf(now), RawFile.of(dir, "ABC234").map { it.file })
-        assertEquals(setOf("m1"), ClipLog(dir, "ABC234").done)
+        assertEquals(setOf("m1"), ClipLog(dir, "ABC234").done())
         dropTrip(dir, "ABC234")
         assertTrue(dir.list()!!.isEmpty()) // 원음과 올린 장면 기록도 여행 파일이다
     }

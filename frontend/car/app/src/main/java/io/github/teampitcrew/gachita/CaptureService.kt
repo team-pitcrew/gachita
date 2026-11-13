@@ -38,8 +38,13 @@ object Live {
     var recent by mutableStateOf(emptyList<Utterance>())
     var count by mutableStateOf(0)
     var pending by mutableStateOf(0)
-    /** 기록 중에 '원음 지우기'를 누름. 수음 스레드가 다음 묶음에서 지난 원음을 지우고 새 파일로 이어 쓴다(T63). */
-    @Volatile var dropRaw = false
+    /**
+     * 원음(T63): 화면이 모두 동의한 것을 확인한 동의 세대. 수음 스레드는 이 세대로만 원음 파일을 연다(0이면 남기지 않음).
+     * 동의 철회 뒤 화면이 알기 전에 읽힌 소리가 새 세대 파일로 넘어가지 않게.
+     */
+    @Volatile var rawGen = 0
+    /** '원음 지우기'를 누른 여행. 화면이 파일을 지우고(쓰던 것까지), 수음 스레드는 다음 묶음에서 새 파일로 넘어간다. */
+    @Volatile var rollRaw: String? = null
 
     /** 내비가 마지막으로 알려 준 위치. 기록 중에 화면이 10초마다 묻고, 서비스가 발화에 붙인다. */
     @Volatile var fix: Fix? = null
@@ -72,6 +77,7 @@ object Live {
 
 private const val TAG = "GachitaCapture"
 private const val MIN_FREE = 500L * 1024 * 1024 // 남은 저장 공간이 이보다 적으면 가장 오래된 원음부터 지운다(T63)
+private const val RESYNC_MS = 250L // 원음 파일의 시각(표본 수로 셈)이 기기 시계와 이만큼 어긋나면 새 파일로(T63)
 
 /**
  * 마이크 포그라운드 서비스. AudioRecord(MIC, 16 kHz 2채널)를 쥐고 0.1초씩 읽어, 좌+우 모노로 Pleos STT(ON_DEVICE)에 sendAudio()로 넣는다.
@@ -87,6 +93,7 @@ class CaptureService : Service() {
     @Volatile private var frames = 0L
     private var raw: RawWriter? = null // 읽기 스레드만 만진다
     private var rawOff = false // 저장 공간이 모자라 원음을 남기지 않는 중
+    private var rawRetryAt = 0L // 원음 쓰기가 실패하거나 공간이 모자라면 이때까지 쉰다
     private var worker: Thread? = null
     private var stt: SpeechToText? = null
     private var sttReady = false
@@ -115,6 +122,7 @@ class CaptureService : Service() {
         }
         current = this
         box = Live.outbox(this, trip)
+        Live.rollRaw = null
         startStt()
         worker = thread(name = "capture") { record() }
         main.postDelayed(watch, 1000)
@@ -187,7 +195,6 @@ class CaptureService : Service() {
         rec = r
         try {
             r.startRecording()
-            val t0 = System.currentTimeMillis() // 첫 표본의 시각. 원음 파일의 시각 기준
             val d = r.routedDevice
             Log.i(TAG, "녹음 시작 ${r.sampleRate} Hz ${r.channelCount}채널 ${d?.productName}")
             val buf = ShortArray(CHUNK_FRAMES * 2)
@@ -198,7 +205,7 @@ class CaptureService : Service() {
                 if (n < 0) { if (++errors > 50) break; SystemClock.sleep(20); continue }
                 if (n == 0) continue
                 val c = downmix(buf, n)
-                keep(c.mono, t0 + frames * 1000 / RATE)
+                keep(c.mono, System.currentTimeMillis() - n / 2 * 1000L / RATE) // 이 조각 첫 표본의 기기 시각(읽기가 막 돌아옴)
                 frames += n / 2
                 val now = System.currentTimeMillis()
                 main.post { chunk(c, now) }
@@ -218,33 +225,40 @@ class CaptureService : Service() {
      * 원음 쓰기가 실패해도 수음은 멈추지 않는다.
      */
     private fun keep(mono: ByteArray, at: Long) {
+        if (stopping) return // 동의가 빠져 멈추는 중에 읽힌 조각은 남기지 않는다
         try {
-            if (Live.dropRaw) { // 쓰던 파일도 닫고 이 여행의 원음을 모두 지운 뒤 새 파일로
-                Live.dropRaw = false
-                raw?.close(); raw = null
-                Log.i(TAG, "원음 지움 ${RawFile.of(filesDir, box.trip).count { it.file.delete() }}개")
+            val w = raw
+            val g = Live.rawGen
+            // 새 파일로 넘어갈 때: 처음, 원음 지우기를 눌렀음, 모두 동의한 세대가 바뀜, 기기 시계와 0.25초 넘게 어긋남(읽기가 멈춤, 시계가 바뀜)
+            val roll = w == null || Live.rollRaw == box.trip || w.trip != box.trip || w.generation != g ||
+                kotlin.math.abs(at - (w.startedAt + w.frames * 1000 / RATE)) > RESYNC_MS
+            if (roll) {
+                if (Live.rollRaw == box.trip) Live.rollRaw = null
+                w?.close(); raw = null
+                if (g == 0 || at < rawRetryAt) return
+                if (!room()) { rawRetryAt = at + 60_000; return }
+                raw = RawWriter(filesDir, box.trip, g, at, Live.seal(this))
+            } else if ((w.frames / CHUNK_FRAMES) % 600 == 0L && !room()) { // 1분마다 남은 공간
+                w.close(); raw = null; rawRetryAt = at + 60_000; return
             }
-            val g = box.generation
-            if (raw?.generation != g || (frames / CHUNK_FRAMES) % 600 == 0L) {
-                val ok = room()
-                if (ok == rawOff) { rawOff = !ok; main.post { Live.set(Live.mic, if (ok) "" else "저장 공간이 모자라 원음을 남기지 않아요") } }
-                if (!ok) { raw?.close(); raw = null; return }
-            }
-            if (raw?.generation != g) { raw?.close(); raw = RawWriter(filesDir, box.trip, g, at, Live.seal) }
             raw?.write(mono)
         } catch (t: Throwable) {
             Log.w(TAG, "원음을 쓰지 못함", t)
             runCatching { raw?.close() }; raw = null
+            rawRetryAt = at + 60_000 // 1분 쉬었다 다시(0.1초마다 파일을 만들지 않게)
         }
     }
 
+    /** 남은 공간이 모자라면 다른 원음 파일을 오래된 것부터 지운다. 그래도 모자라면 false(원음만 남기지 않음, 화면에 알림). */
     private fun room(): Boolean {
+        var ok = true
         while (filesDir.usableSpace < MIN_FREE) {
-            val old = filesDir.listFiles().orEmpty().filter { it.name.startsWith("audio-") && it != raw?.file }.minByOrNull { it.lastModified() } ?: return false
-            Log.i(TAG, "저장 공간이 모자라 오래된 원음을 지움 ${old.length() / 1024} KB")
-            old.delete()
+            val old = filesDir.listFiles().orEmpty().filter { it.isFile && it.name.startsWith("audio-") && it != raw?.file }.minByOrNull { it.lastModified() }
+            if (old == null || !old.delete()) { ok = false; break }
+            Log.i(TAG, "저장 공간이 모자라 오래된 원음을 지움")
         }
-        return true
+        if (ok == rawOff) { rawOff = !ok; main.post { Live.set(Live.mic, if (ok) "" else "저장 공간이 모자라 원음을 남기지 않아요") } }
+        return ok
     }
 
     /**

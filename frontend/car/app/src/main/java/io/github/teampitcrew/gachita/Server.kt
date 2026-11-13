@@ -56,7 +56,7 @@ class Server(base: String) {
      * 거절은 ApiError: 400·404·409·413은 버리고, 401·403·503은 나중에 다시(api-media 계약).
      */
     fun recording(code: String, token: String, moment: String, generation: Int, from: Long, wav: ByteArray) {
-        call("POST", "/api/trips/$code/recordings?moment=$moment&generation=$generation&from=$from", wav, token)
+        call("POST", "/api/trips/$code/recordings?moment=" + java.net.URLEncoder.encode(moment, "UTF-8") + "&generation=$generation&from=$from", wav, token)
     }
 
     private fun call(method: String, path: String, body: Any?, token: String? = null): String? {
