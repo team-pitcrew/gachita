@@ -64,8 +64,10 @@ def env10(x):
 
 
 def match(clip, ref):
-    """클립 포락선이 넣은 소리(ref) 어디에 가장 잘 맞는지: (상관, 위치 초)."""
-    a = env10(clip); b = env10(ref); a = (a - a.mean()) / (a.std() + 1e-9)
+    """클립 포락선과 넣은 소리(ref) 포락선이 가장 잘 맞는 자리: (상관, 짧은 쪽이 긴 쪽에서 시작하는 위치 초)."""
+    a = env10(clip); b = env10(ref)
+    if len(a) > len(b): a, b = b, a  # 짧은 쪽을 긴 쪽 위에서 민다
+    a = (a - a.mean()) / (a.std() + 1e-9)
     best = (-1, 0)
     for i in range(0, len(b) - len(a) + 1):
         w = b[i:i + len(a)]; c = float((a * (w - w.mean()) / (w.std() + 1e-9)).mean())
