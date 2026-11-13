@@ -14,6 +14,8 @@ import { endStores, profilesDb, tripsDb } from "./db.js";
 let base;
 let fakeProvider; // 가짜 구글(T21). code가 곧 사용자 번호다. 특수 code로 장애 상황도 낸다.
 let tokenCalls = 0; // 가짜 구글이 받은 토큰 교환 수
+let fakeS3; // 가짜 클립 버킷(T76). SDK의 표준 설정(AWS_ENDPOINT_URL_S3)으로 꽂는다 — IP 주소라 SDK가 경로 방식으로 부른다.
+const s3 = { objects: new Map(), down: false };
 captureLog(() => {}); // 서버의 구조화 로그는 시험 출력에 섞지 않는다(T71 시험은 따로 받아 본다)
 before(async () => {
   fakeProvider = createServer(async (req, res) => {
@@ -49,6 +51,19 @@ before(async () => {
     send(404, {});
   });
   await new Promise((ok) => fakeProvider.listen(0, "127.0.0.1", ok));
+  fakeS3 = createServer(async (req, res) => {
+    const chunks = [];
+    for await (const c of req) chunks.push(c);
+    const key = decodeURIComponent(new URL(req.url, "http://localhost").pathname).replace(/^\/clips\//, "");
+    if (s3.down) return void (res.writeHead(503), res.end());
+    if (req.method === "PUT") s3.objects.set(key, Buffer.concat(chunks));
+    if (req.method === "DELETE") s3.objects.delete(key);
+    if (req.method === "GET" && !s3.objects.has(key)) return void (res.writeHead(404, { "content-type": "application/xml" }), res.end("<Error><Code>NoSuchKey</Code></Error>"));
+    res.writeHead(req.method === "DELETE" ? 204 : 200);
+    res.end(req.method === "GET" ? s3.objects.get(key) : undefined);
+  });
+  await new Promise((ok) => fakeS3.listen(0, "127.0.0.1", ok));
+  Object.assign(process.env, { CLIPS_BUCKET: "clips", AWS_ENDPOINT_URL_S3: `http://127.0.0.1:${fakeS3.address().port}`, AWS_REGION: "ap-northeast-2", AWS_ACCESS_KEY_ID: "test", AWS_SECRET_ACCESS_KEY: "test" });
   process.env.GOOGLE_TOKEN_URL = `http://127.0.0.1:${fakeProvider.address().port}/token`;
   process.env.GOOGLE_USERINFO_URL = `http://127.0.0.1:${fakeProvider.address().port}/userinfo`;
   // 프로필 저장소를 여행 저장소와 다른 DB에 둔다(T23). 주소를 정하기 전에 그 DB을 만든다.
@@ -70,6 +85,7 @@ before(async () => {
 after(async () => {
   server.close();
   fakeProvider.close();
+  fakeS3.close();
   await endStores();
 });
 
@@ -604,32 +620,33 @@ test("이전 판(프로필마다 토큰 하나)으로 되돌려도 프로필이 
   assert.ok(rows[0].token_hash.equals(createHash("sha256").update(fresh.token).digest()));
 });
 
+// 16 kHz 모노 16비트 WAV 합성 — 기본음+배음이 다른 두 '사람'
+const wav = (freq, seconds) => {
+  const n = Math.floor(seconds * 16000);
+  const data = Buffer.alloc(n * 2);
+  for (let i = 0; i < n; i++) {
+    const t = i / 16000;
+    const v = 0.6 * Math.sin(2 * Math.PI * freq * t + Math.sin(t * 3)) + 0.25 * Math.sin(2 * Math.PI * freq * 2 * t) + 0.1 * Math.sin(2 * Math.PI * freq * 3 * t + 1);
+    data.writeInt16LE(Math.round(Math.max(-1, Math.min(1, v)) * 20000), i * 2);
+  }
+  const head = Buffer.alloc(44);
+  head.write("RIFF", 0);
+  head.writeUInt32LE(36 + data.length, 4);
+  head.write("WAVE", 8);
+  head.write("fmt ", 12);
+  head.writeUInt32LE(16, 16);
+  head.writeUInt16LE(1, 20);
+  head.writeUInt16LE(1, 22);
+  head.writeUInt32LE(16000, 24);
+  head.writeUInt32LE(32000, 28);
+  head.writeUInt16LE(2, 32);
+  head.writeUInt16LE(16, 34);
+  head.write("data", 36);
+  head.writeUInt32LE(data.length, 40);
+  return Buffer.concat([head, data]);
+};
+
 test("목소리 등록으로 발화의 화자를 프로필에 붙인다(T38)", async () => {
-  // 16 kHz 모노 16비트 WAV 합성 — 기본음+배음이 다른 두 '사람'
-  const wav = (freq, seconds) => {
-    const n = Math.floor(seconds * 16000);
-    const data = Buffer.alloc(n * 2);
-    for (let i = 0; i < n; i++) {
-      const t = i / 16000;
-      const v = 0.6 * Math.sin(2 * Math.PI * freq * t + Math.sin(t * 3)) + 0.25 * Math.sin(2 * Math.PI * freq * 2 * t) + 0.1 * Math.sin(2 * Math.PI * freq * 3 * t + 1);
-      data.writeInt16LE(Math.round(Math.max(-1, Math.min(1, v)) * 20000), i * 2);
-    }
-    const head = Buffer.alloc(44);
-    head.write("RIFF", 0);
-    head.writeUInt32LE(36 + data.length, 4);
-    head.write("WAVE", 8);
-    head.write("fmt ", 12);
-    head.writeUInt32LE(16, 16);
-    head.writeUInt16LE(1, 20);
-    head.writeUInt16LE(1, 22);
-    head.writeUInt32LE(16000, 24);
-    head.writeUInt32LE(32000, 28);
-    head.writeUInt16LE(2, 32);
-    head.writeUInt16LE(16, 34);
-    head.write("data", 36);
-    head.writeUInt32LE(data.length, 40);
-    return Buffer.concat([head, data]);
-  };
   const postRaw = (path, buf, token) => fetch(base + path, { method: "POST", headers: token ? { authorization: `Bearer ${token}` } : {}, body: buf });
 
   // 등록: 원본은 어디에도 남기지 않고 대조용 값만
@@ -711,6 +728,89 @@ test("목소리 등록으로 발화의 화자를 프로필에 붙인다(T38)", a
   // 프로필을 지우면 목소리 값도 함께 지운다. 대표가 지우면 대표가 만든 아이의 값도
   assert.equal((await call("DELETE", "/api/profiles/me", null, mom.token))[0], 204);
   assert.deepEqual([await prints(mom.id), await prints(kid.profileId)], [0, 0]);
+});
+
+test("녹음 클립: 고른 장면의 원음을 받고, 재생하고, 바로 지운다(T76)", async () => {
+  const [, trip] = await call("POST", "/api/trips", {});
+  const t = `/api/trips/${trip.code}`;
+  const [, mom] = await join(trip.code, "엄마", "ROW_1_LEFT");
+  const [, son] = await join(trip.code, "아들", "ROW_2_LEFT");
+  const [, m1] = await call("POST", `${t}/moments`, { label: "웃음" });
+  const [, m2] = await call("POST", `${t}/moments`, {});
+  const auth = (token) => (token ? { authorization: `Bearer ${token}` } : {});
+  const up = (moment, body, token, generation = 1) => fetch(`${base}${t}/recordings?moment=${moment}&generation=${generation}`, { method: "POST", headers: auth(token), body });
+  const play = (id, token) => fetch(`${base}${t}/recordings/${id}`, { headers: auth(token) });
+  const del = (id, token) => fetch(`${base}${t}/recordings/${id}`, { method: "DELETE", headers: auth(token) });
+  const gone = async () => {
+    for (let i = 0; i < 100 && s3.objects.size; i++) await new Promise((ok) => setTimeout(ok, 10)); // 버킷 지우기는 기다리지 않고 돈다
+    return s3.objects.size === 0;
+  };
+  const clip = wav(200, 2);
+
+  // 올리기: 장면 하나에 클립 하나. 다시 보내면 저장하지 않고 같은 값
+  const first = await up(m1.id, clip, mom.token);
+  assert.equal(first.status, 201);
+  assert.deepEqual(await first.json(), { id: m1.id, momentId: m1.id, seconds: 2, bytes: clip.length });
+  const again = await up(m1.id, clip, son.token);
+  assert.deepEqual([again.status, (await again.json()).id, s3.objects.size], [200, m1.id, 1]);
+
+  // 재생: 받은 그대로, 캐시하지 않게
+  const heard = await play(m1.id, son.token);
+  assert.deepEqual([heard.status, heard.headers.get("content-type"), heard.headers.get("cache-control")], [200, "audio/wav", "no-store"]);
+  assert.deepEqual(Buffer.from(await heard.arrayBuffer()), clip);
+
+  // 인증: 토큰이 없거나 다른 여행의 토큰이면 401(참가자 토큰은 여행에 묶임)
+  const [, other] = await call("POST", "/api/trips", {});
+  const [, stranger] = await join(other.code, "남", "ROW_1_LEFT");
+  assert.deepEqual([(await up(m2.id, clip)).status, (await up(m2.id, clip, stranger.token)).status, (await play(m1.id, stranger.token)).status, (await del(m1.id)).status], [401, 401, 401, 401]);
+
+  // 형식·크기·장면·세대
+  const stereo = Buffer.from(clip);
+  stereo.writeUInt16LE(2, 22);
+  assert.equal((await up(m2.id, Buffer.from("not-wav"), mom.token)).status, 400, "WAV만");
+  assert.equal((await up(m2.id, stereo, mom.token)).status, 400, "모노만");
+  assert.equal((await up(m2.id, Buffer.alloc(5_000_001), mom.token)).status, 413, "5 MB까지");
+  assert.equal((await up("nope", clip, mom.token)).status, 404, "그 여행의 장면만");
+  assert.equal((await fetch(`${base}${t}/recordings?moment=${m2.id}`, { method: "POST", headers: auth(mom.token), body: clip })).status, 400, "세대가 필요");
+  assert.equal((await up(m2.id, clip, mom.token, 2)).status, 400, "아직 없는 세대");
+  assert.equal(s3.objects.size, 1, "거절한 소리는 버킷에 남지 않음");
+
+  // 지우기: 버킷에서 바로, 다시 올려도 되살아나지 않음. 장면은 그대로
+  const dropped = await del(m1.id, son.token);
+  assert.deepEqual([dropped.status, s3.objects.size], [204, 0]);
+  assert.deepEqual([(await play(m1.id, mom.token)).status, (await del(m1.id, mom.token)).status, (await up(m1.id, clip, mom.token)).status], [404, 404, 409]);
+  assert.ok((await call("GET", t))[1].moments.some((x) => x.id === m1.id), "장면은 남음");
+
+  // 버킷에 닿지 못하면 503이고, 지운 표시도 남지 않아 다시 하면 된다
+  assert.equal((await up(m2.id, clip, mom.token)).status, 201);
+  s3.down = true;
+  assert.equal((await del(m2.id, mom.token)).status, 503);
+  s3.down = false;
+  assert.equal((await play(m2.id, mom.token)).status, 200);
+
+  // 저장소가 없는 환경(로컬·E2E)은 정직하게 503
+  delete process.env.CLIPS_BUCKET;
+  assert.deepEqual([(await up(m2.id, clip, mom.token)).status, (await play(m2.id, mom.token)).status], [503, 503]);
+  process.env.CLIPS_BUCKET = "clips";
+
+  // 동의하지 않은 사람은 올리지도 듣지도 못하고, 그런 탑승자가 있는 동안은 아무도 올리지 못한다
+  const [, guest] = await join(trip.code, "손님", "ROW_2_RIGHT", false);
+  assert.deepEqual([(await up(m2.id, clip, guest.token)).status, (await play(m2.id, guest.token)).status, (await up(m2.id, clip, mom.token)).status], [403, 403, 403]);
+
+  // 동의 철회: 그 여행의 클립을 모두 지우고, 철회 전의 소리(옛 세대)는 받지 않는다
+  assert.equal((await call("PATCH", `${t}/participants/${son.id}`, { consent: false }))[0], 200);
+  assert.ok(await gone(), "철회하면 버킷에서 지움");
+  assert.equal((await play(m2.id, mom.token)).status, 404);
+  await call("PATCH", `${t}/participants/${son.id}`, { consent: true });
+  await call("PATCH", `${t}/participants/${guest.id}`, { consent: true });
+  assert.equal((await up(m2.id, clip, mom.token, 1)).status, 409, "철회 전 세대");
+  assert.equal((await up(m2.id, clip, mom.token, 2)).status, 201);
+
+  // 48시간: 여행을 치울 때 그 여행의 클립도 버킷에서 지운다
+  await tripsDb().query("UPDATE trips SET created_at = now() - interval '49 hours' WHERE code = $1", [trip.code]);
+  await call("POST", "/api/trips", {});
+  assert.ok(await gone(), "치운 여행의 클립이 버킷에 남지 않음");
+  assert.equal((await tripsDb().query("SELECT count(*)::int AS n FROM recordings WHERE trip_code = $1", [trip.code])).rows[0].n, 0);
 });
 
 test("쓰기가 몰려도 서버가 멈추지 않는다", async () => {
