@@ -455,3 +455,32 @@ li .between {
   align-items: flex-start;
   gap: 12px;
 }
+
+/* 프로필 얼굴: 사진, 없으면 캐릭터나 이름 첫 글자 */
+.avatar {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  overflow: hidden;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 28px;
+  font-weight: 700;
+}
+.avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.card.face {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+input[type="file"] {
+  font: inherit;
+  max-width: 100%;
+}
