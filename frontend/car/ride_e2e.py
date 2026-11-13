@@ -2,7 +2,9 @@
 
 준비: e2e.py와 같다(make run 또는 GACHITA_PORT의 서버, adb forward tcp:8088 tcp:8088, ./gradlew assembleDebug).
       에뮬레이터의 뒤 카메라를 가상 장면으로 켠다(-camera-back virtualscene). QR은 가상 장면의 벽 포스터로 넣는다
-      (adb emu virtualscene-image wall <png>). 사람 손으로는 폰을 카메라에 비추는 것과 같다.
+      (adb emu virtualscene-image wall <png>)하고, gRPC setPhysicalModel로 가상 카메라를 그 포스터 앞으로 옮겨 돌린다
+      (위치·방향은 emulator/resources/Toren1BD.posters의 벽 포스터에서 잼, 11/14). 사람 손으로는 폰을 카메라에 비추는 것과 같다.
+      에뮬레이터는 -grpc 8556 -grpc-use-token으로 켠다(capture_e2e.py와 같음).
 실행: python3 frontend/car/ride_e2e.py frontend/car/app/build/outputs/apk/debug/app-debug.apk <저장소 밖 폴더>
 
 순서: 폰 역할(이 스크립트)이 프로필을 만들고 동승 QR을 받음(POST /api/ride-links) → QR을 PNG로 만들어 벽 포스터로
@@ -39,13 +41,29 @@ def qr_png(text, out):
     subprocess.run([JAVA, "-cp", str(jar), str(src), text, str(out)], check=True)
 
 
+WALL, NORMAL = (-0.807, 0.320, 5.316), (-0.5, 0.0, -0.866)  # 벽 포스터의 가운데와 앞쪽(Toren1BD.posters: rotation 0 -150 0)
+AIM = (2.4, 220)  # 포스터 앞 거리(m)와 카메라 회전(도). 더 멀면 탁자·의자가 QR 아래를 가렸다(11/14 실험)
+
+
 def poster(png):
-    """가상 장면 카메라의 벽 포스터를 바꾼다(에뮬레이터 콘솔)."""
-    note("poster", out=subprocess.run(ADB + ["emu", "virtualscene-image", "wall", str(png.resolve())], capture_output=True, text=True).stdout.strip()[-80:])
+    """가상 장면 카메라의 벽 포스터를 QR로 바꾸고 탁자 포스터는 비운다(에뮬레이터 콘솔)."""
+    note("poster", wall=subprocess.run(ADB + ["emu", "virtualscene-image", "wall", str(png.resolve())], capture_output=True, text=True).stdout.strip()[-40:],
+         table=subprocess.run(ADB + ["emu", "virtualscene-image", "table"], capture_output=True, text=True).stdout.strip()[-40:])
+
+
+def aim(inj, on=True):
+    """가상 카메라를 벽 포스터 앞으로 옮겨 그쪽을 보게 한다. on=False면 처음 자리로."""
+    pb = inj.pb; d, yaw = AIM
+    def set(t, v): inj.stub.setPhysicalModel(pb.PhysicalModelValue(target=t, value=pb.ParameterValue(data=list(v))), metadata=inj.md, timeout=5)
+    set(pb.PhysicalModelValue.POSITION, [WALL[i] + d * NORMAL[i] for i in range(3)] if on else (0, 0, 0))
+    set(pb.PhysicalModelValue.ROTATION, (0, yaw, 0) if on else (0, 0, 0))
+    note("aim", on=on)
 
 
 def main(apk):
     threading.Thread(target=e2e.heartbeat, daemon=True).start()
+    inj = cap.Injector()  # gRPC(가상 카메라 위치). 소리는 넣지 않는다
+    aim(inj)
     # 폰 역할: 프로필과 동승 QR
     phone = api("POST", "/api/profiles", {"name": "엄마"})["token"]
     link = api("POST", "/api/ride-links", {}, phone)
@@ -84,9 +102,9 @@ def main(apk):
 
     tap_text("폰 QR 읽기"); time.sleep(3)
     gear("Drive"); time.sleep(3); ui = texts(); shot("4-drive"); note("ui", texts=ui)
-    cams = adb("shell", "dumpsys", "media.camera")
-    check("기어 D: 동승자 연결 카드가 가려지고 카메라를 놓음", "동승자 연결" not in ui and "Device 1 is closed" in cams and "Device 0 is closed" in cams)
-    gear("Park")
+    last = next((l for l in adb("shell", "dumpsys", "media.camera").splitlines() if "client for package " + PKG in l), "")  # 가장 최근 줄이 위
+    check("기어 D: 동승자 연결 카드가 가려지고 카메라를 놓음", "동승자 연결" not in ui and "DISCONNECT" in last, camera=last.strip())
+    gear("Park"); aim(inj, on=False)
 
     (OUT / "results.json").write_text(json.dumps(e2e.log, ensure_ascii=False, indent=1))
     fails = [x for x in e2e.log if x["step"] == "check" and not x["ok"]]
