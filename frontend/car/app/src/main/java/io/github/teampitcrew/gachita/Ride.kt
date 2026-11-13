@@ -69,8 +69,8 @@ class QrCamera(ctx: Context, private val onCode: (String) -> Unit, private val o
             cm.openCamera(id, object : CameraDevice.StateCallback() {
                 override fun onOpened(d: CameraDevice) {
                     opening = false
-                    if (closed) { d.close(); thread.quitSafely(); return } // 열리기 전에 닫힘(주행 제한·닫기)
                     device = d
+                    if (closed) return release() // 열리기 전에 닫힘(주행 제한·닫기)
                     @Suppress("DEPRECATION") // 목록으로 만드는 것이 API 29부터 다 되는 가장 짧은 길
                     runCatching { d.createCaptureSession(listOf(preview, r.surface), object : CameraCaptureSession.StateCallback() {
                         override fun onConfigured(s: CameraCaptureSession) {
@@ -83,8 +83,8 @@ class QrCamera(ctx: Context, private val onCode: (String) -> Unit, private val o
                         override fun onConfigureFailed(s: CameraCaptureSession) { if (!done) fail("카메라를 열지 못했어요", null) }
                     }, bg) }.onFailure { if (!done) fail("카메라를 열지 못했어요", it) }
                 }
-                override fun onDisconnected(d: CameraDevice) { opening = false; d.close(); if (closed) thread.quitSafely() else fail("카메라 연결이 끊겼어요", null) }
-                override fun onError(d: CameraDevice, error: Int) { opening = false; d.close(); if (closed) thread.quitSafely() else fail("카메라를 쓸 수 없어요($error)", null) }
+                override fun onDisconnected(d: CameraDevice) { opening = false; d.close(); if (closed) release() else fail("카메라 연결이 끊겼어요", null) }
+                override fun onError(d: CameraDevice, error: Int) { opening = false; d.close(); if (closed) release() else fail("카메라를 쓸 수 없어요($error)", null) }
             }, bg)
         }.onFailure { opening = false; fail("카메라를 열지 못했어요", it) }
         Log.i(TAG, "카메라 $id ${sz.width}×${sz.height}")
@@ -108,14 +108,20 @@ class QrCamera(ctx: Context, private val onCode: (String) -> Unit, private val o
         main.post { if (!closed) onCode(text) } // 해석하는 사이 닫혔으면(닫기·주행 제한·새 스캔) 버린다
     }
 
-    /** 메인 스레드에서 부른다. 닫기는 이미지 읽기와 같은 bg 스레드 차례로 넘기고, 열리는 중이면 onOpened가 장치를 닫고 끝낸다. */
+    /** 메인 스레드에서 부른다. 닫기는 이미지 읽기와 같은 bg 스레드 차례로 넘기고, 열리는 중이면 onOpened·onError가 release로 마저 닫는다. */
     fun stop() {
         if (closed) return
         closed = true; done = true
-        bg.post {
-            runCatching { session?.close() }; runCatching { device?.close() }; runCatching { reader?.close() }
-            if (!opening) thread.quitSafely()
-        }
+        if (!bg.post(::release)) runCatching { reader?.close() } // 늦은 콜백이 먼저 정리하고 스레드를 끝냈으면 reader만 확인(이미 닫혔어도 됨)
+    }
+
+    /**
+     * bg 스레드에서만 부른다. 세션·장치·reader를 다 닫은 뒤에야 스레드를 끝낸다(먼저 끝내면 뒤이은 정리가 스레드에 못 들어가 reader가 남았다).
+     * 열리는 중이면 스레드를 남겨 둔다(늦게 열린 장치를 onOpened·onError가 여기로 와서 닫는다). 여러 번 불려도 된다.
+     */
+    private fun release() {
+        runCatching { session?.close() }; runCatching { device?.close() }; runCatching { reader?.close() }
+        if (!opening) thread.quitSafely()
     }
 
     companion object { private const val TAG = "GachitaRide" }
