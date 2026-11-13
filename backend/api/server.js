@@ -985,7 +985,9 @@ async function serveFile(path, req, res) {
   if (!file.startsWith(WEB)) fail(404, "없는 파일");
   const data = await readFile(file).catch(() => (page ? readFile(join(WEB, "index.html")) : fail(404, "없는 파일")));
   const headers = { "cache-control": "no-cache", etag: `"${createHash("sha256").update(data).digest("base64url").slice(0, 22)}"` };
-  if (req.headers["if-none-match"] === headers.etag) return void (res.writeHead(304, headers), res.end());
+  // If-None-Match는 약한 비교(RFC 9110 13.1.2): Cloudflare가 압축하면서 W/를 붙이고, 목록이나 *로도 온다.
+  const inm = req.headers["if-none-match"];
+  if (inm === "*" || inm?.split(",").some((t) => t.trim().replace(/^W\//, "") === headers.etag)) return void (res.writeHead(304, headers), res.end());
   res.writeHead(200, { "content-type": `${MIME[page ? ".html" : extname(file)] ?? "application/octet-stream"}; charset=utf-8`, ...headers });
   res.end(data);
 }
