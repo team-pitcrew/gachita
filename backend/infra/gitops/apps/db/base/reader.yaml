@@ -1,0 +1,24 @@
+# API 네임스페이스(gachita)의 서비스 계정 db-reader가 이 네임스페이스의 Secret db-app 하나만 읽게 한다.
+# External Secrets가 그 계정으로 읽어 gachita에 DB 주소를 만든다. 다른 Secret(인증서, 복제 계정)은 못 읽는다.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: db-app-reader
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [db-app]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: db-app-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: db-app-reader
+subjects:
+  - kind: ServiceAccount
+    name: db-reader
+    namespace: gachita

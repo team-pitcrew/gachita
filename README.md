@@ -31,6 +31,7 @@ make check     # CI와 같은 검사
 - 포트는 환경 변수 `PORT`로 바꿉니다.
 - 저장은 Postgres에 합니다. 여행 저장소와 프로필 저장소의 접속 주소는 환경 변수 `TRIPS_DATABASE_URL`과 `PROFILES_DATABASE_URL`로 각각 줍니다. 없으면 `DATABASE_URL` 하나를 같이 씁니다. 48시간이 지난 여행은 읽을 수 없고 다음 여행을 만들 때 지워집니다.
 - 로그인은 없고 기기 프로필이 있습니다. 서버가 발급한 토큰을 기기에 두고, 서버에는 해시만 남깁니다. 프로필 없이도 여행 코드를 아는 사람은 그 여행을 읽고 고칩니다.
+- 기기 프로필에 구글 계정을 연결하면 기기를 바꿔도 프로필을 이어 받습니다(ADR-0006). 구글 클라이언트 값은 환경 변수 `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`로 줍니다. 현대 계정 연동은 아직 없습니다(ADR-0004).
 
 ## API
 
@@ -40,6 +41,7 @@ make check     # CI와 같은 검사
 |---|---|---|
 | `POST /api/profiles` | `{ name, prefs?, consentDefault? }` | 기기 프로필을 만들고 토큰을 한 번 돌려줍니다 |
 | `GET` · `PATCH` · `DELETE /api/profiles/me` | `{ name?, prefs?, consentDefault? }` | 머리말 `Authorization: Bearer 토큰`으로 내 프로필을 읽고 고치고 지웁니다 |
+| `POST` · `DELETE /api/profiles/me/links/google` | `{ code, redirectUri }` | 구글 계정을 프로필에 묶거나 끊습니다. 토큰 없이 부르면 계정의 프로필을 찾아 새 토큰을 줍니다 |
 | `POST /api/trips` | `{ title? }` | 여행을 만들고 6자 코드를 돌려줍니다 |
 | `GET /api/trips/:code?v=버전` | | 여행 전체 상태. 버전이 같으면 304 |
 | `PATCH /api/trips/:code` | `{ status?, recording? }` | 상태는 `boarding`, `driving`, `parked`, `ended` |

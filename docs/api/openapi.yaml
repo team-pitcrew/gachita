@@ -1,17 +1,18 @@
 openapi: 3.1.0
 info:
   title: 같이타 API
-  version: 0.2.0
+  version: 0.3.0
   summary: 여행 세션, 기기 프로필, 부탁, 장면
   description: |
     웹앱(frontend/web)과 차량 앱(frontend/car)이 부르는 API입니다. 구현은 backend/api/server.js입니다.
 
     - 모든 본문은 JSON이고 10 KB를 넘으면 413입니다.
     - 오류는 `{ "error": "이유" }`로 옵니다.
-    - 로그인은 없습니다. 기기 프로필 토큰이 있으면 `Authorization: Bearer <토큰>`으로 보냅니다.
+    - 기기 프로필 토큰이 있으면 `Authorization: Bearer <토큰>`으로 보냅니다. 기기 프로필 자체에는 로그인이 없습니다.
+    - 구글 OAuth로 프로필을 찾아 이어 받을 수 있습니다(ADR-0006). 현대 계정 연동은 아직 없습니다(ADR-0004).
     - 여행은 만든 뒤 48시간까지 읽을 수 있습니다.
 
-    이 서버가 부르는 외부 API는 아직 없습니다. 예정과 결정 상태는 docs/api/external.md에 있습니다.
+    이 서버가 부르는 외부 API는 구글 OAuth(계정 연결을 켰을 때)뿐입니다. 예정과 결정 상태는 docs/api/external.md에 있습니다.
 servers:
   - url: http://localhost:8787
     description: 로컬(make run)
@@ -84,6 +85,45 @@ paths:
       responses:
         "204": { description: 지워짐 }
         "401": { $ref: "#/components/responses/Error" }
+  /api/profiles/me/links/google:
+    post:
+      tags: [프로필]
+      summary: 구글 계정 연결 또는 계정으로 찾아 들어가기
+      description: |
+        프로필 토큰과 함께 부르면 내 프로필에 구글 계정을 묶습니다(이름은 그대로). 이미 다른 프로필에 묶인 계정이면 409입니다.
+        토큰 없이 부르면 그 계정의 프로필을 찾아 들어갑니다. 있으면 새 기기 토큰을 함께 돌려주고(이전 기기의 토큰은 못 쓰게 됨), 없으면 프로필을 새로 만듭니다.
+        찾아 들어가기는 갱신 순간에 연결을 다시 확인합니다 — 요청 중 연결이 바뀌었으면 토큰을 주지 않고 401로 끝냅니다.
+        코드는 서버가 구글과 바꾸므로 클라이언트 비밀 값은 클라이언트에 없습니다(ADR-0006).
+        오류는 나눠 옵니다: 401 코드 거절 또는 연결 변경, 500 서버의 클라이언트 설정 오류, 502 제공자 응답 오류, 503 제공자 일시 장애·연결 실패, 504 제공자 응답 시간 초과.
+      security: [{}, { profileToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code, redirectUri]
+              properties:
+                code: { type: string, minLength: 1, maxLength: 500, description: 구글이 redirect 주소로 돌려준 인증 코드 }
+                redirectUri: { type: string, minLength: 1, maxLength: 500, description: 코드를 받을 때 쓴 주소. 구글에 등록된 값과 같아야 함 }
+      responses:
+        "200": { description: 연결했거나 찾아 들어간 프로필, content: { application/json: { schema: { $ref: "#/components/schemas/ProfileMaybeToken" } } } }
+        "201": { description: 계정으로 새로 만든 프로필, content: { application/json: { schema: { $ref: "#/components/schemas/ProfileMaybeToken" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "500": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+        "504": { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [프로필]
+      summary: 구글 계정 연결 끊기
+      security: [{ profileToken: [] }]
+      responses:
+        "204": { description: 끊음 }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /api/trips:
     post:
       tags: [여행]
@@ -284,8 +324,15 @@ components:
       allOf:
         - $ref: "#/components/schemas/ProfileInput"
         - type: object
-          required: [id, name, prefs, consentDefault]
-          properties: { id: { type: string, format: uuid } }
+          required: [id, name, prefs, consentDefault, links]
+          properties:
+            id: { type: string, format: uuid }
+            links: { type: array, items: { type: string, enum: [google] }, description: 연결된 OAuth 제공자 }
+    ProfileMaybeToken:
+      allOf:
+        - $ref: "#/components/schemas/Profile"
+        - type: object
+          properties: { token: { type: string, description: 토큰 없이 찾아 들어갔거나 새로 만들었을 때만. 이 기기가 쓸 43자 토큰 } }
     Participant:
       type: object
       required: [id, name, seat, prefs, consent]

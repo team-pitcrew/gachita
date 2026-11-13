@@ -1,0 +1,26 @@
+# 이 네임스페이스의 모든 파드는 들어오고 나가는 길이 기본으로 막힌다.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+# 이름 풀이(CoreDNS)만 연다. 밖의 이름(FQDN)으로 나가는 허용은 CiliumNetworkPolicy가 맡는다.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: kube-system }
+          podSelector:
+            matchLabels: { k8s-app: kube-dns }
+      ports:
+        - { protocol: UDP, port: dns }
+        - { protocol: TCP, port: dns-tcp }

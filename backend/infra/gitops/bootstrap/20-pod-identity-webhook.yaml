@@ -1,0 +1,33 @@
+# 물결 2. 파드 신원 웹훅(AWS 공개 소스). 서비스 계정의 eks.amazonaws.com/role-arn 주석을 보고
+# 파드에 AWS 역할 토큰을 넣는다(ADR-0011). 인증서에 cert-manager(물결 1)가 필요하다.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: pod-identity-webhook
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: git@github.com:team-pitcrew/gachita.git
+    targetRevision: develop
+    path: backend/infra/gitops/platform/pod-identity-webhook
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: pod-identity
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - SkipDryRunOnMissingResource=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m

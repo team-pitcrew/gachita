@@ -1,0 +1,30 @@
+# 물결 3. 여행 Postgres(gachita-trips 네임스페이스, T26). 다른 DB와 파드·네트워크로 나뉜다.
+# 앱을 지워도 DB가 지워지지 않게 finalizer를 두지 않는다(데이터 보호).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: db-trips
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+spec:
+  project: default
+  source:
+    repoURL: git@github.com:team-pitcrew/gachita.git
+    targetRevision: develop
+    path: backend/infra/gitops/apps/db/trips
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: gachita-trips
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - SkipDryRunOnMissingResource=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m

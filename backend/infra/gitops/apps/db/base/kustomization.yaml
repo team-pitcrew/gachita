@@ -1,0 +1,10 @@
+# 여행·프로필 Postgres가 같이 쓰는 선언. 네임스페이스와 역할·백업 경로·크기는 trips/, profiles/에서.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - cluster.yaml
+  - backup.yaml
+  - network.yaml
+  - reader.yaml
+components:
+  - ../../../components/data-plane

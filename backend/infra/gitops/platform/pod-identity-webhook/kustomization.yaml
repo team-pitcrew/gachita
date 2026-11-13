@@ -1,0 +1,60 @@
+# 파드 신원 웹훅 v0.6.19(github.com/aws/amazon-eks-pod-identity-webhook의 deploy/ 그대로). ADR-0011.
+# 서비스 계정에 eks.amazonaws.com/role-arn 주석이 있으면 그 파드에 AWS_ROLE_ARN과 웹 신원 토큰을 넣는다.
+# 원본은 default 네임스페이스·이미지 자리 표시라 네임스페이스, 이미지, 인증서 이름, 자원을 고친다.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: pod-identity
+resources:
+  - https://raw.githubusercontent.com/aws/amazon-eks-pod-identity-webhook/v0.6.19/deploy/auth.yaml
+  - https://raw.githubusercontent.com/aws/amazon-eks-pod-identity-webhook/v0.6.19/deploy/deployment-base.yaml
+  - https://raw.githubusercontent.com/aws/amazon-eks-pod-identity-webhook/v0.6.19/deploy/service.yaml
+  - https://raw.githubusercontent.com/aws/amazon-eks-pod-identity-webhook/v0.6.19/deploy/mutatingwebhook.yaml
+images:
+  - name: IMAGE
+    newName: public.ecr.aws/eks/amazon-eks-pod-identity-webhook
+    newTag: v0.6.19
+patches:
+  - target: { kind: Deployment, name: pod-identity-webhook }
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/command
+        value:
+          - /webhook
+          - --in-cluster=false
+          - --namespace=pod-identity
+          - --service-name=pod-identity-webhook
+          - --annotation-prefix=eks.amazonaws.com
+          - --token-audience=sts.amazonaws.com
+          - --aws-default-region=ap-northeast-2
+          - --logtostderr
+      - { op: replace, path: /spec/template/spec/containers/0/imagePullPolicy, value: IfNotPresent }
+      - op: add
+        path: /spec/template/spec/containers/0/resources
+        value: { requests: { cpu: 10m, memory: 24Mi }, limits: { memory: 64Mi } }
+      - { op: add, path: /spec/template/spec/priorityClassName, value: gachita-platform }
+      - op: add
+        path: /spec/template/spec/nodeSelector
+        value: { node-role.kubernetes.io/control-plane: "true" }
+      - op: add
+        path: /spec/template/spec/tolerations
+        value:
+          - { key: node-role.kubernetes.io/control-plane, operator: Exists, effect: NoSchedule }
+          - { key: CriticalAddonsOnly, operator: Exists }
+  - target: { kind: Certificate, name: pod-identity-webhook }
+    patch: |-
+      - { op: replace, path: /spec/commonName, value: pod-identity-webhook.pod-identity.svc }
+      - op: replace
+        path: /spec/dnsNames
+        value: [pod-identity-webhook, pod-identity-webhook.pod-identity, pod-identity-webhook.pod-identity.svc]
+  # 원본의 자체 서명 발급자 이름이 너무 일반적이라 바꾼다(다른 것과 겹치지 않게)
+  - target: { kind: ClusterIssuer, name: selfsigned }
+    patch: |-
+      - { op: replace, path: /metadata/name, value: pod-identity-selfsigned }
+  - target: { kind: Certificate, name: pod-identity-webhook }
+    patch: |-
+      - { op: replace, path: /spec/issuerRef/name, value: pod-identity-selfsigned }
+  - target: { kind: MutatingWebhookConfiguration, name: pod-identity-webhook }
+    patch: |-
+      - op: replace
+        path: /metadata/annotations/cert-manager.io~1inject-ca-from
+        value: pod-identity/pod-identity-webhook

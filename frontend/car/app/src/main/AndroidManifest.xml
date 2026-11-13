@@ -1,0 +1,17 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+ <uses-feature android:name="android.hardware.type.automotive" android:required="true" />
+ <uses-permission android:name="android.permission.INTERNET" />
+ <uses-permission android:name="pleos.car.permission.CAR_DRIVE" />
+ <uses-permission android:name="pleos.car.permission.NAVI_ROUTE" />
+ <uses-permission android:name="pleos.car.permission.TTS_SERVICE" />
+ <!-- 공조 권한(CAR_CLIMATE, CONTROL_CAR_CLIMATE)은 공조를 부르는 T8에서 넣는다.
+      평문 http는 개발 서버 주소에만 허용한다(res/xml/network_security_config.xml).
+      주행 중 화면 선언(distractionOptimized)은 T11에서 한다. -->
+ <application android:label="같이타" android:icon="@drawable/ic_launcher" android:theme="@android:style/Theme.Material.Light.NoActionBar"
+  android:allowBackup="false" android:networkSecurityConfig="@xml/network_security_config">
+  <uses-library android:name="ai.pleos.playground.car" android:required="true" />
+  <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTop" android:resizeableActivity="true">
+   <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
+  </activity>
+ </application>
+</manifest>

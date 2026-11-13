@@ -1,5 +1,5 @@
 # 자주 쓰는 명령. 규칙은 docs/development.md에 있다.
-.PHONY: hooks check check-fast api db db-stop run image image-smoke push deploy-tag ticket-start ticket-pr
+.PHONY: hooks check check-fast api db db-stop run image e2e push deploy-tag ticket-start ticket-pr
 
 # 로컬 개발용 Postgres 컨테이너의 접속 주소. CI와 배포 환경은 DATABASE_URL을 따로 준다.
 PG_PORT ?= 54329
@@ -31,27 +31,34 @@ db-stop: ## 로컬 Postgres 컨테이너를 지운다(데이터도 지워짐)
 run: db ## API와 웹앱을 http://localhost:8787 에서 실행
 	cd backend/api && npm ci --silent && node server.js
 
-# ---- 이미지: 로컬에서 만들어 GHCR에 올리고, 태그를 바꿔 GitOps로 내보낸다 (docs/development.md) ----
+# ---- 이미지: 로컬 E2E로 확인하고, develop 병합 때 CI가 GHCR에 올리고, 태그를 바꿔 GitOps로 내보낸다 (docs/development.md) ----
 IMAGE ?= ghcr.io/team-pitcrew/gachita-api
-TAG ?= $(shell git rev-parse --short=12 HEAD)
+TAG ?= $(shell git rev-parse HEAD | cut -c1-12)
 OVERLAY ?= backend/infra/gitops/apps/api/overlays/dev/kustomization.yaml
 
 image: ## 서버(ARM)용 이미지를 로컬에서 만든다. API와 웹앱이 한 이미지에 들어간다
 	docker buildx build --platform linux/arm64 --load -f backend/api/Dockerfile -t $(IMAGE):$(TAG) .
 
-image-smoke: db ## 이미지를 내 컴퓨터에서 띄워 /healthz와 웹앱이 나오는지 본다
-	docker build -q -f backend/api/Dockerfile -t gachita-api:smoke . >/dev/null
-	@docker stop gachita-smoke >/dev/null 2>&1 || true
-	@docker run -d --rm --name gachita-smoke --read-only --user 1000 --add-host host.docker.internal:host-gateway \
-		-e DATABASE_URL=postgres://gachita:gachita@host.docker.internal:$(PG_PORT)/gachita -p 8798:8787 gachita-api:smoke >/dev/null
-	@ok=0; for i in 1 2 3 4 5 6 7 8 9 10; do \
-		[ "$$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8798/healthz)" = 200 ] && ok=1 && break; sleep 1; done; \
-		web=$$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8798/); \
-		[ $$ok = 1 ] && [ "$$web" = 200 ] || { docker logs gachita-smoke; docker stop gachita-smoke >/dev/null; echo "이미지가 정상으로 뜨지 않았습니다"; exit 1; }
-	@docker stop gachita-smoke >/dev/null
-	@echo "이미지 정상: /healthz 200, 웹앱 200"
+# E2E는 개발용 gachita-pg를 쓰지 않고 일회용 Postgres를 따로 띄운다. 끝나면 성공·실패와 관계없이 컨테이너와 이미지를 지운다.
+# 여러 세션이 동시에 돌려도 겹치지 않게 이름과 이미지 태그에 셸의 프로세스 번호를 붙이고, 포트는 Docker가 빈 것을 고른다.
+E2E_PG_WAIT ?= 60
 
-push: image-smoke ## 띄워 본 뒤 이미지를 GHCR에 올린다(gh 로그인 계정에 write:packages 필요)
+e2e: ## 이미지를 만들어 일회용 Postgres와 띄우고 여행 하나의 흐름을 HTTP로 확인한다(CI package와 같은 스크립트)
+	@id=gachita-e2e-$$$$; \
+	trap 'docker rm -f $$id $$id-pg >/dev/null 2>&1; docker rmi $$id:latest >/dev/null 2>&1' EXIT; \
+	docker build -q -f backend/api/Dockerfile -t $$id:latest . >/dev/null || exit 1; \
+	docker run -d --name $$id-pg -p 5432 \
+		-e POSTGRES_USER=gachita -e POSTGRES_PASSWORD=gachita -e POSTGRES_DB=gachita postgres:17 >/dev/null || exit 1; \
+	n=0; until docker exec $$id-pg pg_isready -h 127.0.0.1 -U gachita -q; do \
+		n=$$((n + 1)); [ $$n -le $$(($(E2E_PG_WAIT) * 2)) ] || { echo "E2E 실패 · 일회용 Postgres가 $(E2E_PG_WAIT)초 안에 준비되지 않았습니다"; docker logs $$id-pg 2>&1 | tail -20; exit 1; }; \
+		sleep 0.5; done; \
+	pg=$$(docker port $$id-pg 5432/tcp | head -1); \
+	docker run -d --name $$id --read-only --user 1000 --add-host host.docker.internal:host-gateway -p 8787 \
+		-e DATABASE_URL=postgres://gachita:gachita@host.docker.internal:$${pg##*:}/gachita $$id:latest >/dev/null || exit 1; \
+	api=$$(docker port $$id 8787/tcp | head -1); \
+	node .github/scripts/e2e.mjs http://localhost:$${api##*:} || { echo "--- 서버 로그"; docker logs $$id 2>&1 | tail -40; exit 1; }
+
+push: e2e ## E2E를 통과한 뒤 이미지를 GHCR에 올린다(gh 로그인 계정에 write:packages 필요). 평소에는 develop 병합 때 CI가 올린다
 	@gh auth token | docker login ghcr.io -u "$$(gh api user --jq .login)" --password-stdin >/dev/null
 	docker buildx build --platform linux/arm64 --push -f backend/api/Dockerfile -t $(IMAGE):$(TAG) .
 	@echo "올림: $(IMAGE):$(TAG)  다음: make deploy-tag TAG=$(TAG)"

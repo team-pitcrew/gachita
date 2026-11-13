@@ -1,0 +1,43 @@
+package io.github.teampitcrew.gachita
+
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import java.net.InetAddress
+import java.net.ServerSocket
+import kotlin.concurrent.thread
+
+/** 실제 HTTP로 응답 처리만 본다(소켓으로 응답 하나를 돌려주는 서버). PATCH는 JVM의 HttpURLConnection이 받지 않아 여기서 보지 않는다. */
+class ServerTest {
+    private fun serve(status: Int, body: String, test: (String) -> Unit) {
+        val sock = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
+        thread(isDaemon = true) {
+            sock.accept().use { c ->
+                val r = c.getInputStream().bufferedReader()
+                while (r.readLine().orEmpty().isNotEmpty()) Unit // 요청 머리를 빈 줄까지 읽는다
+                val b = body.toByteArray()
+                c.getOutputStream().apply {
+                    write("HTTP/1.1 $status X\r\nContent-Type: text/html\r\nContent-Length: ${b.size}\r\nConnection: close\r\n\r\n".toByteArray())
+                    write(b); flush()
+                }
+            }
+        }
+        try { test("http://127.0.0.1:${sock.localPort}/") } finally { sock.close() }
+    }
+
+    @Test fun `200인데 여행 JSON이 아니면 서버 거절이 아닌 연결 문제로 던진다`() = serve(200, "<html>로그인하세요</html>") { url ->
+        val e = runCatching { Server(url).trip("AB23CD") }.exceptionOrNull()
+        assertNotNull(e)
+        assertFalse(e is ApiError) // 앱은 ApiError가 아니면 '연결이 끊겼어요'로 다룬다
+    }
+
+    @Test fun `바뀐 것이 없으면(304) null`() = serve(304, "") { url ->
+        assertNull(Server(url).trip("AB23CD", 3))
+    }
+
+    @Test fun `서버가 거절하면 ApiError`() = serve(404, """{"error":"여행이 없습니다"}""") { url ->
+        assertTrue(runCatching { Server(url).trip("AB23CD") }.exceptionOrNull() is ApiError)
+    }
+}

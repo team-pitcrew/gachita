@@ -1,0 +1,10 @@
+# 밖으로 여는 것(물결 5). 경로와 요청 수 제한은 gachita 네임스페이스에 만들므로 kustomize의 namespace를 쓰지 않고
+# 선언마다 네임스페이스를 적는다. 기본 차단은 edge 네임스페이스에만 건다.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - gateway.yaml
+  - cloudflared.yaml
+  - network.yaml
+  - baseline.yaml

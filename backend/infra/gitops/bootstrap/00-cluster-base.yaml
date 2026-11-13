@@ -1,0 +1,31 @@
+# 물결 0. 클러스터 공통 규칙: 데이터 경로 네임스페이스의 포트 규칙(ValidatingAdmissionPolicy, ADR-0013).
+# 우선순위 클래스는 Argo CD도 쓰므로 구축 5단계(backend/infra/cluster/base)에서 먼저 넣는다.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cluster-base
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: git@github.com:team-pitcrew/gachita.git
+    targetRevision: develop
+    path: backend/infra/gitops/platform/cluster-base
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions: []
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m
