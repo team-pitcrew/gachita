@@ -26,7 +26,6 @@ const ALBUM_SQL = fileURLToPath(new URL("profiles-3-moments.sql", import.meta.ur
 const GROUPS_SQL = fileURLToPath(new URL("profiles-4-groups.sql", import.meta.url));
 const VOICE_SQL = fileURLToPath(new URL("profiles-5-voice.sql", import.meta.url));
 const NO_PREFS_SQL = fileURLToPath(new URL("profiles-6-no-prefs.sql", import.meta.url));
-const INVITE_BASE = process.env.INVITE_BASE_URL ?? "https://gachita.mangowhois.ai/j"; // QR에 담는 초대 주소(ADR-0009·0010)
 const PHOTO_MAX = 1_000_000; // 프로필 사진 상한. 형식은 매직 바이트로만 확인한다(다시 그리기는 T46 화면, ADR-0009 위험)
 const TTL_MS = 48 * 60 * 60 * 1000; // 기획서 v4가 초기 제안으로 적은 보관 기간
 const MAX_BODY = 10_000;
@@ -50,12 +49,14 @@ const NEXT = {
 };
 const MIME = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".json": "application/json", ".webmanifest": "application/manifest+json" };
 
+const RETIRED_GROUP = "그룹 초대는 종료됐어요. 탑승자 폰에서 동승 연결 QR을 열고, 주차 중인 차에서 읽어 주세요.";
+
 const fail = (status, error) => {
   throw { status, error };
 };
 
 // 오류 종류(T71): 응답의 type과 로그의 err.type. 상태에서 정하는 닫힌 목록이라 클라이언트는 문장이 아니라 종류로 가른다.
-const ERROR_TYPE = { 400: "invalid", 401: "unauthenticated", 403: "forbidden", 404: "not_found", 405: "method_not_allowed", 409: "conflict", 413: "too_large", 502: "unavailable", 503: "unavailable", 504: "unavailable" };
+const ERROR_TYPE = { 400: "invalid", 401: "unauthenticated", 403: "forbidden", 404: "not_found", 405: "method_not_allowed", 409: "conflict", 410: "gone", 413: "too_large", 502: "unavailable", 503: "unavailable", 504: "unavailable" };
 // DB에 닿지 않거나(연결 끊김·거절, 연결 수 초과) 질의 시간 제한(57014, T26)에 걸린 것: 다시 해도 되는 503.
 // Postgres 오류 번호 08xxx 연결, 53xxx 자원 부족, 57014 질의 취소, 57P0x 서버 종료·시작 중.
 const DB_DOWN = /^(08|53|57014|57P0)/;
@@ -620,154 +621,6 @@ async function deleteGroups(db, ids) {
   await db.query("DELETE FROM groups WHERE id = ANY($1::text[])", [ids]);
 }
 
-// 가족·동승자 그룹과 QR 초대(ADR-0009, T45). 모든 경로의 인증은 프로필 토큰이다.
-const GROUP_KIND = ["family", "crew"];
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-async function groups(req, seg, b) {
-  const m = req.method;
-  const db = profilesDb();
-  if (!seg[0]) {
-    if (m !== "POST") fail(405, "POST만 됨");
-    const me = (await profileOf(req)) ?? fail(401, "프로필 토큰이 필요함");
-    const g = { id: randomUUID().slice(0, 8), kind: oneOf(b.kind ?? "family", GROUP_KIND, "kind"), name: b.name === undefined ? "" : text(b.name, 40, "name"), ownerId: me.id };
-    await db.query("INSERT INTO groups (id, kind, name, owner_id) VALUES ($1, $2, $3, $4)", [g.id, g.kind, g.name, g.ownerId]);
-    await db.query("INSERT INTO group_members (group_id, profile_id) VALUES ($1, $2)", [g.id, me.id]);
-    return [201, { ...g, members: [{ profileId: me.id, name: me.name, character: me.character, isOwner: true }] }];
-  }
-  const [id, sub, arg, leaf] = seg;
-  // 인증보다 먼저 못 쓰는 메서드를 가른다(없는 경로·메서드는 404·405로 답한다).
-  if (leaf !== undefined && (sub !== "members" || leaf !== "voice" || seg[4] !== undefined)) fail(404, "없는 경로");
-  if (!sub && m !== "GET" && m !== "DELETE") fail(405, "GET, DELETE만 됨");
-  if (sub === "members" && !arg && m !== "POST") fail(405, "POST만 됨");
-  if (sub === "members" && arg && !leaf && m !== "DELETE") fail(405, "DELETE만 됨");
-  if (leaf && m !== "POST" && m !== "DELETE") fail(405, "POST, DELETE만 됨");
-  if (sub === "invites" && !arg && m !== "POST" && m !== "GET") fail(405, "POST, GET만 됨");
-  if (sub === "invites" && arg && m !== "DELETE") fail(405, "DELETE만 됨");
-  if (sub && sub !== "members" && sub !== "invites") fail(404, "없는 경로");
-  if (sub === "members" && arg && !UUID.test(arg)) fail(404, "없는 구성원");
-  const me = (await profileOf(req)) ?? fail(401, "프로필 토큰이 필요함");
-  const { rows: found } = await db.query("SELECT id, kind, name, owner_id FROM groups WHERE id = $1", [id]);
-  const group = found[0] ?? fail(404, "없는 그룹");
-  const isOwner = group.owner_id === me.id;
-  const isMember = isOwner || (await db.query("SELECT 1 FROM group_members WHERE group_id = $1 AND profile_id = $2", [id, me.id])).rows.length > 0;
-  const memberRows = () =>
-    db.query(
-      `SELECT m.profile_id, p.name, p.character, (p.photo IS NOT NULL) AS has_photo, g.owner_id
-       FROM group_members m JOIN profiles p ON p.id = m.profile_id JOIN groups g ON g.id = m.group_id
-       WHERE m.group_id = $1 ORDER BY m.joined_at`,
-      [id]
-    );
-
-  if (!sub) {
-    if (m === "GET") {
-      if (!isMember) fail(403, "구성원만 볼 수 있음");
-      const { rows } = await memberRows();
-      return [200, { id: group.id, kind: group.kind, name: group.name, ownerId: group.owner_id, members: rows.map((r) => ({ profileId: r.profile_id, name: r.name, character: r.character, hasPhoto: r.has_photo, isOwner: r.owner_id === r.profile_id })) }];
-    }
-    // 그룹을 지워도 계정 있는 구성원의 기록본과 앨범은 프로필 소유라 그대로 남는다(ADR-0009).
-    // 대표가 만든 아이 프로필은 함께 지운다.
-    if (!isOwner) fail(403, "대표만 지울 수 있음");
-    await inProfilesTx((tx) => deleteGroups(tx, [id]));
-    return [204];
-  }
-
-  if (sub === "members" && !arg) {
-    // 계정 없는 구성원(아이) 프로필을 대표가 만든다. 토큰은 없다 — 대표의 기기가 참가시킨다.
-    if (!isOwner) fail(403, "대표만 구성원을 만들 수 있음");
-    const p = { id: randomUUID(), name: text(b.name, 20, "name"), character: b.character === undefined ? "" : text(b.character, 20, "character") };
-    await db.query("INSERT INTO profiles (id, name, consent_default, character, managed_by) VALUES ($1, $2, false, $3, $4)", [p.id, p.name, p.character, me.id]);
-    await db.query("INSERT INTO group_members (group_id, profile_id) VALUES ($1, $2)", [id, p.id]);
-    return [201, { profileId: p.id, name: p.name, character: p.character, isOwner: false }];
-  }
-  if (leaf) {
-    // 계정 없는 구성원(아이)의 목소리는 그 아이를 만든 대표가 대신 등록하고 지운다(ADR-0009·0019).
-    // 보호자 동의 문구는 등록 화면(T37·T46)에 붙인다.
-    if (!isOwner) fail(403, "대표만 아이의 목소리를 등록할 수 있음");
-    const { rows: kid } = await db.query(
-      "SELECT 1 FROM profiles p JOIN group_members gm ON gm.profile_id = p.id WHERE p.id = $1 AND gm.group_id = $2 AND p.managed_by = $3",
-      [arg, id, me.id]
-    );
-    if (!kid[0]) fail(404, "이 그룹에서 대표가 만든 구성원이 아님");
-    return voicePrint(req, m, arg);
-  }
-  if (sub === "members" && arg) {
-    if (!isOwner && arg !== me.id) fail(403, "대표만 내보낼 수 있음");
-    if (arg === group.owner_id) fail(409, "대표는 그룹을 지워야 나갈 수 있음");
-    const { rowCount } = await db.query("DELETE FROM group_members WHERE group_id = $1 AND profile_id = $2", [id, arg]);
-    if (!rowCount) fail(404, "없는 구성원");
-    // 대표가 만든 아이 프로필은 내보내면 지울 사람이 없어지므로 함께 지운다. 계정 있는 구성원의 기록은 그대로다.
-    const { rows: kid } = await db.query("SELECT id FROM profiles WHERE id = $1 AND managed_by = $2", [arg, group.owner_id]);
-    if (kid[0]) await inProfilesTx((tx) => deleteProfiles(tx, [arg]));
-    return [204];
-  }
-
-  if (sub === "invites" && !arg) {
-    if (m === "POST") {
-      if (!isOwner) fail(403, "대표만 초대를 만들 수 있음");
-      const code = randomBytes(12).toString("base64url");
-      const maxUses = b.maxUses === undefined ? 5 : int(b.maxUses, 0, 100, "maxUses");
-      const minutes = b.expiresInMinutes === undefined ? 60 : int(b.expiresInMinutes, 1, 1440, "expiresInMinutes");
-      const expiresAt = Date.now() + minutes * 60_000;
-      await db.query("INSERT INTO invites (code, group_id, max_uses, expires_at) VALUES ($1, $2, $3, to_timestamp($4 / 1000.0))", [code, id, maxUses, expiresAt]);
-      return [201, { code, url: `${INVITE_BASE}/${code}`, expiresAt, maxUses }]; // QR에 담을 주소(ADR-0009)
-    }
-    if (!isOwner) fail(403, "대표만 봄");
-    const { rows } = await db.query("SELECT code, max_uses, uses, expires_at, cancelled_at FROM invites WHERE group_id = $1 ORDER BY created_at DESC", [id]);
-    return [200, { invites: rows.map((r) => ({ code: r.code, url: `${INVITE_BASE}/${r.code}`, maxUses: r.max_uses, uses: r.uses, expiresAt: r.expires_at.getTime(), cancelled: r.cancelled_at !== null })) }];
-  }
-  if (sub === "invites" && arg) {
-    if (!isOwner) fail(403, "대표만 취소할 수 있음");
-    const { rowCount } = await db.query("UPDATE invites SET cancelled_at = now() WHERE code = $1 AND group_id = $2 AND cancelled_at IS NULL", [arg, id]);
-    if (!rowCount) fail(404, "없는 초대");
-    return [204];
-  }
-  fail(404, "없는 경로");
-}
-
-// 초대 수락. QR 주소(/j/<코드>)로 들어온 폰 브라우저가 부른다(ADR-0009).
-async function acceptInvite(req, code, b) {
-  const db = profilesDb();
-  // 프로필 토큰이 있으면 있던 프로필로, 없으면 새 프로필을 만들어 이 기기 토큰을 준다.
-  // 입력과 토큰은 횟수를 쓰기 전에 본다 — 거절된 수락이 횟수를 쓰지 않게.
-  const me = await profileOf(req);
-  const profile = me ?? { id: randomUUID(), name: text(b.name, 20, "name"), consentDefault: false, character: b.character === undefined ? "" : text(b.character, 20, "character"), links: [] };
-  const device = b.device === undefined ? "" : text(b.device, 20, "device");
-  // 이미 구성원이면(QR을 다시 찍음) 횟수를 쓰지 않는다.
-  const { rows: member } = me
-    ? await db.query("SELECT i.group_id FROM invites i JOIN group_members m ON m.group_id = i.group_id WHERE i.code = $1 AND m.profile_id = $2", [code, me.id])
-    : { rows: [] };
-  // 횟수 소진·만료·취소와의 경합은 UPDATE 조건으로 막는다(마지막 한 번을 두 명이 못 쓴다).
-  const { rows } = member[0]
-    ? { rows: member }
-    : await db.query(
-        `UPDATE invites SET uses = uses + 1
-         WHERE code = $1 AND cancelled_at IS NULL AND expires_at > now() AND (max_uses = 0 OR uses < max_uses)
-         RETURNING group_id`,
-        [code]
-      );
-  if (!rows[0]) {
-    const { rows: check } = await db.query("SELECT cancelled_at, expires_at, (max_uses = 0 OR uses < max_uses) AS usable FROM invites WHERE code = $1", [code]);
-    if (!check[0]) fail(404, "없는 초대");
-    fail(409, check[0].cancelled_at ? "취소된 초대" : new Date(check[0].expires_at).getTime() <= Date.now() ? "만료된 초대" : "쓸 수 있는 횟수가 다한 초대");
-  }
-  const token = me ? null : randomBytes(32).toString("base64url");
-  if (!me) {
-    // 첫 토큰은 옛 칸에도(POST /profiles와 같은 까닭)
-    await db.query("INSERT INTO profiles (id, token_hash, name, consent_default, character) VALUES ($1, $2, $3, false, $4)", [profile.id, tokenHash(token), profile.name, profile.character]);
-    await issueToken(profile.id, device, token);
-  }
-  await db.query("INSERT INTO group_members (group_id, profile_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", [rows[0].group_id, profile.id]);
-  const { rows: g } = await db.query("SELECT id, kind, name FROM groups WHERE id = $1", [rows[0].group_id]);
-  // 진행 중인 그룹 여행이 있으면 코드만 알려 준다. 자리는 본인이 골라 기존 참가 경로로 들어온다 —
-  // 동의·기록·자리 겹침 규칙이 그 경로 한 곳에만 있다(ADR-0009: 수락한 사람은 자리만 고르면 된다).
-  const { rows: trips } = await tripsDb().query(
-    `SELECT code FROM trips WHERE doc->>'groupId' = $1 AND created_at > now() - interval '48 hours'
-     AND (doc->>'status') IN ('boarding', 'driving') ORDER BY created_at DESC LIMIT 1`,
-    [rows[0].group_id]
-  );
-  return [200, { group: g[0], profile: { ...profile, hasPhoto: me?.hasPhoto ?? false }, ...(token ? { token } : {}), ...(trips[0] ? { trip: { code: trips[0].code } } : {}) }];
-}
-
 // 여행 한 줄을 읽어 fn에 넘긴다. 바꾸는 요청이면 그 줄을 잠그고, 끝나면 문서를 다시 쓴다.
 async function withTrip(code, write, fn) {
   const client = await tripsDb().connect();
@@ -794,14 +647,7 @@ async function trips(req, [code, sub, id], b, query) {
   const m = req.method;
   if (!code) {
     if (m !== "POST") fail(405, "POST만 됨");
-    // 그룹 여행(ADR-0009): 대표가 그룹을 지정하면 초대를 수락한 구성원이 이 여행 코드를 받아 자리를 골라 참가한다.
-    let groupId = null;
-    if (b.groupId !== undefined) {
-      groupId = text(b.groupId, 8, "groupId");
-      const me = await profileOf(req);
-      const { rows } = me ? await profilesDb().query("SELECT id FROM groups WHERE id = $1 AND owner_id = $2", [groupId, me.id]) : { rows: [] };
-      if (!rows[0]) fail(403, "그룹의 대표만 그룹 여행을 만들 수 있음");
-    }
+    if (b.groupId !== undefined) fail(410, RETIRED_GROUP);
     const trip = {
       code: "",
       title: b.title === undefined ? "" : text(b.title, 40, "title"),
@@ -813,7 +659,6 @@ async function trips(req, [code, sub, id], b, query) {
       moments: [],
       version: 1,
       createdAt: Date.now(),
-      ...(groupId ? { groupId } : {}),
     };
     await sweep(); // 여행을 만들 때마다 묵은 여행을 치운다(10분마다도 돈다)
     for (;;) {
@@ -824,6 +669,7 @@ async function trips(req, [code, sub, id], b, query) {
   }
   if (sub === "voice-match" && !id) return voiceMatch(await withTrip(code, false, (trip) => trip), req, query);
   if (sub === "recordings") return recordings(code, id, req, query);
+  if (sub === "participants" && m === "POST" && !id && b.profileId !== undefined) fail(410, RETIRED_GROUP);
   const profile = sub === "participants" && m === "POST" && !id ? await profileOf(req) : null;
   const result = await withTrip(code, m !== "GET", (trip, client) => handle(trip, { req, m, sub, id, b, query, profile }, client));
   if (sub === "participants" && m === "PATCH") void sweepClips(); // 동의 철회가 적은 클립을 커밋 뒤에 버킷에서 지운다
@@ -877,26 +723,10 @@ async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
   if (sub === "participants") {
     const seatFree = (seat, self) => trip.participants.every((p) => p === self || p.seat !== seat);
     if (m === "POST" && !id) {
-      // 대표가 그룹의 계정 없는 구성원(아이) 프로필로 참가시킬 수 있다(ADR-0009).
-      let kidOf = null;
-      if (b.profileId !== undefined) {
-        if (!profile) fail(401, "프로필 토큰이 필요함");
-        if (typeof b.profileId !== "string" || !UUID.test(b.profileId)) fail(400, "profileId: 프로필 id");
-        // 내가 만든 계정 없는 구성원(아이)만 — 계정 있는 어른의 자리와 동의는 그 사람이 정한다.
-        const { rows: kid } = await profilesDb().query(
-          `SELECT p.id, p.name FROM profiles p
-           JOIN group_members gm ON gm.profile_id = p.id
-           JOIN groups g ON g.id = gm.group_id
-           WHERE p.id = $1 AND g.owner_id = $2 AND p.managed_by = $2 LIMIT 1`,
-          [b.profileId, profile.id]
-        );
-        if (!kid[0]) fail(403, "내가 만든 계정 없는 구성원만 참가시킬 수 있음");
-        kidOf = kid[0];
-      }
-      // 같은 프로필(대표가 참가시킨 아이도)이 다시 참가하면 이미 있는 참가자를 돌려준다(폰을 바꿨거나 토큰을 잃었을 때).
+      // 같은 프로필이 다시 참가하면 이미 있는 참가자를 돌려준다(폰을 바꿨거나 토큰을 잃었을 때).
       // 참가자 토큰은 문서에 해시만 남으니 이 기기에 쓸 토큰을 새로 만들어 준다. 앞서 준 토큰도 최근 4개까지 산다(T68) —
       // 남이 끈 동의를 본인이 다시 켜려면 토큰이 있어야 하니, 잃었으면 다시 참가해 받는다.
-      const again = profile && trip.participants.find((p) => p.profileId === (kidOf ?? profile).id);
+      const again = profile && trip.participants.find((p) => p.profileId === profile.id);
       if (again) {
         const token = randomBytes(32).toString("base64url");
         again.olderTokenHashes = [...(again.olderTokenHashes ?? []), again.tokenHash].slice(-4);
@@ -904,11 +734,9 @@ async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
         return changed(200, { ...asParticipant(again), token });
       }
       const seat = oneOf(b.seat, SEATS, "seat");
-      const p = kidOf
-        ? { name: kidOf.name, consent: b.consent === undefined ? false : bool(b.consent, "consent"), profileId: kidOf.id } // 아이는 동의 기본값 꺼짐
-        : profile
-          ? { name: profile.name, consent: b.consent === undefined ? profile.consentDefault : bool(b.consent, "consent"), profileId: profile.id }
-          : { name: text(b.name, 20, "name"), consent: bool(b.consent, "consent") };
+      const p = profile
+        ? { name: profile.name, consent: b.consent === undefined ? profile.consentDefault : bool(b.consent, "consent"), profileId: profile.id }
+        : { name: text(b.name, 20, "name"), consent: bool(b.consent, "consent") };
       if (!seatFree(seat)) fail(409, "이미 다른 사람이 앉은 자리");
       // 참가자 토큰(프로필·손님 모두)은 이때 한 번씩 준다. 음성 경로의 인증에 쓴다(ADR-0007).
       const token = randomBytes(32).toString("base64url");
@@ -1094,7 +922,7 @@ async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
   fail(404, "없는 경로");
 }
 
-// 확장자 없는 주소는 화면이다: 그 폴더의 index.html(/demo), 없으면 웹앱 첫 화면 — 초대 주소 /j/<코드>처럼 웹앱이 주소를 읽는다.
+// 확장자 없는 주소는 화면이다: 그 폴더의 index.html(/demo), 없으면 웹앱 첫 화면 — Google 로그인 콜백처럼 웹앱이 주소를 읽는다.
 // 웹 파일은 쓸 때마다 다시 확인하게 한다(no-cache + ETag). 지시가 없으면 Cloudflare가 4시간 캐시해
 // 배포 뒤에도 옛 app.js가 쓰인다. 바뀌지 않았으면 304라 다시 받지 않는다.
 // ponytail: 파일 이름에 해시를 붙이는 빌드는 두지 않는다(빌드 없는 웹앱). 파일이 커지면 그때.
@@ -1152,6 +980,7 @@ export const server = createServer(async (req, res) => {
       return send(200, { ok: true });
     }
     if (seg[0] === "api") {
+      if (seg[1] === "groups" || seg[1] === "j") fail(410, RETIRED_GROUP);
       // 발화 묶음은 본문이 커서 그 경로만 따로 한도를 둔다(docs/api/voice.md).
       const big = seg[1] === "trips" && seg[3] === "utterances";
       // 목소리 등록(…/voice)·발화 대조는 이진 본문(WAV)이다 — JSON으로 먼저 읽지 않는다.
@@ -1162,11 +991,6 @@ export const server = createServer(async (req, res) => {
         if (Buffer.isBuffer(r[1])) return void sendRaw(r[0], r[1], r[2]); // 사진 같은 이진 응답
         return send(...r);
       }
-      if (seg[1] === "groups") return send(...(await groups(req, seg.slice(2), body)));
-      if (seg[1] === "j" && seg[2] && !seg[3]) {
-        if (req.method !== "POST") fail(405, "POST만 됨");
-        return send(...(await acceptInvite(req, seg[2], body)));
-      }
       if (seg[1] === "trips") {
         const r = await trips(req, seg.slice(2), body, url.searchParams);
         if (Buffer.isBuffer(r[1])) return void sendRaw(r[0], r[1], r[2]); // 클립 소리 같은 이진 응답
@@ -1174,13 +998,16 @@ export const server = createServer(async (req, res) => {
       }
       fail(404, "없는 경로");
     }
-    if (req.method !== "GET") fail(405, "GET만 됨");
     let path;
     try {
       path = decodeURIComponent(url.pathname);
     } catch {
       fail(400, "잘못된 주소");
     }
+    if (path === "/j" || path.startsWith("/j/")) {
+      return sendRaw(410, Buffer.from(`<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>동승 연결 안내 · 가치타</title><h1>동승 연결 방법이 바뀌었어요</h1><p>${RETIRED_GROUP}</p><a href="/">가치타 열기</a></html>`), "text/html; charset=utf-8");
+    }
+    if (req.method !== "GET") fail(405, "GET만 됨");
     await serveFile(path, req, res);
   } catch (e) {
     const { status, type, message } = classify(e);
