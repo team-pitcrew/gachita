@@ -66,7 +66,7 @@ const records = createRecords({
   getTrip: () => trip,
   getParticipant: () => trip?.participants.find((p) => p.id === myId()),
   getParticipantToken: myToken,
-  participantRequest: (method, path, body) => api(method, `/trips/${trip.code}${path}`, body, myToken()),
+  participantRequest: (method, path, body) => asMe(trip.participants.find((p) => p.id === myId()), (c, token) => api(method, `/trips/${c}${path}`, body, token)),
   onSaved: () => refresh(true),
   onProfile: () => (location.hash = "me"),
 });
