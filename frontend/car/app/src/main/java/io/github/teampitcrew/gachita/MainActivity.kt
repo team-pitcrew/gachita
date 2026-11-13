@@ -302,7 +302,10 @@ class MainActivity : ComponentActivity() {
             off.forEach { api.consent(t.code, it, false) }
             api.trip(t.code, v)
         }) { r ->
-            r.onSuccess { got -> s = if (got == null) s.copy(online = true) else s.withTrip(keep(got)) }
+            r.onSuccess { got ->
+                if (s.trip?.code != t.code) return@onSuccess // 그사이 지운 여행(48시간·404)이나 새 여행: 늦게 온 응답으로 되살리지 않는다
+                s = if (got == null) s.copy(online = true) else s.withTrip(keep(got))
+            }
                 .onFailure { if (it is Gone) forget(t.code) else s = s.copy(online = it is ApiError, note = if (it is ApiError) reason(it) else s.note) }
         }
         // 받아 적은 말은 동의와 따로 보낸다. 못 보내면(끊김, 동의 대기 403) 보관함에 두었다 다음 조회에 다시 보낸다.
