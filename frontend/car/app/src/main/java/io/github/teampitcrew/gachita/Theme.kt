@@ -75,7 +75,8 @@ private val Dark = darkColorScheme(
 )
 
 /**
- * 원본 캐릭터 조각(res/drawable-nodpi/char_*.webp, 디자인 1급 문서의 '말랑' 10종에서 잘라 냄). 다시 그리지 않는다.
+ * 원본 시트에서 캐릭터별 전신을 분리하고 가려진 부분을 복원한 투명 PNG(res/drawable-nodpi/char_*.png).
+ * 원본의 형태·색·소품을 유지하며 얼굴만 자르거나 이웃 캐릭터를 함께 표시하지 않는다.
  * 차의 손님 참가자에는 캐릭터 값이 없어 자리 순서로 고른다(운전석부터 기본·캡모자·안경·여행·게임).
  */
 private val SEAT_CHARS = listOf(R.drawable.char_basic, R.drawable.char_cap, R.drawable.char_glasses, R.drawable.char_travel, R.drawable.char_game)
@@ -95,12 +96,12 @@ fun GachitaTheme(content: @Composable () -> Unit) =
 /** 카드의 바탕. 기록 상태 머리만 색을 바꾸고 나머지는 Plain이다. */
 enum class Tone { Plain, Rec, Wait, Accent }
 
-/** 차 화면 카드. 모서리 32dp, 테두리 없이 바탕색으로 구분한다. Accent는 지금 답이 필요한 카드(제안·도착 브리핑)에만. */
+/** 차 화면 카드. 모서리 32dp, 테두리 없이 바탕색으로 구분한다. Accent는 지금 답이 필요한 카드(제안·도착 브리핑)에만. 높이를 고정할 칸은 modifier로 준다(T83). */
 @Composable
-fun CarCard(tone: Tone = Tone.Plain, content: @Composable ColumnScope.() -> Unit) {
+fun CarCard(tone: Tone = Tone.Plain, modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
     val c = MaterialTheme.colorScheme
     val bg = when (tone) { Tone.Plain, Tone.Accent -> c.surface; Tone.Rec -> c.errorContainer; Tone.Wait -> c.secondaryContainer }
-    Surface(Modifier.fillMaxWidth(), RoundedCornerShape(32.dp), color = bg, border = if (tone == Tone.Accent) BorderStroke(3.dp, c.onPrimaryContainer) else null) {
+    Surface(modifier.fillMaxWidth(), RoundedCornerShape(32.dp), color = bg, border = if (tone == Tone.Accent) BorderStroke(3.dp, c.onPrimaryContainer) else null) {
         Column(Modifier.padding(28.dp), verticalArrangement = Arrangement.spacedBy(10.dp), content = content)
     }
 }
@@ -126,11 +127,11 @@ private fun DrawScope.face(y: Float, closed: Boolean) {
     }
 }
 
-/** 가족 캐릭터: 원본 조각을 원 안에. 말하는 사람 강조는 바깥 링 하나뿐이고 깜박이거나 움직이지 않는다(주행 중 동적 표시 금지). */
+/** 투명 PNG 전신을 Fit로 표시한다. 강조 테두리는 이미지를 자르지 않으며, 이 공통 컴포넌트는 움직이지 않는다. */
 @Composable
 fun Character(index: Int, size: Dp, ring: Boolean = false) {
-    val ringMod = if (ring) Modifier.border(6.dp, MaterialTheme.colorScheme.onPrimaryContainer, CircleShape) else Modifier
-    Image(painterResource(SEAT_CHARS.getOrElse(index) { SEAT_CHARS[0] }), null, Modifier.size(size).then(ringMod).clip(CircleShape), contentScale = ContentScale.Crop)
+    val ringMod = if (ring) Modifier.border(3.dp, MaterialTheme.colorScheme.onPrimaryContainer, RoundedCornerShape(16.dp)).padding(3.dp) else Modifier
+    Image(painterResource(SEAT_CHARS.getOrElse(index) { SEAT_CHARS[0] }), null, Modifier.size(size).then(ringMod), contentScale = ContentScale.Fit)
 }
 
 /** 빈자리: 점선 동그라미. */
@@ -154,31 +155,38 @@ fun Mascot(listening: Boolean, size: Dp = 56.dp) {
     }
 }
 
-/** 화면 맨 위 줄: 마스코트, 이름, 여행 제목. */
+/** 화면 맨 위 줄: 마스코트, 이름, 여행 제목, 오른쪽에 상태 알약(주차 중 · P, 서버 연결됨 — 시안 C1·C5·C6). 알약은 (글, 괜찮은지). */
 @Composable
-fun AppBar(title: String, listening: Boolean) {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+fun AppBar(title: String, listening: Boolean, vararg pills: Pair<String, Boolean>) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
         Mascot(listening)
         Text("가치타", fontSize = 32.sp, fontWeight = FontWeight.Bold)
-        Text(title, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(title, Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        pills.forEach { (text, ok) -> Pill(text, ok) }
     }
 }
 
-private val FRONT = listOf(Seat.ROW_1_LEFT, Seat.ROW_1_RIGHT)
-private val BACK = listOf(Seat.ROW_2_LEFT, Seat.ROW_2_CENTER, Seat.ROW_2_RIGHT)
-
-/**
- * 일행을 차의 자리 모양(앞줄 둘, 뒷줄 셋)으로 놓는다. zone(0 앞줄, 1 뒷줄, 모르면 null)은 방금 받아 적은 말의 좌석 구역이고
- * 그 줄의 바탕을 바꾼다. highlight는 목소리 대조가 맞춘 참가자 id이고 그 사람만 민트 링으로 짚는다(frontend/spec/car.md 2절, T37이 넘김).
- * note는 이름 아래 한 줄(동의 상태 등)을 호출하는 쪽이 정하고, null이면 그 줄을 그리지 않는다(좁은 창 주행 중).
- */
+/** 상태 알약: 점과 글. 괜찮으면 민트, 아니면 빨강 기운. 움직이지 않는다. */
 @Composable
-fun SeatMap(people: List<Person>, zone: Int?, highlight: String? = null, size: Dp = 80.dp, note: ((Person) -> Pair<String, Color>)?) {
+fun Pill(text: String, ok: Boolean = true) {
     val c = MaterialTheme.colorScheme
-    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(40.dp)).background(c.surfaceVariant).padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        for ((row, seats) in listOf(0 to FRONT, 1 to BACK)) {
+    val (bg, fg) = if (ok) c.primaryContainer to c.onPrimaryContainer else c.errorContainer to c.error
+    Row(Modifier.clip(CircleShape).background(bg).padding(horizontal = 20.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Canvas(Modifier.size(12.dp)) { drawCircle(fg) }
+        Text(text, color = fg, maxLines = 1)
+    }
+}
+
+@Composable
+fun SeatMap(
+    people: List<Person>, zone: Int?, highlight: String? = null, size: Dp = 80.dp, car: CarStatus = CarStatus(),
+    note: ((Person) -> Pair<String, Color>)?, compact: Boolean = false,
+) {
+    val c = MaterialTheme.colorScheme
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(40.dp)).background(c.surfaceVariant).padding(if (compact) 8.dp else 16.dp), verticalArrangement = Arrangement.spacedBy(if (compact) 4.dp else 8.dp)) {
+        for ((row, seats) in seatRows(car.seats).withIndex()) {
             Row(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(28.dp)).then(if (zone == row) Modifier.background(c.primaryContainer).border(3.dp, c.onPrimaryContainer, RoundedCornerShape(28.dp)) else Modifier).padding(vertical = 12.dp),
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(28.dp)).then(if (zone == row) Modifier.background(c.primaryContainer).border(3.dp, c.onPrimaryContainer, RoundedCornerShape(28.dp)) else Modifier).padding(vertical = if (compact) 6.dp else 12.dp),
                 horizontalArrangement = Arrangement.SpaceEvenly,
             ) {
                 for (seat in seats) {
@@ -186,7 +194,8 @@ fun SeatMap(people: List<Person>, zone: Int?, highlight: String? = null, size: D
                     Column(Modifier.width(size + 40.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         if (p == null) {
                             EmptySeat(size)
-                            Text("빈자리", color = c.onSurfaceVariant)
+                            // 차가 앉았다고 알리는데 여행에 없는 사람(T83): 폰 동승 연결이나 새 여행으로 넣는다
+                            Text(if (seat.name in car.occupied) "앉아 있어요" else "빈자리", color = c.onSurfaceVariant, maxLines = 1)
                         } else {
                             Character(seat.ordinal, size, ring = p.id == highlight)
                             Text(p.name, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)

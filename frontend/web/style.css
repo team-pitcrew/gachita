@@ -1,5 +1,5 @@
 /* 가치타 모바일 화면(T20, 디자인 1급 문서 11/14).
-   캐릭터: 지민님 '말랑' 10종 원본 시트에서 잘라 쓴 조각(chars/<값>.svg). 다시 그리지 않는다.
+   캐릭터: 말랑 10유형 × 큰·작은 2종 전신 PNG. 겹친 외곽을 복원하고 두 팔과 소품을 보존한다.
    색: 시트에서 뽑은 민트 #60C090이 상징색(바이올렛은 쓰지 않음). 바탕·글자는 k-style-ui-ux derive.py(--tone warm)의 미색·먹색.
    민트 바탕(--accent-fill)은 흰 바탕과 2.2:1이라 위 글자는 먹색(--on-accent), 민트 글자·링은 짙은 민트(--accent)를 쓴다.
    시안: https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n
@@ -293,19 +293,10 @@ legend {
 .chip small {
   font-weight: 500;
 }
-.chips:has(input[name="character"]) {
-  grid-template-columns: repeat(5, 1fr);
-}
-.chip:has(input[name="character"]) {
-  min-height: 96px;
-  align-content: end;
-  padding: 60px 2px 6px;
-  font-size: 14px;
-  background-image: var(--face, url("/chars/basic.svg"));
-  background-position: center 8px;
-  background-size: 48px;
-  background-repeat: no-repeat;
-}
+.chips.character-options { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.chip.character-option { min-height: 136px; padding: 8px 4px; gap: 6px; background-image: none; align-content: end; font-size: 12px; }
+.character-option img { display: block; width: 100%; height: 92px; object-fit: contain; }
+.character-option span { min-height: 32px; display: grid; place-items: center; line-height: 1.3; }
 .chip:has(input:checked) small {
   color: inherit;
 }
@@ -495,53 +486,56 @@ li .between {
   height: 56px;
   border-radius: 50%;
   overflow: hidden;
-  background: center / cover no-repeat var(--face, url("/chars/basic.svg"));
+  background: center / contain no-repeat var(--face, url("/chars/basic.png"));
 }
 .c-basic,
 .chip:has(input[name="character"][value="basic"]) {
-  --face: url("/chars/basic.svg");
+  --face: url("/chars/basic.png");
 }
 .c-cap,
 .chip:has(input[name="character"][value="cap"]) {
-  --face: url("/chars/cap.svg");
+  --face: url("/chars/cap.png");
 }
 .c-glasses,
 .chip:has(input[name="character"][value="glasses"]) {
-  --face: url("/chars/glasses.svg");
+  --face: url("/chars/glasses.png");
 }
 .c-travel,
 .chip:has(input[name="character"][value="travel"]) {
-  --face: url("/chars/travel.svg");
+  --face: url("/chars/travel.png");
 }
 .c-game,
 .chip:has(input[name="character"][value="game"]) {
-  --face: url("/chars/game.svg");
+  --face: url("/chars/game.png");
 }
 .c-sport,
 .chip:has(input[name="character"][value="sport"]) {
-  --face: url("/chars/sport.svg");
+  --face: url("/chars/sport.png");
 }
 .c-pet,
 .chip:has(input[name="character"][value="pet"]) {
-  --face: url("/chars/pet.svg");
+  --face: url("/chars/pet.png");
 }
 .c-camping,
 .chip:has(input[name="character"][value="camping"]) {
-  --face: url("/chars/camping.svg");
+  --face: url("/chars/camping.png");
 }
 .c-office,
 .chip:has(input[name="character"][value="office"]) {
-  --face: url("/chars/office.svg");
+  --face: url("/chars/office.png");
 }
 .c-healing,
 .chip:has(input[name="character"][value="healing"]) {
-  --face: url("/chars/healing.svg");
+  --face: url("/chars/healing.png");
 }
 .avatar img {
   width: 100%;
   height: 100%;
   object-fit: cover;
 }
+.avatar.character-avatar { border-radius: 0; overflow: visible; background: none; }
+.avatar.character-avatar img { object-fit: contain; }
+.avatar.profile-picture { border-radius: 50%; overflow: hidden; background: var(--surface-2); }
 .card.face {
   display: flex;
   align-items: center;
@@ -597,58 +591,36 @@ button.share-icon.primary { width: 56px; min-width: 56px; }
   background: #0b0a09;
   color: var(--ink);
 }
-.short > div {
-  width: min(100vw, calc(100dvh * 9 / 16));
-  max-height: 100dvh;
-  aspect-ratio: 9 / 16;
-  display: grid;
-  grid-template-rows: auto auto 1fr auto auto;
-  gap: 16px;
-  padding: calc(16px + env(safe-area-inset-top)) var(--pad) calc(16px + env(safe-area-inset-bottom));
-  background: linear-gradient(#1c3a2d, #12110f 60%); /* 민트 기운에서 따뜻한 검정으로 */
-}
-.segs {
-  display: flex;
-  gap: 6px;
-}
-.segs i {
-  flex: 1;
-  height: 4px;
-  border-radius: 2px;
-  background: linear-gradient(to right, var(--ink) calc(var(--p, 0) * 100%), var(--line) 0);
-}
-.speaker {
-  align-self: center;
-  display: grid;
-  justify-items: center;
-  gap: 16px;
-}
-.speaker .avatar {
-  width: 180px;
-  height: 180px;
-  font-size: 80px;
-  transition: box-shadow 0.2s;
-}
-.speaker.on .avatar {
-  box-shadow: 0 0 0 10px var(--accent);
-}
-.speaker.on .what {
-  color: var(--accent);
-}
-.short .cue {
-  min-height: 3.2em;
-  margin: 0;
-  padding: 16px;
-  border-radius: var(--r-card);
-  background: var(--surface);
-  text-align: center;
-  font-size: 20px;
-  font-weight: 700;
-  line-height: 1.4;
-}
-.short .row > button {
-  flex: 1;
-}
+.short-shell { width: min(100%, 480px); height: 100dvh; min-height: 0; display: grid; grid-template-rows: auto 3px minmax(0, 1fr) auto; gap: 8px; padding: max(8px, env(safe-area-inset-top)) 16px max(8px, env(safe-area-inset-bottom)); background: var(--bg); }
+.short-movie { display: flex; justify-content: center; align-items: center; min-height: 0; overflow: hidden; touch-action: none; }
+.short-film { display: block; width: auto; height: 100%; max-width: 100%; object-fit: contain; aspect-ratio: 9 / 16; }
+.short-controls { display: grid; gap: 5px; }
+.short-controls > .short-state { text-align: center; font-size: 12px; min-height: 18px; }
+.segs { display: flex; gap: 5px; }
+.segs i { flex: 1; height: 3px; border-radius: 2px; background: linear-gradient(to right, var(--accent) calc(var(--p, 0) * 100%), var(--line) 0); }
+.short-top { display: flex; align-items: center; gap: 12px; }
+.short-top > .what { flex: 1; }
+.short-count, .short-time, .short-state { font-size: 13px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.short button { background: var(--surface-2); color: var(--ink); min-width: 48px; min-height: 44px; font-size: 14px; }
+.short button:disabled { opacity: .4; }
+.short .short-close { border-radius: 50%; width: 48px; padding: 0; }
+.short-transport { display: flex; align-items: center; gap: 12px; }
+.short-transport .short-play { background: var(--accent-fill); color: var(--on-accent); min-width: 88px; }
+.short-time { flex: 1; text-align: center; }
+.short-pages { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.short-pages span { font-size: 12px; color: var(--ink-2); }
+.short-pages button { background: none; padding: 3px 12px; min-height: 32px; }
+.film-export { display: grid; gap: 6px; }
+.film-actions { display: flex; gap: 8px; }
+.film-actions > button { flex: 1; }
+.short button.short-make { background: var(--accent-fill); color: var(--on-accent); }
+.film-note { color: var(--ink-2); font-size: 11px; line-height: 1.5; text-align: center; }
+.film-progress { width: 100%; height: 4px; border: 0; border-radius: 4px; accent-color: var(--accent-fill); }
+.film-progress::-webkit-progress-bar { background: var(--surface-2); border-radius: 4px; }
+.film-progress::-webkit-progress-value { background: var(--accent-fill); border-radius: 4px; }
+.short button.short-existing-share { min-height: 30px; padding: 3px; color: var(--ink-2); background: none; font-size: 12px; }
+.short-options { display: flex; justify-content: space-between; gap: 12px; }
+.short [hidden] { display: none; }
 
 /* 동승 연결 QR(#71). 카메라가 읽게 테마와 관계없이 흰 바탕·검은 칸(T20 개편도 이 색을 유지) */
 .qr {
@@ -701,4 +673,103 @@ input[type="file"]::file-selector-button {
   font: inherit;
   font-weight: 700;
   cursor: pointer;
+}
+
+/* 홈은 연결과 보관함, 여행 안에서는 여행·대화·쇼츠로 같은 목적지를 유지한다. */
+.home-view { gap: 28px; padding-bottom: 32px; }
+.home-view .top { margin-bottom: 4px; }
+.home-view .top > .meta { font-size: 12px; }
+.home-intro { display: grid; gap: 20px; }
+.home-intro h1 { margin: 0; font-size: 32px; line-height: 1.3; letter-spacing: -.04em; }
+.home-intro > .sub { font-size: 15px; max-width: 32ch; }
+.home-profile { display: flex; flex-direction: column; align-items: flex-start; gap: 16px; }
+.home-profile > div { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+.home-profile h1 { margin-top: 4px; font-size: 28px; }
+.portrait-edit { position: relative; display: inline-flex; flex: none; align-items: center; justify-content: center; width: 88px; height: 88px; padding: 0; border-radius: 50%; background: none; }
+.portrait-edit .avatar { display: block; width: 88px; height: 88px; }
+.portrait-pencil { position: absolute; right: -2px; bottom: -2px; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; border: 3px solid var(--bg); background: var(--ink); color: var(--surface); }
+.portrait-pencil svg { width: 15px; height: 15px; }
+.home-section { display: grid; gap: 14px; }
+.home-section h2 { font-size: 18px; }
+.home-section .plain { font-size: 13px; min-height: 32px; }
+.home-entry { display: flex; align-items: center; gap: 14px; width: 100%; min-height: 100px; padding: 20px; border-radius: var(--r-card); text-align: left; background: var(--surface); color: var(--ink); }
+.entry-icon { width: 40px; height: 40px; flex: none; display: grid; place-items: center; background: var(--surface-2); border-radius: 14px; }
+.entry-icon svg { width: 23px; height: 23px; }
+.entry-copy { min-width: 0; display: grid; gap: 5px; flex: 1; }
+.entry-copy strong { font-size: 17px; font-weight: 650; }
+.entry-copy > span { font-size: 13px; color: var(--ink-2); font-weight: 400; }
+.entry-arrow { display: grid; place-items: center; width: 24px; flex: none; }
+.entry-arrow svg { width: 20px; height: 20px; }
+.ride-entry { background: var(--accent-soft); }
+.ride-entry .entry-icon { background: var(--accent-fill); color: var(--on-accent); }
+.ride-entry .entry-arrow { color: var(--accent); }
+.home-library { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.home-library .home-entry { display: grid; justify-items: start; align-content: start; gap: 18px; min-height: 156px; }
+.home-library .entry-arrow { display: none; }
+.home-library .entry-copy strong { font-size: 16px; }
+.home-library .entry-copy > span { font-size: 12px; }
+.home-first { padding: 24px 0; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 16px; }
+.home-first .avatar { width: 64px; height: 64px; }
+.home-first h2 { font-size: 16px; margin-bottom: 6px; }
+.home-first .meta { font-size: 13px; }
+.home-footer { margin-top: 4px; text-align: center; color: var(--ink-2); font-size: 12px; }
+.profile-photo { display: grid; justify-items: center; gap: 16px; padding: 16px 0 12px; }
+.profile-photo .portrait-edit, .profile-photo .avatar { width: 112px; height: 112px; }
+.profile-photo .portrait-pencil { width: 34px; height: 34px; }
+.visually-hidden { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important; overflow: hidden !important; clip-path: inset(50%); white-space: nowrap; border: 0 !important; }
+.journey-tabs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; padding: 4px; border-radius: 16px; background: var(--surface-2); }
+.journey-tabs button { min-height: 48px; background: none; color: var(--ink-2); border-radius: 12px; }
+.journey-tabs button.selected { background: var(--surface); color: var(--ink); box-shadow: 0 1px 3px rgb(0 0 0 / .05); }
+
+/* 녹취는 고정 머리·메뉴·바닥 안에서만 스크롤한다. 대화 입력창은 두지 않는다. */
+.conversations-dialog { width: min(100%, 520px); height: 100dvh; max-height: 100dvh; max-width: 520px; margin: 0 auto; padding: 0; border-radius: 0; background: var(--bg); overflow: hidden; }
+.conversations-dialog[open] { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; animation: none; }
+.conversation-heading { display: flex; align-items: center; gap: 14px; padding: max(12px, env(safe-area-inset-top)) 20px 14px; background: var(--surface); }
+.conversation-heading .grow { min-width: 0; }
+.conversation-heading h1 { margin: 0; font-size: 19px; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conversation-heading .meta { font-size: 12px; margin-top: 3px; }
+.conversation-heading > .plain { font-size: 14px; min-width: 38px; }
+.record-state { flex: none; font-size: 12px; color: var(--ink-2); display: flex; align-items: center; gap: 6px; }
+.record-state.is-recording { color: var(--rec); }
+.record-state.is-recording::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.conversations-dialog .journey-tabs { margin: 12px 20px 4px; }
+.conversation-body { overflow-y: auto; overscroll-behavior: contain; min-height: 0; scroll-behavior: auto; }
+.conversation-list { display: grid; gap: 16px; padding: 24px 20px; }
+.section-label { font-size: 13px; color: var(--ink-2); }
+.conversation-session { display: flex; width: 100%; min-height: 116px; align-items: center; gap: 14px; padding: 20px 16px; background: var(--surface); color: var(--ink); text-align: left; border-radius: var(--r-card); }
+.session-faces { display: flex; width: 48px; height: 64px; position: relative; flex: none; }
+.session-faces .avatar { position: absolute; width: 40px; height: 40px; border: 2px solid var(--surface); }
+.session-faces .avatar:nth-child(2) { left: 10px; top: 22px; }
+.session-faces .avatar:nth-child(3) { left: 20px; top: 10px; }
+.session-copy { display: grid; gap: 7px; min-width: 0; flex: 1; }
+.session-copy strong { font-size: 16px; overflow-wrap: anywhere; }
+.session-preview { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; color: var(--ink-2); font-size: 13px; font-weight: 400; }
+.session-copy .meta { font-size: 11px; font-weight: 400; }
+.session-chevron { font-size: 25px; color: var(--ink-2); }
+.conversation-footnote { color: var(--ink-2); font-size: 12px; line-height: 1.7; padding-inline: 4px; }
+.conversation-thread { padding: 20px 20px 24px; display: grid; gap: 16px; }
+.conversation-date { justify-self: center; padding: 5px 14px; margin-bottom: 6px; border-radius: 999px; color: var(--ink-2); background: var(--surface-2); font-size: 12px; }
+.conversation-message { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
+.message-face { flex: none; width: 36px; }
+.message-face .avatar { display: block; width: 36px; height: 36px; }
+.message-content { max-width: calc(100% - 72px); min-width: 0; display: grid; justify-items: start; gap: 6px; }
+.message-name { color: var(--ink-2); font-size: 12px; }
+.message-bubble { padding: 13px 16px; border-radius: 4px 18px 18px 18px; background: var(--surface); font-size: 16px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+.message-time { color: var(--ink-2); font-size: 10px; font-variant-numeric: tabular-nums; padding-inline: 3px; }
+.conversation-message.mine { flex-direction: row-reverse; }
+.conversation-message.mine .message-content { justify-items: end; }
+.conversation-message.mine .message-bubble { background: var(--accent-soft); border-radius: 18px 4px 18px 18px; }
+.conversation-message.grouped { margin-top: -10px; }
+.conversation-message.grouped .message-bubble { border-radius: 18px; }
+.conversation-empty { min-height: 280px; display: grid; align-content: center; justify-items: center; gap: 18px; padding: 32px; text-align: center; }
+.conversation-empty .what { font-size: 16px; font-weight: 500; }
+.conversation-mark { font-size: 72px; line-height: .8; font-weight: 700; color: var(--accent); }
+.conversation-bottom { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 64px; padding: 8px 20px max(12px, env(safe-area-inset-bottom)); background: var(--surface); border-top: 1px solid var(--line); }
+.conversation-bottom .meta, .conversation-bottom .plain { font-size: 12px; }
+@media (max-width: 359px) {
+  .home-library { gap: 8px; }
+  .home-library .home-entry { padding: 16px; }
+  .conversation-heading { gap: 8px; padding-inline: 14px; }
+  .conversation-thread { padding-inline: 12px; }
+  .short-shell { padding-inline: 12px; }
 }

@@ -8,6 +8,8 @@ import { createShares, shareIconButton } from "/shares.js";
 import { createCaptions } from "/captions.js";
 import qrcode from "/qrcode.js";
 import { createRecords } from "/records.js";
+import { createConversations } from "/conversations.js";
+import { CHARACTER_OPTIONS, characterKey, characterImage, createShortFilm, exportShortFilm, recordingFormat } from "/short-film.js";
 
 const TRIP = {
   boarding: ["탑승 중", "모두 타면 운전자가 출발을 눌러요."],
@@ -32,19 +34,8 @@ const CONSENT = [
   "프로필로 참가한 사람은 자기 이름이 붙은 글을, 참가자 누구나 장면으로 남긴 소리를 바로 지울 수 있습니다.",
   "동의는 여행 중 언제든 끌 수 있고, 끄면 이 여행에서 그때까지 받아 적은 글과 올라간 소리가 모두 지워집니다.",
 ];
-// 프로필 캐릭터: 사진이 없을 때 보이는 원본 10종(디자인 1급 문서 11/14). 그림은 chars/<값>.svg, 꾸밈은 style.css의 .c-<값>.
-const CHARACTERS = [
-  ["basic", "기본"],
-  ["cap", "캡모자"],
-  ["glasses", "안경"],
-  ["travel", "여행"],
-  ["game", "게임"],
-  ["sport", "운동"],
-  ["pet", "반려동물"],
-  ["camping", "캠핑"],
-  ["office", "직장인"],
-  ["healing", "힐링"],
-];
+// 원본 말랑 10유형 × 큰·작은 전신 2종. API에는 20자 이내의 기존 character 값으로 저장합니다.
+const CHARACTERS = CHARACTER_OPTIONS;
 // 한 번 눌러 채우는 부탁: [단추 글자, 채울 문장, 언제]
 const QUICK = [
   ["화장실", "화장실 가고 싶어요", "now"],
@@ -70,6 +61,8 @@ const pdraft = { name: "", character: "", photo: null, preview: "", consentDefau
 let failed = ""; // 여행을 불러오지 못한 이유
 let offline = false;
 let stale = false; // 입력 중에 온 변경은 입력이 끝난 뒤 그린다
+let conversationPending = false;
+let savingProfile = false;
 let reading = false; // 여행 화면의 '동의 켜기': 켜기 전에 동의 문구 전문을 보이는 중
 const shares = createShares({
   getProfile: () => profile,
@@ -102,6 +95,32 @@ const records = createRecords({
   onSaved: () => refresh(true),
   onProfile: () => (location.hash = "me"),
 });
+
+const conversations = createConversations({
+  getTrip: () => trip,
+  getParticipant: () => trip?.participants.find((p) => p.id === myId()),
+  getToken: myToken,
+  request: (c, signal) => {
+    if (trip?.code !== c) return Promise.reject(new Error("여행이 바뀌었어요."));
+    return asMe(trip.participants.find((p) => p.id === myId()), (code, token) => api("GET", `/trips/${code}/transcript`, null, token, signal));
+  },
+  avatar: (person) => {
+    const mine = person?.profileId && person.profileId === profile?.id;
+    const fallback = ["basic", "cap", "glasses", "travel", "game"][Math.max(0, SEATS.findIndex(([seat]) => seat === person?.seat))];
+    return avatar(mine ? profile : { ...person, character: person?.character || fallback }, mine ? photo : "");
+  },
+  onCaptions: () => captions.open(),
+  onShorts: () => launchShort(),
+});
+const launchShort = () => {
+  const me = trip?.participants.find((p) => p.id === myId());
+  if (me) openShort(me).catch((e) => toast(e.status === 0 ? "연결이 끊겨서 열지 못했어요." : e.message));
+};
+const openConversations = () => {
+  if (trip?.code === code()) return conversations.open();
+  const last = store("trip");
+  if (last) { conversationPending = true; location.hash = last; }
+};
 
 // 프로필 다시 읽기. 지워졌거나 모르는 토큰이면 이 폰에서도 잊는다.
 async function loadProfile() {
@@ -181,7 +200,7 @@ async function refresh(force) {
       if (next) (trip = next), (failed = "");
       // 못 받았으면 다음 폴링에서 다시 한다. 그동안은 참가 화면이 보이고, 거기서 참가해도 같은 참가자로 들어간다.
       const claimed = await claim().catch(() => false);
-      if (!next && !claimed) return;
+      if (!next && !claimed) { conversations.sync(); if (short && Date.now() >= short.createdAt + 48 * 3600 * 1000) closeShort("보관 기간이 지나 숏폼을 닫았어요."); return; }
     } catch (e) {
       if (e.status === 0) {
         // 터널 같은 곳에서는 마지막 화면을 그대로 두고 계속 다시 묻는다
@@ -206,7 +225,9 @@ const form = (onsubmit, ...kids) => h("form", { className: "stack", onsubmit: (e
 const chip = (name, value, label, { sub, onpick, ...input } = {}) =>
   h("label", { className: "chip" }, h("input", { type: "radio", name, value, onchange: () => onpick?.(value), ...input }), label, sub && h("small", {}, sub));
 const chipGroup = (legend, name, options, current, onpick) =>
-  h("fieldset", {}, h("legend", {}, legend), h("div", { className: "chips" }, options.map(([v, label]) => chip(name, v, label, { checked: v === current, onpick }))));
+  h("fieldset", {}, h("legend", {}, legend), h("div", { className: `chips${name === "character" ? " character-options" : ""}` }, options.map(([v, label]) => name === "character"
+    ? h("label", { className: "chip character-option" }, h("input", { type: "radio", name, value: v, checked: v === current, onchange: () => onpick(v) }), characterImage(v), h("span", {}, label))
+    : chip(name, v, label, { checked: v === current, onpick }))));
 
 // 좌석 배치. 위가 차 앞쪽이다.
 const car = (seat, className = "car") =>
@@ -214,61 +235,88 @@ const car = (seat, className = "car") =>
 
 // 얼굴: 사진, 없으면 캐릭터 그림(style.css .c-*), 없으면 기본 그림
 // 캐릭터 값은 서버가 20자 문자열로만 받으므로, 목록에 있는 값만 클래스로 쓴다(다른 클래스가 섞이지 않게).
-const face = (c) => (CHARACTERS.some(([v]) => v === c) ? c : "basic");
-const avatar = (p, src) => h("span", { className: src ? "avatar" : `avatar c-${face(p?.character)}`, "aria-hidden": "true" }, src && h("img", { src, alt: "" }));
+const face = characterKey;
+const avatar = (p, src) => h("span", { className: src ? "avatar profile-picture" : "avatar character-avatar", "aria-hidden": "true" }, src ? h("img", { src, alt: "" }) : characterImage(face(p?.character)));
+
+// 작은 선 아이콘만 쓰고 캐릭터 원본을 장식 아이콘으로 대체하지 않는다.
+const uiIcon = (name) => {
+  const paths = {
+    pencil: "m16 3 5 5M4 20l4-1L21 6l-5-5L3 14l-1 7 7-1",
+    arrow: "M5 12h14m-6-6 6 6-6 6",
+    record: "M8 5h8a3 3 0 0 1 3 3v9a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3V8a3 3 0 0 1 3-3Zm1 5h6m-6 4h6M9 2v5m6-5v5",
+    play: "m9 5 11 7-11 7V5Z",
+    qr: "M3 3h6v6H3V3Zm12 0h6v6h-6V3ZM3 15h6v6H3v-6Zm12 0h2v2h4v4h-6v-6Z",
+  };
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  for (const [key, value] of Object.entries({ viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": "1.7", "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" })) svg.setAttribute(key, value);
+  const path = document.createElementNS(svg.namespaceURI, "path");
+  path.setAttribute("d", paths[name] || paths.arrow);
+  svg.append(path);
+  return svg;
+};
+const editPortrait = () => h("button", { type: "button", className: "portrait-edit", "aria-label": "내 사진과 프로필 편집", onclick: () => { location.hash = "me"; } }, avatar(profile, photo), h("span", { className: "portrait-pencil" }, uiIcon("pencil")));
+const journeyTabs = () => h("nav", { className: "journey-tabs", "aria-label": "여행 메뉴" },
+  h("button", { type: "button", className: "selected", "aria-current": "page" }, "여행"),
+  button("대화", () => conversations.open()),
+  button("쇼츠", launchShort),
+);
 
 function fillDraft() {
   URL.revokeObjectURL(pdraft.preview);
-  Object.assign(pdraft, { name: profile?.name ?? "", character: profile?.character ?? "", photo: null, preview: "", consentDefault: profile?.consentDefault ?? false });
+  Object.assign(pdraft, { name: profile?.name ?? "", character: profile?.character ?? "basic", photo: null, preview: "", consentDefault: profile?.consentDefault ?? false });
 }
 
-// 프로필 칸: 이름이나 별명, 사진이나 캐릭터. full이면 기록 동의 기본값까지.
+// 얼굴 자체가 사진 선택의 시작점이다. 이름은 얼굴 바로 아래에서 고친다.
 function profileFields(full) {
+  const repaint = () => app.querySelector(".profile-photo .avatar")?.replaceWith(avatar({ character: pdraft.character }, pdraft.preview || photo));
   const pick = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
     try {
-      pdraft.photo = await shrink(file);
-    } catch {
-      return toast("이 사진은 읽지 못했어요. 다른 사진을 골라 주세요.");
-    }
-    URL.revokeObjectURL(pdraft.preview);
-    pdraft.preview = URL.createObjectURL(pdraft.photo);
-    face();
+      const shrunk = await shrink(file);
+      if (!shrunk) throw new Error("사진을 읽지 못했어요.");
+      pdraft.photo = shrunk;
+      URL.revokeObjectURL(pdraft.preview);
+      pdraft.preview = URL.createObjectURL(shrunk);
+      repaint();
+    } catch { toast("이 사진은 읽지 못했어요. 다른 사진을 골라 주세요."); }
   };
-  // 얼굴만 다시 그린다(화면 전체를 다시 그리면 고른 파일 이름이 지워져 보인다)
-  const face = () => app.querySelector(".face .avatar")?.replaceWith(avatar({ name: pdraft.name, character: pdraft.character }, pdraft.preview || photo));
+  const file = h("input", { type: "file", accept: "image/*", className: "visually-hidden", "aria-label": "프로필 사진 선택", onchange: pick });
   return [
-    h("label", { className: "field" }, h("span", {}, "이름 또는 별명"), h("input", { value: pdraft.name, required: true, maxLength: 20, autocomplete: "nickname", oninput: (e) => (pdraft.name = e.target.value) })),
-    h(
-      "div",
-      { className: "card face" },
-      avatar({ name: pdraft.name, character: pdraft.character }, pdraft.preview || photo),
-      h("label", { className: "field grow" }, h("span", {}, "사진(고르면 캐릭터 대신 보여요)"), h("input", { type: "file", accept: "image/*", onchange: pick })),
+    h("div", { className: "profile-photo" },
+      h("button", { type: "button", className: "portrait-edit", "aria-label": "프로필 사진 선택", onclick: () => file.click() }, avatar({ character: pdraft.character }, pdraft.preview || photo), h("span", { className: "portrait-pencil" }, uiIcon("pencil"))),
+      file, h("p", { className: "meta" }, "사진을 누르면 바꿀 수 있어요"),
     ),
-    chipGroup("캐릭터", "character", CHARACTERS, pdraft.character, (v) => ((pdraft.character = v), face())),
-    full &&
-      h("label", { className: "chip" }, h("input", { type: "checkbox", checked: pdraft.consentDefault, onchange: (e) => (pdraft.consentDefault = e.target.checked) }), "참가할 때 대화 기록 동의를 미리 켜 둠"),
+    h("label", { className: "field" }, h("span", {}, "이름 또는 별명"), h("input", { value: pdraft.name, required: true, maxLength: 20, autocomplete: "nickname", placeholder: "함께 타는 사람들에게 보일 이름", oninput: (e) => (pdraft.name = e.target.value) })),
+    chipGroup("나를 닮은 캐릭터", "character", CHARACTERS, pdraft.character, (v) => { pdraft.character = v; repaint(); }),
+    full && h("label", { className: "chip" }, h("input", { type: "checkbox", checked: pdraft.consentDefault, onchange: (e) => (pdraft.consentDefault = e.target.checked) }), "다음 여행에서 기록 동의를 먼저 제안받기"),
   ];
 }
 
-const saveProfile = () =>
-  act(async () => {
-    const fresh = !store("profile");
-    const body = {
-      name: pdraft.name.trim(),
-      consentDefault: pdraft.consentDefault,
-      ...(pdraft.character && { character: pdraft.character }),
-    };
-    if (fresh) {
-      store("profile", (await api("POST", "/profiles", { ...body, device: "폰" })).token);
-      await loadProfile(); // 사진 올리기가 실패해도 다음 저장은 이 프로필을 고친다
-    } else await mine("PATCH", "/profiles/me", body);
-    if (pdraft.photo) await mine("PUT", "/profiles/me/photo", pdraft.photo);
-    await loadProfile();
-    toast("프로필을 저장했어요.");
-    location.hash = "";
-  });
+async function saveProfile() {
+  if (savingProfile) return;
+  if (!pdraft.name.trim()) return toast("함께 타는 사람들에게 보일 이름을 적어 주세요.");
+  savingProfile = true;
+  const control = document.getElementById("profile-save");
+  if (control) { control.disabled = true; control.textContent = "저장 중"; }
+  try {
+    await act(async () => {
+      const fresh = !store("profile");
+      const body = { name: pdraft.name.trim(), consentDefault: pdraft.consentDefault, ...(pdraft.character && { character: pdraft.character }) };
+      if (fresh) {
+        store("profile", (await api("POST", "/profiles", { ...body, device: "폰" })).token);
+        await loadProfile();
+      } else await mine("PATCH", "/profiles/me", body);
+      if (pdraft.photo) await mine("PUT", "/profiles/me/photo", pdraft.photo);
+      await loadProfile();
+      toast("프로필을 저장했어요.");
+      location.hash = "";
+    });
+  } finally {
+    savingProfile = false;
+    if (control?.isConnected) { control.disabled = false; control.textContent = "저장"; }
+  }
+}
 
 // 구글 로그인(OAuth 인증 코드). 새 로그인은 프로필 없이, 연결은 이 폰의 프로필 토큰과 함께 코드를 서버에 넘긴다.
 // 복귀 주소는 이 웹앱의 /oauth/google/callback(서버가 첫 화면을 준다). Client ID는 서버가 준다(GET /api/config, 웹에 박지 않음).
@@ -348,7 +396,7 @@ function profileView() {
         h("p", { className: "meta" }, "다른 폰에서 구글로 계속하면 이 프로필로 들어와요."),
         button("구글 연결 끊기", () => act(async () => (await mine("DELETE", "/profiles/me/links/google"), await loadProfile(), toast("구글 연결을 끊었어요."))), "plain"),
       ),
-    form(saveProfile, ...profileFields(true), bar(h("button", { className: "primary" }, "저장"))),
+    form(saveProfile, ...profileFields(true), bar(h("button", { id: "profile-save", className: "primary", disabled: savingProfile }, savingProfile ? "저장 중" : "저장"))),
     profile &&
       h(
         "section",
@@ -365,29 +413,35 @@ function profileView() {
 }
 
 function home() {
-  const last = store("trip"); // 이 폰이 마지막으로 들어간 여행
+  const last = store("trip");
+  const entry = (icon, title, detail, onclick, className = "") => h("button", { type: "button", className: `home-entry ${className}`, onclick },
+    h("span", { className: "entry-icon", "aria-hidden": "true" }, uiIcon(icon)),
+    h("span", { className: "entry-copy" }, h("strong", {}, title), h("span", {}, detail)),
+    h("span", { className: "entry-arrow", "aria-hidden": "true" }, uiIcon("arrow")),
+  );
   return [
-    header(h("span", { className: "brand" }, "가치타")),
-    h("h1", {}, "같이 탈 준비를 할까요?"),
-    profile && button("내 기록본", records.openFeed),
-    h("p", { className: "sub" }, "차가 이 폰의 동승 연결 QR을 읽으면 여행에 들어가요. 부탁과 기록은 그다음에 여기서 챙겨요."),
-    profile
-      ? h(
-          "section",
-          { className: "card face" },
-          avatar(profile, photo),
-          h("div", { className: "grow" }, h("p", { className: "what" }, `${profile.name} 님`), h("p", { className: "meta" }, "차에 탈 때 동승 연결 QR을 띄우면 돼요.")),
-          button("프로필", () => (location.hash = "me"), "plain"),
-        )
-      : h(
-          "section",
-          { className: "card" },
-          h("p", { className: "what" }, "프로필을 만들어 두세요"),
-          h("p", { className: "meta" }, "이름과 캐릭터를 정하면 동승 연결 QR을 띄울 수 있어요."),
-          button("프로필 만들기", () => (location.hash = "me")),
-        ),
-    profile && h("section", { className: "card" }, h("div", { className: "between" }, h("h2", {}, "동승자와 나눈 장면"), shareIconButton("share", "동승자와 나눈 장면 열기", () => shares.openList("received")))),
-    (profile || last) && bar(profile && button("동승 연결", startRide, "primary"), last && button("지금 탄 여행", () => (location.hash = last), profile ? "" : "primary")),
+    header(h("span", { className: "brand" }, "가치타"), h("span", { className: "meta" }, "함께 타고, 함께 남기고")),
+    h("section", { className: "home-intro" },
+      profile ? h("div", { className: "home-profile" }, editPortrait(), h("div", {}, h("p", { className: "meta" }, "오늘도 함께해요"), h("h1", {}, `${profile.name} 님`))) : h("h1", {}, "같이 탄 오늘,", h("br"), "함께 남겨요."),
+      h("p", { className: "sub" }, profile ? "차 안에서 나눈 이야기가 우리만의 기록이 돼요." : "이름과 얼굴을 정하고, 차에 QR을 보여 주세요."),
+    ),
+    profile ? entry("qr", "동승 연결", "차에 내 QR 보여주기", startRide, "ride-entry") : entry("pencil", "내 프로필 만들기", "사진 또는 캐릭터로 나를 소개해요", () => { location.hash = "me"; }, "ride-entry"),
+    last && h("section", { className: "home-section" },
+      h("div", { className: "between" }, h("h2", {}, "함께한 여행"), button("여행 열기", () => { location.hash = last; }, "plain")),
+      entry("record", "대화 기록", "최근에 탄 여행의 이야기를 이어 봐요", openConversations),
+    ),
+    profile && h("section", { className: "home-section" },
+      h("h2", {}, "내가 남긴 순간"),
+      h("div", { className: "home-library" },
+        entry("record", "내 기록본", "내가 한 말과 남긴 장면", records.openFeed),
+        entry("play", "나눈 장면", "동승자와 주고받은 기록", () => shares.openList("received")),
+      ),
+    ),
+    !last && h("section", { className: "home-first" },
+      avatar({ character: "travel" }),
+      h("div", {}, h("h2", {}, "첫 이야기를 기다리고 있어요"), h("p", { className: "meta" }, "차에 연결하면 대화 기록과 남긴 장면이 여기에 모여요.")),
+    ),
+    h("p", { className: "home-footer" }, "우리의 목소리로 남기는 여행"),
   ];
 }
 
@@ -556,7 +610,9 @@ function tripView(me) {
   };
 
   return [
-    header(h("span", { className: "brand" }, "가치타"), h("span", { className: "meta" }, trip.title || "가치타 여행")),
+    header(button("처음으로", () => { location.hash = ""; }, "plain"), h("span", { className: "brand" }, "가치타")),
+    h("h1", {}, trip.title || "함께 탄 여행"),
+    journeyTabs(),
     h(
       "section",
       { className: "card" },
@@ -596,13 +652,12 @@ function tripView(me) {
       // 이미 동의한 사람도 지금의 동의 문구(바뀐 것 포함)를 언제든 다시 본다
       h("details", {}, h("summary", { className: "meta" }, "동의 문구 보기"), h("ul", {}, CONSENT.map((line) => h("li", {}, line)))),
     ),
-    me.consent && myToken() && button("자막 확인하기", captions.open),
-    me.consent && myToken() && button("장면 후보 보기", records.openScenes),
+    me.consent && myToken() && h("div", { className: "row" }, button("장면 후보 보기", records.openScenes, "grow"), button("자막 수정", captions.open, "plain")),
     trip.moments.length > 0 &&
       h(
         "section",
         { className: "card" },
-        h("div", { className: "between" }, h("h2", {}, `남긴 장면 ${trip.moments.length}개`), me.consent && myToken() && button("숏폼 보기", () => openShort(me).catch((e) => toast(e.status === 0 ? "연결이 끊겨서 열지 못했어요." : e.message)))),
+        h("h2", {}, `남긴 장면 ${trip.moments.length}개`),
         !(me.consent && myToken()) && h("p", { className: "meta" }, "기록에 동의한 사람만 숏폼을 볼 수 있어요."),
         h(
           "ul",
@@ -622,47 +677,144 @@ function tripView(me) {
   ];
 }
 
-// 숏폼(T43): 서버가 구성한 장면 클립 소리와 자막 큐를 9:16 화면에 차례로 들려준다. 영상 파일은 만들지 않는다.
+// 서버 장면 클립·자막을 9:16 말랑 대화극으로 재생한다. 영상 만들기는 현재 장면을 실제 소리와 녹화한다.
 // 클립은 머리말 인증으로 받아 object URL로 튼다(토큰을 URL에 넣지 않음). 첫 재생은 사람이 누른다(자동 재생 막기).
 let short = null; // 보고 있는 구성 { title, cast, scenes, code, generation, at(지금 장면), clips(장면별 object URL 약속), started, req }
 const audio = new Audio(); // DOM 밖에 두어 화면을 다시 그려도 끊기지 않는다
+let openingShort;
+const shortReadReason = (s) => Date.now() >= s.createdAt + 48 * 3600 * 1000 ? "보관 기간이 지나 쇼츠를 닫았어요."
+  : trip?.code !== s.code || code() !== s.code ? "여행이 바뀌어 쇼츠를 닫았어요."
+  : !trip.participants.find((p) => p.id === s.participantId)?.consent || trip.generation !== s.generation ? "기록 동의가 바뀌어 쇼츠를 닫았어요."
+  : !myToken() || myToken() !== s.token ? "동승 연결을 다시 확인해 주세요." : "";
+const clearFilmFile = (s) => { if (s.fileUrl) URL.revokeObjectURL(s.fileUrl); s.fileUrl = null; s.file = null; };
+const cancelFilm = (s) => { s.exportJob?.abort(); s.exportJob = null; s.exportProgress = 0; };
+const checkFilmAccess = async (s, signal) => {
+  const control = new AbortController();
+  const cancel = () => control.abort();
+  signal.addEventListener("abort", cancel, { once: true });
+  if (signal.aborted) control.abort();
+  const timeout = setTimeout(cancel, 8000);
+  try {
+    if (shortReadReason(s) || offline) throw new Error("지금은 기록 권한을 확인할 수 없어요. 연결 후 다시 시도해 주세요.");
+    const data = await api("GET", `/trips/${s.code}/transcript`, null, s.token, control.signal);
+    if (data.generation !== s.generation || shortReadReason(s)) throw new Error("기록 동의가 바뀌어 영상 만들기를 멈췄어요.");
+  } finally { clearTimeout(timeout); signal.removeEventListener("abort", cancel); }
+};
+
+async function makeShortFilm(s) {
+  if (s.exportJob || short !== s || shortReadReason(s)) return;
+  const index = s.at;
+  const controller = s.exportJob = new AbortController();
+  s.exportError = ""; s.exportProgress = 0; clearFilmFile(s); audio.pause(); s.paint?.();
+  try {
+    const file = await exportShortFilm({ title: s.title, cast: s.cast, scene: s.scenes[index], signal: controller.signal,
+      canRead: () => short === s && s.exportJob === controller && s.at === index && !shortReadReason(s) && !offline,
+      checkAccess: (signal) => checkFilmAccess(s, signal),
+      getAudio: async (signal) => {
+        const response = await fetch(clipAddress(s, index), { signal, headers: { authorization: `Bearer ${s.token}` } });
+        if (!response.ok) throw new Error(`장면 소리를 받지 못했어요(${response.status}).`);
+        return response.arrayBuffer();
+      },
+      onProgress: (progress) => { if (s.exportJob === controller) { s.exportProgress = progress; s.paint?.(); } },
+    });
+    if (short !== s || s.exportJob !== controller || shortReadReason(s)) return;
+    s.file = file; s.fileUrl = URL.createObjectURL(file);
+  } catch (error) {
+    if (short === s && s.exportJob === controller) s.exportError = error.name === "AbortError" ? "영상 만들기를 취소했어요." : error.message;
+  } finally {
+    if (s.exportJob === controller) s.exportJob = null;
+    if (short === s) s.paint?.();
+  }
+}
+
+function saveShortFilm(s) {
+  if (!s.file || shortReadReason(s)) return;
+  const link = h("a", { href: s.fileUrl, download: s.file.name });
+  document.body.append(link); link.click(); link.remove();
+}
+async function shareShortFilm(s) {
+  if (!s.file || shortReadReason(s)) return;
+  if (!navigator.canShare?.({ files: [s.file] })) { s.exportError = "이 브라우저는 파일 공유를 지원하지 않아요. 영상을 저장해 공유해 주세요."; s.paint?.(); return; }
+  try { await navigator.share({ files: [s.file], title: s.scenes[s.at].label || "가치타 쇼츠" }); }
+  catch (error) { if (error.name !== "AbortError") { s.exportError = "공유를 마치지 못했어요. 영상을 저장해 다시 공유해 주세요."; s.paint?.(); } }
+}
 
 async function openShort(me) {
   const c = trip.code;
   const generation = trip.generation;
-  const data = await asMe(me, (code, token) => api("GET", `/trips/${code}/shortform`, null, token)).catch((e) => {
+  if (!me.consent || !myToken()) return toast("기록에 동의한 사람만 숏폼을 볼 수 있어요.");
+  openingShort?.abort();
+  const opening = openingShort = new AbortController();
+  const data = await asMe(me, (code, token) => api("GET", `/trips/${code}/shortform`, null, token, opening.signal)).catch((e) => {
     throw e.status === 401 || e.status === 403 ? new Error("기록에 동의한 사람만 숏폼을 볼 수 있어요.") : e;
   });
-  if (trip?.code !== c || trip.generation !== generation) return; // 기다리는 사이 다른 여행으로 옮겼거나 동의가 바뀌었다
+  if (opening.signal.aborted || trip?.code !== c || trip.generation !== generation || data.generation !== generation) return;
   if (!data.scenes.length) return toast("아직 숏폼으로 만들 장면 클립이 없어요.");
   // 연 때의 여행·동의 세대를 남긴다: 보는 사이 바뀌면 render()가 닫는다
-  short = { ...data, code: c, generation, at: 0, clips: [], started: false, req: 0 };
+  if (short) closeShort();
+  short = { ...data, code: c, generation, participantId: me.id, token: myToken(), createdAt: trip.createdAt, at: 0, clips: [], started: false, req: 0, controller: new AbortController() };
+  short.film = createShortFilm({ title: short.title, cast: short.cast });
+  const current = short;
+  const animate = () => {
+    if (short !== current) return;
+    const reason = shortReadReason(current);
+    if (reason) return closeShort(reason);
+    current.film.draw(current.scenes[current.at], current.exportJob ? current.exportProgress * current.scenes[current.at].seconds : current.started ? audio.currentTime : 0, Boolean(current.exportJob) || !audio.paused);
+    current.frame = requestAnimationFrame(animate);
+  };
+  current.frame = requestAnimationFrame(animate);
+  current.fileGuard = setInterval(async () => {
+    if (!current.file || current.checkingFile || short !== current) return;
+    current.checkingFile = true;
+    try { await checkFilmAccess(current, current.controller.signal); }
+    catch { if (short === current) { clearFilmFile(current); current.exportError = "기록 권한을 확인할 수 없어 만든 영상을 비웠어요."; current.paint?.(); } }
+    finally { current.checkingFile = false; }
+  }, 2000);
+  audio.muted = false;
   render();
 }
 // 장면 소리를 머리말 인증으로 받아 object URL로. 실패하면 그 자리를 비워 연결이 돌아오면 다시 받는다.
-const clip = (s, i) =>
-  (s.clips[i] ??= fetch(s.scenes[i].clip, { headers: { authorization: `Bearer ${store(`${s.code}:token`)}` } })
+const clipAddress = (s, i) => {
+  const url = new URL(s.scenes[i].clip, location.origin);
+  if (url.origin !== location.origin || url.pathname !== `/api/trips/${s.code}/recordings/${s.scenes[i].momentId}` || url.search || url.hash) throw new Error("장면 소리 주소를 확인하지 못했어요.");
+  return url;
+};
+const clip = async (s, i) => {
+  return (s.clips[i] ??= fetch(clipAddress(s, i), { headers: { authorization: `Bearer ${s.token}` }, signal: s.controller.signal })
     .then((r) => (r.ok ? r.blob() : Promise.reject(new Error(`장면 소리를 받지 못했어요(${r.status}).`))))
     .then((b) => URL.createObjectURL(b))
     .catch((e) => {
       s.clips[i] = null;
       throw e instanceof TypeError ? Object.assign(new Error("연결이 끊겨서 소리를 받지 못했어요."), { status: 0 }) : e;
     }));
+};
 async function playScene(i) {
   const s = short;
+  if (!s || s.exportJob || i < 0 || i >= s.scenes.length) return;
+  if (shortReadReason(s)) return closeShort(shortReadReason(s));
+  if (Date.now() >= s.createdAt + 48 * 3600 * 1000) return closeShort("보관 기간이 지나 숏폼을 닫았어요.");
   const req = ++s.req; // 늦게 끝난 옛 받기가 새 재생의 소리를 덮지 않게 마지막 요청만 튼다
-  if (!s.started) ((s.started = true), render()); // '재생' 단추가 '다시 보기'로 바뀐다
-  const url = await clip(s, i);
-  if (short !== s || s.req !== req) return; // 받는 사이 닫았거나 다른 장면을 틀었다
-  // 소리를 받은 뒤에 장면과 소리를 함께 바꾼다: 받기에 실패하면 지금 장면에 머물러 자막과 소리가 어긋나지 않는다
-  s.at = i;
-  audio.src = url;
+  s.loading = true;
   s.paint?.();
-  await audio.play();
-  if (i + 1 < s.scenes.length) clip(s, i + 1).catch(() => {}); // 다음 장면을 미리 받는다
+  try {
+    const url = await clip(s, i);
+    if (short !== s || s.req !== req) return; // 받는 사이 닫았거나 다른 장면을 틀었다
+    // 소리를 받은 뒤에 장면과 소리를 함께 바꾼다: 받기에 실패하면 지금 장면에 머물러 자막과 소리가 어긋나지 않는다
+    if (s.at !== i) { clearFilmFile(s); s.exportError = ""; }
+    s.at = i;
+    s.started = true;
+    audio.src = url;
+    s.paint?.();
+    await audio.play();
+    if (i + 1 < s.scenes.length) clip(s, i + 1).catch(() => {}); // 다음 장면을 미리 받는다
+  } finally {
+    if (short === s && s.req === req) { s.loading = false; s.paint?.(); }
+  }
 }
 const playing = (i) => playScene(i).catch((e) => toast(e.message));
 function closeShort(message) {
+  openingShort?.abort();
+  if (short) { cancelFilm(short); clearFilmFile(short); short.controller.abort(); clearInterval(short.fileGuard); cancelAnimationFrame(short.frame); short.film.dispose(); }
   audio.pause();
   audio.removeAttribute("src");
   for (const u of short?.clips ?? []) u?.then(URL.revokeObjectURL, () => {});
@@ -671,63 +823,105 @@ function closeShort(message) {
   render();
 }
 audio.ontimeupdate = () => short?.paint?.();
+audio.onplay = audio.onpause = audio.onvolumechange = () => short?.paint?.();
 audio.onended = () => short && (short.at + 1 < short.scenes.length ? playing(short.at + 1) : short.paint?.());
-// 말한 사람을 못 붙인 큐는 이름을 짓지 않고 자리만 적는다(after-trip.md)
-const spot = (seat) => (SEAT[seat] ? `${SEAT[seat]} 자리` : seat?.startsWith("ROW_1") ? "앞줄" : seat?.startsWith("ROW_2") ? "뒷줄" : "누군가");
-
 function shortView() {
   const s = short;
   const segs = s.scenes.map(() => h("i"));
-  const count = h("span", { className: "meta" });
-  const face = h("div", { className: "speaker" });
-  const line = h("p", { className: "cue", "aria-live": "polite" });
-  // 소리 시각에 맞춰 바뀌는 곳만 고친다(단추를 다시 만들지 않게)
+  const count = h("span", { className: "short-count" });
+  const clock = h("span", { className: "short-time" });
+  const status = h("p", { className: "short-state", role: "status" });
+  const caption = h("p", { className: "visually-hidden", "aria-live": "polite" });
+  const toggle = () => s.loading || s.exportJob ? undefined : !s.started || audio.ended ? playing(s.at) : audio.paused ? audio.play().catch((e) => toast(e.message)) : audio.pause();
+  const playControl = button("재생", toggle, "short-play");
+  const mute = button("음소거", () => { audio.muted = !audio.muted; });
+  const prev = button("이전", () => playing(s.at - 1));
+  const next = button("다음", () => playing(s.at + 1));
+  prev.setAttribute("aria-label", "이전 쇼츠"); next.setAttribute("aria-label", "다음 쇼츠");
+  const make = button("영상 만들기", () => makeShortFilm(s), "short-make");
+  const cancel = button("취소", () => { cancelFilm(s); s.exportError = "영상 만들기를 취소했어요."; s.paint?.(); });
+  const save = button("영상 저장", () => saveShortFilm(s), "short-make");
+  const share = button("공유", () => shareShortFilm(s));
+  const progress = h("progress", { className: "film-progress", max: 1, value: 0, "aria-label": "영상 만드는 중" });
+  const exportNote = h("p", { className: "film-note", role: "status" });
+  const actions = h("div", { className: "film-actions" }, make, cancel, save, share);
+  const supported = Boolean(recordingFormat() && (globalThis.AudioContext || globalThis.webkitAudioContext) && HTMLCanvasElement.prototype.captureStream);
+  const elapsed = (seconds) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
   s.paint = () => {
-    const scene = s.scenes[s.at];
-    const t = s.started ? audio.currentTime : 0;
+    const scene = s.scenes[s.at], exporting = Boolean(s.exportJob);
+    const t = exporting ? s.exportProgress * scene.seconds : s.started ? audio.currentTime : 0;
     segs.forEach((el, i) => el.style.setProperty("--p", i < s.at ? 1 : i > s.at ? 0 : Math.min(1, t / scene.seconds)));
     count.textContent = `${s.at + 1} / ${s.scenes.length}`;
-    const cue = s.started && scene.cues.find((c) => c.start <= t && t < c.end);
-    const who = cue && s.cast.find((c) => c.participantId === cue.participantId);
-    const key = cue ? (who?.participantId ?? cue.seatArea ?? "?") : "";
-    if (face.dataset.key !== key || !face.firstChild) {
-      face.dataset.key = key;
-      face.className = `speaker${cue ? " on" : ""}`;
-      face.replaceChildren(avatar(who ?? { name: "?" }), h("p", { className: "what" }, cue ? (who?.name ?? spot(cue.seatArea)) : scene.label || "장면"));
-    }
-    line.textContent = cue ? `“${cue.text}”` : "";
+    clock.textContent = `${elapsed(t)} / ${elapsed(scene.seconds)}`;
+    status.textContent = s.loading ? "장면 소리를 불러오고 있어요" : exporting ? `영상 만드는 중 · ${Math.round(s.exportProgress * 100)}%` : !s.started ? "우리의 목소리를 말랑 쇼츠로" : audio.ended ? "다시 듣고 싶은 순간" : audio.paused ? "잠시 멈춤" : "원래 목소리로 재생 중";
+    playControl.textContent = s.loading ? "불러오는 중" : !s.started ? "재생" : audio.ended ? "다시 보기" : audio.paused ? "이어 듣기" : "일시정지";
+    playControl.disabled = Boolean(s.loading || exporting); playControl.setAttribute("aria-label", playControl.textContent);
+    mute.textContent = audio.muted ? "소리 켜기" : "음소거"; mute.setAttribute("aria-pressed", String(audio.muted)); mute.disabled = exporting;
+    prev.disabled = exporting || s.at === 0; next.disabled = exporting || s.at === s.scenes.length - 1;
+    make.hidden = exporting || Boolean(s.file); make.disabled = !supported || Boolean(s.loading);
+    cancel.hidden = !exporting; save.hidden = share.hidden = !s.file;
+    share.disabled = Boolean(s.file && !navigator.canShare?.({ files: [s.file] }));
+    progress.hidden = !exporting; progress.value = s.exportProgress || 0;
+    const format = s.file?.type.startsWith("video/mp4") ? "MP4" : "WebM";
+    exportNote.textContent = s.exportError || (exporting ? "소리와 함께 만드는 중이에요. 이 화면을 유지해 주세요." : s.file ? `${format} 영상이 준비됐어요.${share.disabled ? " 저장한 뒤 다른 앱에서 공유할 수 있어요." : ""}` : !supported ? "이 브라우저는 영상 만들기를 지원하지 않아요." : "현재 장면을 소리와 함께 만들어요.");
+    const cue = scene.cues.find((c) => c.start <= t && t < c.end);
+    const spoken = cue?.text || "";
+    if (caption.textContent !== spoken) caption.textContent = spoken;
+    s.film.draw(scene, t, exporting || !audio.paused);
   };
   s.paint();
-  return [
-    h(
-      "section",
-      { className: "short", "aria-label": "숏폼 재생" },
-      h(
-        "div",
-        { onclick: (e) => s.started && !e.target.closest("button") && (audio.paused ? audio.play() : audio.pause()) },
-        h("div", { className: "segs", "aria-hidden": "true" }, segs),
-        h("div", { className: "between" }, h("span", { className: "what" }, s.title || trip?.title || "가치타 여행"), count),
-        face,
-        line,
-        h("div", { className: "row" }, s.started ? button("다시 보기", () => playing(0)) : button("▶ 재생", () => playing(0), "primary"), button("닫기", () => closeShort(), s.started ? "primary" : "")),
+  let pointer;
+  const movie = h("div", {
+    className: "short-movie", tabIndex: 0, "aria-label": "가공한 쇼츠. 위아래로 넘기거나 방향키로 장면을 바꿀 수 있어요.",
+    onpointerdown: (e) => { if (!s.exportJob) pointer = { x: e.clientX, y: e.clientY }; },
+    onpointerup: (e) => {
+      if (!pointer || s.exportJob) return;
+      const dx = e.clientX - pointer.x, dy = e.clientY - pointer.y; pointer = null;
+      if (Math.abs(dy) > 55 && Math.abs(dy) > Math.abs(dx)) playing(s.at + (dy < 0 ? 1 : -1));
+      else if (Math.abs(dx) < 12 && Math.abs(dy) < 12) toggle();
+    },
+    onpointercancel: () => { pointer = null; },
+    onkeydown: (e) => {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); playing(s.at + (e.key === "ArrowDown" ? 1 : -1)); }
+      if (e.key === " " || e.key === "Enter") { e.preventDefault(); toggle(); }
+      if (e.key === "Escape") closeShort();
+    },
+  }, s.film.canvas, caption);
+  const editConversation = button("대화·자막 수정", () => { closeShort(); conversations.open(); }, "short-existing-share");
+  const connectedShare = profile && trip?.participants.find((p) => p.id === s.participantId)?.profileId === profile.id
+    ? button("동승자에게 장면 공유", () => { closeShort(); shares.openCompose(); }, "short-existing-share") : null;
+  return [h("section", { className: "short", "aria-label": "가공한 쇼츠 재생과 공유" },
+    h("div", { className: "short-shell" },
+      h("header", { className: "short-top" }, h("span", { className: "what" }, "추천 쇼츠"), count, button("닫기", () => closeShort(), "short-close")),
+      h("div", { className: "segs", "aria-hidden": "true" }, segs),
+      movie,
+      h("div", { className: "short-controls" },
+        status,
+        h("div", { className: "short-transport" }, playControl, clock, mute),
+        h("div", { className: "short-pages" }, prev, h("span", {}, "위아래로 넘겨 보세요"), next),
+        h("div", { className: "film-export" }, progress, actions, exportNote), h("div", { className: "short-options" }, editConversation, connectedShare),
       ),
     ),
-  ];
+  )];
 }
 
 function render() {
   shares.sync();
   captions.sync();
   records.sync();
+  conversations.sync();
   stale = false;
   const me = trip?.participants.find((p) => p.id === myId());
   if (me) store("trip", trip.code); // 처음 화면의 '지난 여행 열기'
   else if (failed && store("trip") === code()) store("trip", null);
   // 숏폼은 기록에 동의한 사람만 본다. 보는 사이 여행이 사라지거나 동의가 꺼지면(세대가 오름) 닫고 받은 소리를 버린다.
-  const gone = short && (failed || trip?.code !== short.code ? "여행을 더 볼 수 없어 숏폼을 닫았어요." : !me?.consent || trip.generation !== short.generation ? "기록 동의가 바뀌어 숏폼을 닫았어요." : "");
+  const gone = short && (Date.now() >= short.createdAt + 48 * 3600 * 1000 ? "보관 기간이 지나 숏폼을 닫았어요." : failed || trip?.code !== short.code ? "여행을 더 볼 수 없어 숏폼을 닫았어요." : !me?.consent || trip.generation !== short.generation ? "기록 동의가 바뀌어 숏폼을 닫았어요." : "");
   if (gone) return closeShort(gone);
   const view = short ? shortView() : location.hash === "#me" ? profileView() : !code() ? (ride ? rideView() : home()) : failed ? missing() : !trip ? loading() : !me ? notHere() : asking(me) || reading ? consentView(me) : tripView(me);
+  app.classList.toggle("home-view", !short && !code() && !ride && location.hash !== "#me");
   app.replaceChildren(...view.flat().filter(Boolean));
+  if (conversationPending && me && !asking(me) && !reading) { conversationPending = false; conversations.open(); }
+  if (failed || (trip && !me)) conversationPending = false;
 }
 
 // 부탁 남기기 시트는 한 번만 채운다
@@ -760,7 +954,7 @@ function render() {
   };
 }
 
-addEventListener("hashchange", () => ((reading = false), short && closeShort(), location.hash === "#me" && fillDraft(), (trip = null), (failed = ""), refresh(true)));
+addEventListener("hashchange", () => (openingShort?.abort(), (reading = false), short && closeShort(), location.hash === "#me" && fillDraft(), (trip = null), (failed = ""), refresh(true)));
 app.addEventListener("focusout", () => setTimeout(() => stale && !typing() && render())); // 입력이 끝나면 밀린 변경을 그린다
 setInterval(refresh, 2000); // ponytail: 2초마다 묻는다(바뀐 게 없으면 304). 지연이 문제가 되면 SSE로 바꾼다.
 setInterval(pollRide, 2000); // 동승 연결 QR을 띄워 둔 동안만 묻는다

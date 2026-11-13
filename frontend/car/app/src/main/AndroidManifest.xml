@@ -1,7 +1,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+ <queries>
+  <package android:name="ai.umos.maps.android.navigation.app" />
+ </queries>
  <uses-feature android:name="android.hardware.type.automotive" android:required="true" />
  <uses-permission android:name="android.permission.INTERNET" />
  <uses-permission android:name="pleos.car.permission.CAR_DRIVE" />
+ <uses-permission android:name="pleos.car.permission.CAR_SEATS" /> <!-- 차의 좌석 영역과 앉음 여부(SEAT_OCCUPANCY)로 좌석 지도를 그림(T83). 보호 수준 normal -->
  <uses-permission android:name="pleos.car.permission.NAVI_ROUTE" />
  <uses-permission android:name="pleos.car.permission.NAVI_ROUTE_SEARCH" /> <!-- 경로 요청·경유지 추가(requestRoute, addWaypoint)에 필요. 없으면 SecurityException(T9 에뮬레이터) -->
  <uses-permission android:name="pleos.car.permission.TTS_SERVICE" />
