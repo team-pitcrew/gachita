@@ -429,7 +429,7 @@ class MainActivity : ComponentActivity() {
     private fun enroll(p: Person) {
         val token = tokens[p.id] ?: return
         val code = s.trip?.code ?: return
-        if (!CaptureService.running || enrolling != null || Live.enroll != null) return
+        if (!CaptureService.running || muted || enrolling != null || Live.enroll != null) return // Gleo에 마이크를 넘긴 동안(T41)은 모을 소리가 없다
         val buf = java.io.ByteArrayOutputStream()
         val now = System.currentTimeMillis()
         Live.quiet = (now - 1_000)..(now + ENROLL_MS + 1_500)
