@@ -191,29 +191,29 @@
 
     # ---------------------------------------------------------------- 4 oidc
     # 발급자 문서(.well-known/openid-configuration)는 내용이 정해져 있어 Terraform 남는 묶음이 올린다(IAM이 서버보다 먼저 읽음).
-    - name: "[4/7 oidc] 공개 키"
-      ansible.builtin.command: kubectl get --raw /openid/v1/jwks
-      register: jwks
-      changed_when: false
-      tags: [oidc]
-
-    - name: "[4/7 oidc] S3에 올리기(서버를 새로 만들면 키가 바뀌므로 매번)"
+    # 공개 키는 셸에서 그대로 흘려 올린다. Ansible 변수로 넘기면 JSON 문자열이 사전으로 바뀌었다가 파이썬 표기로 올라간다
+    # (11/13 실제 계정에서 그렇게 올라가 파드가 역할을 받지 못할 뻔함).
+    - name: "[4/7 oidc] 공개 키를 S3에 올리기(서버를 새로 만들면 키가 바뀌므로 매번)"
       ansible.builtin.shell: >-
-        printf '%s' "$DOC" | aws s3 cp - "s3://{{ oidc_bucket }}/openid/v1/jwks"
+        set -o pipefail;
+        kubectl get --raw /openid/v1/jwks | aws s3 cp - "s3://{{ oidc_bucket }}/openid/v1/jwks"
         --region {{ region }} --content-type application/json --cache-control no-cache
-      environment:
-        DOC: "{{ jwks.stdout }}"
+      args:
+        executable: /bin/bash
       changed_when: false
       tags: [oidc]
 
-    - name: "[4/7 oidc] 공개 주소의 키가 클러스터의 키와 같은지"
-      ansible.builtin.uri:
-        url: "{{ oidc_issuer }}/openid/v1/jwks"
-        return_content: true
-      register: public_jwks
-      until: public_jwks.json is defined and public_jwks.json == (jwks.stdout | from_json)
+    - name: "[4/7 oidc] 공개 주소의 키가 클러스터의 키와 같은지(JSON으로 비교)"
+      ansible.builtin.shell: >-
+        set -o pipefail;
+        diff <(curl -sf "{{ oidc_issuer }}/openid/v1/jwks" | jq -S .) <(kubectl get --raw /openid/v1/jwks | jq -S .)
+      args:
+        executable: /bin/bash
+      register: jwks_same
+      until: jwks_same.rc == 0
       retries: 10
       delay: 3
+      changed_when: false
       tags: [oidc]
 
     - name: "[4/7 oidc] 끝"
