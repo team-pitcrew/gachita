@@ -91,6 +91,8 @@ private const val OFFER_MS = 30_000L // 제안에 답이 없으면 보관으로 
 
 class MainActivity : ComponentActivity() {
     private val io = Executors.newSingleThreadExecutor()
+    private val clipIo = Executors.newSingleThreadExecutor() // 장면 클립 올리기(T63). 동의 끄기 요청이 클립 묶음 뒤에 서지 않게 따로
+    @Volatile private var clipsAllowed = false // 모두 동의했고 끄기 대기가 없음. 클립을 하나 올릴 때마다 본다
     private val main = Handler(Looper.getMainLooper())
     private lateinit var prefs: SharedPreferences
     private lateinit var car: Car
@@ -107,6 +109,7 @@ class MainActivity : ComponentActivity() {
             if (v.offPending != state.offPending || v.started != state.started)
                 prefs.edit().putBoolean("offPending", v.offPending).putBoolean("started", v.started).commit()
             state = v
+            clipsAllowed = v.consented && !v.offPending // 끄면 남은 클립을 더 올리지 않는다
             syncCapture() // 동의가 빠졌으면 수음을 먼저 멈춘다
             v.trip?.let { t ->
                 val box = Live.outbox(this, t.code)
@@ -260,7 +263,7 @@ class MainActivity : ComponentActivity() {
         main.removeCallbacksAndMessages(null) // 조회, 제안 시간 초과, 결과 카드 닫기
         if (Live.onHeard == ::heard) Live.onHeard = null
         if (!isChangingConfigurations) { handoff.stop(); CaptureService.stop(this) } // 동의를 확인할 화면이 없어지면 수음도 멈춘다
-        car.stop(); io.shutdown(); super.onDestroy()
+        car.stop(); io.shutdown(); clipIo.shutdownNow(); super.onDestroy()
     }
 
     /** 통신은 한 줄로 차례대로 돌리고 결과만 메인 스레드로 돌려받는다. */
@@ -362,10 +365,15 @@ class MainActivity : ComponentActivity() {
         if (todo.isEmpty()) return
         clipping = true
         val url = server; val dir = filesDir
-        bg({
+        val done2: (Result<Unit>) -> Unit = { r ->
+            clipping = false
+            r.exceptionOrNull()?.let { clipsAfter = System.currentTimeMillis() + 5 * 60_000; Log.i(TAG, "클립 올리기 미룸 ${if (it is ApiError) it.status else "연결"}") }
+        }
+        if (!clipIo.isShutdown) clipIo.execute { val r = runCatching {
             val api = Server(url)
             val files = RawFile.of(dir, t.code)
             for (m in todo) {
+                if (!clipsAllowed) break // 그사이 동의를 껐으면(철회) 남은 클립은 올리지 않는다
                 val w = m.window
                 val f = clipFile(files, w)
                 val pcm = f?.let { runCatching { it.cut(Live.seal(this), w.first, w.last) }.getOrNull() }
@@ -377,10 +385,7 @@ class MainActivity : ComponentActivity() {
                     if (e.status in listOf(400, 404, 409, 413)) { log.add(m.id); Log.i(TAG, "장면 ${m.id} 클립 버림 ${e.status}") } else throw e
                 }
             }
-        }) { r ->
-            clipping = false
-            r.exceptionOrNull()?.let { clipsAfter = System.currentTimeMillis() + 5 * 60_000; Log.i(TAG, "클립 올리기 미룸 ${if (it is ApiError) it.status else "연결"}") }
-        }
+        }; main.post { done2(r) } }
     }
 
     /**
@@ -389,7 +394,7 @@ class MainActivity : ComponentActivity() {
      */
     private fun dropRawNow() {
         val t = s.trip ?: return
-        val n = RawFile.of(filesDir, t.code).count { it.file.delete() } // 쓰던 파일도(닫히면 그 자리가 비워진다)
+        val n = synchronized(RAW_LOCK) { RawFile.of(filesDir, t.code).count { it.file.delete() } } // 쓰던 파일도(닫히면 그 자리가 비워진다)
         if (CaptureService.running) Live.rollRaw = t.code // 수음 스레드는 다음 묶음부터 새 파일에
         s = s.copy(note = if (n > 0) "이 차에 둔 지난 원음을 지웠어요" else "이 차에 둔 원음이 없어요")
     }

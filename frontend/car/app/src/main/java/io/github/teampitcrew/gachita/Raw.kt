@@ -142,8 +142,14 @@ class ClipLog(dir: File, trip: String) {
     fun add(id: String) = file.appendText("$id\n")
 }
 
+/**
+ * 원음 파일을 열고 쓰는 것(수음 스레드)과 지우는 것(화면)을 한 줄로 세운다. 수음 스레드가 '멈추는 중이 아님'을 보고 옛 세대 파일을 여는 사이
+ * 화면이 철회로 지우기를 끝내 버리면 그 파일이 남기 때문이다. 0.1초 묶음 하나를 쓰는 동안만 잡는다.
+ */
+val RAW_LOCK = Any()
+
 /** 동의 세대가 바뀌면(동의 철회) 옛 세대의 원음을 지운다. 지운 파일 수. */
-fun dropRaw(dir: File, trip: String, below: Int): Int = RawFile.of(dir, trip).count { it.generation < below && it.file.delete() }
+fun dropRaw(dir: File, trip: String, below: Int): Int = synchronized(RAW_LOCK) { RawFile.of(dir, trip).count { it.generation < below && it.file.delete() } }
 
 /** 16 kHz 모노 16비트 PCM → WAV(RIFF 머리 44바이트). POST /recordings가 받는 모양. */
 fun wav(pcm: ByteArray): ByteArray = ByteBuffer.allocate(44 + pcm.size).order(ByteOrder.LITTLE_ENDIAN).apply {

@@ -231,8 +231,8 @@ class CaptureService : Service() {
      * 1분마다와 파일을 열 때 남은 공간을 보고, 모자라면 다른 원음 파일을 오래된 것부터 지운다. 그래도 모자라면 원음만 남기지 않는다(받아쓰기는 계속).
      * 원음 쓰기가 실패해도 수음은 멈추지 않는다.
      */
-    private fun keep(mono: ByteArray, at: Long) {
-        if (stopping) return // 동의가 빠져 멈추는 중에 읽힌 조각은 남기지 않는다
+    private fun keep(mono: ByteArray, at: Long): Unit = synchronized(RAW_LOCK) { // 철회 지우기(dropRaw)와 한 줄로
+        if (stopping) return // 동의가 빠져 멈추는 중에 읽힌 조각은 남기지 않는다(화면은 halt()로 이 값을 세운 뒤에 지운다)
         try {
             val w = raw
             val g = Live.rawGen
