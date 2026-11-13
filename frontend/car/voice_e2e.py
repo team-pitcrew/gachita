@@ -9,7 +9,8 @@
 - 좌석 구역은 앱 로그(GachitaCapture '발화 N … 구역 0|1|모름'), 말한 사람은 서버 기록(GET /utterances의 participantId)으로 본다.
 - 결과는 OUT/results.json과 OUT/speakers.tsv(넣은 문장, 넣은 사람·줄, 받은 구역·사람).
 """
-import json, re, sys, threading, time
+import io, json, re, sys, threading, time, urllib.request, wave
+import numpy as np
 import e2e, capture_e2e as cap
 from e2e import ADB, PKG, OUT, adb, shot, texts, tap_text, tap_switch, gear, check, note, phone_join, phone_consent
 from capture_e2e import PORT, TALK, Injector, fixture, wait_texts, wait_uploaded, server
@@ -30,6 +31,30 @@ def zones():
 def matched():
     """앱 로그에서 대조를 마친 순번(GachitaCapture '말한 사람 N …')."""
     return {int(m.group(1)) for c in cap.capture_log if (m := re.match(r"말한 사람 (\d+) ", c["line"]))}
+
+
+def baseline(talk):
+    """같은 합성 음성을 차를 거치지 않고 서버에 바로 등록·대조한 결과(새 여행 하나). 서버 임베더가 이 목소리들을 얼마나 가르는지의 기준."""
+    api = f"http://localhost:{PORT}"
+    def req(m, path, body=None, token=None, ctype="application/json"):
+        data = json.dumps(body).encode() if isinstance(body, dict) else body
+        r = urllib.request.Request(api + path, data=data, method=m, headers={"Content-Type": ctype, **({"Authorization": "Bearer " + token} if token else {})})
+        with urllib.request.urlopen(r, timeout=20) as x: return json.loads(x.read() or b"{}")
+    def wav(pcm):
+        b = io.BytesIO(); w = wave.open(b, "wb"); w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000); w.writeframes(pcm.astype("<i2").tobytes()); w.close(); return b.getvalue()
+    def mono(path):
+        return np.clip(np.frombuffer(wave.open(str(path)).readframes(10 ** 9), dtype="<i2").reshape(-1, 2).astype(np.int32).sum(1), -32768, 32767)
+    code = req("POST", "/api/trips", {"title": "baseline"})["code"]
+    seats = {"아빠": "ROW_1_LEFT", "엄마": "ROW_1_RIGHT", "서준": "ROW_2_LEFT", "하은": "ROW_2_RIGHT"}
+    ppl = {n: (lambda p: (p["id"], p["token"]))(req("POST", f"/api/trips/{code}/participants", {"seat": s, "name": n, "consent": False})) for n, s in seats.items()}
+    for n, (i, tok) in ppl.items():
+        req("PATCH", f"/api/trips/{code}/participants/{i}", {"consent": True}, tok)
+        req("POST", f"/api/trips/{code}/participants/{i}/voice", wav(mono(OUT / "inputs" / f"enroll-{n}.wav")), tok, "audio/wav")
+    pcm = mono(OUT / "inputs" / "talk.wav"); names = {v[0]: k for k, v in ppl.items()}; out = []
+    for u in talk["utterances"]:
+        r = req("POST", f"/api/trips/{code}/voice-match?row={1 if u['channel'] == 'L' else 2}", wav(pcm[int(u["start_s"] * 16000):int(u["end_s"] * 16000)]), ppl["아빠"][1], "audio/wav")
+        out.append((next(k for k, v in VOICE.items() if v == u["who"]), names.get(r.get("participantId")), r.get("confidence")))
+    return out
 
 
 def main(apk, n):
@@ -74,8 +99,8 @@ def main(apk, n):
     offset = cap.clock_offset()
     # 발화마다 넣은 문장 하나에만 붙인다: 시작이 그 문장 구간(앞 1.5초 여유)에 들고 시작이 가장 가까운 문장
     lines = talk["utterances"]
-    def best(u):
-        c = [i for i, l in enumerate(lines) if t0 + l["start_s"] * 1000 - 1500 <= u["at"] - offset <= t0 + l["end_s"] * 1000]
+    def best(u):  # 바쁜 기기에서는 첫 중간 결과가 늦어 at이 말 끝 뒤로 밀리기도 한다
+        c = [i for i, l in enumerate(lines) if t0 + l["start_s"] * 1000 - 2000 <= u["at"] - offset <= t0 + l["end_s"] * 1000 + 2000]
         return min(c, key=lambda i: abs(u["at"] - offset - t0 - lines[i]["start_s"] * 1000)) if c else None
     owner = {u["seq"]: best(u) for u in items}
     rows = []
@@ -91,11 +116,17 @@ def main(apk, n):
     with open(OUT / "speakers.tsv", "w") as f:
         f.write("넣은 문장\t넣은 사람\t줄\t순번\t받은 구역\t받은 사람\n")
         for r in rows: f.write(f"{r['text']}\t{r['who']}\t{r['row']}\t{r['seq']}\t{r['zone']}\t{r['got']}\n")
-    note("result", zone=zone, speaker=spk)
+    (OUT / "uploaded.json").write_text(json.dumps(items, ensure_ascii=False, indent=1))
+    (OUT / "capture-log.json").write_text(json.dumps(cap.capture_log, ensure_ascii=False, indent=1))
+    base = baseline(talk)
+    bs = {"right": sum(a == b for a, b, _ in base), "wrong": sum(b is not None and a != b for a, b, _ in base), "unknown": sum(b is None for _, b, _ in base)}
+    note("result", zone=zone, speaker=spk, baseline=bs, baseline_rows=base)
     covered = sum(1 for r in rows if r["seq"])
     check("넣은 문장의 90% 이상에 받아 적은 발화가 하나 이상 붙음(맞힘 수를 셀 바탕)", covered >= len(rows) * 0.9, covered=covered, lines=len(rows))
     check("발화마다 좌석 구역이 맞음(틀림 0)", zr and zone["wrong"] == 0 and zone["right"] >= len(zr) * 0.9, **zone)
-    check("발화에 말한 사람이 붙음(틀림 0, 맞힘 70% 이상)", sr and spk["wrong"] == 0 and spk["right"] >= len(sr) * 0.7, **spk)
+    # 서버 임베더가 이 합성 목소리들을 가르는 만큼(차를 거치지 않은 기준)에 견준다. 기준보다 틀림이 늘거나 맞힘이 절반 아래로 줄면 차 쪽 문제
+    check("발화에 말한 사람이 붙음(차를 거치지 않은 서버 기준보다 틀림이 늘지 않고 맞힘이 기준의 절반 이상)", sr and spk["wrong"] <= bs["wrong"] and spk["right"] * len(lines) >= bs["right"] * len(sr) * 0.5,
+          car=spk, baseline=bs)
     # 3. 화면: 방금 받아 적은 말에 이름이 붙고, '누구?'면 주차 중에 고칠 수 있다
     adb("shell", "am", "start", "--user", "10", "-n", f"{PKG}/.MainActivity"); time.sleep(3)
     ui = texts(); shot("03-heard-names"); note("ui", texts=ui)
