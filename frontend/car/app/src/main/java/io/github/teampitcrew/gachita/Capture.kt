@@ -39,9 +39,12 @@ data class Utterance(
      * 서버에 올리는 모양. 지금 세대(current)보다 옛 세대면 내용 없이 순번과 세대만(ADR-0014 2절).
      * 서버가 묶음 전체를 400으로 거절하면 확인 순번이 그 앞에서 멈추므로, 서버 검사에 걸리지 않게 다듬는다:
      * 글은 500자에서 자르되 이모지를 반으로 가르지 않고, 세대는 서버의 지금 세대를 넘지 않는다(DB를 되살려 세대가 내려간 경우).
+     * 글을 지운 발화(동의 철회)는 지금 세대로는 보낼 수 없어(서버가 글을 요구) 앞 세대로 순번만 보내 확인받고,
+     * 서버가 세대 1로 되살아나 앞 세대가 없으면 보내지 않는다(null). 그러면 같은 묶음의 다른 발화는 막히지 않는다.
      */
-    fun wire(current: Int): JSONObject {
+    fun wire(current: Int): JSONObject? {
         val g = minOf(generation, current)
+        if (text.isBlank() && g >= current) return if (current > 1) JSONObject().put("seq", seq).put("generation", current - 1) else null
         val o = JSONObject().put("seq", seq).put("generation", g)
         if (g < current) return o
         val t = text.trim()
@@ -196,11 +199,14 @@ class Outbox(dir: File, val trip: String) {
         return true
     }
 
-    /** 받지 않은 것을 max건까지 보낸다. 통신 스레드에서 부른다. 보낸 뒤 서버가 받았다고 한 데까지로 acked를 맞춘다. */
-    fun flush(up: Uplink, device: String, max: Int = 100) {
+    /**
+     * 받지 않은 것을 max건까지 보낸다. 통신 스레드에서 부른다. 보낸 뒤 서버가 받았다고 한 데까지로 acked를 맞춘다.
+     * always면 보낼 것이 없어도 빈 묶음으로 서버의 lastSeq를 받는다(서버 DB가 되살아나 순번이 내려갔으면 그 뒤부터 다시 보내게, ADR-0014 2절).
+     */
+    fun flush(up: Uplink, device: String, max: Int = 100, always: Boolean = false) {
         val (batch, g) = synchronized(this) { items.filter { it.seq > acked }.take(max) to generation }
-        if (batch.isEmpty()) return
-        val got = up.send(device, JSONArray(batch.map { it.wire(g) }))
+        if (batch.isEmpty() && !always) return
+        val got = up.send(device, JSONArray(batch.mapNotNull { it.wire(g) }))
         synchronized(this) {
             if (got != acked) { acked = got; ackFile.writeText(got.toString()) }
         }

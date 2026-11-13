@@ -86,6 +86,7 @@ private const val RESULT_MS = 60_000L // 경유지 결과 카드를 보여 두�
 private const val GLEO_ARRIVAL = "GACHITA_ARRIVAL_TASKS" // assets/schema.json의 함수 이름(T40)
 private const val GLEO_PAUSE = "GACHITA_PAUSE_RECORDING" // 같은 곳(T41)
 private const val GLEO_RESUME = "GACHITA_RESUME_RECORDING"
+private const val RESYNC_EVERY = 30 // 조회 30번(5분)마다, 그리고 끊겼다 다시 닿을 때 서버의 확인 순번을 다시 받는다(ADR-0014 2절)
 private const val OFFER_MS = 30_000L // 제안에 답이 없으면 보관으로 되돌리는 시간. 그사이 휴게소를 지나칠 수 있어 길게 두지 않는다
 
 class MainActivity : ComponentActivity() {
@@ -135,7 +136,8 @@ class MainActivity : ComponentActivity() {
 
     /** 화면이 보이는 동안, 그리고 수음 중이면 화면 뒤에서도 조회해 폰에서 끈 동의를 반영한다. */
     private val tick = object : Runnable {
-        override fun run() { refresh(); locate(); if (visible || s.recording) main.postDelayed(this, POLL_MS) }
+        private var n = 0
+        override fun run() { refresh(resync = ++n % RESYNC_EVERY == 0 || !s.online); locate(); if (visible || s.recording) main.postDelayed(this, POLL_MS) }
     }
 
     /** 마이크(꼭 필요)와 알림(화면 뒤에서 '기록 멈춤'을 보이는 데 씀. 없으면 API 33부터 알림이 올라가지 않음)을 한 번에 묻는다. */
@@ -269,8 +271,11 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** 최신 여행을 묻는다. 끄기를 서버에 아직 못 알렸으면 먼저 다시 보낸다. */
-    private fun refresh() {
+    /**
+     * 최신 여행을 묻는다. 끄기를 서버에 아직 못 알렸으면 먼저 다시 보낸다.
+     * resync면 보낼 발화가 없어도 서버의 확인 순번을 다시 받는다(서버 DB가 백업에서 되살아나 내려갔으면 그 뒤부터 다시 보냄).
+     */
+    private fun refresh(resync: Boolean = false) {
         val t = s.trip ?: return
         val off = s.offTargets
         val v = s.pollVersion
@@ -287,9 +292,10 @@ class MainActivity : ComponentActivity() {
                 .onFailure { s = s.copy(online = it is ApiError, note = if (it is ApiError) reason(it) else s.note) }
         }
         // 받아 적은 말은 동의와 따로 보낸다. 못 보내면(끊김, 동의 대기 403) 보관함에 두었다 다음 조회에 다시 보낸다
-        if (box == null || up == null || box.pending == 0 || uploading || s.offPending) return
+        val again = resync && box != null && box.acked > 0
+        if (box == null || up == null || (box.pending == 0 && !again) || uploading || s.offPending) return
         uploading = true
-        bg({ box.flush({ d, items -> Server(url).utterances(t.code, up, d, items) }, dev) }) { r ->
+        bg({ box.flush({ d, items -> Server(url).utterances(t.code, up, d, items) }, dev, always = again) }) { r ->
             uploading = false
             r.exceptionOrNull()?.let { Log.w(TAG, "발화 올리기 못 함 ${if (it is ApiError) it.message else "연결"}") } // 서버 거절(400 등)의 글에는 받아 적은 말이 없다
             Live.show(box)
