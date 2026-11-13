@@ -46,7 +46,8 @@ spec:
             # 녹음 클립 버킷(T64·T76, Terraform persist/). 자격은 서비스 계정 역할: 웹훅이 AWS_ROLE_ARN·AWS_REGION·토큰 파일을 넣는다
             - { name: CLIPS_BUCKET, value: gachita-dev-clips-721622471953 }
             # 고른 장면 클립의 재전사(T75, 상현님 Nemotron ASR). 토큰(ASR_TOKEN, 아래 asr Secret)이 있을 때만 보낸다.
-            # 주소의 호스트는 network.yaml의 나가는 길과 같아야 한다
+            # 주소의 호스트는 network.yaml의 나가는 길과 같아야 한다. 요청 간격(ASR_GAP_MS, 기본 파드마다 1.1초)은 파드 둘이
+            # 상대 서버 한도(IP당 초당 2건) 아래에 들게 정한 값이라 replicas를 바꾸면 같이 맞춘다(롤아웃 중 셋일 때는 429 물러섬이 받음)
             - { name: ASR_URL, value: "https://llm.kikum.xyz/asr/v1" }
           # 구글 OAuth(GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET)와 ASR 토큰(ASR_TOKEN). 값이 없으면 Secret이 없고, 서버는 그대로 뜬다
           envFrom:
