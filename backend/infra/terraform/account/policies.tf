@@ -61,7 +61,7 @@ data "aws_iam_policy_document" "plan_read" {
     actions   = ["s3:GetObject"]
     resources = ["arn:aws:s3:::gachita-tfstate-${local.account}/*"]
   }
-  # 소진 속도 알림과 SLO 대시보드(본 설정 slo.tf). 알림 설정 목록은 자원 단위로 좁힐 수 없다(값이 아니라 설정)
+  # 소진 속도 알림과 SLO 대시보드(본 설정 slo.tf). DescribeAlarms를 이름 접두사로 물을 때 자원 단위로 좁혀도 되는지 확인하지 못해 *로 둔다(설정만 보이고 값은 아님)
   statement {
     actions   = ["cloudwatch:DescribeAlarms"]
     resources = ["*"]

@@ -35,7 +35,7 @@ resource "aws_cloudwatch_metric_alarm" "burn" {
   metric_query {
     id          = "burn"
     label       = "소진 속도(${each.key})"
-    expression  = "IF(total > 0, bad / total, 0) / ${1 - local.slo_goal}"
+    expression  = "IF(total > 0, bad / total, 0) / ${format("%.3f", 1 - local.slo_goal)}" # 0.005
     return_data = true
   }
   metric_query {

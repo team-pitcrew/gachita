@@ -9,7 +9,7 @@
 //   발화 올리기(5초 묶음)는 develop에 아직 API가 없어 걸지 않는다(T39). 그래서 초당 요청이 표의 약 57이 아니라 약 50.5다
 // SLI(ADR-0016 1절): 가용성 = 5xx·시간 초과·연결 실패가 아닌 요청 ÷ 4xx를 뺀 요청, 조회 200 ms 안, 쓰기 1초 안.
 // 시험 데이터: 여행의 제목은 'E2E 부하'다. ops 워크플로의 clean-e2e가 지우고, 지우지 않아도 API가 48시간 뒤 지운다.
-// 가용성이 99.5% 아래면 1로 끝난다.
+// 가용성이 99.5% 아래면 1, 사용법이 틀리거나 준비(여행 만들기·참가)가 실패하면 2로 끝난다.
 const base = (process.argv[2] ?? "").replace(/\/+$/, "");
 const users = Number(process.argv[3] ?? 100);
 const seconds = Number(process.argv[4] ?? 60);
@@ -41,13 +41,17 @@ async function call(kind, method, path, body) {
 }
 
 // 준비(재지 않음): 차마다 여행 하나와 운전자 참가자
+const setupFailed = (what, status) => {
+  console.error(`준비 실패(${what}: ${status}). 서버 주소와 /healthz를 먼저 봅니다`);
+  process.exit(2); // SLO 미달(1)과 가른다
+};
 const cars = Math.max(1, Math.round(users * 0.3));
 const trips = [];
 for (let i = 0; i < cars; i++) {
   const trip = await call(null, "POST", "/api/trips", { title: "E2E 부하" });
-  if (trip.status !== 201) throw new Error(`여행 만들기 실패: ${trip.status}`);
+  if (trip.status !== 201) setupFailed("여행 만들기", trip.status);
   const me = await call(null, "POST", `/api/trips/${trip.json.code}/participants`, { name: `차${i}`, seat: "ROW_1_LEFT", consent: true });
-  if (me.status !== 201) throw new Error(`참가 실패: ${me.status}`);
+  if (me.status !== 201) setupFailed("참가", me.status);
   trips.push({ code: trip.json.code, driver: me.json.id });
 }
 console.log(`준비: 여행 ${cars}개, 동시 접속 ${users}(차 ${cars} · 폰 ${users - cars}), ${seconds}초`);

@@ -268,7 +268,7 @@ status() {
   healthy "$health" || bad="$bad ALB대상"
   log 3/4 "가용성 소진 속도 알림(ADR-0016, Terraform slo.tf)"
   alarms=$(aws cloudwatch describe-alarms --alarm-name-prefix "$CLUSTER-availability-burn-" \
-    --query 'MetricAlarms[].[AlarmName, StateValue]' --output text)
+    --query 'MetricAlarms[].[AlarmName, StateValue]' --output text) || alarms="(알림을 묻지 못함) ALARM"
   echo "${alarms:-알림 없음}" | sed 's/^/  /'
   ! awk '$2 == "ALARM"' <<<"$alarms" | grep -q . || bad="$bad 소진속도"
   log 4/4 "실제 주소 ${url%/}/healthz"
