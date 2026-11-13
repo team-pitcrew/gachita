@@ -181,7 +181,7 @@ test("잘못된 요청은 서버를 죽이지 않고 거절한다", async () => 
   assert.equal((await call("GET", "/healthz"))[0], 200);
   const page = await fetch(base + "/");
   assert.equal(page.status, 200);
-  assert.match(await page.text(), /같이타/);
+  assert.match(await page.text(), /가치타/);
 });
 
 test("여행 저장소와 프로필 저장소가 서로 다른 DB에 있다(T23)", async () => {
@@ -697,7 +697,7 @@ test("확장자 없는 주소는 웹 화면으로 연다(초대 /j/<코드>, 시
   assert.equal((await fetch(`${base}/nothing.js`)).status, 404, "없는 파일은 그대로 404");
   assert.equal((await fetch(`${base}/..%2F..%2Fbackend%2Fapi%2Fserver.js`)).status, 404, "웹 폴더 밖은 404");
   const outside = await fetch(`${base}/..%2F..%2Fbackend%2Fapi`);
-  assert.ok((await outside.text()).includes("<title>같이타</title>"), "확장자 없는 주소로 웹 폴더 밖을 가리켜도 웹앱 첫 화면만 나옴");
+  assert.ok((await outside.text()).includes("<title>가치타</title>"), "확장자 없는 주소로 웹 폴더 밖을 가리켜도 웹앱 첫 화면만 나옴");
 });
 
 test("DB가 연결을 끊어도 서버가 살아 있고 다음 요청에서 다시 맺는다(Postgres 재시작·장애 조치)", async () => {

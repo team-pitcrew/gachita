@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 떠 있는 같이타 서버에 동시 접속 N의 부하를 걸고 SLI를 잰다(ADR-0016의 부하 가정, T62). 의존성 없음(Node 22 기본 fetch).
+// 떠 있는 가치타 서버에 동시 접속 N의 부하를 걸고 SLI를 잰다(ADR-0016의 부하 가정, T62). 의존성 없음(Node 22 기본 fetch).
 //
 //   node .github/scripts/load.mjs <서버 주소> [동시 접속=100] [초=60]
 //

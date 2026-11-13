@@ -1,6 +1,6 @@
 openapi: 3.1.0
 info:
-  title: 같이타 API
+  title: 가치타 API
   version: 0.6.0
   summary: 여행 세션, 기기 프로필, 부탁, 장면, 기록본, 가족 그룹, 화자 대조
   description: |

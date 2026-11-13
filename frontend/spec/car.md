@@ -1,4 +1,4 @@
-# 같이타 차량 화면
+# 가치타 차량 화면
 
 [T17 차량 화면](https://github.com/team-pitcrew/gachita/issues/23) · 기획서 v4의 주행 중 기록, 정차 제안, 도착 후 확인 흐름
 

@@ -4,7 +4,7 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 
-/** 같이타 API(docs/api/openapi.yaml)를 부른다. 메인 스레드에서 부르지 않는다. */
+/** 가치타 API(docs/api/openapi.yaml)를 부른다. 메인 스레드에서 부르지 않는다. */
 class Server(base: String) {
     private val base = base.trim().trimEnd('/')
 

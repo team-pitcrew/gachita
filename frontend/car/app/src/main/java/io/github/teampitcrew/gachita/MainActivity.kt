@@ -80,7 +80,7 @@ private val CarType = Typography(labelLarge = TextStyle(fontSize = 24.sp), bodyL
 
 private const val DEFAULT_SERVER = "http://10.0.2.2:8787" // 에뮬레이터에서 본 Mac의 make run
 private const val POLL_MS = 10_000L // 웹앱은 2초. 차에서는 주행 중 자원 기준(CPU 5% 미만)을 생각해 길게 둔다
-private const val TITLE = "같이타 가족 여행"
+private const val TITLE = "가치타 가족 여행"
 private const val TAG = "GachitaAsk"
 private const val RESULT_MS = 60_000L // 경유지 결과 카드를 보여 두는 시간
 private const val GLEO_ARRIVAL = "GACHITA_ARRIVAL_TASKS" // assets/schema.json의 함수 이름(T40)

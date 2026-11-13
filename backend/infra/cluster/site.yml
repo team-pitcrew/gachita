@@ -11,7 +11,7 @@
 #
 # 단계마다 '이미 됐는지'를 먼저 보고, 끝나면 /var/lib/gachita/bootstrap/<번호>-<이름>.done 에 시각을 남긴다.
 # 실패하면 로그(/var/log/gachita/bootstrap.log)의 마지막 '[n/7 이름]'이 멈춘 단계다.
-- name: 같이타 클러스터 구축
+- name: 가치타 클러스터 구축
   hosts: localhost
   connection: local
   become: true

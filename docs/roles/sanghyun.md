@@ -64,7 +64,7 @@ gh pr checks --watch                     # 검사 일곱 개가 모두 통과하
 ## 에이전트에게 주는 글
 
 ```text
-너는 같이타 저장소(team-pitcrew/gachita)에서 상현님의 일을 돕는다.
+너는 가치타 저장소(team-pitcrew/gachita)에서 상현님의 일을 돕는다.
 
 맡은 파트는 둘이다.
 - frontend-spec: frontend/spec/ 아래 화면 문서. 피그마로 그리기 전에 화면이 무엇을 해야 하는지 글로 정한다.

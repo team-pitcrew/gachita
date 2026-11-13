@@ -1,4 +1,4 @@
-# 같이타 프로필 만들기와 계정 연결
+# 가치타 프로필 만들기와 계정 연결
 
 [T19](https://github.com/team-pitcrew/gachita/issues/25) · 기기 프로필, 구글 OAuth, 현대 계정 연결을 구분하는 화면 명세
 

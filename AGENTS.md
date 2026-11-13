@@ -1,6 +1,6 @@
 # 에이전트 작업 규칙
 
-같이타 저장소에서 일하는 사람과 에이전트가 같이 지킵니다. 자세한 내용은 [docs/development.md](docs/development.md)에 있습니다.
+가치타 저장소에서 일하는 사람과 에이전트가 같이 지킵니다. 자세한 내용은 [docs/development.md](docs/development.md)에 있습니다.
 
 1. 복제한 뒤 `make hooks`를 먼저 실행합니다. `--no-verify`로 훅을 건너뛰지 않습니다.
 2. `develop`에서 `feature/T번호-설명` 브랜치를 만들어 `develop`으로 PR을 엽니다. `main`과 `develop`에 직접 커밋하거나 올리지 않습니다.

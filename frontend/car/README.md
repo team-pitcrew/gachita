@@ -1,4 +1,4 @@
-# 같이타 차량 앱
+# 가치타 차량 앱
 
 Pleos Connect용 Kotlin·Compose 앱입니다(`io.github.teampitcrew.gachita`). 차량에서 가족을 골라 여행을 만들고 '기록 중' 화면과 기록 동의를 보여 줍니다(T7). 기록 중이면 차량 마이크로 수음해 Pleos STT(ON_DEVICE)로 받아 적고, 발화를 순번과 함께 앱 안 보관함에 쌓습니다(T36). 주행 중에도 앞에 남는 화면이고, 주행 제한 중에는 설정과 진단을 가립니다(T11). 쉬어 가자는 부탁을 알아채 다음 휴게소를 제안하고, 수락하면 순정 내비에 경유지로 넣습니다(T9). 장소가 붙은 할 일을 모아 그곳에 주차하면 알립니다(T40).
 
@@ -78,7 +78,7 @@ adb shell am start --user 10 -n io.github.teampitcrew.gachita/.MainActivity --es
 | `Todos.kt` | 도착 브리핑(T40)에서 화면·SDK와 무관한 것: 할 일 뽑기, 도착 판정, 차 안 저장(단위 테스트 `TodosTest.kt`) |
 | `assets/schema.json` | Gleo 함수 목록(T40). 이름을 바꾸면 `MainActivity`의 `GLEO_ARRIVAL`과 매니페스트의 intent-filter도 같이 |
 | `Trip.kt` | 여행 응답 해석과 기록 동의 규칙(단위 테스트 `TripTest.kt`) |
-| `Server.kt` | 같이타 API 호출(`docs/api/openapi.yaml`) |
+| `Server.kt` | 가치타 API 호출(`docs/api/openapi.yaml`) |
 | `Capture.kt` | 수음에서 화면·SDK와 무관한 것: 모노 합치기, 발화 묶기, 막힘 판정, 보관함과 보내는 쪽 이음매(단위 테스트 `CaptureTest.kt`) |
 | `CaptureService.kt` | 마이크 포그라운드 서비스: `AudioRecord` → Pleos STT `sendAudio()` → 보관함. 화면이 읽는 수음 상태(`Live`) |
 | `MainActivity.kt` | 여행 만들기 화면과 '기록 중' 화면, 경유지 제안 흐름과 카드(T9), 도착 브리핑과 Gleo 함수(T40). 기록 상태에 맞춰 수음을 켜고 끔. 창 너비 1200dp 이상이면 두 칸. `--ei widthDp 841`이면 그 폭으로 그림(에뮬레이터는 창을 나누지 않음) |
