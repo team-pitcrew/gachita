@@ -140,7 +140,8 @@ def main(apk, minutes):
     check("받은 클립은 16 kHz 모노 16비트 WAV이고 말소리가 들어 있음", clips and all(c["rate"] == 16000 and c["channels"] == 1 and c["bits"] == 16 and c["peak_dbfs"] > -30 for c in clips), clips=clips)
     check("클립 소리가 넣은 대화와 맞음(10 ms 포락선 상관 0.6 이상)", clips and all(c["corr"] >= 0.6 for c in clips), corr=[c["corr"] for c in clips])
     delays = [c["delay_s"] for c in clips]
-    check("클립 시각이 맞음(클립마다 에뮬레이터 지연이 0.3초 안에서 같고 0~4초)", delays and max(delays) - min(delays) <= 0.3 and all(0 <= d <= 4 for d in delays), delays=delays)
+    # 지연 = 클립 첫 표본의 기기 시각 − 넣기 시작(Mac) − 포락선 자리. 11/14 실측 −0.2초 안팎(넣기 시작을 재는 쪽의 오차 포함)
+    check("클립 시각이 맞음(클립마다 에뮬레이터 지연이 0.3초 안에서 같고 −1~4초)", delays and max(delays) - min(delays) <= 0.3 and all(-1 <= d <= 4 for d in delays), delays=delays)
     names = raw_names(); note("raw", files=raw_files())
     blob = b"".join(raw_bytes(n) for n in names)  # 클립을 자른 파일이 어느 것이든
     first = np.frombuffer(wave.open(str(OUT / "clips" / f"{moments[0]['id']}.wav")).readframes(10 ** 9), dtype="<i2")
