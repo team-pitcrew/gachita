@@ -1,6 +1,6 @@
 # AWS·Cloudflare 자원 (Terraform)
 
-묶음이 셋입니다. 펴고 접는 순서와 확인은 [`../infra.sh`](../infra.sh)(`infra` 워크플로)가 맡습니다. 결정은 [ADR-0012](../../../docs/adr/0012-cluster-build-and-node-size.md)(구축·노드), [ADR-0016](../../../docs/adr/0016-slo-capacity-single-postgres.md)(기본 배치), [ADR-0017](../../../docs/adr/0017-alb-by-controller-and-fold-order.md)(ALB 컨트롤러·펴기 순서). 클러스터를 세우는 단계는 [`backend/infra/cluster`](../cluster/README.md), 그 위에 올리는 것은 [`backend/infra/gitops`](../gitops/README.md)에 있습니다.
+묶음이 셋입니다. 펴고 접는 순서와 확인은 [`../infra.sh`](../infra.sh)(`infra` 워크플로)가 맡습니다. 결정은 [ADR-0012](../../../docs/adr/0012-cluster-build-and-node-size.md)(구축·노드), [ADR-0016](../../../docs/adr/0016-slo-capacity-single-postgres.md)(기본 배치), [ADR-0017](../../../docs/adr/0017-alb-by-controller-and-fold-order.md)(ALB 컨트롤러·펴기 순서), [ADR-0018](../../../docs/adr/0018-postgres-storage-on-root-disk.md)(Postgres 저장 장치). 클러스터를 세우는 단계는 [`backend/infra/cluster`](../cluster/README.md), 그 위에 올리는 것은 [`backend/infra/gitops`](../gitops/README.md)에 있습니다.
 
 | 묶음 | 폴더(상태 키) | 만드는 것 | 접을 때 |
 |---|---|---|---|
