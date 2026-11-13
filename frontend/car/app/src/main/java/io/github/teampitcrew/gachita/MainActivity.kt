@@ -203,6 +203,7 @@ class MainActivity : ComponentActivity() {
         tokens = unsealed("tokens")?.let { j -> JSONObject(j).let { o -> o.keys().asSequence().associateWith { o.getString(it) } } }.orEmpty()
         // 앱을 다시 켜도, 서버에 닿지 않아도 마지막으로 받은 여행과 끄기 대기, 받아 적은 말과 순번을 이어 보여 준다
         s = Session.restore(saved, prefs.getBoolean("offPending", false), prefs.getBoolean("started", false), tokens.keys)
+        if (s.offPending) s.trip?.let { dropRawAll(it.code) } // 끈 뒤 지우기 전에 앱이 꺼졌으면 마저 지운다
         car = Car(this) {
             carStatus = it
             val was = s.gear
@@ -394,10 +395,13 @@ class MainActivity : ComponentActivity() {
      */
     private fun dropRawNow() {
         val t = s.trip ?: return
-        val n = synchronized(RAW_LOCK) { RawFile.of(filesDir, t.code).count { it.file.delete() } } // 쓰던 파일도(닫히면 그 자리가 비워진다)
+        val n = dropRawAll(t.code) // 쓰던 파일도(닫히면 그 자리가 비워진다)
         if (CaptureService.running) Live.rollRaw = t.code // 수음 스레드는 다음 묶음부터 새 파일에
         s = s.copy(note = if (n > 0) "이 차에 둔 지난 원음을 지웠어요" else "이 차에 둔 원음이 없어요")
     }
+
+    /** 그 여행의 원음을 모두 지운다. 원음 쓰기와 같은 잠금 안에서(쓰던 파일까지). 지운 파일 수. */
+    private fun dropRawAll(code: String): Int = synchronized(RAW_LOCK) { RawFile.of(filesDir, code).count { it.file.delete() } }
 
     /** 서버가 모르는 여행(48시간이 지나 지워짐): 기록을 멈추고 이 차의 사본(보관함·할 일)을 지운 뒤 처음 화면으로. */
     private fun forget(code: String) {
@@ -440,7 +444,8 @@ class MainActivity : ComponentActivity() {
 
     /** 끄기는 서버를 기다리지 않고 바로 멈춘다. 서버에는 refresh가 알린다. */
     private fun turnOff() {
-        s = s.turnOff().copy(note = "")
+        s = s.turnOff().copy(note = "") // 수음을 먼저 멈춘다(setter의 syncCapture)
+        s.trip?.let { dropRawAll(it.code) } // 원음은 차에만 있으니 서버 확인을 기다리지 않고 바로 지운다(ADR-0007 철회 때 원음 삭제)
         car.speak("기록을 멈췄어요")
         refresh()
     }
