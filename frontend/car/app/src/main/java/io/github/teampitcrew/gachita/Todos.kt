@@ -54,12 +54,14 @@ class Todos(dir: File, val trip: String) {
 
     fun done(id: Long) = save(items.map { if (it.id == id) it.copy(done = true) else it })
 
-    /** 임시 파일에 다 쓴 뒤 이름을 바꾼다. 쓰다 끊겨도 앞의 파일이 남는다. */
+    /** 임시 파일에 다 쓴 뒤 이름을 바꾼다. 쓰다 끊기거나 바꾸지 못하면 앞의 파일이 남고, 이번 실행의 목록은 그대로 쓴다. */
     private fun save(next: List<Todo>) {
         items = next
         val tmp = File(file.path + ".tmp")
-        tmp.writeText(JSONArray(next.map { JSONObject().put("id", it.id).put("place", it.place).put("text", it.text).put("done", it.done) }).toString())
-        if (!tmp.renameTo(file)) error("할 일을 저장하지 못함")
+        runCatching {
+            tmp.writeText(JSONArray(next.map { JSONObject().put("id", it.id).put("place", it.place).put("text", it.text).put("done", it.done) }).toString())
+            tmp.renameTo(file)
+        }
     }
 }
 

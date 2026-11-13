@@ -18,6 +18,7 @@ import ai.pleos.playground.navi.helper.listener.NaviHelperEventListener
 import ai.pleos.playground.tts.TextToSpeech
 import ai.pleos.playground.tts.constant.ErrorType
 import ai.pleos.playground.tts.constant.Mode
+import ai.pleos.playground.tts.listener.EventListener
 import ai.pleos.playground.tts.listener.OnInitializeListener
 import ai.pleos.playground.vehicle.Vehicle
 import ai.pleos.playground.vehicle.api.model.area.SeatArea
@@ -55,6 +56,8 @@ class Car(ctx: Context, private val onChange: (CarStatus) -> Unit) {
     private var ux: CarUxRestrictionsManager? = null
     private var status = CarStatus()
     private var savedTemp: Float? = null
+    @Volatile private var ttsFrom = 0L // 우리 TTS가 말한 구간(epoch ms). 말하는 중이면 ttsTo = Long.MAX_VALUE
+    @Volatile private var ttsTo = 0L
 
     private fun update(f: (CarStatus) -> CarStatus) { main.post { status = f(status); onChange(status) } }
 
@@ -147,7 +150,7 @@ class Car(ctx: Context, private val onChange: (CarStatus) -> Unit) {
         runCatching {
             tts = TextToSpeech(app, Mode.ON_DEVICE).also { t ->
                 t.initialize(object : OnInitializeListener {
-                    override fun onSuccess() { t.setLocale(Locale.KOREA); update { it.copy(voice = true) } }
+                    override fun onSuccess() { t.setLocale(Locale.KOREA); t.addEventListener(ttsListener); update { it.copy(voice = true) } }
                     override fun onFailure(error: ErrorType) { Log.w(TAG, "TTS 초기화 실패 ${error.name}") }
                 })
             }
@@ -173,8 +176,22 @@ class Car(ctx: Context, private val onChange: (CarStatus) -> Unit) {
 
     fun speak(text: String) {
         Log.i(TAG, "말함 ${text.length}자" + if (status.voice) "" else " · TTS 준비 안 됨") // 글자는 남기지 않는다(받아 적은 말이 들어갈 수 있음)
-        if (status.voice) runCatching { tts?.speak(text, true) }
+        if (!status.voice) return
+        ttsFrom = System.currentTimeMillis(); ttsTo = Long.MAX_VALUE // 첫 소리는 0.3~0.4초 뒤(11/2). 부른 때부터 센다
+        runCatching { tts?.speak(text, true) }.onFailure { ttsTo = System.currentTimeMillis() }
     }
+
+    private val ttsListener = object : EventListener {
+        override fun onDone() { ttsTo = System.currentTimeMillis() }
+        override fun onStop() { ttsTo = System.currentTimeMillis() }
+        override fun onError(error: ai.pleos.playground.tts.constant.ErrorType) { ttsTo = System.currentTimeMillis() }
+        override fun onStart() {}
+        override fun onReady() {}
+        override fun onUpdatedRms(rms: Double) {}
+    }
+
+    /** 받아 적은 말이 우리 TTS 소리일 수 있는지: 첫 중간 결과가 우리가 말하는 동안(끝난 뒤 0.3초까지) 왔다. */
+    fun ownVoice(firstPartialAt: Long) = overlapsSpeech(firstPartialAt, ttsFrom, ttsTo)
 
     /** 내비가 아는 지금 위치. 화면은 넘어가지 않는다(0.1~0.2초, 11/12). 모르면 null, null. */
     fun here(done: (Double?, Double?) -> Unit) = here.start({ done(it?.latitude, it?.longitude) }) { navi.getCurrentLocationInfo() }

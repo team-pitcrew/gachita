@@ -320,6 +320,8 @@ class MainActivity : ComponentActivity() {
         }
         if (isRestRequest(u.text)) return hold(t, u)
         todoOf(u.text)?.let { (place, text) ->
+            // 도착 알림은 할 일을 그대로 읽는다. 그 소리가 마이크로 되돌아와 다시 모이지 않게, 우리가 말하는 동안 받아 적힌 할 일은 모으지 않는다
+            if (car.ownVoice(u.startedAt + LEAD_MS)) { Log.i(TAG, "우리 말소리와 겹친 할 일은 모으지 않음"); return }
             val box = todosOf(t.code)
             if (box.add(place, text) == null) { Log.i(TAG, "같은 할 일이 있어 더하지 않음"); return }
             todoList = box.items
@@ -471,9 +473,9 @@ class MainActivity : ComponentActivity() {
         val open = todos?.open().orEmpty()
         val msg = if (open.isEmpty()) "There are no to-do items for after arriving." else "Found ${open.size} to-do items for after arriving. The list is on the screen once the car is parked."
         val data = JSONArray(open.map { JSONObject().put("place", it.place).put("task", it.text) }).toString()
-        sendBroadcast(Intent("ai.pleos.playground.intent.action.APP_ACTION_RESPONSE").putExtra("packageName", packageName)
-            .putExtra("response", JSONObject().put("functionName", GLEO_ARRIVAL).put("status", "success").put("message", msg).put("mode", "voice").put("data", data).toString()))
-        Log.i(TAG, "Gleo 도착 할 일 ${open.size}건 응답 $GLEO_ARRIVAL")
+        val reply = JSONObject().put("functionName", GLEO_ARRIVAL).put("status", "success").put("message", msg).put("mode", "voice").put("data", data)
+        sendBroadcast(Intent("ai.pleos.playground.intent.action.APP_ACTION_RESPONSE").putExtra("packageName", packageName).putExtra("response", reply.toString()))
+        Log.i(TAG, "Gleo 도착 할 일 ${open.size}건 응답 ${reply.getString("functionName")}")
     }
 
     /** 제안을 결과 단계로 닫고 말로 알린다. 그 제안이 이미 바뀌었으면(새 여행) 화면은 두고 말도 하지 않는다. */
