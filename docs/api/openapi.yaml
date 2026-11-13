@@ -33,6 +33,26 @@ tags:
   - name: 그룹
   - name: 상태 확인
 paths:
+  /api/config:
+    get:
+      tags: [프로필]
+      summary: 웹앱의 공개 로그인 설정
+      description: |
+        로그인 전에도 읽을 수 있습니다. 서버의 GOOGLE_CLIENT_ID와 GOOGLE_CLIENT_SECRET이
+        모두 설정돼 있으면 공개 Client ID만 주고, 하나라도 없거나 비어 있으면 빈 문자열을 줍니다.
+        웹앱은 빈 문자열이면 구글 인증 화면으로 이동하지 않습니다.
+        Client Secret과 다른 환경 설정은 내주지 않으며 응답은 캐시하지 않습니다(no-store).
+      responses:
+        "200":
+          description: 공개 설정. 로그인 미설정도 빈 googleClientId로 답합니다.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [googleClientId]
+                additionalProperties: false
+                properties:
+                  googleClientId: { type: string, description: 구글 공개 Client ID. 로그인을 시작할 수 없으면 빈 문자열 }
   /healthz:
     get:
       tags: [상태 확인]
