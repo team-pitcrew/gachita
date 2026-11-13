@@ -190,10 +190,14 @@ export function createShortFilm({ title = "함께 남긴 순간", cast = [] }) {
 }
 
 // 현재 장면 전체를 실제 재생 시간 동안 녹화합니다. 파일 공유는 이 함수가 하지 않습니다.
-export async function exportShortFilm({ title, cast, scene, getAudio, signal, canRead, checkAccess, onProgress = () => {} }) {
+export async function exportShortFilm({ title, cast, scene, getAudio, signal: callerSignal, canRead, checkAccess, onProgress = () => {} }) {
   const format = recordingFormat();
   const AudioContextClass = globalThis.AudioContext ?? globalThis.webkitAudioContext;
   if (!format || !AudioContextClass || !HTMLCanvasElement.prototype.captureStream) throw new Error("이 브라우저는 영상 만들기를 지원하지 않아요.");
+  const controller = new AbortController();
+  const signal = controller.signal;
+  const cancelled = () => signal.reason instanceof Error ? signal.reason : new DOMException("영상 만들기를 취소했어요.", "AbortError");
+  const cancelFromCaller = () => controller.abort(callerSignal.reason);
   const context = new AudioContextClass();
   // 사용자 클릭의 활성 상태 안에서 먼저 오디오 컨텍스트를 엽니다.
   const resumed = context.resume();
@@ -201,18 +205,21 @@ export async function exportShortFilm({ title, cast, scene, getAudio, signal, ca
   let source, stream, canvasStream, destination, recorder, frame, clock, heartbeat, checking = false;
   let finished = false, stopRecording;
   const chunks = [];
-  const assertAccess = () => { if (signal.aborted || !canRead()) throw new DOMException("영상 만들기를 취소했어요.", "AbortError"); };
+  const assertAccess = () => { if (signal.aborted) throw cancelled(); if (document.hidden || !canRead()) throw new DOMException("영상 만들기를 취소했어요.", "AbortError"); };
   const waiting = (promise) => new Promise((resolve, reject) => {
-    const cancel = () => reject(new DOMException("영상 만들기를 취소했어요.", "AbortError"));
+    const cancel = () => reject(cancelled());
     if (signal.aborted) return cancel();
     signal.addEventListener("abort", cancel, { once: true });
     Promise.resolve(promise).then(resolve, reject).finally(() => signal.removeEventListener("abort", cancel));
   });
-  const abort = () => stopRecording?.(new DOMException("영상 만들기를 취소했어요.", "AbortError"));
-  const hidden = () => { if (document.hidden) stopRecording?.(new Error("화면을 벗어나 영상 만들기를 멈췄어요. 다시 시작해 주세요.")); };
+  const abort = () => stopRecording?.(cancelled());
+  const hidden = () => { if (document.hidden) controller.abort(new Error("화면을 벗어나 영상 만들기를 멈췄어요. 다시 시작해 주세요.")); };
   try {
+    callerSignal.addEventListener("abort", cancelFromCaller, { once: true });
+    if (callerSignal.aborted) cancelFromCaller();
     signal.addEventListener("abort", abort, { once: true });
     document.addEventListener("visibilitychange", hidden);
+    hidden();
     assertAccess();
     await waiting(resumed);
     await waiting(checkAccess(signal));
@@ -271,7 +278,9 @@ export async function exportShortFilm({ title, cast, scene, getAudio, signal, ca
     return new File([blob], `${safeTitle}.${extension}`, { type: mime });
   } finally {
     finished = true; cancelAnimationFrame(frame); clearInterval(clock); clearInterval(heartbeat);
+    callerSignal.removeEventListener("abort", cancelFromCaller);
     signal.removeEventListener("abort", abort); document.removeEventListener("visibilitychange", hidden);
+    controller.abort();
     try { source?.stop(); } catch {}
     if (recorder?.state !== "inactive" && recorder?.state) recorder.stop();
     source?.disconnect(); destination?.disconnect(); stream?.getTracks().forEach((track) => track.stop()); canvasStream?.getTracks().forEach((track) => track.stop());
