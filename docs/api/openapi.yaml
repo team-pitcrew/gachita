@@ -771,7 +771,17 @@ components:
       description: 거절한 이유
       content:
         application/json:
-          schema: { type: object, required: [error], properties: { error: { type: string } } }
+          schema:
+            type: object
+            required: [error, type]
+            properties:
+              error: { type: string, description: 사람이 읽는 이유(바뀔 수 있음) }
+              type:
+                type: string
+                enum: [invalid, unauthenticated, forbidden, not_found, method_not_allowed, conflict, too_large, unavailable, internal]
+                description: "오류 종류(T71). 클라이언트는 문장이 아니라 이것으로 가른다. unavailable(503)은 DB에 닿지 않거나 질의 시간 제한 — 잠시 뒤 다시 해도 된다"
+      headers:
+        x-request-id: { schema: { type: string }, description: 요청 id(로그와 맞춰 볼 때). 모든 응답에 있음 }
   schemas:
     Seat:
       type: string
