@@ -78,9 +78,10 @@ up() {
   local i out=""
   for ((i = 0; i < 80; i++)); do
     if ssm_online "$id"; then
-      out=$(on_server "$id" 60 'ls /var/lib/gachita/bootstrap 2>/dev/null | tr "\n" " "; cloud-init status 2>/dev/null | tail -1' || true)
-      echo "  $out"
-      case $out in *7-verify.done*) break ;; *"status: error"*) break ;; esac
+      # 첫 부팅이 실패했어도 구축을 다시 돌리는 중(gachita-converge)이면 기다린다
+      out=$(on_server "$id" 60 'ls /var/lib/gachita/bootstrap 2>/dev/null | tr "\n" " "; cloud-init status 2>/dev/null | tail -1; pgrep -fc "ansible-pull|ansible-playbook" || true' || true)
+      echo "  $(echo "$out" | tr '\n' ' ')"
+      case $out in *7-verify.done*) break ;; *"status: error"*$'\n'0*) break ;; esac
     else
       echo "  서버의 SSM 에이전트를 기다림"
     fi
