@@ -537,3 +537,6 @@ await loadProfile();
 fillDraft();
 refresh(true);
 navigator.serviceWorker?.register("/sw.js").catch(() => {}); // 홈 화면 설치와 끊겼을 때의 마지막 화면(T6)
+// 처음 설치되는 방문에서는 여행을 워커가 맡기 전에 읽었고 그 뒤 폴링은 304라 캐시에 여행이 없다.
+// 워커가 이 화면을 맡는 순간 한 번 더 읽어 끊겼을 때 보일 여행을 남긴다.
+navigator.serviceWorker?.addEventListener("controllerchange", () => refresh(true));
