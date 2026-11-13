@@ -43,8 +43,17 @@ class Server(base: String) {
         call("PATCH", "/api/trips/$code/requests/$id", JSONObject().put("status", status))
     }
 
-    /** 최신 여행. 보낸 version에서 바뀐 것이 없으면(304) null. */
-    fun trip(code: String, version: Int? = null): Got? = call("GET", "/api/trips/$code" + (version?.let { "?v=$it" } ?: ""), null)?.let(::got)
+    /** 최신 여행. 보낸 version에서 바뀐 것이 없으면(304) null. 서버가 여행을 모르면(없음, 48시간 지남) Gone. */
+    fun trip(code: String, version: Int? = null): Got? = try {
+        call("GET", "/api/trips/$code" + (version?.let { "?v=$it" } ?: ""), null)?.let(::got)
+    } catch (e: ApiError) {
+        throw if (e.status == 404) Gone(code) else e
+    }
+
+    /** 서버에 글이 남아 있는 이 기기 발화의 순번(GET /utterances?device=). 참가자가 지운 글(비운 줄)은 빠진다. */
+    fun keptSeqs(code: String, token: String, device: String): Set<Long> =
+        JSONObject(call("GET", "/api/trips/$code/utterances?device=" + java.net.URLEncoder.encode(device, "UTF-8"), null, token)!!).getJSONArray("items")
+            .let { a -> (0 until a.length()).map { a.getJSONObject(it).getLong("seq") }.toSet() }
 
     private fun call(method: String, path: String, body: JSONObject?, token: String? = null): String? {
         val c = URL(base + path).openConnection() as HttpURLConnection
@@ -70,4 +79,7 @@ class Server(base: String) {
 }
 
 /** 서버가 거절함(4xx·5xx). 통신 자체가 안 된 것(IOException)과 구분해 '연결 끊김'으로 보지 않는다. */
-class ApiError(val status: Int, message: String) : Exception("$status $message")
+open class ApiError(val status: Int, message: String) : Exception("$status $message")
+
+/** 서버가 여행을 모른다(404: 없음, 보관 48시간 지남). 차 안 사본도 지운다(T69). */
+class Gone(code: String) : ApiError(404, "없는 여행 $code")

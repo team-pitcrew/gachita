@@ -65,19 +65,19 @@ class CaptureTest {
 
     @Test fun 보관함_순번과_다시_켜면_이어짐() {
         val dir = tmp.root
-        val o = Outbox(dir, "ABC123")
+        val o = Outbox(dir, "ABC123", TEST_SEAL)
         assertEquals(1, o.add(d(1), null).seq)
         assertEquals(2, o.add(d(2), Fix(37.5, 127.0, 2_400)).seq)
-        val again = Outbox(dir, "ABC123")
+        val again = Outbox(dir, "ABC123", TEST_SEAL)
         assertEquals(2, again.size)
         assertEquals(listOf("말 1", "말 2"), again.recent(5).map { it.text })
         assertEquals(37.5, again.recent(1)[0].lat!!, 0.0)
         assertEquals(3, again.add(d(3), null).seq)
-        assertEquals(1, Outbox(dir, "XYZ999").add(d(1), null).seq) // 여행마다 1부터
+        assertEquals(1, Outbox(dir, "XYZ999", TEST_SEAL).add(d(1), null).seq) // 여행마다 1부터
     }
 
     @Test fun 위치는_발화_끝에서_30초_안의_것만() {
-        val o = Outbox(tmp.root, "ABC123")
+        val o = Outbox(tmp.root, "ABC123", TEST_SEAL)
         assertNull(o.add(d(100), Fix(37.5, 127.0, 100_500 - FIX_MS - 1)).lat)
         assertEquals(127.0, o.add(d(101), Fix(37.5, 127.0, 101_500 - FIX_MS)).lng!!, 0.0)
     }
@@ -95,7 +95,7 @@ class CaptureTest {
 
     @Test fun 받은_데_뒤만_보내고_일부만_받아도_이어서_보냄() {
         val dir = tmp.root
-        val o = Outbox(dir, "ABC123")
+        val o = Outbox(dir, "ABC123", TEST_SEAL)
         repeat(5) { o.add(d(it + 1), Fix(37.5, 127.0, 1_000L * (it + 1))) }
         val up = Fake { 3 } // 서버가 3까지만 받음
         o.flush(up, "dev-1", max = 4)
@@ -105,12 +105,12 @@ class CaptureTest {
         o.flush(up, "dev-1")
         assertEquals(listOf(4L, 5), up.sent[1].map { it.getLong("seq") })
         assertEquals(0, o.pending)
-        assertEquals(5, Outbox(dir, "ABC123").acked) // 받은 데까지도 다시 켜면 남음
+        assertEquals(5, Outbox(dir, "ABC123", TEST_SEAL).acked) // 받은 데까지도 다시 켜면 남음
         o.flush(Fake { error("보낼 것이 없으면 부르지 않음") }, "dev-1")
     }
 
     @Test fun 올리는_칸은_서버_계약과_같음() {
-        val o = Outbox(tmp.root, "ABC123")
+        val o = Outbox(tmp.root, "ABC123", TEST_SEAL)
         o.add(d(1), Fix(37.5, 127.0, 1_000)); o.add(d(2), null)
         val up = Fake { 2 }
         o.flush(up, "dev-1")
@@ -121,7 +121,7 @@ class CaptureTest {
     }
 
     @Test fun 못_보내면_보관함에_남고_다음에_다시_보냄() {
-        val o = Outbox(tmp.root, "ABC123")
+        val o = Outbox(tmp.root, "ABC123", TEST_SEAL)
         o.add(d(1), null)
         assertTrue(runCatching { o.flush(Fake { throw ApiError(403, "동의하지 않은 탑승자가 있어 올릴 수 없음") }, "dev-1") }.isFailure)
         assertEquals(0, o.acked); assertEquals(1, o.pending)
@@ -130,7 +130,7 @@ class CaptureTest {
     }
 
     @Test fun 서버가_준_순번이_작으면_내리고_그_뒤를_다시_보냄() { // DB를 백업에서 되살린 경우(ADR-0014 2절)
-        val o = Outbox(tmp.root, "ABC123")
+        val o = Outbox(tmp.root, "ABC123", TEST_SEAL)
         repeat(4) { o.add(d(it + 1), null) }
         o.flush(Fake { 4 }, "dev-1")
         o.add(d(5), null)
@@ -143,13 +143,12 @@ class CaptureTest {
 
     @Test fun 동의_세대가_오르면_옛_발화의_글을_지우고_순번과_세대만_보냄() {
         val dir = tmp.root
-        val o = Outbox(dir, "ABC123")
+        val o = Outbox(dir, "ABC123", TEST_SEAL)
         o.add(d(1), Fix(37.5, 127.0, 1_000)); o.add(d(2), null)
         o.flush(Fake { 1 }, "dev-1")
-        assertFalse(o.see(1))
-        assertTrue(o.see(3)) // 동의 철회
+        assertFalse(o.see(1, 0))
+        assertTrue(o.see(3, 0)) // 동의 철회
         assertEquals(0, o.size); assertTrue(o.recent(5).isEmpty())
-        assertFalse(java.io.File(dir, "utterances-ABC123.jsonl").readText().contains("말 ")) // 파일에서도 지워짐
         val later = System.currentTimeMillis() + 1_000 // 세대가 오른 것을 안 뒤에 시작한 말
         assertEquals(3, o.add(Draft(later, later + 500, "말 3", 0, 0), null).generation) // 새 발화는 새 세대
         val up = Fake { 3 }
@@ -157,33 +156,33 @@ class CaptureTest {
         assertEquals(setOf("seq", "generation"), up.sent[0][0].keys().asSequence().toSet())
         assertEquals(1, up.sent[0][0].getInt("generation"))
         assertEquals("말 3", up.sent[0][1].getString("text"))
-        val again = Outbox(dir, "ABC123") // 다시 켜도 세대와 지운 것이 남음
+        val again = Outbox(dir, "ABC123", TEST_SEAL) // 다시 켜도 세대와 지운 것이 남음
         assertEquals(3, again.generation); assertEquals(1, again.size); assertEquals(3, again.acked)
     }
 
     @Test fun 세대가_오른_것을_알기_전에_시작한_말은_앞_세대로_글_없이() { // 폰에서 끄고 10초 안에 다시 켜 기록이 이어진 경우
-        val o = Outbox(tmp.root, "ABC123")
-        o.see(2)
+        val o = Outbox(tmp.root, "ABC123", TEST_SEAL)
+        o.see(2, 0)
         val u = o.add(Draft(System.currentTimeMillis() - 5_000, System.currentTimeMillis(), "철회 사이에 한 말", 0, 0), Fix(37.5, 127.0, System.currentTimeMillis()))
         assertEquals(1, u.generation); assertEquals("", u.text); assertNull(u.lat)
         assertEquals(setOf("seq", "generation"), u.wire(2)!!.keys().asSequence().toSet())
     }
 
     @Test fun 서버_세대가_내려가면_따르고_넘는_세대로_보내지_않음() { // DB를 백업에서 되살린 경우
-        val o = Outbox(tmp.root, "ABC123")
-        o.see(3)
+        val o = Outbox(tmp.root, "ABC123", TEST_SEAL)
+        o.see(3, 0)
         val later = System.currentTimeMillis() + 1_000
         val u = o.add(Draft(later, later + 500, "말", 0, 0), null)
-        assertFalse(o.see(2))
+        assertFalse(o.see(2, 0))
         assertEquals(2, o.generation)
         assertEquals(2, u.wire(2)!!.getInt("generation")); assertEquals("말", u.wire(2)!!.getString("text"))
     }
 
     @Test fun 철회로_지운_발화는_세대가_거꾸로_가도_새_발화를_막지_않음() { // 동의 철회 → 서버 DB 되살림(세대 역행) → 새 발화
-        val o = Outbox(tmp.root, "ABC123")
+        val o = Outbox(tmp.root, "ABC123", TEST_SEAL)
         o.add(d(1), null); o.add(d(2), null)
-        o.see(2) // 철회: 1·2의 글을 지움
-        assertFalse(o.see(1)) // 서버가 세대 1로 되살아남
+        o.see(2, 0) // 철회: 1·2의 글을 지움
+        assertFalse(o.see(1, 0)) // 서버가 세대 1로 되살아남
         val later = System.currentTimeMillis() + 1_000
         o.add(Draft(later, later + 500, "새 말", 0, 0), null)
         val up = Fake { 0 }
@@ -191,9 +190,9 @@ class CaptureTest {
         assertEquals(listOf(3L), up.sent[0].map { it.getLong("seq") }) // 앞 세대가 없어 지운 발화는 보내지 않고, 새 발화는 감
         assertEquals("새 말", up.sent[0][0].getString("text"))
         // 세대 3에서 철회한 뒤 세대 2로 되살아나면 지운 발화는 앞 세대(1)로 순번만
-        val o2 = Outbox(java.io.File(tmp.root, "b").apply { mkdirs() }, "ABC123")
-        o2.see(2); val l2 = System.currentTimeMillis() + 1_000; o2.add(Draft(l2, l2 + 500, "말", 0, 0), null)
-        o2.see(3); o2.see(2)
+        val o2 = Outbox(java.io.File(tmp.root, "b").apply { mkdirs() }, "ABC123", TEST_SEAL)
+        o2.see(2, 0); val l2 = System.currentTimeMillis() + 1_000; o2.add(Draft(l2, l2 + 500, "말", 0, 0), null)
+        o2.see(3, 0); o2.see(2, 0)
         val up2 = Fake { 1 }
         o2.flush(up2, "dev-1")
         assertEquals(setOf("seq", "generation"), up2.sent[0][0].keys().asSequence().toSet()); assertEquals(1, up2.sent[0][0].getInt("generation"))
@@ -201,24 +200,24 @@ class CaptureTest {
 
     @Test fun 철회를_안_때까지의_순번을_지우고_세대가_오르내려도_그_경계로만() { // 세대 3 → 2(서버 DB 되살림) → 3(철회)
         val dir = tmp.root
-        val o = Outbox(dir, "ABC123")
-        o.see(3)
+        val o = Outbox(dir, "ABC123", TEST_SEAL)
+        o.see(3, 0)
         val t = System.currentTimeMillis() + 1_000
         fun say(n: Int) = o.add(Draft(t + n, t + n + 500, "말 $n", 0, 0), null)
         say(1); say(2) // 세대 3
-        o.see(2); say(3) // 되살아난 세대 2
-        assertTrue(o.see(3)) // 철회: 그때까지의 1~3을 모두 지움(세대로 견주면 1·2가 남았음)
+        o.see(2, 0); say(3) // 되살아난 세대 2
+        assertTrue(o.see(3, 0)) // 철회: 그때까지의 1~3을 모두 지움(세대로 견주면 1·2가 남았음)
         assertEquals(0, o.size)
         val later = System.currentTimeMillis() + 2_000
         o.add(Draft(later, later + 500, "철회 뒤 말", 0, 0), null) // 순번 4
-        val again = Outbox(dir, "ABC123") // 다시 켜도 경계(3)로만 지움: 철회 뒤 말은 남음
+        val again = Outbox(dir, "ABC123", TEST_SEAL) // 다시 켜도 경계(3)로만 지움: 철회 뒤 말은 남음
         assertEquals(listOf("철회 뒤 말"), again.recent(5).map { it.text })
     }
 
     @Test fun 지운_발화가_묶음보다_많아도_세대_1로_되살아난_뒤_새_발화가_나감() { // 철회로 120건을 지움 → 서버가 세대 1, lastSeq 0으로 되살아남
-        val o = Outbox(tmp.root, "ABC123")
+        val o = Outbox(tmp.root, "ABC123", TEST_SEAL)
         repeat(120) { o.add(d(it + 1), null) }
-        o.see(2); o.see(1)
+        o.see(2, 0); o.see(1, 0)
         val later = System.currentTimeMillis() + 1_000
         repeat(30) { o.add(Draft(later + it, later + it + 500, "새 말 $it", 0, 0), null) }
         val up = Fake { 0 }
@@ -230,21 +229,22 @@ class CaptureTest {
 
     @Test fun 철회한_글을_파일에서_못_지웠으면_다음_조회와_다시_켤_때_다시_지움() {
         val dir = tmp.root
-        val o = Outbox(dir, "ABC123")
+        val o = Outbox(dir, "ABC123", TEST_SEAL)
         o.add(d(1), Fix(37.5, 127.0, 1_000))
         val tmpFile = java.io.File(dir, "utterances-ABC123.jsonl.tmp").apply { mkdir() } // 임시 파일 자리에 폴더: 바꾸기가 실패함
-        assertTrue(o.see(2))
-        assertTrue(java.io.File(dir, "utterances-ABC123.jsonl").readText().contains("말 1")) // 아직 파일에 남음
+        assertTrue(o.see(2, 0))
+        val plain = { java.io.File(dir, "utterances-ABC123.jsonl").readLines().map { runCatching { TEST_SEAL.unline(it) }.getOrDefault("") } }
+        assertTrue(plain().any { "말 1" in it }) // 아직 파일에 남음
         val later = System.currentTimeMillis() + 1_000
         o.add(Draft(later, later + 500, "새 말", 0, 0), null) // 새 세대 발화가 쌓임
-        assertTrue(Outbox(dir, "ABC123").recent(5).none { it.text == "말 1" }) // 다시 켜면 옛 세대 글은 비움
+        assertTrue(Outbox(dir, "ABC123", TEST_SEAL).recent(5).none { it.text == "말 1" }) // 다시 켜면 옛 세대 글은 비움
         tmpFile.delete()
-        o.see(2) // 다음 조회에서 다시 바꿈
-        assertFalse(java.io.File(dir, "utterances-ABC123.jsonl").readText().contains("말 1"))
+        o.see(2, 0) // 다음 조회에서 다시 바꿈
+        assertFalse(plain().any { "말 1" in it })
     }
 
     @Test fun 보낼_것이_없어도_서버_순번을_다시_받아_내려가면_그_뒤를_다시_보냄() { // 서버 DB가 백업에서 되살아남(ADR-0014 2절)
-        val o = Outbox(tmp.root, "ABC123")
+        val o = Outbox(tmp.root, "ABC123", TEST_SEAL)
         repeat(5) { o.add(d(it + 1), null) }
         o.flush(Fake { 5 }, "dev-1")
         o.flush(Fake { error("보낼 것이 없으면 부르지 않음") }, "dev-1")
@@ -267,12 +267,12 @@ class CaptureTest {
 
     @Test fun 쓰다_끊긴_줄은_건너뛰고_다음_줄을_붙여_쓰지_않음() {
         val dir = tmp.root
-        Outbox(dir, "ABC123").add(d(1), null)
-        java.io.File(dir, "utterances-ABC123.jsonl").appendText("{\"seq\":2,\"trip\":\"ABC") // 쓰는 중에 꺼짐
-        val o = Outbox(dir, "ABC123")
+        Outbox(dir, "ABC123", TEST_SEAL).add(d(1), null)
+        java.io.File(dir, "utterances-ABC123.jsonl").appendText(TEST_SEAL.line("{\"seq\":2}").take(20)) // 쓰는 중에 꺼짐
+        val o = Outbox(dir, "ABC123", TEST_SEAL)
         assertEquals(1, o.size)
         assertEquals(2, o.add(d(2), null).seq)
-        assertEquals(listOf(1L, 2), Outbox(dir, "ABC123").recent(5).map { it.seq })
+        assertEquals(listOf(1L, 2), Outbox(dir, "ABC123", TEST_SEAL).recent(5).map { it.seq })
     }
 
     @Test fun 발화_JSON_왕복() {

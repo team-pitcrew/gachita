@@ -138,23 +138,23 @@ fun interface Uplink {
 }
 
 /**
- * 보관함: 여행 하나의 발화를 순번(1부터)과 함께 앱 저장소에 한 줄씩(JSON lines) 쌓는다. 앱을 다시 켜면 파일에서 이어 읽는다.
- * acked는 서버가 1부터 빠짐없이 받았다고 한 마지막 순번(lastSeq)이고, 그 뒤의 것만 보낸다.
+ * 보관함: 여행 하나의 발화를 순번(1부터)과 함께 앱 저장소에 한 줄씩 쌓는다. 줄마다 AES-GCM으로 암호화한 Base64 한 줄이다(Vault.kt, T69).
+ * 앱을 다시 켜면 풀어서 이어 읽는다. 열리지 않는 줄(쓰다 끊김, 키가 바뀜)은 건너뛴다.
+ * 상태 파일(.acked, 암호화)에는 서버가 1부터 빠짐없이 받았다고 한 마지막 순번(lastSeq), 여행을 만든 시각(48시간 지우기의 기준),
+ * 동의 철회로 글을 지운 경계 순번을 둔다.
  * 서버가 돌려준 값이 acked보다 작으면(DB를 백업에서 되살림) 그 값으로 내리고 그 뒤부터 다시 보낸다(ADR-0014 2절).
- * 동의 철회(서버 여행의 세대가 오름)를 알게 되면 그때까지 쌓인 순번의 글과 위치를 모두 지우고 그 경계 순번을 파일(.wiped)에 남긴다.
- * 다시 켜도 그 경계로만 지운다(세대를 견주지 않음: 서버 DB가 되살아나 세대가 오르내려도 철회 전 글은 남지 않고, 철회 뒤 글은 지워지지 않게).
- * 서버에는 지운 순번을 글 없이 순번과 세대만 보내 확인받는다.
+ * 동의 철회(서버 여행의 세대가 오름)를 알게 되면 그때까지 쌓인 순번의 글과 위치를 모두 지우고 그 경계를 남긴다. 다시 켜도 그 경계로만 지운다
+ * (세대를 견주지 않음: 서버 DB가 되살아나 세대가 오르내려도 철회 전 글은 남지 않고 철회 뒤 글은 지워지지 않게). 서버에는 지운 순번을 순번과 세대만 보낸다.
  * 쓰기(수음 서비스, 메인 스레드)와 보내기(통신 스레드)가 갈라져 있어 목록은 잠금 안에서만 만진다. 보내는 동안은 잠그지 않는다.
- * ponytail: 여행마다 파일 하나, 지우지 않는다. 암호화와 48시간 뒤 지우기는 T69.
  */
-class Outbox(dir: File, val trip: String) {
+class Outbox(dir: File, val trip: String, private val seal: Seal) {
     private val file = File(dir, "utterances-$trip.jsonl")
-    private val ackFile = File(dir, "utterances-$trip.acked")
-    private val wipedFile = File(dir, "utterances-$trip.wiped")
-    private var wiped = 0L // 동의 철회로 글을 지운 마지막 순번
+    private val stateFile = File(dir, "utterances-$trip.acked")
     private val items = mutableListOf<Utterance>()
     var acked = 0L
         private set
+    private var createdAt = 0L
+    private var wiped = 0L // 동의 철회로 글을 지운 마지막 순번
 
     /** 지금 동의 세대. 새 발화에 붙인다. 화면이 서버 여행을 받을 때마다 see()로 맞춘다. */
     @Volatile var generation = 1
@@ -166,29 +166,13 @@ class Outbox(dir: File, val trip: String) {
 
     init {
         if (file.exists()) {
-            file.forEachLine { line -> runCatching { Utterance.parse(line) }.getOrNull()?.let { items += it } } // 쓰다 끊긴 줄은 건너뜀
+            file.forEachLine { line -> runCatching { Utterance.parse(seal.unline(line)) }.getOrNull()?.let { items += it } }
             if (file.length() > 0 && !file.readText().endsWith("\n")) file.appendText("\n") // 끊긴 줄 뒤에 붙여 쓰지 않게
         }
-        acked = runCatching { ackFile.readText().trim().toLong() }.getOrDefault(0L)
-        wiped = runCatching { wipedFile.readText().trim().toLong() }.getOrDefault(0L)
+        state(stateFile, seal)?.let { acked = it.optLong("acked"); createdAt = it.optLong("createdAt"); wiped = it.optLong("wiped") }
         generation = items.maxOfOrNull { it.generation } ?: 1 // 새 발화에 붙일 값. 서버 여행을 받으면 see()가 맞춘다
-        wipe() // 지난번에 지우다 파일을 바꾸지 못했으면 여기서 다시
+        blank { it.seq <= wiped } // 지난번에 지우다 파일을 바꾸지 못했으면 여기서 다시
     }
-
-    /** 경계 순번까지의 글과 위치를 지우고 파일을 바꾼다. 바꾸지 못하면 표시를 남겨 다음 see()에서 다시. 지운 것이 있으면 true. */
-    private fun wipe(): Boolean {
-        if (items.none { it.seq <= wiped && it.text.isNotEmpty() }) return false
-        for (i in items.indices) if (items[i].seq <= wiped) items[i] = items[i].copy(text = "", lat = null, lng = null)
-        dirty = !rewrite()
-        return true
-    }
-
-    /** 임시 파일에 다 쓴 뒤 이름을 바꾼다. 둘 중 하나라도 실패하면 false(앞의 파일이 남음). */
-    private fun rewrite(): Boolean = runCatching {
-        val tmp = File(file.path + ".tmp")
-        tmp.writeText(items.joinToString("") { it.json().toString() + "\n" })
-        tmp.renameTo(file)
-    }.getOrDefault(false)
 
     private val said get() = items.filter { it.text.isNotEmpty() }
     val size: Int @Synchronized get() = said.size
@@ -205,25 +189,58 @@ class Outbox(dir: File, val trip: String) {
         val f = fix?.takeIf { !old && kotlin.math.abs(d.endedAt - it.at) <= FIX_MS }
         val u = Utterance((items.lastOrNull()?.seq ?: 0) + 1, trip, d.startedAt, d.endedAt, if (old) "" else d.text, d.audioFromMs, d.audioToMs,
             if (old) before else generation, f?.lat, f?.lng)
-        file.appendText(u.json().toString() + "\n")
+        file.appendText(seal.line(u.json().toString()) + "\n")
         items += u
         return u
     }
 
-    /** 서버 여행의 동의 세대. 올라갔으면 옛 세대 발화의 내용을 지운다(임시 파일에 다 쓴 뒤 이름을 바꿈). 지운 것이 있으면 true. */
-    @Synchronized fun see(g: Int): Boolean {
+    /**
+     * 서버 여행의 동의 세대와 만든 시각. 만든 시각은 처음 한 번 상태 파일에 적는다(통신이 끊겨도 48시간을 잴 수 있게).
+     * 세대가 올라갔으면(동의 철회) 그때까지의 순번을 지우고 경계를 남긴다. 지운 것이 있으면 true.
+     */
+    @Synchronized fun see(g: Int, born: Long): Boolean {
         if (dirty) dirty = !rewrite() // 지난번에 바꾸지 못한 파일(철회한 글이 남아 있음)
+        if (born != createdAt && born > 0) { createdAt = born; saveState() }
         if (g < generation) generation = g // 서버 DB를 백업에서 되살림: 서버의 세대를 따른다(넘는 세대로 보내면 400)
         if (g <= generation) return false
         before = generation; generation = g; bumpedAt = System.currentTimeMillis()
         val last = items.lastOrNull()?.seq ?: 0
-        if (last > wiped) { wiped = last; runCatching { wipedFile.writeText(last.toString()) } }
-        return wipe()
+        if (last > wiped) { wiped = last; saveState() }
+        return blank { it.seq <= wiped }
+    }
+
+    /**
+     * 참가자가 서버에서 자기 글을 지운 것(DELETE /utterances는 줄을 남기고 글만 비움)을 차 사본에도 옮긴다.
+     * kept는 서버에 글이 남아 있는 이 기기의 순번(GET /utterances?device=). 서버가 받았다고 한 데까지(acked) 가운데 kept에 없는 발화는 글을 지운다.
+     * acked는 같은 차례에 서버에서 받은 값이어야 한다(되살린 DB에서 잃은 순번을 지운 것으로 보지 않게). 지운 것이 있으면 true.
+     */
+    @Synchronized fun prune(kept: Set<Long>): Boolean = blank { it.seq <= acked && it.seq !in kept }
+
+    /** 고른 발화의 글과 위치를 지우고 파일을 바꾼다. 바꾸지 못하면 표시를 남겨 다음 see()에서 다시. 지운 것이 있으면 true. */
+    private fun blank(which: (Utterance) -> Boolean): Boolean {
+        if (items.none { which(it) && it.text.isNotEmpty() }) return false
+        for (i in items.indices) if (which(items[i])) items[i] = items[i].copy(text = "", lat = null, lng = null)
+        dirty = !rewrite()
+        return true
+    }
+
+    /** 임시 파일에 다 쓴 뒤 이름을 바꾼다. 둘 중 하나라도 실패하면 false(앞의 파일이 남음). */
+    private fun rewrite(): Boolean = runCatching {
+        val tmp = File(file.path + ".tmp")
+        tmp.writeText(items.joinToString("") { seal.line(it.json().toString()) + "\n" })
+        tmp.renameTo(file)
+    }.getOrDefault(false)
+
+    /** 임시 파일에 다 쓴 뒤 이름을 바꾼다(쓰다 끊겨 만든 시각을 잃으면 그 여행이 지워지므로). */
+    private fun saveState() {
+        val tmp = File(stateFile.path + ".tmp")
+        tmp.writeText(seal.line(JSONObject().put("acked", acked).put("createdAt", createdAt).put("wiped", wiped).toString()))
+        tmp.renameTo(stateFile)
     }
 
     /**
      * 받지 않은 것을 max건까지 보낸다. 통신 스레드에서 부른다. 보낸 뒤 서버가 받았다고 한 데까지로 acked를 맞춘다.
-     * always면 보낼 것이 없어도 빈 묶음으로 서버의 lastSeq를 받는다(서버 DB가 되살아나 순번이 내려갔으면 그 뒤부터 다시 보내게, ADR-0014 2절).
+     * always면 보낼 것이 없어도 빈 묶음으로 서버의 lastSeq를 받는다(서버 DB가 되살아나 순번이 내려갔으면 그 뒤부터 다시 보내게, ADR-0014 2절. prune 앞에서도).
      */
     fun flush(up: Uplink, device: String, max: Int = 100, always: Boolean = false) {
         val batch = synchronized(this) {
@@ -237,7 +254,15 @@ class Outbox(dir: File, val trip: String) {
         val got = up.send(device, JSONArray(batch.map { it.second }))
         synchronized(this) {
             sent = if (got < acked) got else maxOf(sent, batch.lastOrNull()?.first ?: 0) // 서버 순번이 내려가면 그 뒤부터 다시
-            if (got != acked) { acked = got; ackFile.writeText(got.toString()) }
+            if (got != acked) { acked = got; saveState() }
         }
+    }
+
+    companion object {
+        private fun state(f: File, seal: Seal): JSONObject? = runCatching { JSONObject(seal.unline(f.readText())) }.getOrNull()
+
+        /** 보관함에 적어 둔 여행의 만든 시각. 없거나 열리지 않으면 null. */
+        fun createdAtOf(dir: File, trip: String, seal: Seal): Long? =
+            state(File(dir, "utterances-$trip.acked"), seal)?.optLong("createdAt")?.takeIf { it > 0 }
     }
 }

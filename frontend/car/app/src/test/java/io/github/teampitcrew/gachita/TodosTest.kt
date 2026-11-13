@@ -28,7 +28,7 @@ class TodosTest {
 
     @Test fun storeKeepsOpenAndDone() {
         val dir = Files.createTempDirectory("todos").toFile()
-        val box = Todos(dir, "T")
+        val box = Todos(dir, "T", TEST_SEAL)
         val a = box.add("마트", "마트에서 우유랑 간식 사자")!!
         box.add("마트", "마트에서 물도 사야 돼")
         box.add("숙소", "숙소에서 가방 꺼내자")
@@ -37,7 +37,7 @@ class TodosTest {
         assertEquals(2, box.open().size)
         assertNull(box.add("마트", "마트에서 물도 사야 돼")) // 같은 말은 다시 모으지 않는다(TTS가 마이크로 되돌아와도)
         assertNull(box.add("마트", "마트에서 우유랑 간식 사자")) // 완료한 것도 되살아나지 않는다
-        val again = Todos(dir, "T") // 앱을 다시 켜도 이어진다
+        val again = Todos(dir, "T", TEST_SEAL) // 앱을 다시 켜도 이어진다
         assertEquals(box.items, again.items)
         assertEquals(4L, again.add("마트", "마트에서 빵 사자")!!.id)
         assertEquals("마트에 도착했어요. 할 일 1건. 마트에서 물도 사야 돼", briefingLine("마트", box.open("마트")))

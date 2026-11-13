@@ -86,7 +86,7 @@ private const val RESULT_MS = 60_000L // 경유지 결과 카드를 보여 두�
 private const val GLEO_ARRIVAL = "GACHITA_ARRIVAL_TASKS" // assets/schema.json의 함수 이름(T40)
 private const val GLEO_PAUSE = "GACHITA_PAUSE_RECORDING" // 같은 곳(T41)
 private const val GLEO_RESUME = "GACHITA_RESUME_RECORDING"
-private const val RESYNC_EVERY = 30 // 조회 30번(5분)마다, 그리고 끊겼다 다시 닿을 때 서버의 확인 순번을 다시 받는다(ADR-0014 2절)
+private const val RESYNC_EVERY = 30 // 조회 30번(5분)마다, 그리고 끊겼다 다시 닿을 때 서버의 확인 순번을 다시 받는다(ADR-0014 2절). 5분마다는 서버에서 지운 글도 차 사본에 맞춘다(T69)
 private const val OFFER_MS = 30_000L // 제안에 답이 없으면 보관으로 되돌리는 시간. 그사이 휴게소를 지나칠 수 있어 길게 두지 않는다
 
 class MainActivity : ComponentActivity() {
@@ -108,7 +108,7 @@ class MainActivity : ComponentActivity() {
                 prefs.edit().putBoolean("offPending", v.offPending).putBoolean("started", v.started).commit()
             state = v
             syncCapture() // 동의가 빠졌으면 수음을 먼저 멈춘다
-            v.trip?.let { t -> Live.outbox(this, t.code).let { if (it.see(t.generation)) Live.show(it) } } // 동의 세대가 오르면 옛 세대 발화의 글을 지운다
+            v.trip?.let { t -> Live.outbox(this, t.code).let { if (it.see(t.generation, t.createdAt)) Live.show(it) } } // 동의 세대가 오르면 옛 세대 발화의 글을 지운다
         }
     private var carStatus by mutableStateOf(CarStatus())
     private var server by mutableStateOf(DEFAULT_SERVER)
@@ -137,7 +137,7 @@ class MainActivity : ComponentActivity() {
     /** 화면이 보이는 동안, 그리고 수음 중이면 화면 뒤에서도 조회해 폰에서 끈 동의를 반영한다. */
     private val tick = object : Runnable {
         private var n = 0
-        override fun run() { refresh(resync = ++n % RESYNC_EVERY == 0 || !s.online); locate(); if (visible || s.recording) main.postDelayed(this, POLL_MS) }
+        override fun run() { refresh(resync = ++n % RESYNC_EVERY == 0 || !s.online, prune = n % RESYNC_EVERY == 0); locate(); if (visible || s.recording) main.postDelayed(this, POLL_MS) }
     }
 
     /** 마이크(꼭 필요)와 알림(화면 뒤에서 '기록 멈춤'을 보이는 데 씀. 없으면 API 33부터 알림이 올라가지 않음)을 한 번에 묻는다. */
@@ -176,9 +176,17 @@ class MainActivity : ComponentActivity() {
         if (debug) intent.getStringExtra("server")?.let { prefs.edit().putString("server", it).apply() }
         server = prefs.getString("server", null) ?: DEFAULT_SERVER
         device = prefs.getString("device", null) ?: UUID.randomUUID().toString().also { prefs.edit().putString("device", it).apply() }
-        tokens = prefs.getString("tokens", null)?.let { j -> JSONObject(j).let { o -> o.keys().asSequence().associateWith { o.getString(it) } } }.orEmpty()
+        // 여행을 만든 뒤 48시간이 지난 차 안 사본을 지운다(T69). 시험용으로 보관 기간을 줄이는 --el keepMs는 디버그 빌드에서만
+        val now = System.currentTimeMillis()
+        val keepMs = if (debug) intent.getLongExtra("keepMs", KEEP_MS) else KEEP_MS
+        sweep(filesDir, Live.seal, now, keepMs)
+        // 저장한 여행과 참가자 토큰도 받아 적은 말(부탁)과 인증 값이라 암호화해 둔다. 열리지 않거나(키가 바뀜) 보관 기간이 지났으면 없는 것으로
+        fun unsealed(k: String) = prefs.getString(k, null)?.let { runCatching { Live.seal.unline(it) }.getOrNull() }
+        val saved = unsealed("trip")?.takeIf { j -> runCatching { now - parseTrip(j).createdAt <= keepMs }.getOrDefault(false) }
+        if (saved == null) prefs.edit().remove("trip").remove("tokens").commit()
+        tokens = unsealed("tokens")?.let { j -> JSONObject(j).let { o -> o.keys().asSequence().associateWith { o.getString(it) } } }.orEmpty()
         // 앱을 다시 켜도, 서버에 닿지 않아도 마지막으로 받은 여행과 끄기 대기, 받아 적은 말과 순번을 이어 보여 준다
-        s = Session.restore(prefs.getString("trip", null), prefs.getBoolean("offPending", false), prefs.getBoolean("started", false), tokens.keys)
+        s = Session.restore(saved, prefs.getBoolean("offPending", false), prefs.getBoolean("started", false), tokens.keys)
         car = Car(this) {
             carStatus = it
             val was = s.gear
@@ -247,7 +255,7 @@ class MainActivity : ComponentActivity() {
         if (!io.isShutdown) io.execute { val r = runCatching(work); main.post { done(r) } }
     }
 
-    private fun keep(got: Server.Got): Trip { prefs.edit().putString("trip", got.json).apply(); return got.trip }
+    private fun keep(got: Server.Got): Trip { prefs.edit().putString("trip", Live.seal.line(got.json)).apply(); return got.trip }
 
     private fun reason(e: Throwable) = if (e is ApiError) "서버가 거절했어요(${e.message})" else "서버에 닿지 않아요"
 
@@ -264,7 +272,7 @@ class MainActivity : ComponentActivity() {
         }) { r ->
             r.onSuccess { (got, mine) ->
                 tokens = mine
-                prefs.edit().putString("tokens", JSONObject(mine).toString()).commit() // 다시 받을 수 없는 값이라 디스크에 쓰고 돌아온다
+                prefs.edit().putString("tokens", Live.seal.line(JSONObject(mine).toString())).commit() // 다시 받을 수 없는 값이라 디스크에 쓰고 돌아온다
                 s = Session(gear = s.gear, ours = mine.keys).withTrip(keep(got))
             }
                 .onFailure { s = s.copy(busy = false); error = "여행을 만들지 못했어요 · ${reason(it)}" }
@@ -272,10 +280,11 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * 최신 여행을 묻는다. 끄기를 서버에 아직 못 알렸으면 먼저 다시 보낸다.
+     * 최신 여행을 묻는다. 끄기를 서버에 아직 못 알렸으면 먼저 다시 보낸다. 서버가 여행을 모르면(48시간이 지나 지워짐) 차 안 사본도 지운다.
      * resync면 보낼 발화가 없어도 서버의 확인 순번을 다시 받는다(서버 DB가 백업에서 되살아나 내려갔으면 그 뒤부터 다시 보냄).
+     * prune이면 이어서 참가자가 서버에서 지운 글을 차 사본에서도 지운다(T69). ponytail: 이 기기 발화 전체 목록을 받음. 순번만 주는 길이 생기면 바꾼다
      */
-    private fun refresh(resync: Boolean = false) {
+    private fun refresh(resync: Boolean = false, prune: Boolean = false) {
         val t = s.trip ?: return
         val off = s.offTargets
         val v = s.pollVersion
@@ -289,17 +298,30 @@ class MainActivity : ComponentActivity() {
             api.trip(t.code, v)
         }) { r ->
             r.onSuccess { got -> s = if (got == null) s.copy(online = true) else s.withTrip(keep(got)) }
-                .onFailure { s = s.copy(online = it is ApiError, note = if (it is ApiError) reason(it) else s.note) }
+                .onFailure { if (it is Gone) forget(t.code) else s = s.copy(online = it is ApiError, note = if (it is ApiError) reason(it) else s.note) }
         }
-        // 받아 적은 말은 동의와 따로 보낸다. 못 보내면(끊김, 동의 대기 403) 보관함에 두었다 다음 조회에 다시 보낸다
-        val again = resync && box != null && box.acked > 0
+        // 받아 적은 말은 동의와 따로 보낸다. 못 보내면(끊김, 동의 대기 403) 보관함에 두었다 다음 조회에 다시 보낸다.
+        // 지운 글 맞추기는 같은 차례에 받은 lastSeq 안에서만 한다(빈 묶음이라도 먼저 보냄). 되살린 DB에서 잃은 순번을 지운 것으로 보지 않게
+        val again = (resync || prune) && box != null && box.acked > 0
         if (box == null || up == null || (box.pending == 0 && !again) || uploading || s.offPending) return
         uploading = true
-        bg({ box.flush({ d, items -> Server(url).utterances(t.code, up, d, items) }, dev, always = again) }) { r ->
+        bg({
+            val api = Server(url)
+            box.flush({ d, items -> api.utterances(t.code, up, d, items) }, dev, always = again)
+            if (prune && again && box.prune(api.keptSeqs(t.code, up, dev))) Log.i(TAG, "서버에서 지운 글을 차에서도 지움")
+        }) { r ->
             uploading = false
             r.exceptionOrNull()?.let { Log.w(TAG, "발화 올리기 못 함 ${if (it is ApiError) it.message else "연결"}") } // 서버 거절(400 등)의 글에는 받아 적은 말이 없다
             Live.show(box)
         }
+    }
+
+    /** 서버가 모르는 여행(48시간이 지나 지워짐): 기록을 멈추고 이 차의 사본(보관함·할 일)을 지운 뒤 처음 화면으로. */
+    private fun forget(code: String) {
+        if (s.trip?.code != code) return
+        newTrip()
+        dropTrip(filesDir, code); Live.forget(code)
+        error = "서버에 없는 여행이라 이 차에 남은 기록도 지웠어요"
     }
 
     /** 기록 중이면 내비에 지금 위치를 물어 둔다. 발화에 붙인다(FIX_MS). 휴게소를 찾는 중이면 그 물음을 끊지 않게 묻지 않는다. */
@@ -337,6 +359,7 @@ class MainActivity : ComponentActivity() {
 
     private fun newTrip() {
         prefs.edit().remove("trip").remove("tokens").commit()
+        sweep(filesDir, Live.seal, System.currentTimeMillis()).forEach(Live::forget)
         tokens = emptyMap()
         s = Session(gear = s.gear)
         offer = null; todos = null; todoList = emptyList(); brief = null
@@ -466,7 +489,7 @@ class MainActivity : ComponentActivity() {
 
     // ---- 도착 브리핑(T40) ----
 
-    private fun todosOf(code: String): Todos = todos?.takeIf { it.trip == code } ?: Todos(filesDir, code).also { todos = it; todoList = it.items }
+    private fun todosOf(code: String): Todos = todos?.takeIf { it.trip == code } ?: Todos(filesDir, code, Live.seal).also { todos = it; todoList = it.items }
 
     /**
      * 기어가 P로 바뀐 때: 내비가 향하는 다음 곳(첫 경유지, 없으면 목적지)이 할 일의 장소면 그곳의 미완료 할 일을 알린다.
