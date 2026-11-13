@@ -948,11 +948,13 @@ async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
   fail(404, "없는 경로");
 }
 
+// 확장자 없는 주소는 화면이다: 그 폴더의 index.html(/demo), 없으면 웹앱 첫 화면 — 초대 주소 /j/<코드>처럼 웹앱이 주소를 읽는다.
 async function serveFile(path, res) {
-  const file = normalize(join(WEB, path === "/" ? "index.html" : path));
+  const page = !extname(path);
+  const file = normalize(join(WEB, page ? join(path, "index.html") : path));
   if (!file.startsWith(WEB)) fail(404, "없는 파일");
-  const data = await readFile(file).catch(() => fail(404, "없는 파일"));
-  res.writeHead(200, { "content-type": `${MIME[extname(file)] ?? "application/octet-stream"}; charset=utf-8` });
+  const data = await readFile(file).catch(() => (page ? readFile(join(WEB, "index.html")) : fail(404, "없는 파일")));
+  res.writeHead(200, { "content-type": `${MIME[page ? ".html" : extname(file)] ?? "application/octet-stream"}; charset=utf-8` });
   res.end(data);
 }
 
