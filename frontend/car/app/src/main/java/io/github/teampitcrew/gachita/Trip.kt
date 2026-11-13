@@ -7,6 +7,17 @@ enum class Seat(val label: String) {
     ROW_1_LEFT("운전석"), ROW_1_RIGHT("조수석"), ROW_2_LEFT("뒷자리 왼쪽"), ROW_2_CENTER("뒷자리 가운데"), ROW_2_RIGHT("뒷자리 오른쪽")
 }
 
+/**
+ * 좌석 지도의 줄(앞줄, 뒷줄 …). 칸은 차가 알려 준 좌석 영역(CarStatus.seats, T83)에서 만든다. 서버가 받는 자리(Seat)만 그리고,
+ * 차가 좌석을 알려 주지 않으면 기본 배치(앞 둘·뒤 셋)를 쓴다. 한 줄 안은 왼쪽 → 가운데 → 오른쪽.
+ * ponytail: 3열 좌석(ROW_3_*)은 서버의 자리 값에 없어 그리지 않는다. 3열 차가 생기면 Seat와 서버 SEATS에 함께 더한다.
+ */
+fun seatRows(carSeats: List<String>): List<List<Seat>> {
+    val known = Seat.entries.filter { carSeats.isEmpty() || it.name in carSeats }
+    val side = listOf("LEFT", "CENTER", "RIGHT")
+    return known.groupBy { it.name.substringBeforeLast('_') }.toSortedMap().values.map { row -> row.sortedBy { side.indexOf(it.name.substringAfterLast('_')) } }
+}
+
 data class Member(val name: String, val seat: Seat)
 
 /**

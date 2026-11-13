@@ -19,6 +19,24 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -35,11 +53,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -878,125 +894,178 @@ class MainActivity : ComponentActivity() {
         main.postDelayed({ if (offer === done) offer = null }, RESULT_MS)
     }
 
-    @OptIn(ExperimentalLayoutApi::class)
+    // ---- 화면(T83, 시안: 피그마 '개편 · 차와 폰' C1~C7) ----
+    // 칸의 자리와 크기를 고정하고 칸 안의 내용만 바꾼다. 카드가 생기고 사라져도 다른 칸이 밀리지 않는다(주행 중 화면은 움직이지 않아야 함, T11).
+    // 넓은 창: 머리 줄 / 왼쪽 무대(기록 상태 · 초점 칸 · 부탁·할 일 수) / 오른쪽(좌석 지도 · 주차 중 도구 · 기록 동의).
+    // 숏폼과 동승 연결은 주차 중에만, 왼쪽 무대 전체를 쓴다.
+
+    /** 여행 만들기(C6): 같이 탈 가족을 캐릭터 카드로 고르고 'N명으로 여행 만들기'. 서버 주소는 화면에 두지 않고 디버그 실행 인자(--es server)로만 바꾼다. */
     @Composable
     private fun Setup() {
         val c = MaterialTheme.colorScheme
-        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(32.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
-            Text("여행 만들기", fontSize = 40.sp, fontWeight = FontWeight.Bold)
+        Column(Modifier.fillMaxSize().padding(32.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
+            AppBar(TITLE, listening = false, *pills(online = null))
+            Spacer(Modifier.height(8.dp))
+            Text("누구랑 같이 타나요?", fontSize = 40.sp, fontWeight = FontWeight.Bold)
             Text("같이 타는 가족을 골라 주세요", color = c.onSurfaceVariant)
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
                 FAMILY.forEach { m ->
                     val on = m.name in picked
-                    FilterChip(
-                        selected = on,
-                        onClick = { if (on) picked.remove(m.name) else picked.add(m.name) },
-                        label = { Text("${m.name} · ${m.seat.label}", Modifier.padding(vertical = 16.dp, horizontal = 8.dp)) },
-                        colors = FilterChipDefaults.filterChipColors(selectedContainerColor = c.onSurface, selectedLabelColor = c.surface), // 칩 선택은 먹색(k-style)
-                    )
+                    MemberCard(m, on, Modifier.weight(1f)) { if (on) picked.remove(m.name) else picked.add(m.name) }
                 }
             }
-            OutlinedTextField(server, { server = it }, Modifier.fillMaxWidth(), label = { Text("서버 주소", fontSize = 18.sp) }, singleLine = true)
-            Button(::createTrip, Modifier.heightIn(min = 72.dp), enabled = !s.busy && picked.isNotEmpty()) {
-                Text(if (s.busy) "여행을 만들고 있어요" else "여행 만들기", fontSize = 26.sp)
+            Spacer(Modifier.weight(1f))
+            Text(error, color = c.error, maxLines = 2) // 비어 있어도 자리를 둔다
+            Button(::createTrip, Modifier.fillMaxWidth().height(96.dp), enabled = !s.busy && picked.isNotEmpty()) {
+                Text(if (s.busy) "여행을 만들고 있어요" else "${picked.size}명으로 여행 만들기", fontSize = 30.sp, fontWeight = FontWeight.Bold)
             }
-            if (error.isNotEmpty()) Text(error, color = c.error)
         }
     }
 
-    /** 주행 제한 중에는 여행 만들기(가족 고르기·서버 주소 입력)가 설정·키보드라 가린다(T11, NO_SETUP). */
+    /** 가족 한 사람(C6). 누르면 같이 탐·안 탐을 바꾼다(체크 상태라 화면 트리에 checked로 보인다). */
+    @Composable
+    private fun MemberCard(m: Member, on: Boolean, modifier: Modifier, toggle: () -> Unit) {
+        val c = MaterialTheme.colorScheme
+        Surface(
+            checked = on, onCheckedChange = { toggle() }, modifier = modifier, shape = RoundedCornerShape(32.dp),
+            color = if (on) c.primaryContainer else c.surface, border = BorderStroke(3.dp, if (on) c.onPrimaryContainer else c.outlineVariant),
+        ) {
+            Column(Modifier.padding(vertical = 28.dp, horizontal = 12.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Character(m.seat.ordinal, 112.dp)
+                Text(m.name, fontSize = 30.sp, fontWeight = FontWeight.Bold, color = c.onSurface)
+                Text(m.seat.label, color = c.onSurfaceVariant, maxLines = 1)
+                Text(if (on) "✓ 같이 타요" else "안 타요", color = if (on) c.onPrimaryContainer else c.onSurfaceVariant)
+            }
+        }
+    }
+
+    /** 주행 제한 중에는 여행 만들기(가족 고르기)가 설정이라 가린다(T11, NO_SETUP). */
     @Composable
     private fun SetupLocked() {
         Column(Modifier.fillMaxSize().padding(32.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
-            Text("여행 만들기", fontSize = 40.sp, fontWeight = FontWeight.Bold)
+            AppBar(TITLE, listening = false)
+            Spacer(Modifier.height(8.dp))
+            Text("누구랑 같이 타나요?", fontSize = 40.sp, fontWeight = FontWeight.Bold)
             Card { Text("주차(P)한 뒤 여행을 만들 수 있어요", fontSize = 30.sp, fontWeight = FontWeight.Bold) }
         }
     }
 
+    /** 머리 줄 알약: 주차 중이면 기어(C5·C6), 여행 중이면 서버 연결(C1). 주행 중 기어는 Pleos 주행 화면이 보인다. */
+    private fun pills(online: Boolean?): Array<Pair<String, Boolean>> = listOfNotNull(
+        carStatus.gear?.takeIf { !carStatus.restricted }?.let { "주차 중 · $it" to true },
+        online?.let { if (it) "서버 연결됨" to true else "연결 끊김" to false },
+    ).toTypedArray()
+
     /**
-     * 주행 제한 중(T11): 기록 상태 → 받아 적은 말 두 줄 → 일행 → 보관한 부탁 수 → 기록 끄기 → 연결 상태만 24sp 이상으로 보인다.
-     * 설명·진단 줄(20sp)과 새 여행 만들기는 가린다. 1682 × 1210 창은 두 칸, 반쪽(약 841 × 1210)은 한 칸에 기록 → 가족 → 부탁 → 조작 순서로 쌓는다(frontend/spec/car.md). */
+     * 여행 화면. 주행 제한 중(T11)에는 기록 상태, 받아 적은 말 두 줄, 일행, 부탁·할 일 수, 기록 동의(끄기만), 연결만 24sp 이상으로 보인다.
+     * 1682 × 1210 창은 두 칸, 반쪽(약 841 × 1210)은 같은 칸을 위에서 아래로 쌓고 기록 동의를 아래에 붙인다(frontend/spec/car.md).
+     */
     @Composable
     private fun TripScreen(t: Trip) {
+        val parked = !carStatus.restricted
         BoxWithConstraints(Modifier.fillMaxSize().padding(32.dp)) {
             val wide = maxWidth >= 1200.dp
             Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
-                AppBar(t.title.ifEmpty { "가족 여행" }, listening = s.recording && Live.mic == Mic.ON && !muted && handoff.state == Handoff.State.OFF)
-                // 넓은 창: 왼쪽은 지금 일(기록 상태·제안·받아 적은 말·부탁 수), 오른쪽은 사람과 조작(일행·동의·연결).
-                // 한 칸이면 같은 순서로 쌓는다(frontend/spec/car.md 화면 요소). 칸이 넘치면 손으로 스크롤할 수 있다(자동 스크롤 없음).
+                AppBar(t.title.ifEmpty { "가족 여행" }, listening = s.recording && Live.mic == Mic.ON && !muted && handoff.state == Handoff.State.OFF, *pills(s.online))
                 if (wide) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(32.dp)) {
-                        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(24.dp)) { Summary(t); Counts(t) }
-                        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(24.dp)) { People(t); Consent(); Controls(t) }
+                    Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(32.dp)) {
+                        Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(24.dp)) {
+                            if (takeover()) Takeover(t, Modifier.weight(1f)) else { StatusHero(t); Focus(t, Modifier.weight(1f)); Counts(t) }
+                        }
+                        Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(24.dp)) {
+                            People(t, Modifier.weight(1f), fill = true)
+                            if (parked) Tools(t)
+                            Consent()
+                        }
                     }
                 } else {
-                    // 한 칸에서는 주행 중에 누를 수 있는 유일한 조작(기록 동의 끄기)이 스크롤 밖으로 밀리지 않게 아래에 붙인다
-                    Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(24.dp)) { Summary(t); People(t, compact = carStatus.restricted); Counts(t); Controls(t) }
+                    // 한 칸: 넘치면 손으로 스크롤한다(자동 스크롤 없음). 주행 중에 누를 수 있는 유일한 조작(기록 동의 끄기)은 스크롤 밖 아래에 붙인다
+                    Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(24.dp)) {
+                        if (takeover()) Takeover(t, Modifier.height(900.dp)) else { StatusHero(t); Focus(t, Modifier.height(360.dp)); Counts(t) }
+                        People(t, compact = !parked)
+                        if (parked) Tools(t)
+                    }
                     Consent()
                 }
             }
         }
     }
 
+    /** 왼쪽 무대 전체를 쓰는 것: 숏폼 재생, 동승 연결(카메라·자리 고르기). 주차 중에만(제한이 걸리면 각자 닫는다). */
+    private fun takeover() = !carStatus.restricted && ((short != null && shortAt >= 0) || scanning || rideQr != null)
+
     @Composable
-    private fun Summary(t: Trip) {
+    private fun Takeover(t: Trip, modifier: Modifier) {
+        val sh = short
+        if (sh != null && shortAt >= 0) ShortStage(sh, modifier) else RideStage(t, modifier)
+    }
+
+    private data class Status(val big: String, val sub: String, val bigColor: Color = Color.Unspecified, val strong: Boolean = false)
+
+    @Composable
+    private fun status(t: Trip): Status {
         val c = MaterialTheme.colorScheme
-        Card(statusTone()) {
-            if (s.recording && muted) {
-                Text("기록 멈춤", fontSize = 48.sp, fontWeight = FontWeight.Bold)
-                Text("Gleo로 멈췄어요 · 동의는 그대로예요", color = c.onSurfaceVariant)
-                Button({ mute(false); syncCapture() }, Modifier.heightIn(min = 72.dp)) { Text("다시 기록", fontSize = 26.sp) }
-            } else if (s.recording && shortAt >= 0) {
-                Text("기록 잠시 멈춤", fontSize = 48.sp, fontWeight = FontWeight.Bold)
-                Text("숏폼을 듣는 동안은 기록하지 않아요", color = c.onSurfaceVariant)
-            } else if (s.recording && handoff.state != Handoff.State.OFF) {
-                Text("기록 잠시 멈춤", fontSize = 48.sp, fontWeight = FontWeight.Bold)
-                Text(if (handoff.state == Handoff.State.WAITING) "운전대 버튼을 누르세요" else "Gleo가 끝나면 다시 기록해요", fontSize = 30.sp, fontWeight = FontWeight.Bold)
-            } else if (s.recording) {
-                when (Live.mic) {
-                    Mic.ON -> {
-                        Text("● 기록 중", fontSize = 48.sp, fontWeight = FontWeight.Bold, color = c.error)
-                        Text(Live.why.ifEmpty { "동의를 끄면 바로 멈춰요" }, color = c.onSurfaceVariant)
-                    }
-                    Mic.BLOCKED, Mic.FAILED -> {
-                        Text("기록 멈춤", fontSize = 48.sp, fontWeight = FontWeight.Bold, color = c.error)
-                        Text(if (Live.mic == Mic.BLOCKED) "마이크가 막혔어요 · 앱을 열어 두면 다시 기록해요" else Live.why, color = c.onSurfaceVariant)
-                    }
-                    else -> {
-                        Text("기록 준비", fontSize = 48.sp, fontWeight = FontWeight.Bold)
-                        Text("기록을 시작하고 있어요", color = c.onSurfaceVariant)
-                    }
+        return when {
+            s.recording && muted -> Status("기록 멈춤", "Gleo로 멈췄어요 · 동의는 그대로예요")
+            s.recording && shortAt >= 0 -> Status("기록 잠시 멈춤", "숏폼을 듣는 동안은 기록하지 않아요")
+            s.recording && handoff.state != Handoff.State.OFF ->
+                Status("기록 잠시 멈춤", if (handoff.state == Handoff.State.WAITING) "운전대 버튼을 누르세요" else "Gleo가 끝나면 다시 기록해요", strong = true)
+            s.recording -> when (Live.mic) {
+                Mic.ON -> Status("● 기록 중", Live.why.ifEmpty { "동의를 끄면 바로 멈춰요" }, c.error)
+                Mic.BLOCKED -> Status("기록 멈춤", "마이크가 막혔어요 · 앱을 열어 두면 다시 기록해요", c.error)
+                Mic.FAILED -> Status("기록 멈춤", Live.why, c.error)
+                else -> Status("기록 준비", "기록을 시작하고 있어요")
+            }
+            s.waiting -> Status("기록 대기", "주차(P)하면 기록을 시작해요")
+            else -> Status("기록 꺼짐", when {
+                s.offPending -> "기록을 멈췄어요"
+                t.people.any { it.consent } -> "모두 동의하면 다시 기록할 수 있어요"
+                else -> "주차(P)한 뒤 대화 기록 동의를 켜면 기록해요"
+            })
+        }
+    }
+
+    /** 기록 상태(높이 고정). 큰 글 한 줄, 작은 글 한 줄, Gleo로 멈췄으면 오른쪽에 '다시 기록'. */
+    @Composable
+    private fun StatusHero(t: Trip) {
+        val c = MaterialTheme.colorScheme
+        val st = status(t)
+        Card(statusTone(), Modifier.height(168.dp)) {
+            Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(st.big, fontSize = 48.sp, fontWeight = FontWeight.Bold, color = st.bigColor, maxLines = 1)
+                    Text(st.sub, color = if (st.strong) c.onSurface else c.onSurfaceVariant, fontWeight = if (st.strong) FontWeight.Bold else null, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
-            } else if (s.waiting) {
-                Text("기록 대기", fontSize = 48.sp, fontWeight = FontWeight.Bold)
-                Text("주차(P)하면 기록을 시작해요", color = c.onSurfaceVariant)
-            } else {
-                Text("기록 꺼짐", fontSize = 48.sp, fontWeight = FontWeight.Bold)
-                Text(
-                    when {
-                        s.offPending -> "기록을 멈췄어요"
-                        t.people.any { it.consent } -> "모두 동의하면 다시 기록할 수 있어요"
-                        else -> "주차(P)한 뒤 대화 기록 동의를 켜면 기록해요"
-                    },
-                    color = c.onSurfaceVariant,
-                )
+                if (s.recording && muted) Button({ mute(false); syncCapture() }, Modifier.heightIn(min = 72.dp)) { Text("다시 기록", fontSize = 26.sp) }
             }
         }
-        brief?.takeIf { !carStatus.restricted }?.let { BriefCard(it) } // 주행 중에는 목록을 띄우지 않는다(T40)
-        if (!carStatus.restricted) ShortCard() // 숏폼은 주차 중에만(T11)
-        offer?.takeIf { it.stage != Offer.Stage.FINDING }?.let { OfferCard(it) }
-        EnrollCard(t)
-        if (s.recording || Live.count > 0) Heard(t)
+    }
+
+    /** 이 차가 참가시킨 사람 가운데 아직 목소리를 등록하지 않은 사람(T37). 출발 전(받아 적은 말이 없을 때)에만 초점 칸에 띄운다. */
+    private fun enrollShown(t: Trip) =
+        !carStatus.restricted && s.recording && (enrolling != null || voiceNote.isNotEmpty() || (Live.count == 0 && t.people.any { it.id in s.ours && it.id !in voiced }))
+
+    /** 초점 칸(크기 고정): 지금 가장 급한 것 하나만. 제안 > 도착 브리핑 > 목소리 등록 > 받아 적은 말. */
+    @Composable
+    private fun Focus(t: Trip, modifier: Modifier) {
+        val o = offer?.takeIf { it.stage != Offer.Stage.FINDING }
+        val b = brief?.takeIf { !carStatus.restricted } // 주행 중에는 목록을 띄우지 않는다(T40)
+        when {
+            o != null -> OfferCard(o, modifier)
+            b != null -> BriefCard(b, modifier)
+            enrollShown(t) -> EnrollCard(t, modifier)
+            else -> Heard(t, modifier)
+        }
     }
 
     /**
-     * 일행 자리 지도. 자리는 지도의 위치가 말해 주므로 이름 아래에는 동의만 적는다.
-     * compact(좁은 창 주행 중): 캐릭터를 줄이고 동의 줄을 빼서 부탁 수와 기록 동의가 한 화면에 들어오게 한다.
+     * 일행 자리 지도. 칸은 차가 알려 준 좌석(CarStatus.seats)에서 만든다. 이름 아래에는 동의만 적는다.
+     * compact(좁은 창 주행 중): 캐릭터를 줄이고 동의 줄을 빼서 부탁 수와 기록 동의가 한 화면에 들어오게 한다. fill이면 남은 높이 가운데에 둔다.
      */
     @Composable
-    private fun People(t: Trip, compact: Boolean = false) {
+    private fun People(t: Trip, modifier: Modifier = Modifier, compact: Boolean = false, fill: Boolean = false) {
         val c = MaterialTheme.colorScheme
-        Card {
+        Card(modifier = modifier) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("일행 ${t.people.size}명", Modifier.weight(1f), fontSize = 30.sp, fontWeight = FontWeight.Bold)
                 Text("차 앞쪽 ▲", color = c.onSurfaceVariant)
@@ -1004,70 +1073,102 @@ class MainActivity : ComponentActivity() {
             // 방금 받아 적은 말의 좌석 구역(T37)을 그 줄의 바탕으로, 말한 사람(대조·고침, T37)을 그 사람의 캐릭터로 보인다. 모르면 강조하지 않는다.
             heardTick // 말한 사람이 바뀌면 다시 그린다
             val last = Live.recent.lastOrNull()?.takeIf { s.recording }
-            SeatMap(
-                t.people, last?.seatZone, highlight = last?.let { u -> speakers?.takeIf { it.trip == t.code }?.get(u.seq)?.who }, size = if (compact) 56.dp else 80.dp,
-                note = if (compact) null else { p -> if (p.consent) "동의" to c.tertiary else if (s.waitsFor(p)) "동의 대기" to c.secondary else "동의 전" to c.onSurfaceVariant },
-            )
+            val map = @Composable {
+                SeatMap(
+                    t.people, last?.seatZone, highlight = last?.let { u -> speakers?.takeIf { it.trip == t.code }?.get(u.seq)?.who }, size = if (compact) 56.dp else if (fill) 96.dp else 80.dp, car = carStatus,
+                    note = if (compact) null else { p -> if (p.consent) "동의" to c.tertiary else if (s.waitsFor(p)) "동의 대기" to c.secondary else "동의 전" to c.onSurfaceVariant },
+                )
+            }
+            if (fill) Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) { map() } else map()
         }
     }
 
-    /** 보관한 부탁 수와 도착해서 할 일 수. */
+    /** 보관한 부탁 수와 도착해서 할 일 수(C1의 두 칸, 높이 고정). */
     @Composable
     private fun Counts(t: Trip) {
-        Card {
-            Text(if (t.heldRequests == 0) "보관한 부탁이 없어요" else "보관한 부탁 ${t.heldRequests}건", fontSize = 30.sp, fontWeight = FontWeight.Bold)
-            val open = todoList.count { !it.done }
-            if (open > 0) Text("도착해서 할 일 ${open}건")
+        val open = todoList.count { !it.done }
+        Row(Modifier.fillMaxWidth().height(136.dp), horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+            Stat("보관한 부탁", if (t.heldRequests == 0) "없음" else "${t.heldRequests}건", Modifier.weight(1f))
+            Stat("도착해서 할 일", if (open == 0) "없음" else "${open}건", Modifier.weight(1f))
+        }
+    }
+
+    @Composable
+    private fun Stat(label: String, value: String, modifier: Modifier) {
+        Card(modifier = modifier.fillMaxHeight()) {
+            Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(value, fontSize = 40.sp, fontWeight = FontWeight.Bold)
         }
     }
 
     /**
-     * 방금 받아 적은 말 두 줄. 주행 중 화면 기준(docs/emulator/README.md): 글자 24sp 이상, 자동 스크롤·움직이는 표시 없음.
-     * 긴 대화 기록은 주행 중에 보이지 않는다(frontend/spec/car.md). 한 줄은 두 줄까지만 보이고 넘치면 줄임표.
+     * 받아 적은 말(C1). 주행 중에는 '방금 받아 적은 말' 두 줄(docs/emulator/README.md: 글자 24sp 이상, 자동 스크롤·움직이는 표시 없음).
+     * 주차 중에는 '대화록': 이 차가 받아 적은 말 전체를 최신순으로 칸 안에서 손으로 넘겨 본다. 말한 사람 고치기(T37)는 최근 두 줄만.
      */
+    @Composable
+    private fun Heard(t: Trip, modifier: Modifier) {
+        val c = MaterialTheme.colorScheme
+        val parked = !carStatus.restricted
+        heardTick // 말한 사람이 바뀌면 다시 그린다
+        val lines = if (parked) remember(Live.count, Live.recent) { Live.box?.recent(Live.count).orEmpty() } else Live.recent
+        Card(modifier = modifier) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(if (parked) "대화록" else "방금 받아 적은 말", Modifier.weight(1f), fontSize = 30.sp, fontWeight = FontWeight.Bold)
+                Text("${Live.count}건", color = c.onSurfaceVariant)
+            }
+            if (lines.isEmpty()) Text("아직 받아 적은 말이 없어요", color = c.onSurfaceVariant)
+            Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(20.dp)) {
+                lines.asReversed().forEachIndexed { i, u -> HeardLine(t, u, fix = parked && i < 2) }
+            }
+            if (parked && Live.pending > 0) Text("서버에 아직 보내지 못하고 이 차에 보관 중 ${Live.pending}건", color = c.onSurfaceVariant, fontSize = 20.sp, maxLines = 1)
+        }
+    }
+
+    /** 한 줄: 말한 사람의 캐릭터(모르면 빈 동그라미), '시각 · 이름 · 앞줄', 그 말. */
     @OptIn(ExperimentalLayoutApi::class)
     @Composable
-    private fun Heard(t: Trip) {
+    private fun HeardLine(t: Trip, u: Utterance, fix: Boolean) {
         val c = MaterialTheme.colorScheme
-        val hm = SimpleDateFormat("HH:mm", Locale.KOREA)
-        heardTick // 말한 사람이 바뀌면 다시 그린다
-        Card {
-            Text("받아 적은 말 ${Live.count}건", fontSize = 30.sp, fontWeight = FontWeight.Bold)
-            if (Live.recent.isEmpty()) Text("아직 받아 적은 말이 없어요", color = c.onSurfaceVariant)
-            Live.recent.asReversed().forEach { u ->
-                val sp = speakers?.takeIf { it.trip == t.code }?.get(u.seq)
-                val name = sp?.who?.let { id -> t.people.firstOrNull { it.id == id }?.name }
-                Text("${hm.format(Date(u.startedAt))} · " + (name ?: if (sp != null) "누구?" else "").let { if (it.isEmpty()) "" else "$it · " } + u.text +
-                    if (sp?.byPerson == true && !sp.sent) " (보내는 중)" else "", maxLines = 2, overflow = TextOverflow.Ellipsis)
-                // 대조를 마친 줄은 주차 중에 사람을 골라 고친다(T37): '모름'이든 이름이 틀렸든. 그 구역의 사람을 앞에 두되 모두 보인다(구역이 틀렸을 수 있음).
-                // 주행 중에는 고치지 않는다
-                if (sp != null && !carStatus.restricted) FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        val sp = speakers?.takeIf { it.trip == t.code }?.get(u.seq)
+        val who = sp?.who?.let { id -> t.people.firstOrNull { it.id == id } }
+        val meta = listOfNotNull(
+            SimpleDateFormat("HH:mm", Locale.KOREA).format(Date(u.startedAt)),
+            who?.name ?: "누구?".takeIf { sp != null },
+            u.seatZone?.let { if (it == 0) "앞줄" else "뒷줄" },
+            "보내는 중".takeIf { sp?.byPerson == true && !sp.sent },
+        ).joinToString(" · ")
+        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            if (who != null) Character(runCatching { Seat.valueOf(who.seat).ordinal }.getOrDefault(0), 56.dp)
+            else Box(Modifier.size(56.dp).clip(CircleShape).background(c.surfaceVariant)) // 누가 말했는지 모름(빈자리 점선과 구별)
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(meta, color = c.onSurfaceVariant)
+                Text(u.text, fontSize = 28.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                // 대조를 마친 줄은 주차 중에 사람을 골라 고친다(T37): '모름'이든 이름이 틀렸든. 그 구역의 사람을 앞에 두되 모두 보인다(구역이 틀렸을 수 있음)
+                if (sp != null && fix) FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     val row = u.seatZone?.let { if (it == 0) "ROW_1" else "ROW_2" }
                     t.people.filter { it.id != sp.who }.sortedBy { if (row != null && it.seat.startsWith(row)) 0 else 1 }.forEach { p ->
                         OutlinedButton({ fixSpeaker(u, p) }, Modifier.heightIn(min = 56.dp)) { Text(p.name, fontSize = 20.sp) }
                     }
                 }
             }
-            if (Live.pending > 0 && !carStatus.restricted) Text("서버에 아직 보내지 못하고 이 차에 보관 중 ${Live.pending}건", color = c.onSurfaceVariant, fontSize = 20.sp)
         }
     }
 
-    /** 출발 전 목소리 등록(T37). 주차 중이고 기록 중일 때만, 이 차가 참가시킨 사람 가운데 아직 등록하지 않은 사람. */
+    /** 출발 전 목소리 등록(T37). 주차 중이고 기록 중일 때 초점 칸에. */
     @OptIn(ExperimentalLayoutApi::class)
     @Composable
-    private fun EnrollCard(t: Trip) {
+    private fun EnrollCard(t: Trip, modifier: Modifier) {
         val todo = t.people.filter { it.id in s.ours && it.id !in voiced }
         val e = enrolling
-        if (carStatus.restricted || !s.recording || (todo.isEmpty() && e == null && voiceNote.isEmpty())) return
         val c = MaterialTheme.colorScheme
-        Card {
+        Card(modifier = modifier) {
             Text("출발 전 목소리 등록", fontSize = 30.sp, fontWeight = FontWeight.Bold)
             if (e != null) {
                 Text("${e.name}, 아래 두 문장을 읽어 주세요")
                 ENROLL_LINES.forEach { Text(it, fontSize = 30.sp, fontWeight = FontWeight.Bold) }
             } else if (todo.isNotEmpty()) {
                 Text("누가 말했는지 알아보려고 한 사람씩 두 문장을 읽어요. 목소리는 대조용 값만 서버에 남아요", color = c.onSurfaceVariant, fontSize = 20.sp)
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                     todo.forEach { p -> OutlinedButton({ enroll(p) }, Modifier.heightIn(min = 64.dp)) { Text(p.name) } }
                 }
             }
@@ -1075,110 +1176,98 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** 도착 브리핑(T40): 장소의 미완료 할 일과 항목마다 '완료'. 받아 적은 말 그대로 보인다. */
+    /** 도착 브리핑(T40): 장소의 미완료 할 일과 항목마다 '완료'. 받아 적은 말 그대로 보인다. 목록은 칸 안에서 넘긴다. */
     @Composable
-    private fun BriefCard(b: Brief) {
+    private fun BriefCard(b: Brief, modifier: Modifier) {
         val items = todoList.filter { !it.done && (b.place == null || it.place == b.place) }
-        Card(Tone.Accent) {
+        Card(Tone.Accent, modifier) {
             Text(if (b.place != null) "${b.place}에서 할 일" else "도착해서 할 일", fontSize = 36.sp, fontWeight = FontWeight.Bold)
-            items.forEach { item ->
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    Text((if (b.place == null) "${item.place} · " else "") + item.text, Modifier.weight(1f))
-                    OutlinedButton({ complete(item) }, Modifier.heightIn(min = 64.dp)) { Text("완료") }
+            Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                items.forEach { item ->
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                        Text((if (b.place == null) "${item.place} · " else "") + item.text, Modifier.weight(1f))
+                        OutlinedButton({ complete(item) }, Modifier.heightIn(min = 64.dp)) { Text("완료") }
+                    }
                 }
             }
             OutlinedButton({ brief = null }, Modifier.heightIn(min = 64.dp)) { Text("닫기") }
         }
     }
 
-    /** 숏폼(T43): 장면 진행, 지금 자막의 말한 사람과 글. 말한 사람을 못 붙인 줄은 자리 이름만. */
+    /** 경유지 제안(T9, C2). 주행 중에도 한 번 누르는 큰 단추 둘만. 거리·시간은 그곳까지이고 들르면 늘어나는 시간이 아니다. */
     @Composable
-    private fun ShortCard() {
+    private fun OfferCard(o: Offer, modifier: Modifier) {
         val c = MaterialTheme.colorScheme
-        val sh = short
-        Card {
-            if (sh == null || shortAt < 0) {
-                Text("숏폼", fontSize = 30.sp, fontWeight = FontWeight.Bold)
-                Text(shortNote.ifEmpty { "남긴 장면을 원래 목소리와 자막으로 들어요" }, color = c.onSurfaceVariant)
-                OutlinedButton(::showShort, Modifier.heightIn(min = 64.dp), enabled = shortNote != "숏폼을 받고 있어요" && handoff.state == Handoff.State.OFF) { Text("숏폼 보기") }
-            } else {
-                val sc = sh.scenes[shortAt]
-                val cue = cueAt(sc.cues, shortPos)
-                Text("${shortAt + 1} / ${sh.scenes.size} · ${sc.label}", color = c.onSurfaceVariant)
-                if (!cue?.who.isNullOrEmpty()) Text(cue!!.who, fontSize = 30.sp, fontWeight = FontWeight.Bold, color = c.primary)
-                Text(cue?.text ?: "", fontSize = 36.sp, fontWeight = FontWeight.Bold)
-                Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    OutlinedButton({ player?.let { if (it.isPlaying) it.pause() else it.start(); shortPaused = !it.isPlaying } }, Modifier.heightIn(min = 64.dp)) {
-                        Text(if (shortPaused) "이어 듣기" else "멈춤")
-                    }
-                    OutlinedButton(::stopShort, Modifier.heightIn(min = 64.dp)) { Text("닫기") }
-                }
-            }
-        }
-    }
-
-    /** 경유지 제안(T9). 주행 중에도 한 번 누르는 단추 둘만. 거리·시간은 그곳까지이고 들르면 늘어나는 시간이 아니다. */
-    @Composable
-    private fun OfferCard(o: Offer) {
-        val c = MaterialTheme.colorScheme
-        Card(Tone.Accent) {
+        Card(Tone.Accent, modifier) {
             when (o.stage) {
                 Offer.Stage.ASKING -> {
-                    Text("${o.stop?.spoken}에 들를까요?", fontSize = 36.sp, fontWeight = FontWeight.Bold)
+                    Text("${o.stop?.spoken}에 들를까요?", fontSize = 44.sp, fontWeight = FontWeight.Bold)
                     Text(listOf(distanceLabel(o.meters, o.seconds), "부탁 ${o.requests.size}건").filter { it.isNotEmpty() }.joinToString(" · "), color = c.onSurfaceVariant)
+                    Spacer(Modifier.weight(1f))
                     Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                         // 그린 뒤에 묶인 부탁이 빠지지 않게 누른 때의 제안으로 부른다
-                        Button({ offer?.let(::accept) }, Modifier.heightIn(min = 72.dp)) { Text("경유지로 추가", fontSize = 26.sp) }
-                        OutlinedButton({ offer?.let { later(it) } }, Modifier.heightIn(min = 72.dp)) { Text("나중에", fontSize = 26.sp) }
+                        Button({ offer?.let(::accept) }, Modifier.weight(1f).height(88.dp)) { Text("경유지로 추가", fontSize = 28.sp) }
+                        OutlinedButton({ offer?.let { later(it) } }, Modifier.weight(1f).height(88.dp)) { Text("나중에", fontSize = 28.sp) }
                     }
                 }
                 Offer.Stage.FINDING -> {}
-                Offer.Stage.ADDING -> Text("내비에 경유지를 추가하고 있어요", fontSize = 30.sp, fontWeight = FontWeight.Bold)
-                Offer.Stage.ADDED -> {
-                    Text("경유지를 추가했어요", fontSize = 30.sp, fontWeight = FontWeight.Bold, color = c.tertiary)
-                    Text("${o.stop?.spoken} · 부탁 ${o.requests.size}건")
-                }
-                Offer.Stage.FAILED -> {
-                    Text("경유지를 추가하지 못했어요", fontSize = 30.sp, fontWeight = FontWeight.Bold, color = c.error)
-                    Text("부탁은 보관했어요")
+                else -> Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically)) {
+                    val (title, color, sub) = when (o.stage) {
+                        Offer.Stage.ADDING -> Triple("내비에 경유지를 추가하고 있어요", Color.Unspecified, "${o.stop?.spoken}")
+                        Offer.Stage.ADDED -> Triple("경유지를 추가했어요", c.tertiary, "${o.stop?.spoken} · 부탁 ${o.requests.size}건")
+                        else -> Triple("경유지를 추가하지 못했어요", c.error, "부탁은 보관했어요")
+                    }
+                    Text(title, fontSize = 44.sp, fontWeight = FontWeight.Bold, color = color)
+                    Text(sub, fontSize = 30.sp, color = c.onSurfaceVariant)
                 }
             }
         }
     }
 
+    /**
+     * 대화 기록 동의(높이 고정). 주행 중에는 끄기만 한 번 누름으로 된다. Gleo는 단추로 부르지 않고, 기록 중에 호출어를 알아채면 저절로 마이크를 넘긴다(T41, heard()).
+     * 안내 줄 자리에 동의 오류를 대신 보여 높이가 변하지 않는다.
+     */
     @Composable
     private fun Consent() {
         val c = MaterialTheme.colorScheme
-        Card {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
+        val sub = s.note.ifEmpty { if (carStatus.restricted) "끄기는 주행 중에도 한 번에 돼요" else "기본값은 꺼짐 · 주차 중에만 켤 수 있어요" }
+        Card(modifier = Modifier.height(144.dp)) {
+            Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text("대화 기록 동의", fontSize = 30.sp, fontWeight = FontWeight.Bold)
-                    if (!carStatus.restricted) Text("기본값은 꺼짐 · 주차 중에만 켤 수 있어요", color = c.onSurfaceVariant, fontSize = 20.sp)
+                    Text(sub, color = if (s.note.isEmpty()) c.onSurfaceVariant else c.error, fontSize = if (carStatus.restricted) 24.sp else 20.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
                 Switch(s.switchOn, { if (it) turnOn() else turnOff() }, enabled = !s.busy && (s.switchOn || !carStatus.restricted)) // 주행 제한 중에는 끄기(한 번 누름)만
             }
-            if (s.note.isNotEmpty()) Text(s.note, color = c.error)
-            // 우리가 수음하는 동안 Gleo는 운전대 버튼을 무시한다. 한 번 눌러 마이크를 넘긴다(T41). 주행 중에도 한 번 누름이라 둔다
-            if (s.recording && !muted && Live.mic == Mic.ON && handoff.state == Handoff.State.OFF && shortAt < 0)
-                OutlinedButton({ handoff.give(wake = false) }, Modifier.heightIn(min = 72.dp)) { Text("Gleo 쓰기", fontSize = 26.sp) }
         }
     }
 
-    /** 연결 상태와(주차 중) 진단 줄·새 여행 만들기. */
+    /**
+     * 주차 중 도구(높이 고정): 동승자 연결(T46)·숏폼(T43)을 여는 단추, 여행 코드와 진단 한 줄(알림이 있으면 그 자리에), 새 여행·원음 지우기.
+     * 주행 중에는 그리지 않는다(T11).
+     */
     @Composable
-    private fun Controls(t: Trip) {
+    private fun Tools(t: Trip) {
         val c = MaterialTheme.colorScheme
-        if (!carStatus.restricted) RideCard(t) // 카메라·자리 고르기는 주차 중에만(T11)
+        val free = freeSeats(t)
+        val tool = ButtonDefaults.filledTonalButtonColors(containerColor = c.primaryContainer, contentColor = c.onPrimaryContainer)
+        val note = rideNote.ifEmpty { shortNote }.ifEmpty { if (free.isEmpty()) "빈자리가 없어 동승자를 더 넣을 수 없어요" else "" }
         Card {
-            if (s.online) Text("서버에 연결됐어요", color = c.tertiary)
-            else Text("연결이 끊겼어요 · 마지막으로 확인한 정보예요", color = c.error)
-            if (!carStatus.restricted) {
-                Text("기어 ${s.gear ?: "모름"} · 내비 ${if (carStatus.navi) "연결됨" else "연결 안 됨"} · 음성 ${if (carStatus.voice) "준비됨" else "준비 안 됨"}", color = c.onSurfaceVariant, fontSize = 20.sp)
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                FilledTonalButton(::scan, Modifier.weight(1f).height(72.dp), enabled = free.isNotEmpty(), colors = tool) { Text("폰 QR 읽기") }
+                FilledTonalButton(::showShort, Modifier.weight(1f).height(72.dp), enabled = shortNote != "숏폼을 받고 있어요" && handoff.state == Handoff.State.OFF, colors = tool) { Text("숏폼 보기") }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("여행 코드 ${t.code}", color = c.onSurfaceVariant, fontSize = 20.sp)
+                Text(note.ifEmpty { "기어 ${s.gear ?: "모름"} · 내비 ${if (carStatus.navi) "연결됨" else "연결 안 됨"} · 음성 ${if (carStatus.voice) "준비됨" else "준비 안 됨"}" },
+                    color = if (note.isEmpty()) c.onSurfaceVariant else c.onSurface, fontSize = 20.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                OutlinedButton(::newTrip, Modifier.heightIn(min = 64.dp), enabled = !s.agreed && !s.switchOn && !s.busy) { Text("새 여행 만들기") }
+                OutlinedButton(::dropRawNow, Modifier.heightIn(min = 64.dp)) { Text("이 차에 둔 원음 지우기") }
             }
         }
-        if (!carStatus.restricted) OutlinedButton(::newTrip, Modifier.heightIn(min = 64.dp), enabled = !s.agreed && !s.switchOn && !s.busy) { Text("새 여행 만들기") }
-        if (!carStatus.restricted) OutlinedButton(::dropRawNow, Modifier.heightIn(min = 64.dp)) { Text("이 차에 둔 원음 지우기") }
     }
 
     /** 기록 상태 머리의 바탕: 기록 중은 빨강 기운, Gleo로 멈춤·기다림·막힘은 노랑 기운, 꺼짐은 보통 카드. */
@@ -1189,39 +1278,96 @@ class MainActivity : ComponentActivity() {
         else -> Tone.Plain
     }
 
-    /** 동승 연결(T46): 폰 QR 읽기 → 자리 고르기. 폰이 없는 아이는 여행 만들 때 손님으로 넣는다. */
-    @OptIn(ExperimentalLayoutApi::class)
+    /**
+     * 숏폼(T43)을 왼쪽 무대 전체에(릴스·틱톡·쇼츠의 세로 화면처럼). 주차 중에만.
+     * 위: 장면마다 한 칸인 진행 막대와 '2 / 6 · 장면 이름'. 아래 왼쪽: 말한 사람과 큰 자막. 아래 오른쪽: 세로 단추(멈춤·다음 장면·닫기).
+     * 영상이 아니라 장면 클립 소리 + 자막 큐 + 말한 사람이라(#63) 바탕은 어둡게 두고 글을 크게 쓴다.
+     */
     @Composable
-    private fun RideCard(t: Trip) {
-        val c = MaterialTheme.colorScheme
-        val free = freeSeats(t)
-        Card {
-            Text("동승자 연결", fontSize = 30.sp, fontWeight = FontWeight.Bold)
-            when {
-                rideQr != null -> {
-                    Text("어느 자리에 앉았나요?")
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                        free.forEach { seat -> Button({ seatRider(seat) }, Modifier.heightIn(min = 64.dp), enabled = rideNote != "연결하고 있어요") { Text(seat.label) } }
-                        OutlinedButton({ rideQr = null; rideNote = "" }, Modifier.heightIn(min = 64.dp)) { Text("취소") }
+    private fun ShortStage(sh: Short, modifier: Modifier) {
+        val sc = sh.scenes[shortAt]
+        val cue = cueAt(sc.cues, shortPos) ?: sc.cues.lastOrNull { shortPos >= it.start } ?: sc.cues.firstOrNull() // 줄 사이에도 앞 자막을 둔다(쇼츠처럼 비지 않게)
+        val ink = Color(0xFFF4F1EC)
+        val face = cue?.who?.let { name -> s.trip?.people?.firstOrNull { it.name == name } }?.let { p -> runCatching { Seat.valueOf(p.seat).ordinal }.getOrNull() }
+        Box(modifier.fillMaxWidth().clip(RoundedCornerShape(32.dp)).background(Brush.verticalGradient(listOf(Color(0xFF1C3A2D), Color(0xFF12110F))))) {
+            Column(Modifier.fillMaxWidth().padding(28.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    sh.scenes.forEachIndexed { i, scene ->
+                        val f = when { i < shortAt -> 1f; i > shortAt -> 0f; else -> (shortPos / scene.seconds).toFloat().coerceIn(0f, 1f) }
+                        Box(Modifier.weight(1f).height(6.dp).clip(CircleShape).background(ink.copy(alpha = 0.3f))) { Box(Modifier.fillMaxWidth(f).fillMaxHeight().background(ink)) }
                     }
                 }
-                scanning -> {
-                    Text("폰의 동승 QR을 카메라에 보여 주세요", color = c.onSurfaceVariant)
-                    Scanner()
-                    OutlinedButton(::closeCamera, Modifier.heightIn(min = 64.dp)) { Text("닫기") }
+                Text("${shortAt + 1} / ${sh.scenes.size} · ${sc.label}", color = ink, fontSize = 28.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            // 가운데: 지금 말하는 사람(영상 자리). 이름을 못 붙인 줄은 가치타 마스코트
+            Box(Modifier.align(Alignment.Center).padding(bottom = 200.dp)) { if (face != null) Character(face, 240.dp, ring = true) else Mascot(listening = true, size = 200.dp) }
+            Column(Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(start = 32.dp, end = 152.dp, bottom = 40.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                if (!cue?.who.isNullOrEmpty()) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    if (face != null) Character(face, 72.dp, ring = true)
+                    Text(cue!!.who, color = ink, fontSize = 30.sp, fontWeight = FontWeight.Bold)
                 }
-                else -> {
-                    Text(if (free.isEmpty()) "빈자리가 없어요" else "탑승자 폰의 동승 QR을 읽어 자리에 넣어요", color = c.onSurfaceVariant)
-                    OutlinedButton(::scan, Modifier.heightIn(min = 64.dp), enabled = free.isNotEmpty()) { Text("폰 QR 읽기") }
+                Text(cue?.text ?: "", color = Color.White, fontSize = 48.sp, fontWeight = FontWeight.Bold, lineHeight = 60.sp, maxLines = 5, overflow = TextOverflow.Ellipsis)
+            }
+            Column(Modifier.align(Alignment.BottomEnd).padding(end = 24.dp, bottom = 40.dp), verticalArrangement = Arrangement.spacedBy(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                RailButton(if (shortPaused) "이어 듣기" else "멈춤", if (shortPaused) Glyph.PLAY else Glyph.PAUSE) {
+                    player?.let { if (it.isPlaying) it.pause() else it.start(); shortPaused = !it.isPlaying }
+                }
+                RailButton("다음 장면", Glyph.NEXT) { play(shortAt + 1) } // 마지막 장면에서 누르면 닫힌다
+                RailButton("닫기", Glyph.CLOSE, ::stopShort)
+            }
+        }
+    }
+
+    private enum class Glyph { PLAY, PAUSE, NEXT, CLOSE }
+
+    /** 숏폼 오른쪽 세로 단추: 둥근 단추와 아래 이름(릴스의 오른쪽 줄). 그림은 Canvas로 그려 글꼴에 기대지 않는다. */
+    @Composable
+    private fun RailButton(label: String, glyph: Glyph, onClick: () -> Unit) {
+        val ink = Color(0xFFF4F1EC)
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Surface(onClick = onClick, shape = CircleShape, color = Color.White.copy(alpha = 0.16f), modifier = Modifier.size(88.dp)) {
+                Canvas(Modifier.padding(28.dp)) {
+                    val w = size.width; val h = size.height; val stroke = Stroke(6.dp.toPx(), cap = StrokeCap.Round)
+                    when (glyph) {
+                        Glyph.PLAY -> drawPath(Path().apply { moveTo(w * 0.15f, 0f); lineTo(w, h / 2); lineTo(w * 0.15f, h); close() }, ink)
+                        Glyph.PAUSE -> { drawRect(ink, Offset(w * 0.1f, 0f), Size(w * 0.28f, h)); drawRect(ink, Offset(w * 0.62f, 0f), Size(w * 0.28f, h)) }
+                        Glyph.NEXT -> { drawPath(Path().apply { moveTo(0f, 0f); lineTo(w * 0.7f, h / 2); lineTo(0f, h); close() }, ink); drawRect(ink, Offset(w * 0.78f, 0f), Size(w * 0.2f, h)) }
+                        Glyph.CLOSE -> { drawLine(ink, Offset(0f, 0f), Offset(w, h), stroke.width, StrokeCap.Round); drawLine(ink, Offset(w, 0f), Offset(0f, h), stroke.width, StrokeCap.Round) }
+                    }
                 }
             }
-            if (rideNote.isNotEmpty()) Text(rideNote, fontSize = 20.sp)
+            Text(label, color = ink, fontSize = 20.sp)
+        }
+    }
+
+    /** 동승 연결(T46)을 왼쪽 무대 전체에(C7): 카메라로 폰의 QR 읽기 → 읽으면 빈자리 고르기. 폰이 없는 아이는 여행 만들 때 손님으로 넣는다. */
+    @OptIn(ExperimentalLayoutApi::class)
+    @Composable
+    private fun RideStage(t: Trip, modifier: Modifier) {
+        val c = MaterialTheme.colorScheme
+        Card(Tone.Accent, modifier) {
+            Text("동승자 연결", fontSize = 36.sp, fontWeight = FontWeight.Bold)
+            if (rideQr != null) {
+                Pill("동승 연결 QR을 읽었어요")
+                Text("어느 자리에 앉았나요?", fontSize = 30.sp, fontWeight = FontWeight.Bold)
+                Text("빈자리를 눌러 주세요 · 기록 동의는 그 사람이 폰에서 직접 켜요", color = c.onSurfaceVariant)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    freeSeats(t).forEach { seat -> Button({ seatRider(seat) }, Modifier.heightIn(min = 88.dp), enabled = rideNote != "연결하고 있어요") { Text(seat.label, fontSize = 28.sp) } }
+                }
+                Spacer(Modifier.weight(1f))
+                OutlinedButton({ rideQr = null; rideNote = "" }, Modifier.fillMaxWidth().height(72.dp)) { Text("취소") }
+            } else {
+                Text("폰의 동승 QR을 카메라에 보여 주세요", color = c.onSurfaceVariant)
+                Scanner(Modifier.weight(1f).fillMaxWidth().clip(RoundedCornerShape(24.dp)))
+                OutlinedButton(::closeCamera, Modifier.fillMaxWidth().height(72.dp)) { Text("닫기") }
+            }
+            Text(rideNote, fontSize = 20.sp, maxLines = 1) // 비어 있어도 자리를 둔다
         }
     }
 
     /** 카메라 미리보기와 QR 읽기. 화면에서 빠지면(닫기, 주행 제한, 읽음) 카메라를 놓는다. */
     @Composable
-    private fun Scanner() {
+    private fun Scanner(modifier: Modifier) {
         val cam = remember {
             QrCamera(this, onCode = { rideQr = it; closeCamera() }, onFail = { rideNote = it; closeCamera() }).also { qrCam = it }
         }
@@ -1235,9 +1381,9 @@ class MainActivity : ComponentActivity() {
                     override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
                 }
             }
-        }, Modifier.fillMaxWidth().height(360.dp))
+        }, modifier)
     }
 
     @Composable
-    private fun Card(tone: Tone = Tone.Plain, content: @Composable () -> Unit) = CarCard(tone) { content() }
+    private fun Card(tone: Tone = Tone.Plain, modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) = CarCard(tone, modifier, content)
 }

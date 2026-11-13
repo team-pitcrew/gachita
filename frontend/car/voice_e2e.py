@@ -57,6 +57,16 @@ def baseline(talk):
     return out
 
 
+def heard(ui):
+    """대화록 줄을 옛 한 줄 꼴 '시각 · 이름 · 말'(보내는 중이면 끝에 ' (보내는 중)')로 모은다.
+    화면(T83)은 한 줄을 두 글로 그린다: '시각 · 이름 · 앞줄 · 보내는 중'(이름·구역·보내는 중은 있을 때만)과 그 아래 말."""
+    out = []
+    for i, t in enumerate(ui[:-1]):
+        m = re.match(r"^(\d\d:\d\d) · (아빠|엄마|서준|하은|누구\?)(?: · (?:앞줄|뒷줄))?( · 보내는 중)?$", t)
+        if m: out.append(f"{m.group(1)} · {m.group(2)} · {ui[i + 1]}" + (" (보내는 중)" if m.group(3) else ""))
+    return out
+
+
 def main(apk, n):
     threading.Thread(target=e2e.heartbeat, daemon=True).start()
     threading.Thread(target=cap.logcat, daemon=True).start()
@@ -70,7 +80,7 @@ def main(apk, n):
     adb("shell", "am", "force-stop", "--user", "10", PKG); adb("shell", "pm", "clear", "--user", "10", PKG)
     for perm in ("RECORD_AUDIO", "POST_NOTIFICATIONS"): adb("shell", "pm", "grant", "--user", "10", PKG, f"android.permission.{perm}")
     adb("shell", "am", "start", "--user", "10", "-n", f"{PKG}/.MainActivity", "--es", "server", f"http://10.0.2.2:{PORT}")
-    wait_texts(lambda u: "서버 주소" in u, 30); tap_text("여행 만들기"); time.sleep(4)  # 설치 직후 첫 화면은 바쁜 기기에서 4초를 넘기기도 함
+    wait_texts(lambda u: e2e.SETUP in u, 30); e2e.tap_make(); time.sleep(4)  # 설치 직후 첫 화면은 바쁜 기기에서 4초를 넘기기도 함
     code = next((t.split()[-1] for t in texts() if t.startswith("여행 코드")), None); note("trip", code=code)
     phone = phone_join(code)  # 서버 기록을 읽을 참가자(뒷자리 가운데, 목소리 등록 없음)
     wait_texts(lambda u: "일행 5명" in u, 15); tap_switch(); wait_texts(lambda u: "동의 대기" in " ".join(u), 10)
@@ -137,18 +147,18 @@ def main(apk, n):
     while not (matched() - before) and time.time() < end: time.sleep(3)
     time.sleep(2)
     ui = texts(); shot("03-heard-names"); note("ui", texts=ui)
-    named = [t for t in ui if re.match(r"\d\d:\d\d · (아빠|엄마|서준|하은|누구\?) · ", t)]
+    named = [t for t in heard(ui) if re.match(r"\d\d:\d\d · (아빠|엄마|서준|하은|누구\?) · ", t)]
     check("받아 적은 말 줄에 말한 사람 이름(또는 누구?)이 보임", named, lines=named)
     fixed = None
-    unknown = [t for t in ui if " · 누구? · " in t]
+    unknown = [t for t in heard(ui) if " · 누구? · " in t]
     if unknown:  # 모름인 줄마다 이름 단추가 모두 있다(그 구역 사람이 앞). 화면 위쪽의 첫 '누구?' 줄의 '엄마'를 누른다
         fixed = re.sub(r" · 누구\? · ", " · 엄마 · ", unknown[0], count=1)
         for _ in range(3):  # 경유지 카드가 사라지며 줄이 밀리면 누름이 빗나간다. 바뀔 때까지 다시
             tap_text("엄마", last=False); time.sleep(2); ui = texts(); note("ui", texts=ui)
-            if fixed in ui or fixed + " (보내는 중)" in ui: break
-        check("모름인 말은 주차 중에 사람을 골라 고칠 수 있음", fixed in ui or fixed + " (보내는 중)" in ui, line=fixed)
-        ui = wait_texts(lambda u: fixed in u, 20)  # 서버에 남기면 '보내는 중'이 사라진다(#65 PATCH)
-        check("고친 것을 서버에 남기면 '보내는 중'이 사라짐", fixed in ui)
+            if fixed in heard(ui) or fixed + " (보내는 중)" in heard(ui): break
+        check("모름인 말은 주차 중에 사람을 골라 고칠 수 있음", fixed in heard(ui) or fixed + " (보내는 중)" in heard(ui), line=fixed)
+        ui = wait_texts(lambda u: fixed in heard(u), 20)  # 서버에 남기면 '보내는 중'이 사라진다(#65 PATCH)
+        check("고친 것을 서버에 남기면 '보내는 중'이 사라짐", fixed in heard(ui))
         text = fixed.split(" · ", 2)[2]
         srv = [u for u in wait_uploaded(code, phone, 1)["items"] if u["text"].startswith(text[:8])]
         check("고친 말한 사람이 서버 기록에도 남음", srv and srv[0].get("participantId") == ids["엄마"], got=[u.get("participantId") for u in srv], want=ids["엄마"])
