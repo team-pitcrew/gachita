@@ -469,3 +469,18 @@ input[type="file"] {
   font: inherit;
   max-width: 100%;
 }
+
+/* 동승 연결 QR(#71). 카메라가 읽게 테마와 관계없이 흰 바탕·검은 칸(T20 개편도 이 색을 유지) */
+.qr {
+  display: block;
+  width: min(100%, 300px);
+  margin: 0 auto;
+  border-radius: var(--r-ctl);
+}
+.qr.expired {
+  opacity: 0.2;
+}
+.center {
+  text-align: center;
+}
+

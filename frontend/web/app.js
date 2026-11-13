@@ -4,6 +4,7 @@
 // 사용자가 쓴 글은 textContent로만 넣는다(innerHTML 금지).
 
 import { SEATS, SEAT, WHEN, REQ, CLOSED, api, h, toast } from "/shared.js";
+import qrcode from "/qrcode.js";
 
 const TRIP = {
   boarding: ["탑승 중", "모두 타면 운전자가 출발을 눌러요."],
@@ -63,6 +64,7 @@ const pdraft = { name: "", character: "", photo: null, preview: "", consentDefau
 let failed = ""; // 여행을 불러오지 못한 이유
 let offline = false;
 let stale = false; // 입력 중에 온 변경은 입력이 끝난 뒤 그린다
+let reading = false; // 여행 화면의 '동의 켜기': 켜기 전에 동의 문구 전문을 보이는 중
 
 // 여행 경로는 토큰 없이, 프로필 경로(mine)는 이 폰의 프로필 토큰으로.
 const call = (method, path, body) => api(method, `/trips${path}`, body);
@@ -113,10 +115,26 @@ const claim = () => (claiming ??= rejoin().finally(() => (claiming = null)));
 async function rejoin() {
   const c = trip?.code;
   if (!c || (store(c) && store(`${c}:token`)) || !profile || !trip.participants.some((p) => p.profileId === profile.id)) return false;
-  const p = await api("POST", `/trips/${c}/participants`, {}, store("profile"));
+  const seat = trip.participants.find((p) => p.profileId === profile.id).seat; // openapi는 seat 필수. 있던 참가자라 서버는 자리를 바꾸지 않는다
+  const p = await api("POST", `/trips/${c}/participants`, { seat }, store("profile"));
   store(c, p.id);
   store(`${c}:token`, p.token);
   return true;
+}
+
+// 이 폰의 참가자 토큰으로 부른다(동의 켜기, 지우기, 숏폼). 누른 여행을 잡아 그 여행의 토큰만 쓴다.
+// 서버가 토큰을 잊었으면(401: 같은 프로필이 다른 곳에서 다섯 번 넘게 다시 참가) 프로필로 들어온 사람은
+// 다시 참가해 새 토큰으로 한 번 더 한다. 기다리는 사이 다른 여행으로 옮겼으면 다시 하지 않는다. 손님은 다시 받을 길이 없다.
+async function asMe(me, call) {
+  const c = trip.code;
+  const go = () => call(c, store(`${c}:token`));
+  return go().catch(async (e) => {
+    if (e.status !== 401 || !profile || me.profileId !== profile.id || trip?.code !== c) throw e;
+    store(`${c}:token`, null);
+    await claim();
+    if (trip?.code !== c) throw e;
+    return go();
+  });
 }
 
 const typing = () => app.contains(document.activeElement) && /^(INPUT|SELECT)$/.test(document.activeElement.tagName);
@@ -267,7 +285,67 @@ function home() {
           h("p", { className: "meta" }, "이름과 캐릭터를 정하면 동승 연결 QR을 띄울 수 있어요."),
           button("프로필 만들기", () => (location.hash = "me")),
         ),
-    last && bar(button("지금 탄 여행", () => (location.hash = last), "primary")),
+    (profile || last) && bar(profile && button("동승 연결", startRide, "primary"), last && button("지금 탄 여행", () => (location.hash = last), profile ? "" : "primary")),
+  ];
+}
+
+// 동승 연결(#71, 11/14): 이 폰의 프로필로 1회용 QR을 띄우면 주차 중인 차가 읽어 운전자가 고른 자리에 넣는다.
+// QR에는 짧은 코드만 담기고, 참가자 토큰은 발급 응답으로 이 폰에만 온다. 연결되면 그 토큰으로 이 폰의 동의를 묻는다.
+const RIDE_KEY = "gachita:ride"; // sessionStorage: 새로 고쳐도 기다리던 연결을 잇는다
+let ride = JSON.parse(sessionStorage.getItem(RIDE_KEY) ?? "null"); // { id, qr, expiresAt, token }
+const keepRide = (r) => ((ride = r), r ? sessionStorage.setItem(RIDE_KEY, JSON.stringify(r)) : sessionStorage.removeItem(RIDE_KEY));
+const startRide = () =>
+  act(async () => {
+    if (ride) await mine("DELETE", `/ride-links/${ride.id}`).catch(() => {}); // 새로 띄우면 앞 QR은 거둔다
+    const r = await mine("POST", "/ride-links", {});
+    keepRide({ id: r.id, qr: r.qr, expiresAt: r.expiresAt, token: r.participantToken });
+  });
+// 닫기: 아직 아무 차도 읽지 않았으면 거두고, 그사이 차가 읽었으면(409) 그 여행으로 간다
+const cancelRide = () =>
+  act(async () => {
+    const gone = await mine("DELETE", `/ride-links/${ride.id}`).then(() => true, (e) => e.status !== 409);
+    if (gone) keepRide(null);
+    else await pollRide();
+  });
+// 차가 읽었는지 2초마다 본다. 만료 뒤에도 잠깐(차가 막 읽었을 수 있음) 더 보고, 그다음엔 '새로 띄우기'만 보인다.
+async function pollRide() {
+  if (!ride || Date.now() > ride.expiresAt + 10_000) return;
+  const r = await mine("GET", `/ride-links/${ride.id}`).catch((e) => (e.status === 404 ? { status: "gone" } : null));
+  if (r?.status === "gone") keepRide(null);
+  if (r?.status !== "linked") return !code() && !typing() && render(); // 남은 시간을 다시 그린다
+  store(r.tripCode, r.participant.id);
+  store(`${r.tripCode}:token`, ride.token);
+  keepRide(null);
+  toast(`${SEAT[r.participant.seat] ?? "차"}에 탔어요`);
+  location.hash = r.tripCode;
+}
+
+// QR을 SVG로 그린다(innerHTML 없이). 카메라가 읽게 테마와 관계없이 흰 바탕에 검은 칸, 둘레 4칸을 비운다.
+// data-payload는 /demo의 차가 같은 출처 iframe에서 QR을 '읽는' 흉내에 쓴다(실제 차는 카메라로 읽는다).
+function qrSvg(text, expired) {
+  const q = qrcode(0, "M");
+  q.addData(text);
+  q.make();
+  const n = q.getModuleCount();
+  const d = [];
+  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (q.isDark(r, c)) d.push(`M${c + 4} ${r + 4}h1v1h-1z`);
+  const ns = "http://www.w3.org/2000/svg";
+  const el = (tag, attrs) => Object.entries(attrs).reduce((e, [k, v]) => (e.setAttribute(k, v), e), document.createElementNS(ns, tag));
+  const svg = el("svg", { viewBox: `0 0 ${n + 8} ${n + 8}`, class: `qr${expired ? " expired" : ""}`, role: "img", "aria-label": "동승 연결 QR", "shape-rendering": "crispEdges", "data-payload": text });
+  svg.append(el("rect", { width: n + 8, height: n + 8, fill: "#fff" }), el("path", { d: d.join(""), fill: "#000" }));
+  return svg;
+}
+
+function rideView() {
+  const left = ride.expiresAt - Date.now();
+  return [
+    header(button("닫기", cancelRide, "plain"), h("span", { className: "meta" }, "동승 연결")),
+    h("h1", {}, "차에 이 QR을 보여 주세요"),
+    h("p", { className: "sub" }, "주차 중인 차 화면의 '동승자 연결'에서 이 QR을 읽으면, 운전자가 고른 자리로 여행에 들어가요."),
+    profile && h("div", { className: "card face" }, avatar(profile, photo), h("p", { className: "what grow" }, `${profile.name} 님`)),
+    qrSvg(ride.qr, left <= 0),
+    h("p", { className: "meta center", "aria-live": "polite" }, left > 0 ? `${Math.ceil(left / 60_000)}분 남았어요` : "QR이 만료됐어요. 새로 띄워 주세요."),
+    bar(button("새로 띄우기", startRide, left > 0 ? "" : "primary")),
   ];
 }
 
@@ -291,10 +369,10 @@ const notHere = () => [
 // 차가 넣어 준 뒤 한 번 묻는 기록 동의. 켜기는 이 폰의 참가자 토큰으로만 된다(T68). 고른 뒤로는 여행 화면에서 바꾼다.
 const asking = (me) => !me.consent && !store(`${trip.code}:asked`);
 function consentView(me) {
-  const decide = (on) => () => (store(`${trip.code}:asked`, "1"), on ? consentOn(me) : render());
+  const decide = (on) => () => (store(`${trip.code}:asked`, "1"), (reading = false), on ? consentOn(me) : render());
   return [
     header(h("span", { className: "brand" }, "가치타"), h("span", { className: "meta" }, trip.title || "가치타 여행")),
-    h("p", { className: "state" }, `${SEAT[me.seat] ?? "차"}에 탔어요`),
+    asking(me) && h("p", { className: "state" }, `${SEAT[me.seat] ?? "차"}에 탔어요`),
     h("h1", {}, "이동 중 대화를 기록해도 될까요?"),
     h("p", { className: "sub" }, "도착한 뒤 재미있던 장면을 클립으로 남기는 데 써요. 한 명이라도 동의하지 않으면 기록하지 않아요."),
     h("ul", { className: "card" }, CONSENT.map((line) => h("li", {}, line))),
@@ -304,24 +382,13 @@ function consentView(me) {
 
 // 켜기는 본인의 참가자 토큰으로만 된다(끄기는 누구나). 서버가 이 폰의 토큰을 잊었으면(다른 곳에서 다섯 번 넘게
 // 다시 참가) 프로필로 들어온 사람은 다시 참가해 새 토큰으로 한 번 더 켠다. 손님은 다시 받을 길이 없다.
-// 누른 여행·참가자를 고정한다: 응답을 기다리는 사이 다른 여행으로 옮겨도 그 여행의 토큰을 건드리지 않는다.
+// 켜기는 본인의 참가자 토큰으로만 된다(끄기는 누구나). 토큰 회복과 여행 고정은 asMe()가 한다.
 const consentOn = (me) =>
-  act(async () => {
-    const c = trip.code;
-    const mine = profile && me.profileId === profile.id;
-    const on = () => api("PATCH", `/trips/${c}/participants/${me.id}`, { consent: true }, store(`${c}:token`));
-    await on()
-      .catch(async (e) => {
-        if (e.status !== 401 || !mine || trip?.code !== c) throw e; // 화면이 바뀌었으면 다시 하지 않는다
-        store(`${c}:token`, null);
-        await claim();
-        if (trip?.code !== c) throw e;
-        await on();
-      })
-      .catch((e) => {
-        throw e.status === 401 || e.status === 403 ? new Error(ONLY_HERE) : e;
-      });
-  });
+  act(() =>
+    asMe(me, (c, token) => api("PATCH", `/trips/${c}/participants/${me.id}`, { consent: true }, token)).catch((e) => {
+      throw e.status === 401 || e.status === 403 ? new Error(ONLY_HERE) : e;
+    }),
+  );
 
 function tripView(me) {
   const t = `/${trip.code}`;
@@ -334,7 +401,7 @@ function tripView(me) {
   const eraseClip = (m) =>
     confirm("이 장면의 소리를 지울까요? 받아 적은 글과 장면은 남아요.") &&
     act(async () => {
-      const del = () => api("DELETE", `/trips${t}/recordings/${m.id}`, null, myToken());
+      const del = () => asMe(me, (c, token) => api("DELETE", `/trips/${c}/recordings/${m.id}`, null, token));
       await del()
         .catch((e) => (e.status === 409 ? del() : Promise.reject(e))) // 그사이 새로 올라왔으면 한 번 더 지운다
         .then(
@@ -345,7 +412,7 @@ function tripView(me) {
   const eraseMine = () =>
     confirm("이 여행에서 내 이름이 붙은 받아 적은 글을 지울까요? 되돌릴 수 없어요.") &&
     act(async () => {
-      const { deleted } = await api("DELETE", `/trips${t}/utterances`, null, myToken());
+      const { deleted } = await asMe(me, (c, token) => api("DELETE", `/trips/${c}/utterances`, null, token));
       toast(deleted ? `내 이름이 붙은 글 ${deleted}줄을 지웠어요.` : "지울 내 글이 없어요.");
     });
   const open = trip.requests.filter((r) => !CLOSED.includes(r.status));
@@ -408,12 +475,14 @@ function tripView(me) {
         "div",
         { className: "between" },
         h("div", {}, h("p", { className: "what" }, "대화 기록 동의"), h("p", { className: "meta" }, me.consent ? "동의했어요." : "동의하지 않았어요.")),
-        me.consent ? button("동의 끄기", () => confirm(OFF_WIPES) && patch(`/participants/${me.id}`, { consent: false })()) : myToken() ? button("동의 켜기", () => consentOn(me)) : h("p", { className: "meta" }, ONLY_HERE),
+        me.consent ? button("동의 끄기", () => confirm(OFF_WIPES) && patch(`/participants/${me.id}`, { consent: false })()) : myToken() ? button("동의 켜기", () => ((reading = true), render(), scrollTo(0, 0))) : h("p", { className: "meta" }, ONLY_HERE),
       ),
       // 동의 문구가 약속한 지우기: 프로필로 참가한 사람의 자기 글(손님 발화는 누구 것인지 가릴 수 없어 서버가 403)
       me.profileId &&
         myToken() &&
         h("div", { className: "between" }, h("div", {}, h("p", { className: "what" }, "내 글"), h("p", { className: "meta" }, "내 이름이 붙은 받아 적은 글")), button("내 글 지우기", eraseMine, "plain")),
+      // 이미 동의한 사람도 지금의 동의 문구(바뀐 것 포함)를 언제든 다시 본다
+      h("details", {}, h("summary", { className: "meta" }, "동의 문구 보기"), h("ul", {}, CONSENT.map((line) => h("li", {}, line)))),
     ),
     trip.moments.length > 0 &&
       h(
@@ -442,7 +511,7 @@ function render() {
   const me = trip?.participants.find((p) => p.id === myId());
   if (me) store("trip", trip.code); // 처음 화면의 '지난 여행 열기'
   else if (failed && store("trip") === code()) store("trip", null);
-  const view = location.hash === "#me" ? profileView() : !code() ? home() : failed ? missing() : !trip ? loading() : !me ? notHere() : asking(me) ? consentView(me) : tripView(me);
+  const view = location.hash === "#me" ? profileView() : !code() ? (ride ? rideView() : home()) : failed ? missing() : !trip ? loading() : !me ? notHere() : asking(me) || reading ? consentView(me) : tripView(me);
   app.replaceChildren(...view.flat().filter(Boolean));
 }
 
@@ -476,9 +545,10 @@ function render() {
   };
 }
 
-addEventListener("hashchange", () => (location.hash === "#me" && fillDraft(), (trip = null), (failed = ""), refresh(true)));
+addEventListener("hashchange", () => ((reading = false), location.hash === "#me" && fillDraft(), (trip = null), (failed = ""), refresh(true)));
 app.addEventListener("focusout", () => setTimeout(() => stale && !typing() && render())); // 입력이 끝나면 밀린 변경을 그린다
 setInterval(refresh, 2000); // ponytail: 2초마다 묻는다(바뀐 게 없으면 304). 지연이 문제가 되면 SSE로 바꾼다.
+setInterval(pollRide, 2000); // 동승 연결 QR을 띄워 둔 동안만 묻는다
 render();
 await loadProfile();
 fillDraft();
