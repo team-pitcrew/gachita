@@ -62,7 +62,7 @@ jobs:
           docker system prune -af > /dev/null
           after=$(df -h / | tail -1)
           printf '전: %s\n뒤: %s\n' "$before" "$after"
-          printf '### 실행기 디스크(/)\n\n```\n%s\n전: %s\n뒤: %s\n```\n\n' "$(df -h / | head -1)" "$before" "$after" >> "$GITHUB_STEP_SUMMARY"
+          printf '### 실행기 디스크(/)\n\n- %s\n- 전: %s\n- 뒤: %s\n\n' "$(df -h / | head -1)" "$before" "$after" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/checkout@v7
       # docker, kubectl, jq, yq, git은 실행기에 있다. ansible-core는 뿌리 앱 템플릿을 그린다(구축 6단계와 같은 모듈).
       # br_netfilter가 없으면 K3s 안에서 같은 노드의 서비스 응답이 iptables를 거치지 않아 클러스터 DNS가 닿지 않는다
