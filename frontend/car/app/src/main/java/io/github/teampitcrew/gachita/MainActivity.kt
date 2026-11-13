@@ -1,12 +1,14 @@
 package io.github.teampitcrew.gachita
 
 import android.Manifest
+import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -56,6 +58,8 @@ import androidx.compose.ui.unit.sp
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import org.json.JSONArray
+import org.json.JSONObject
 import java.util.UUID
 import java.util.concurrent.Executors
 
@@ -77,6 +81,10 @@ private val CarType = Typography(labelLarge = TextStyle(fontSize = 24.sp), bodyL
 private const val DEFAULT_SERVER = "http://10.0.2.2:8787" // 에뮬레이터에서 본 Mac의 make run
 private const val POLL_MS = 10_000L // 웹앱은 2초. 차에서는 주행 중 자원 기준(CPU 5% 미만)을 생각해 길게 둔다
 private const val TITLE = "같이타 가족 여행"
+private const val TAG = "GachitaAsk"
+private const val RESULT_MS = 60_000L // 경유지 결과 카드를 보여 두는 시간
+private const val GLEO_ARRIVAL = "GACHITA_ARRIVAL_TASKS" // assets/schema.json의 함수 이름(T40)
+private const val OFFER_MS = 30_000L // 제안에 답이 없으면 보관으로 되돌리는 시간. 그사이 휴게소를 지나칠 수 있어 길게 두지 않는다
 
 class MainActivity : ComponentActivity() {
     private val io = Executors.newSingleThreadExecutor()
@@ -102,6 +110,15 @@ class MainActivity : ComponentActivity() {
     private var server by mutableStateOf(DEFAULT_SERVER)
     private val picked = mutableStateListOf<String>().apply { addAll(FAMILY.map { it.name }) }
     private var error by mutableStateOf("")
+    private var offer by mutableStateOf<Offer?>(null) // 지금 보이는 경유지 제안(T9)
+    private var debug = false
+    private var pendingRoute: List<String>? = null // 내비에 붙으면 보낼 목적지(디버그 인자)
+    private var offers = 0L // 제안 번호. 늦게 온 콜백이 다른 제안을 건드리지 않게
+    private var todos: Todos? = null // 지금 여행의 장소별 할 일(T40)
+    private var todoList by mutableStateOf(emptyList<Todo>())
+    /** 보이고 있는 도착 브리핑. place가 null이면 모든 장소(Gleo로 부름). 주차해 주행 제한이 풀렸을 때만 그린다. */
+    private data class Brief(val place: String?)
+    private var brief by mutableStateOf<Brief?>(null)
     private var visible = false // onStart ~ onStop
     private var resumed = false // 우리 화면이 앞: 마이크 서비스는 이때만 시작할 수 있다(T10)
     private var askedMic = false
@@ -141,16 +158,26 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = getSharedPreferences("car", MODE_PRIVATE)
-        // 실행 인자(--es server, --ei widthDp)는 디버그 빌드에서만 받는다. 밖에서 연 화면이 서버 주소를 바꾸지 못하게
-        val debug = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+        // 실행 인자(--es server, --ei widthDp, --es route)는 디버그 빌드에서만 받는다. 밖에서 연 화면이 서버 주소를 바꾸지 못하게
+        debug = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
         if (debug) intent.getStringExtra("server")?.let { prefs.edit().putString("server", it).apply() }
         server = prefs.getString("server", null) ?: DEFAULT_SERVER
         device = prefs.getString("device", null) ?: UUID.randomUUID().toString().also { prefs.edit().putString("device", it).apply() }
         // 앱을 다시 켜도, 서버에 닿지 않아도 마지막으로 받은 여행과 끄기 대기를 이어 보여 준다
         s = Session.restore(prefs.getString("trip", null), prefs.getBoolean("offPending", false), prefs.getBoolean("started", false))
         s.trip?.let { Live.outbox(this, it.code) } // 앱을 다시 켜도 받아 적은 말과 순번을 이어 보여 준다
-        car = Car(this) { carStatus = it; Live.gear = it.gear; s = s.withGear(it.gear) }
+        car = Car(this) {
+            carStatus = it; Live.gear = it.gear
+            val was = s.gear
+            s = s.withGear(it.gear)
+            if (was != null && was != "P" && it.gear == "P") arrive() // 앱을 켤 때 처음 읽은 P는 도착이 아니다
+            routeIfReady()
+        }
         car.start()
+        Live.onHeard = ::heard
+        s.trip?.let { todosOf(it.code) }
+        routeFrom(intent)
+        if (savedInstanceState == null) gleo(intent) // 다시 만들어진 화면이 지난 호출에 또 답하지 않게
         setContent {
             MaterialTheme(colorScheme = if (isSystemInDarkTheme()) DarkColors else LightColors, typography = CarType) {
                 ProvideTextStyle(TextStyle(fontSize = 24.sp)) {
@@ -169,6 +196,20 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); routeFrom(intent); gleo(intent) }
+
+    /** 시연·E2E: --es route "위도,경도,이름"으로 내비에 목적지를 넣는다(디버그 빌드). 실제로는 운전자가 내비에서 정한다. */
+    private fun routeFrom(i: Intent?) {
+        if (debug) pendingRoute = i?.getStringExtra("route")?.split(",")?.takeIf { it.size == 3 } ?: pendingRoute
+        routeIfReady()
+    }
+
+    private fun routeIfReady() {
+        val (la, ln, name) = pendingRoute?.takeIf { carStatus.navi } ?: return
+        pendingRoute = null
+        car.route(Place(la.toDouble(), ln.toDouble(), name), emptyList())
+    }
+
     override fun onStart() { super.onStart(); visible = true; main.removeCallbacks(tick); main.post(tick) }
     override fun onStop() { visible = false; super.onStop() }
 
@@ -182,13 +223,16 @@ class MainActivity : ComponentActivity() {
     override fun onPause() { resumed = false; super.onPause() }
 
     override fun onDestroy() {
-        main.removeCallbacks(tick)
+        main.removeCallbacksAndMessages(null) // 조회, 제안 시간 초과, 결과 카드 닫기
+        if (Live.onHeard == ::heard) Live.onHeard = null
         if (!isChangingConfigurations) CaptureService.stop(this) // 동의를 확인할 화면이 없어지면 수음도 멈춘다
         car.stop(); io.shutdown(); super.onDestroy()
     }
 
     /** 통신은 한 줄로 차례대로 돌리고 결과만 메인 스레드로 돌려받는다. */
-    private fun <T> bg(work: () -> T, done: (Result<T>) -> Unit) = io.execute { val r = runCatching(work); main.post { done(r) } }
+    private fun <T> bg(work: () -> T, done: (Result<T>) -> Unit) {
+        if (!io.isShutdown) io.execute { val r = runCatching(work); main.post { done(r) } }
+    }
 
     private fun keep(got: Server.Got): Trip { prefs.edit().putString("trip", got.json).apply(); return got.trip }
 
@@ -259,6 +303,187 @@ class MainActivity : ComponentActivity() {
     private fun newTrip() {
         prefs.edit().remove("trip").commit()
         s = Session(gear = s.gear)
+        offer = null; todos = null; todoList = emptyList(); brief = null
+    }
+
+    // ---- 부탁을 경유지로(T9). 서버의 부탁 상태: held → proposed → accepted → reflected, 못 넣으면 held(openapi.yaml) ----
+    // 제안은 한 번에 하나(offer)이고 단계는 FINDING → ASKING → ADDING → ADDED·FAILED. 새 부탁은 열린 제안에 묶인다.
+
+    /** 받아 적은 말 한 건(메인 스레드). 열린 제안에 대한 답, 쉬어 가자는 부탁, 장소가 붙은 할 일(T40), 모호한 답 순서로 본다. */
+    private fun heard(u: Utterance) {
+        val t = s.trip?.takeIf { it.code == u.trip } ?: return
+        val o = offer?.takeIf { it.stage == Offer.Stage.ASKING }
+        val a = answerOf(u.text)
+        if (o != null && a != Answer.UNCLEAR) { // "그래, 쉬었다 가자"도 수락이다
+            if (a == Answer.NO) later(o) else if (canAccept(u)) accept(o) else Log.i(TAG, "뒷줄의 수락은 받지 않음")
+            return
+        }
+        if (isRestRequest(u.text)) return hold(t, u)
+        todoOf(u.text)?.let { (place, text) ->
+            // 도착 알림은 할 일을 그대로 읽는다. 그 소리가 마이크로 되돌아와 다시 모이지 않게, 우리가 말하는 동안 받아 적힌 할 일은 모으지 않는다
+            if (car.ownVoice(u.startedAt + LEAD_MS)) { Log.i(TAG, "우리 말소리와 겹친 할 일은 모으지 않음"); return }
+            val box = todosOf(t.code)
+            if (box.add(place, text) == null) { Log.i(TAG, "같은 할 일이 있어 더하지 않음"); return }
+            todoList = box.items
+            Log.i(TAG, "할 일 보관 $place · 이 여행 ${box.open().size}건")
+            return
+        }
+        if (o != null && o.asked < 2 && canAccept(u)) { // 한 번만 다시 묻는다. 답 낱말을 넣지 않는다(스피커 소리가 마이크로 되돌아와 답이 되지 않게)
+            offer = o.copy(asked = 2)
+            car.speak("${o.stop?.spoken}에 들를지 다시 말해 주세요")
+        }
+    }
+
+    /**
+     * 부탁을 서버에 남기고(held) 열린 제안에 묶는다. 열린 제안이 없거나 실패로 끝났으면 새 제안을 연다.
+     * 누가 말했는지는 아직 모른다. ponytail: 운전석 참가자로 남긴다. 좌석 구역(T37)과 목소리 대조(T38)가 붙으면 그 사람으로.
+     */
+    private fun hold(t: Trip, u: Utterance) {
+        val by = (t.people.firstOrNull { it.seat == Seat.ROW_1_LEFT.name } ?: t.people.firstOrNull())?.id ?: return
+        val o = offer?.takeIf { it.trip == t.code && it.stage != Offer.Stage.FAILED } ?: Offer(++offers, t.code).also { offer = it; propose(it, u) }
+        val url = server
+        bg({ Server(url).request(t.code, by, u.text) }) { r ->
+            r.onSuccess { id -> Log.i(TAG, "부탁 보관 $id"); join(o.id, id) }
+                .onFailure {
+                    Log.w(TAG, "부탁을 남기지 못함", it)
+                    if (offer?.let { x -> x.id == o.id && x.requests.isEmpty() } == true) offer = null // 묶인 부탁이 없는 제안은 닫는다
+                    car.speak(if (it is ApiError) "부탁을 남기지 못했어요" else "연결이 끊겨 부탁을 남기지 못했어요")
+                }
+        }
+    }
+
+    /** 서버에 남은 부탁을 그 제안에 묶고 제안의 단계만큼 상태를 따라가게 한다. 제안이 그사이 닫혔으면 보관(held)에 둔다. */
+    private fun join(offerId: Long, id: String) {
+        val o = offer?.takeIf { it.id == offerId } ?: return
+        offer = o.copy(requests = o.requests + id)
+        when (o.stage) {
+            Offer.Stage.FINDING, Offer.Stage.FAILED -> {} // FINDING은 제안을 띄울 때 묶인 부탁을 함께 proposed로 바꾼다
+            Offer.Stage.ASKING -> mark(o.trip, listOf(id), "proposed")
+            Offer.Stage.ADDING -> mark(o.trip, listOf(id), "proposed", "accepted") // 같은 휴게소로 가는 중. 결과가 오면 함께 바뀐다
+            Offer.Stage.ADDED -> { mark(o.trip, listOf(id), "proposed", "accepted", "reflected"); car.speak("${o.stop?.spoken}에 이미 들르기로 했어요") }
+        }
+    }
+
+    /** 아직 지나치지 않은 가장 가까운 휴게소와 그곳까지의 거리·시간을 내비에 묻고 제안한다. 화면은 넘어가지 않는다. 답이 없으면 30초 뒤 보관. */
+    private fun propose(o: Offer, u: Utterance) {
+        car.here { lat, lng ->
+            val stop = nextStop(lat, lng)
+            if (stop == null) { Log.i(TAG, "남은 휴게소 없음 · 부탁은 보관"); if (offer?.id == o.id) offer = null; return@here }
+            car.distanceTo(stop) { m, sec ->
+                val cur = offer?.takeIf { it.id == o.id } ?: return@distanceTo
+                offer = cur.copy(stop = stop, meters = m, seconds = sec, stage = Offer.Stage.ASKING)
+                Log.i(TAG, "제안 ${stop.name} 부탁 ${cur.requests.size}건 · 최종 결과에서 ${System.currentTimeMillis() - u.endedAt}ms · 위치 ${lat != null}")
+                car.speak("${stop.spoken}에 들를까요?")
+                mark(cur.trip, cur.requests, "proposed")
+                main.postDelayed({ offer?.takeIf { it.id == o.id && it.stage == Offer.Stage.ASKING }?.let { later(it, timedOut = true) } }, OFFER_MS)
+            }
+        }
+    }
+
+    /**
+     * 서버의 부탁 상태를 path 순서대로 바꾼다. 모두 바뀐 부탁과, 통신이 안 된 것이 있었는지를 돌려준다.
+     * 그사이 폰에서 취소된 부탁은 갈 수 없는 길이라 409로 빠진다(openapi.yaml).
+     */
+    private fun mark(code: String, ids: List<String>, vararg path: String, done: (List<String>, Boolean) -> Unit = { _, _ -> refresh() }) {
+        val url = server
+        bg({
+            val api = Server(url)
+            val errs = ids.map { id -> runCatching { path.forEach { api.requestStatus(code, id, it) } }.exceptionOrNull() }
+            ids.filterIndexed { i, _ -> errs[i] == null } to errs.any { it != null && it !is ApiError }
+        }) { r ->
+            val (ok, offline) = r.getOrDefault(emptyList<String>() to true)
+            Log.i(TAG, "부탁 ${ok.size}/${ids.size}건 ${path.last()}" + if (offline) " · 연결 끊김" else "")
+            done(ok, offline)
+        }
+    }
+
+    /**
+     * 수락(말이나 화면): accepted가 된 부탁이 있으면 내비에 경유지를 넣고, onWaypointChanged(ADD)를 받으면 reflected.
+     * ponytail: 연결이 끊겨 accepted로 바꾸지 못하면 넣지 않고 실패로 알린다(확인되지 않은 동작을 하지 않음). 그 부탁은 proposed로 남는다.
+     */
+    private fun accept(o: Offer) {
+        val stop = o.stop ?: return
+        if (offer?.id != o.id || o.stage != Offer.Stage.ASKING) return
+        offer = o.copy(stage = Offer.Stage.ADDING)
+        mark(o.trip, o.requests, "accepted") { ok, offline ->
+            if (ok.isEmpty()) return@mark finish(o.id, Offer.Stage.FAILED, if (offline) "연결이 끊겨 경유지를 넣지 못했어요" else "부탁이 취소돼 경유지를 넣지 않았어요")
+            Log.i(TAG, "경유지 요청 ${stop.name} 부탁 ${ok.size}건")
+            car.speak("${stop.spoken}를 경유지로 추가하고 있어요")
+            // 내비가 앞으로 나와 우리 화면은 가려진다. 판정과 서버 갱신은 화면과 무관하게 이어지고 결과는 말로 알린다
+            car.addStop(stop) { added ->
+                Log.i(TAG, "경유지 ${if (added) "반영" else "실패"} ${stop.name}")
+                val ids = offer?.takeIf { it.id == o.id }?.requests ?: o.requests // ADDING 중에 묶인 부탁까지
+                finish(o.id, if (added) Offer.Stage.ADDED else Offer.Stage.FAILED, if (added) "${stop.spoken}를 경유지로 추가했어요" else "경유지를 추가하지 못했어요. 부탁은 보관했어요")
+                mark(o.trip, ids, if (added) "reflected" else "held")
+            }
+        }
+    }
+
+    /** 거절·나중에·답 없음: 부탁을 보관으로 되돌린다. 저절로 다시 제안하지 않는다. */
+    private fun later(o: Offer, timedOut: Boolean = false) {
+        if (offer?.id != o.id || o.stage != Offer.Stage.ASKING) return
+        offer = null
+        car.speak(if (timedOut) "답이 없어 부탁은 보관해 둘게요" else "부탁은 보관해 둘게요")
+        mark(o.trip, o.requests, "held")
+    }
+
+    // ---- 도착 브리핑(T40) ----
+
+    private fun todosOf(code: String): Todos = todos?.takeIf { it.trip == code } ?: Todos(filesDir, code).also { todos = it; todoList = it.items }
+
+    /**
+     * 기어가 P로 바뀐 때: 내비가 향하는 다음 곳(첫 경유지, 없으면 목적지)이 할 일의 장소면 그곳의 미완료 할 일을 알린다.
+     * 그 앞의 휴게소 등에 서면 다음 곳이 그 휴게소라 알리지 않는다.
+     * ponytail: 다음 곳에 닿기 전에 P로 바꿔도(신호 대기·주유소) 알린다. 남은 거리(remainDistance)로 거르는 것은
+     * 차가 움직이는 데서 확인한 뒤 넣는다(에뮬레이터는 차를 옮기지 않아 남은 거리가 줄지 않음).
+     */
+    private fun arrive() {
+        val box = s.trip?.let { todosOf(it.code) } ?: return
+        if (box.open().isEmpty()) return
+        car.nextStopName { next ->
+            val place = box.open().map { it.place }.distinct().firstOrNull { arrivedAt(it, next) }
+            Log.i(TAG, "주차 · 다음 곳 ${if (next == null) "모름" else "있음"} · 할 일 장소에 도착 ${place != null}")
+            if (place != null) briefAt(place, speak = true)
+        }
+    }
+
+    /** 도착 브리핑을 띄운다(주행 제한이 풀린 때만 그려짐). place가 null이면 모든 장소. */
+    private fun briefAt(place: String?, speak: Boolean) {
+        val open = todos?.open(place).orEmpty()
+        brief = Brief(place).takeIf { open.isNotEmpty() }
+        Log.i(TAG, "도착 브리핑 ${place ?: "전체"} ${open.size}건")
+        if (speak && open.isNotEmpty()) car.speak(briefingLine(place, open))
+    }
+
+    private fun complete(item: Todo) {
+        todos?.let { it.done(item.id); todoList = it.items }
+        Log.i(TAG, "할 일 완료 · 남은 ${todos?.open()?.size}건")
+        if (brief?.let { todos?.open(it.place).isNullOrEmpty() } == true) brief = null
+    }
+
+    /**
+     * Gleo가 "도착해서 할 일 알려 줘"로 부른 때(assets/schema.json, component activity). 미완료 할 일 전체를 띄우고
+     * Gleo에 결과를 돌려준다(Callback Schema: message는 영어, 항목은 data). 말은 Gleo가 하므로 우리 TTS는 쓰지 않는다.
+     * Gleo는 함수 이름이나 '<패키지>.<함수 이름>'을 action으로 보낸다(11/1 프로브). 응답의 functionName은 schema의 함수 이름 그대로.
+     */
+    private fun gleo(i: Intent?) {
+        if (i?.action?.substringAfterLast('.') != GLEO_ARRIVAL) return
+        s.trip?.let { todosOf(it.code) }
+        briefAt(null, speak = false)
+        val open = todos?.open().orEmpty()
+        val msg = if (open.isEmpty()) "There are no to-do items for after arriving." else "Found ${open.size} to-do items for after arriving. The list is on the screen once the car is parked."
+        val data = JSONArray(open.map { JSONObject().put("place", it.place).put("task", it.text) }).toString()
+        val reply = JSONObject().put("functionName", GLEO_ARRIVAL).put("status", "success").put("message", msg).put("mode", "voice").put("data", data)
+        sendBroadcast(Intent("ai.pleos.playground.intent.action.APP_ACTION_RESPONSE").putExtra("packageName", packageName).putExtra("response", reply.toString()))
+        Log.i(TAG, "Gleo 도착 할 일 ${open.size}건 응답 ${reply.getString("functionName")}")
+    }
+
+    /** 제안을 결과 단계로 닫고 말로 알린다. 그 제안이 이미 바뀌었으면(새 여행) 화면은 두고 말도 하지 않는다. */
+    private fun finish(id: Long, stage: Offer.Stage, say: String) {
+        val done = offer?.takeIf { it.id == id }?.copy(stage = stage) ?: return
+        offer = done
+        car.speak(say)
+        main.postDelayed({ if (offer === done) offer = null }, RESULT_MS)
     }
 
     @OptIn(ExperimentalLayoutApi::class)
@@ -346,6 +571,8 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
+        brief?.takeIf { !carStatus.restricted }?.let { BriefCard(it) } // 주행 중에는 목록을 띄우지 않는다(T40)
+        offer?.takeIf { it.stage != Offer.Stage.FINDING }?.let { OfferCard(it) }
         if (s.recording || Live.count > 0) Heard()
         Card {
             Text("일행 ${t.people.size}명", fontSize = 30.sp, fontWeight = FontWeight.Bold)
@@ -356,6 +583,8 @@ class MainActivity : ComponentActivity() {
         }
         Card {
             Text(if (t.heldRequests == 0) "보관한 부탁이 없어요" else "보관한 부탁 ${t.heldRequests}건", fontSize = 30.sp, fontWeight = FontWeight.Bold)
+            val open = todoList.count { !it.done }
+            if (open > 0) Text("도착해서 할 일 ${open}건")
         }
     }
 
@@ -374,6 +603,51 @@ class MainActivity : ComponentActivity() {
                 Text("${hm.format(Date(u.startedAt))} · ${u.text}", maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
             if (Live.pending > 0 && !carStatus.restricted) Text("서버에 보내지 않고 이 차에 보관 중 ${Live.pending}건", color = c.onSurfaceVariant, fontSize = 20.sp)
+        }
+    }
+
+    /** 도착 브리핑(T40): 장소의 미완료 할 일과 항목마다 '완료'. 받아 적은 말 그대로 보인다. */
+    @Composable
+    private fun BriefCard(b: Brief) {
+        val items = todoList.filter { !it.done && (b.place == null || it.place == b.place) }
+        Card {
+            Text(if (b.place != null) "${b.place}에서 할 일" else "도착해서 할 일", fontSize = 36.sp, fontWeight = FontWeight.Bold)
+            items.forEach { item ->
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    Text((if (b.place == null) "${item.place} · " else "") + item.text, Modifier.weight(1f))
+                    OutlinedButton({ complete(item) }, Modifier.heightIn(min = 64.dp)) { Text("완료") }
+                }
+            }
+            OutlinedButton({ brief = null }, Modifier.heightIn(min = 64.dp)) { Text("닫기") }
+        }
+    }
+
+    /** 경유지 제안(T9). 주행 중에도 한 번 누르는 단추 둘만. 거리·시간은 그곳까지이고 들르면 늘어나는 시간이 아니다. */
+    @Composable
+    private fun OfferCard(o: Offer) {
+        val c = MaterialTheme.colorScheme
+        Card {
+            when (o.stage) {
+                Offer.Stage.ASKING -> {
+                    Text("${o.stop?.spoken}에 들를까요?", fontSize = 36.sp, fontWeight = FontWeight.Bold)
+                    Text(listOf(distanceLabel(o.meters, o.seconds), "부탁 ${o.requests.size}건").filter { it.isNotEmpty() }.joinToString(" · "), color = c.onSurfaceVariant)
+                    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                        // 그린 뒤에 묶인 부탁이 빠지지 않게 누른 때의 제안으로 부른다
+                        Button({ offer?.let(::accept) }, Modifier.heightIn(min = 72.dp)) { Text("경유지로 추가", fontSize = 26.sp) }
+                        OutlinedButton({ offer?.let { later(it) } }, Modifier.heightIn(min = 72.dp)) { Text("나중에", fontSize = 26.sp) }
+                    }
+                }
+                Offer.Stage.FINDING -> {}
+                Offer.Stage.ADDING -> Text("내비에 경유지를 추가하고 있어요", fontSize = 30.sp, fontWeight = FontWeight.Bold)
+                Offer.Stage.ADDED -> {
+                    Text("경유지를 추가했어요", fontSize = 30.sp, fontWeight = FontWeight.Bold, color = c.tertiary)
+                    Text("${o.stop?.spoken} · 부탁 ${o.requests.size}건")
+                }
+                Offer.Stage.FAILED -> {
+                    Text("경유지를 추가하지 못했어요", fontSize = 30.sp, fontWeight = FontWeight.Bold, color = c.error)
+                    Text("부탁은 보관했어요")
+                }
+            }
         }
     }
 

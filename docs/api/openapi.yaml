@@ -203,7 +203,7 @@ paths:
                 name: { type: string, minLength: 1, maxLength: 20, description: 손님일 때 필요 }
                 consent: { type: boolean, description: 손님일 때 필요 }
                 prefs: { $ref: "#/components/schemas/Prefs" }
-                profileId: { type: string, format: uuid, description: 내 그룹의 구성원 프로필(아이)로 참가시킬 때. 대표만 }
+                profileId: { type: string, format: uuid, description: 내가 만든 계정 없는 구성원(아이)으로 참가시킬 때. 대표만. 이미 참가했으면 409 }
       responses:
         "200": { description: 이미 참가한 프로필(참가자 토큰 새로 발급), content: { application/json: { schema: { $ref: "#/components/schemas/ParticipantWithToken" } } } }
         "201": { description: 참가함, content: { application/json: { schema: { $ref: "#/components/schemas/ParticipantWithToken" } } } }
@@ -714,7 +714,7 @@ paths:
       summary: 초대 수락
       description: |
         QR 주소로 들어온 폰 브라우저가 부릅니다(ADR-0009).
-        프로필 토큰이 있으면 있던 프로필로, 없으면 새 프로필(이름 필수)과 이 기기 토큰을 만들어 구성원이 됩니다.
+        프로필 토큰이 있으면 있던 프로필로, 없으면 새 프로필(이름 필수)과 이 기기 토큰을 만들어 구성원이 됩니다. 이미 구성원이면 횟수를 쓰지 않습니다.
         그룹의 진행 중인 여행이 있으면 응답에 그 여행 코드를 줍니다. 자리는 본인이 골라 `POST /api/trips/{code}/participants`로 참가합니다(동의·기록 규칙이 그 경로에 있음).
         입력이 틀리거나(400) 토큰이 틀리면(401) 횟수를 쓰지 않습니다.
         취소·만료·횟수 소진은 409, 없는 코드는 404입니다.
@@ -727,8 +727,8 @@ paths:
               type: object
               properties:
                 name: { type: string, minLength: 1, maxLength: 20, description: 새 프로필을 만들 때 필요 }
-                character: { type: string, maxLength: 20 }
-                device: { type: string, maxLength: 20 }
+                character: { type: string, minLength: 1, maxLength: 20 }
+                device: { type: string, minLength: 1, maxLength: 20 }
                 prefs: { $ref: "#/components/schemas/Prefs" }
       responses:
         "200":
@@ -739,7 +739,7 @@ paths:
                 type: object
                 required: [group, profile]
                 properties:
-                  group: { $ref: "#/components/schemas/Group" }
+                  group: { type: object, required: [id, kind, name], properties: { id: { type: string }, kind: { type: string, enum: [family, crew] }, name: { type: string } } }
                   profile: { $ref: "#/components/schemas/Profile" }
                   token: { type: string, description: 새 프로필을 만들었을 때만. 이 기기가 쓸 토큰 }
                   trip:

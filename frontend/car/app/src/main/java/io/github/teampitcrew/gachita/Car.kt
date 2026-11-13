@@ -1,17 +1,24 @@
 package io.github.teampitcrew.gachita
 
 import ai.pleos.playground.navi.constants.NaviErrorCode
+import ai.pleos.playground.navi.constants.WaypointCmdType
 import ai.pleos.playground.navi.constants.WaypointIndex
+import ai.pleos.playground.navi.data.CurrentLocationInfo
+import ai.pleos.playground.navi.data.DestinationInfo
 import ai.pleos.playground.navi.data.RequestWaypointInfo
 import ai.pleos.playground.navi.data.RouteInfo
 import ai.pleos.playground.navi.data.RouteStartInfo
 import ai.pleos.playground.navi.data.RouteWithWaypointsRequest
+import ai.pleos.playground.navi.data.TripInfo
+import ai.pleos.playground.navi.data.TripRequest
 import ai.pleos.playground.navi.data.WaypointChangedInfo
+import ai.pleos.playground.navi.data.WaypointInfo
 import ai.pleos.playground.navi.helper.NaviHelper
 import ai.pleos.playground.navi.helper.listener.NaviHelperEventListener
 import ai.pleos.playground.tts.TextToSpeech
 import ai.pleos.playground.tts.constant.ErrorType
 import ai.pleos.playground.tts.constant.Mode
+import ai.pleos.playground.tts.listener.EventListener
 import ai.pleos.playground.tts.listener.OnInitializeListener
 import ai.pleos.playground.vehicle.Vehicle
 import ai.pleos.playground.vehicle.api.model.area.SeatArea
@@ -49,6 +56,8 @@ class Car(ctx: Context, private val onChange: (CarStatus) -> Unit) {
     private var ux: CarUxRestrictionsManager? = null
     private var status = CarStatus()
     private var savedTemp: Float? = null
+    @Volatile private var ttsFrom = 0L // 우리 TTS가 말한 구간(epoch ms). 말하는 중이면 ttsTo = Long.MAX_VALUE
+    @Volatile private var ttsTo = 0L
 
     private fun update(f: (CarStatus) -> CarStatus) { main.post { status = f(status); onChange(status) } }
 
@@ -57,11 +66,47 @@ class Car(ctx: Context, private val onChange: (CarStatus) -> Unit) {
         override fun onFailed(e: Exception) { Log.w(TAG, "기어 알림 실패", e); update { it.copy(gear = null) } }
     }
 
+    /**
+     * 내비에 묻고 답 알림을 한 번 기다린다(메인 스레드). ms 안에 오지 않으면 null. 같은 물음이 겹치면 앞의 것은 null로 끝낸다.
+     * NaviHelper는 물음의 답을 리스너 알림으로 돌려준다(경유지 추가는 약 6초 뒤 onWaypointChanged, 11/12).
+     */
+    private inner class Wait<T>(private val ms: Long) {
+        private var done: ((T?) -> Unit)? = null
+        private var n = 0
+
+        fun start(done: (T?) -> Unit, call: () -> Unit) {
+            answer(null)
+            if (!status.navi) return done(null)
+            this.done = done
+            val my = ++n
+            main.postDelayed({ if (n == my) answer(null) }, ms)
+            runCatching(call).onFailure { Log.w(TAG, "내비 호출 실패", it); answer(null) }
+        }
+
+        fun answer(v: T?) { val d = done ?: return; done = null; d(v) }
+    }
+
+    private val here = Wait<CurrentLocationInfo>(2_000)
+    private val trip = Wait<TripInfo>(3_000)
+    private val stop = Wait<Boolean>(30_000) // onWaypointChanged까지 11/13 7.6초, 11/13 밤 9.9~12.9초
+    private val dest = Wait<DestinationInfo>(2_000)
+    private val wps = Wait<List<WaypointInfo>>(2_000)
+
     private val naviListener = object : NaviHelperEventListener {
         override fun onRouteStarted(routeStartInfo: RouteStartInfo) = naviEvent("경로 시작 ${routeStartInfo.name ?: ""}")
-        override fun onWaypointChanged(waypointChangedInfo: WaypointChangedInfo) = naviEvent("경유지 바뀜") // T9가 이 알림을 보고 '경유 반영'으로 바꾼다
-        override fun onRouteCancelled() = naviEvent("안내 취소")
-        override fun onError(errorCode: NaviErrorCode) = naviEvent("내비 오류 ${errorCode.name}")
+        override fun onWaypointChanged(waypointChangedInfo: WaypointChangedInfo) {
+            naviEvent("경유지 ${waypointChangedInfo.cmdType} ${waypointChangedInfo.routeStartInfo?.name ?: ""}")
+            if (waypointChangedInfo.cmdType == WaypointCmdType.ADD) main.post { stop.answer(true) }
+        }
+        override fun onRouteCancelled() = naviEvent("안내 취소") // 경유지를 더하면 안내가 한 번 끊겼다 다시 시작한다(11/13). 실패로 보지 않는다
+        override fun onError(errorCode: NaviErrorCode) {
+            naviEvent("내비 오류 ${errorCode.name}")
+            main.post { if (errorCode == NaviErrorCode.CAUSE_SEARCH_TRIP) trip.answer(null) else stop.answer(false) } // 거리 묻기의 오류는 경유지 실패가 아니다
+        }
+        override fun onCurrentLocationInfo(currentLocationInfo: CurrentLocationInfo) { main.post { here.answer(currentLocationInfo) } }
+        override fun onTripInfo(tripInfo: TripInfo) { main.post { trip.answer(tripInfo) } }
+        override fun onDestinationInfo(destinationInfo: DestinationInfo) { main.post { dest.answer(destinationInfo) } }
+        override fun onWayPointInfo(waypointInfo: List<WaypointInfo>) { main.post { wps.answer(waypointInfo) } }
     }
 
     /**
@@ -105,7 +150,7 @@ class Car(ctx: Context, private val onChange: (CarStatus) -> Unit) {
         runCatching {
             tts = TextToSpeech(app, Mode.ON_DEVICE).also { t ->
                 t.initialize(object : OnInitializeListener {
-                    override fun onSuccess() { t.setLocale(Locale.KOREA); update { it.copy(voice = true) } }
+                    override fun onSuccess() { t.setLocale(Locale.KOREA); t.addEventListener(ttsListener); update { it.copy(voice = true) } }
                     override fun onFailure(error: ErrorType) { Log.w(TAG, "TTS 초기화 실패 ${error.name}") }
                 })
             }
@@ -117,6 +162,7 @@ class Car(ctx: Context, private val onChange: (CarStatus) -> Unit) {
         runCatching { vehicle?.release() }
         runCatching { ux?.unregisterListener() }
         runCatching { aaos?.disconnect() }
+        main.removeCallbacksAndMessages(null) // 기다리던 내비 답과 시간 초과를 버린다(화면이 없어진 뒤 불리지 않게)
         runCatching { navi.removeListener(naviListener); navi.release() }
         runCatching { tts?.release() }
     }
@@ -128,7 +174,45 @@ class Car(ctx: Context, private val onChange: (CarStatus) -> Unit) {
         runCatching { v.getGear().getCurrentGearSelectionState({ answer(label(it)) }, { answer(null) }) }.onFailure { answer(null) }
     }
 
-    fun speak(text: String) { if (status.voice) runCatching { tts?.speak(text, true) } }
+    fun speak(text: String) {
+        Log.i(TAG, "말함 ${text.length}자" + if (status.voice) "" else " · TTS 준비 안 됨") // 글자는 남기지 않는다(받아 적은 말이 들어갈 수 있음)
+        if (!status.voice) return
+        ttsFrom = System.currentTimeMillis(); ttsTo = Long.MAX_VALUE // 첫 소리는 0.3~0.4초 뒤(11/2). 부른 때부터 센다
+        runCatching { tts?.speak(text, true) }.onFailure { ttsTo = System.currentTimeMillis() }
+    }
+
+    private val ttsListener = object : EventListener {
+        override fun onDone() { ttsTo = System.currentTimeMillis() }
+        override fun onStop() { ttsTo = System.currentTimeMillis() }
+        override fun onError(error: ai.pleos.playground.tts.constant.ErrorType) { ttsTo = System.currentTimeMillis() }
+        override fun onStart() {}
+        override fun onReady() {}
+        override fun onUpdatedRms(rms: Double) {}
+    }
+
+    /** 받아 적은 말이 우리 TTS 소리일 수 있는지: 첫 중간 결과가 우리가 말하는 동안(끝난 뒤 0.3초까지) 왔다. */
+    fun ownVoice(firstPartialAt: Long) = overlapsSpeech(firstPartialAt, ttsFrom, ttsTo)
+
+    /** 내비가 아는 지금 위치. 화면은 넘어가지 않는다(0.1~0.2초, 11/12). 모르면 null, null. */
+    fun here(done: (Double?, Double?) -> Unit) = here.start({ done(it?.latitude, it?.longitude) }) { navi.getCurrentLocationInfo() }
+
+    /** 그곳까지의 거리(m)와 시간(초). 들르면 늘어나는 시간이 아니다. 화면은 넘어가지 않는다. */
+    fun distanceTo(p: Place, done: (Int?, Int?) -> Unit) =
+        trip.start({ done(it?.distance, it?.eta) }) { navi.requestTrip(TripRequest(latitude = p.lat, longitude = p.lng, poiId = "", poiName = p.name, poiSubId = "0")) }
+
+    /**
+     * 내비가 지금 향하는 다음 곳의 이름: 첫 경유지, 없으면 목적지(T40 도착 판정). 모르면 null. 화면은 넘어가지 않는다.
+     * 에뮬레이터는 경유지 좌표를 0.0으로 주어 이름만 쓴다. 지난 경유지는 내비가 목록에서 뺀다고 보고 있다(실차 확인 전).
+     */
+    fun nextStopName(done: (String?) -> Unit) = wps.start({ w ->
+        w?.map { it.name }?.firstOrNull { !it.isNullOrBlank() }?.let { return@start done(it) }
+        dest.start({ d -> done(d?.name?.takeIf { it.isNotBlank() }) }) { navi.getDestinationInfo() }
+    }) { navi.getWaypointInfo() }
+
+    /** 지금 경로에 들를 곳을 더한다. 내비가 앞으로 나오고, 반영 알림(onWaypointChanged ADD)이 오면 true. 경로 오류나 30초 넘으면 false. */
+    fun addStop(p: Place, done: (Boolean) -> Unit) = stop.start({ done(it == true) }) {
+        navi.addWaypoint(RequestWaypointInfo(latitude = p.lat, longitude = p.lng, poiName = p.name, waypointIndex = WaypointIndex.FIRST, poiId = "", address = p.address, poiSubId = "0"))
+    }
 
     /** 순정 내비에 목적지와 들를 곳(둘까지)을 보낸다. 반영은 onWaypointChanged로 온다(T9). */
     fun route(dest: Place, stops: List<Place>): Boolean {

@@ -1,0 +1,20 @@
+{
+  "packageName": "io.github.teampitcrew.gachita",
+  "appDescription": "Gachita keeps a family's car conversation as a trip record. It turns requests into navigation stops and collects to-do items for places the family is driving to.",
+  "version": "0.1.0",
+  "actionCalls": [
+    {
+      "type": "function",
+      "function": {
+        "name": "GACHITA_ARRIVAL_TASKS",
+        "description": "Show the to-do items that the family mentioned during the drive for the places they are going to, and read them out. Use this when the user asks what they need to do after arriving.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        },
+        "component": "activity"
+      }
+    }
+  ]
+}
