@@ -4,7 +4,7 @@
 // 사용자가 쓴 글은 textContent로만 넣는다(innerHTML 금지).
 
 import { SEATS, SEAT, WHEN, REQ, CLOSED, api, h, toast } from "/shared.js";
-import { createShares } from "/shares.js";
+import { createShares, shareIconButton } from "/shares.js";
 import { createCaptions } from "/captions.js";
 import qrcode from "/qrcode.js";
 import { createRecords } from "/records.js";
@@ -386,7 +386,7 @@ function home() {
           h("p", { className: "meta" }, "이름과 캐릭터를 정하면 동승 연결 QR을 띄울 수 있어요."),
           button("프로필 만들기", () => (location.hash = "me")),
         ),
-    profile && h("section", { className: "card" }, h("h2", {}, "동승자와 나눈 장면"), h("div", { className: "shares-actions" }, button("받은 공유", () => shares.openList("received")), button("보낸 공유", () => shares.openList("sent")))),
+    profile && h("section", { className: "card" }, h("div", { className: "between" }, h("h2", {}, "동승자와 나눈 장면"), shareIconButton("share", "동승자와 나눈 장면 열기", () => shares.openList("received")))),
     (profile || last) && bar(profile && button("동승 연결", startRide, "primary"), last && button("지금 탄 여행", () => (location.hash = last), profile ? "" : "primary")),
   ];
 }
@@ -617,7 +617,7 @@ function tripView(me) {
           ),
         ),
       ),
-    profile && me.profileId === profile.id && me.consent && myToken() && trip.moments.length > 0 && h("section", { className: "card" }, h("h2", {}, "함께 나눌 장면"), h("p", { className: "meta" }, "내 앨범에 남긴 장면과 받는 동승자를 직접 골라요."), button("내 장면 공유", () => shares.openCompose())),
+    profile && me.profileId === profile.id && me.consent && myToken() && trip.moments.length > 0 && h("section", { className: "card" }, h("div", { className: "between" }, h("h2", {}, "함께 나눌 장면"), shareIconButton("share", "내 장면 공유", () => shares.openCompose())), h("p", { className: "meta" }, "내 앨범에 남긴 장면과 받는 동승자를 직접 골라요.")),
     trip.status !== "ended" && bar(button("부탁 남기기", () => (sheet.showModal(), sheet.querySelector("#sheet-text").focus()), "primary")),
   ];
 }

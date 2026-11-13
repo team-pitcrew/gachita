@@ -567,6 +567,11 @@ input[type="file"] {
 .shares-list > li { display: block; }
 .shares-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .shares-actions > button { flex: 1; }
+.shares-actions > .share-icon { flex: none; }
+button.share-icon { width: 48px; min-width: 48px; min-height: 48px; padding: 12px; display: inline-flex; align-items: center; justify-content: center; }
+button.share-icon.primary { width: 56px; min-width: 56px; }
+.share-icon svg { width: 24px; height: 24px; }
+.shares-tools { justify-content: flex-end; }
 .shares-caption { white-space: pre-wrap; overflow-wrap: anywhere; }
 .shares-dialog textarea { width: 100%; padding: 12px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--bg); color: var(--ink); font: inherit; resize: vertical; }
 .shares-target { display: flex; align-items: center; gap: 12px; min-height: 48px; padding: 8px 0; }

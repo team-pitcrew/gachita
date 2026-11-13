@@ -1,11 +1,22 @@
 // 선택한 장면 공유(T81). 목록은 프로필 토큰으로, 공유 실행은 이 폰의 참가자 토큰으로만 한다.
 import { api, h, toast } from "./shared.js";
+import { shareCardPng } from "./share-card.js";
 
 const KEEP_MS = 48 * 3600 * 1000;
 const button = (label, onclick, className = "") => h("button", { type: "button", className, onclick }, label);
 const when = (at) => new Date(at).toLocaleString("ko-KR", { month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" });
 const hasLocation = (item) => Number.isFinite(item.lat) && Number.isFinite(item.lng);
 const errorText = (e) => e.status === 0 ? "연결을 확인하지 못해 공유 내용을 닫았어요. 다시 연결한 뒤 확인해 주세요." : e.status === 401 ? "이 폰의 프로필 연결을 다시 확인해 주세요." : e.message;
+
+export function shareIconButton(kind, label, onclick, className = "") {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  for (const [key, value] of Object.entries({ viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": "1.8", "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true", focusable: "false" })) svg.setAttribute(key, value);
+  const path = document.createElementNS(svg.namespaceURI, "path");
+  path.setAttribute("d", kind === "download" ? "M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5" : "M9 8V4l-6 6 6 6v-4h5a6 6 0 0 1 6 6v2-9a3 3 0 0 0-3-3Z");
+  if (kind === "share") path.setAttribute("transform", "translate(24 0) scale(-1 1)");
+  svg.append(path);
+  return h("button", { type: "button", className: `share-icon ${className}`, "aria-label": label, title: label, onclick }, svg);
+}
 
 // 공개 여행의 장면 목록만으로는 소유권을 알 수 없다. 내 앨범과 같은 여행의 교집합만 표시한다.
 // 앨범은 GET /profiles/me/moments?trip=<코드>(#216)로 그 여행 것만 자르지 않고 받는다 — 발화와 섞어 100개로
@@ -29,6 +40,7 @@ export function createShares({ getProfile, getProfileToken, getTrip, getParticip
     clearInterval(expiryTimer);
     state?.read?.abort();
     state?.write?.abort();
+    state?.download?.abort();
   };
   const close = () => {
     stop();
@@ -94,7 +106,7 @@ export function createShares({ getProfile, getProfileToken, getTrip, getParticip
   }
   async function load(s) {
     if (!valid(s)) return sync();
-    if (s.loading) return;
+    if (s.loading || s.saving) return;
     clearTimeout(timer);
     s.loading = true;
     const controller = s.read = new AbortController();
@@ -102,7 +114,7 @@ export function createShares({ getProfile, getProfileToken, getTrip, getParticip
     try {
       if (s.mode === "list") {
         const { items } = await api("GET", "/profiles/me/shares", null, s.profileToken, controller.signal);
-        if (!valid(s)) return;
+        if (!valid(s) || s.read !== controller) return;
         s.items = items.filter((item) => !s.removed.has(item.id) && Date.now() < item.expiresAt);
         const snapshot = JSON.stringify(s.items);
         if (snapshot !== s.snapshot) { s.snapshot = snapshot; listView(s); }
@@ -111,7 +123,7 @@ export function createShares({ getProfile, getProfileToken, getTrip, getParticip
           api("GET", `/trips/${encodeURIComponent(s.code)}`, null, undefined, controller.signal),
           api("GET", `/profiles/me/moments?trip=${encodeURIComponent(s.code)}`, null, s.profileToken, controller.signal),
         ]);
-        if (!valid(s)) return;
+        if (!valid(s) || s.read !== controller) return;
         if (trip.generation !== s.generation || Date.now() >= trip.createdAt + KEEP_MS || !trip.participants.some((p) => p.id === s.participantId && p.profileId === s.profileId && p.consent)) {
           close();
           return toast("기록 동의나 보관 기간이 바뀌어 공유할 수 없어요.");
@@ -129,8 +141,9 @@ export function createShares({ getProfile, getProfileToken, getTrip, getParticip
         }
       }
       s.stopped = false;
+      s.authError = false;
     } catch (e) {
-      if (valid(s)) {
+      if (valid(s) && s.read === controller) {
         s.items = [];
         s.options = null;
         s.snapshot = undefined;
@@ -140,8 +153,9 @@ export function createShares({ getProfile, getProfileToken, getTrip, getParticip
       }
     } finally {
       clearTimeout(timeout);
-      s.loading = false;
-      if (state === s) {
+      if (s.read === controller) {
+        s.read = null;
+        s.loading = false;
         sync();
         if (valid(s) && !s.stopped) timer = setTimeout(() => load(s), 5000);
       }
@@ -151,11 +165,14 @@ export function createShares({ getProfile, getProfileToken, getTrip, getParticip
   function listView(s) {
     const items = s.items.filter((item) => item.direction === s.direction && Date.now() < item.expiresAt);
     shell(s, s.direction === "received" ? "받은 공유" : "보낸 공유",
-      h("p", { className: "meta" }, "여행을 만든 뒤 48시간까지 볼 수 있어요. 회수·동의 철회·원본 삭제 뒤에는 보이지 않아요."),
+      h("p", { className: "meta" }, "여행을 만든 뒤 48시간까지 볼 수 있어요. 회수·동의 철회·원본 삭제 뒤에는 보이지 않아요. 다운로드한 이미지는 회수해도 남아요."),
       h("div", { className: "shares-actions" }, button("받은 공유", () => openList("received")), button("보낸 공유", () => openList("sent"))),
       items.length ? h("ul", { className: "shares-list" }, items.map((item) => {
-        const revokeButton = button("공유 회수", () => revoke(s, item), "plain");
-        revokeButton.disabled = s.pending.has(item.id);
+        const revokeButton = shareIconButton("revoke", "공유 회수", () => revoke(s, item));
+        revokeButton.disabled = s.pending.has(item.id) || s.saving === item.id;
+        const downloadButton = shareIconButton("download", s.saving === item.id ? "이미지 준비 중" : "공유 이미지 다운로드", () => download(s, item));
+        downloadButton.disabled = !!s.saving || s.pending.has(item.id);
+        downloadButton.setAttribute("aria-busy", String(s.saving === item.id));
         return h("li", { className: "card" },
           h("h2", {}, item.label || "이름 없는 장면"),
           h("p", { className: "meta" }, `${item.sender.name} 님이 보냄 · ${when(item.at)}`),
@@ -163,14 +180,75 @@ export function createShares({ getProfile, getProfileToken, getTrip, getParticip
           h("p", { className: "shares-caption" }, item.caption || "추가 문구 없음"),
           h("p", { className: "meta" }, hasLocation(item) ? `함께 보낸 위치: ${item.lat.toFixed(5)}, ${item.lng.toFixed(5)}` : "위치는 공유하지 않았어요."),
           h("p", { className: "meta" }, `${when(item.expiresAt)}까지`),
-          item.direction === "sent" && revokeButton,
+          h("div", { className: "shares-actions shares-tools" }, downloadButton, item.direction === "sent" && revokeButton),
         );
       })) : h("p", { className: "empty", role: "status" }, s.direction === "received" ? "아직 받은 공유가 없어요." : "아직 보낸 공유가 없어요."),
-      button("새로 고침", () => load(s)),
+      Object.assign(button(s.authError ? "프로필 확인" : "새로 고침", () => s.authError ? (close(), onProfile()) : load(s)), { disabled: !!s.saving }),
     );
   }
+  async function download(s, item) {
+    if (!valid(s) || s.saving || s.pending.has(item.id) || Date.now() >= item.expiresAt) return sync();
+    // 앞선 폴링의 늦은 200이 권한 재확인 실패 뒤 내용을 되살리지 못하게 한다.
+    clearTimeout(timer);
+    s.read?.abort();
+    s.read = null;
+    s.loading = false;
+    s.saving = item.id;
+    s.note = null;
+    listView(s);
+    const controller = s.download = new AbortController();
+    let timeout;
+    const current = () => valid(s) && !controller.signal.aborted && !s.removed.has(item.id);
+    const fresh = async () => {
+      const { items } = await api("GET", "/profiles/me/shares", null, s.profileToken, controller.signal);
+      const found = items.find((entry) => entry.id === item.id && Date.now() < entry.expiresAt);
+      if (!current()) throw new Error("공유 화면을 닫았어요.");
+      if (!found) {
+        s.items = s.items.filter((entry) => entry.id !== item.id);
+        s.removed.add(item.id);
+        throw new Error("회수·동의 변경·삭제·기간 만료로 다운로드할 수 없어요.");
+      }
+      return found;
+    };
+    try {
+      // 열린 화면의 옛 내용으로 저장하지 않는다. 변환 전과 저장 직전에 서버 권한을 확인한다.
+      const result = await Promise.race([
+        (async () => {
+          const allowed = await fresh();
+          const blob = await shareCardPng(allowed);
+          const latest = await fresh();
+          return { blob, expiresAt: latest.expiresAt };
+        })(),
+        new Promise((_, reject) => { timeout = setTimeout(() => { controller.abort(); reject(new Error("이미지 저장을 준비하지 못했어요. 연결을 확인한 뒤 다시 시도해 주세요.")); }, 10000); }),
+      ]);
+      if (!current() || Date.now() >= result.expiresAt) return sync();
+      const url = URL.createObjectURL(result.blob);
+      const link = h("a", { href: url, download: `gachita-${new Date().toISOString().replace(/[-:]/g, "").slice(0, 15)}.png` });
+      document.body.append(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      note(s, "이미지 다운로드를 시작했어요. 저장한 파일은 공유를 회수해도 남아요.");
+    } catch (e) {
+      if (valid(s)) {
+        s.items = [];
+        s.snapshot = undefined;
+        s.authError = e.status === 401 || e.status === 403;
+        s.stopped = s.authError;
+        note(s, e.status ? errorText(e) : e.message, { alert: true });
+      }
+    } finally {
+      clearTimeout(timeout);
+      controller.abort();
+      s.saving = null;
+      if (valid(s)) {
+        listView(s);
+        if (!s.stopped) timer = setTimeout(() => load(s), 5000);
+      }
+    }
+  }
   async function revoke(s, item) {
-    if (!valid(s) || s.pending.has(item.id) || !confirm("이 공유를 회수할까요? 받는 사람에게 더 이상 보이지 않아요.")) return;
+    if (!valid(s) || s.pending.has(item.id) || s.saving === item.id || !confirm("이 공유를 회수할까요? 앱에서는 더 이상 보이지 않지만, 이미 다운로드한 파일은 남아요.")) return;
     s.pending.add(item.id);
     s.note = null;
     listView(s);
@@ -191,7 +269,7 @@ export function createShares({ getProfile, getProfileToken, getTrip, getParticip
     if (!s.options) return;
     if (s.stage === "pick") {
       shell(s, "내 장면 공유", h("p", { className: "meta" }, "이 여행에서 내 앨범에 남긴 장면만 고를 수 있어요. 대화 원문이나 소리는 보내지 않아요."),
-        s.options.moments.length ? h("ul", { className: "shares-list" }, s.options.moments.map((m) => h("li", { className: "card" }, h("h2", {}, m.label || "이름 없는 장면"), h("p", { className: "meta" }, when(m.at)), button("이 장면 공유", () => { s.momentId = m.id; s.stage = "edit"; s.selected.clear(); s.caption = ""; s.includeLocation = false; composeView(s); })))) : h("p", { className: "empty", role: "status" }, "공유할 내 장면이 없어요. 먼저 장면을 내 앨범에 남겨 주세요."));
+        s.options.moments.length ? h("ul", { className: "shares-list" }, s.options.moments.map((m) => h("li", { className: "card" }, h("h2", {}, m.label || "이름 없는 장면"), h("p", { className: "meta" }, when(m.at)), shareIconButton("share", "이 장면 공유", () => { s.momentId = m.id; s.stage = "edit"; s.selected.clear(); s.caption = ""; s.includeLocation = false; composeView(s); })))) : h("p", { className: "empty", role: "status" }, "공유할 내 장면이 없어요. 먼저 장면을 내 앨범에 남겨 주세요."));
       return;
     }
     const moment = s.options.moments.find((m) => m.id === s.momentId);
@@ -201,8 +279,8 @@ export function createShares({ getProfile, getProfileToken, getTrip, getParticip
     if (s.stage === "preview") {
       shell(s, "보내기 전에 확인해 주세요",
         h("section", { className: "card" }, h("h2", {}, moment.label || "이름 없는 장면"), h("p", { className: "meta" }, when(moment.at)), h("p", { className: "shares-caption" }, s.caption.trim() || "추가 문구 없음"), h("p", {}, `받는 사람: ${recipients.map((p) => p.name).join(", ")}`), h("p", {}, s.includeLocation ? `위치 포함: ${moment.lat.toFixed(5)}, ${moment.lng.toFixed(5)}` : "위치 제외"), h("p", { className: "meta" }, `${when(s.expiresAt)}까지 볼 수 있어요.`)),
-        h("p", { className: "meta" }, "위 내용만 선택한 동승자에게 보냅니다. 대화 원문과 원음은 포함하지 않아요."),
-        h("div", { className: "shares-actions" }, Object.assign(button("수정하기", () => { s.stage = "edit"; composeView(s); }), { disabled: !!s.sending }), Object.assign(button(s.sending ? "공유 중…" : "이 내용으로 공유", () => send(s), "primary"), { disabled: !!s.sending || !recipients.length })),
+        h("p", { className: "meta" }, "위 내용만 선택한 동승자에게 보냅니다. 대화 원문과 원음은 포함하지 않아요. 받는 사람은 이미지로 다운로드할 수 있고, 저장한 파일은 공유를 회수해도 남아요."),
+        h("div", { className: "shares-actions" }, Object.assign(button("수정하기", () => { s.stage = "edit"; composeView(s); }), { disabled: !!s.sending }), Object.assign(shareIconButton("share", s.sending ? "공유 중" : "이 내용으로 공유", () => send(s), "primary"), { disabled: !!s.sending || !recipients.length })),
       );
       return;
     }
