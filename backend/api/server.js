@@ -590,7 +590,10 @@ async function recordings(code, id, req, query) {
     });
     if (result[0] === 200) await trashClips([key]); // 같은 장면을 동시에 올린 다른 요청이 먼저 남겼다 — 내 것은 버린다
     // 새로 남긴 클립은 기다리지 않고 다시 받아 적는다(T75). 응답은 바로 간다.
-    else retranscribeClip({ code: before.tripCode, momentId: before.momentId, generation: before.current, startAt: before.startAt, samples, context }).catch((e) => log("warn", "clip_retranscribe_failed", { err: errFields(e) }));
+    else if (asrReady()) {
+      const pcm = Int16Array.from(samples, (v) => Math.max(-32768, Math.min(32767, Math.round(v * 32768))));
+      queueRetranscribe({ code: before.tripCode, momentId: before.momentId, generation: before.current, startAt: before.startAt, pcm, context });
+    }
     return result;
   } catch (e) {
     await trashClips([key]); // 남기지 못한 소리는 버킷에 두지 않는다
@@ -600,34 +603,75 @@ async function recordings(code, id, req, query) {
 
 // 재전사(T75): 클립 구간의 발화마다 그 소리와 Pleos 초안과 여행이 아는 낱말을 Nemotron에 보내(providers/asr.js)
 // 고친 글을 asr_text에 남긴다. 원문(text)은 그대로다. ASR_URL·ASR_TOKEN이 없으면 건너뛴다.
-// 실패·늦음·되풀이면 그 줄은 원문 자막으로 남는다. 사람이 고른 클립만 보낸다(동의 문구, docs/api/voice.md).
-// 줄마다 클립이 아직 있는지 보고, 지웠거나 동의가 철회됐으면 더 보내지 않는다.
-// 발화의 at을 말 시작으로 보고 0.5초 앞부터 다음 발화(또는 클립 끝, 최대 15초)까지 자른다.
-// ponytail: 올린 파드에서 기다리지 않고 돈다. 그 사이 파드가 죽으면 남은 줄은 원문 자막으로 남는다.
-async function retranscribeClip({ code, momentId, generation, startAt, samples, context }) {
-  if (!asrReady()) return;
-  const clipMs = samples.length / 16; // 16 kHz: 1 ms = 16 표본
+// 실패·늦음·믿지 못할 답이면 그 줄은 원문 자막으로 남는다. 사람이 고른 클립만 보낸다(동의 문구, docs/api/voice.md).
+// 보내기 직전마다 클립이 살아 있고(지우지 않음, 동의 철회 전 세대) 그 줄의 글이 그대로인지 본다 — 아니면 보내지 않고 붙이지 않는다.
+// 자르기: 발화의 at을 말 시작으로 보고 0.5초 앞부터 같은 자리의 다음 말까지(다른 자리의 말은 겹칠 수 있다).
+// 다음 말이 바로 붙어도 이 말의 어림 길이(글자당 0.15초, 1.5초 이상)는 남기고, 15초·클립 끝을 넘지 않는다. 0.8초보다 짧으면 보내지 않는다.
+// 한 프로세스에서 한 클립씩 차례로 돈다(요청 간격을 지키고 메모리를 묶으려고). 대기열이 차면(10개) 새 클립은 원문 자막으로 남는다.
+// ponytail: 올린 파드의 메모리에서 기다린다. 그 사이 파드가 죽으면 남은 클립은 원문 자막으로 남는다.
+const ASR_QUEUE_MAX = 10;
+const asrQueue = [];
+let asrBusy = false;
+function queueRetranscribe(job) {
+  if (asrQueue.length >= ASR_QUEUE_MAX) return log("warn", "clip_retranscribe_dropped", { queued: asrQueue.length });
+  asrQueue.push(job);
+  if (asrBusy) return;
+  asrBusy = true;
+  (async () => {
+    while (asrQueue.length) await retranscribeClip(asrQueue.shift()).catch((e) => log("warn", "clip_retranscribe_failed", { err: errFields(e) }));
+    asrBusy = false;
+  })();
+}
+
+async function retranscribeClip({ code, momentId, generation, startAt, pcm, context }) {
+  const clipMs = pcm.length / 16; // 16 kHz: 1 ms = 16 표본
+  const live = "SELECT 1 FROM recordings WHERE trip_code = $1 AND moment_id = $2 AND generation = $3 AND deleted_at IS NULL";
   const { rows } = await tripsDb().query(
-    "SELECT device, seq, at, text FROM utterances WHERE trip_code = $1 AND generation = $2 AND text <> '' AND at >= $3 AND at < $4 ORDER BY at",
+    "SELECT device, seq, at, text, seat_area FROM utterances WHERE trip_code = $1 AND generation = $2 AND text <> '' AND at >= $3 AND at < $4 ORDER BY at",
     [code, generation, startAt, startAt + Math.ceil(clipMs)]
   );
   const started = Date.now();
+  const reasons = {};
   let fixed = 0;
   let changed = 0;
   for (const [i, u] of rows.entries()) {
-    const { rows: live } = await tripsDb().query("SELECT 1 FROM recordings WHERE trip_code = $1 AND moment_id = $2 AND generation = $3 AND deleted_at IS NULL", [code, momentId, generation]);
-    if (!live[0]) break;
-    const from = Math.max(0, Number(u.at) - startAt - 500);
-    const to = Math.min(clipMs, (rows[i + 1] ? Number(rows[i + 1].at) : startAt + clipMs) - startAt, Number(u.at) - startAt + 15_000);
-    const text = await retranscribe(toWav(samples.subarray(Math.round(from * 16), Math.round(to * 16))), u.text, context);
-    if (text === null) continue;
+    if (!(await tripsDb().query(live, [code, momentId, generation])).rows[0]) {
+      reasons.stopped = (reasons.stopped ?? 0) + rows.length - i; // 클립을 지웠거나 동의가 철회됨 — 남은 줄은 보내지 않는다
+      break;
+    }
+    const at = Number(u.at) - startAt;
+    const next = rows.slice(i + 1).find((r) => r.seat_area === u.seat_area);
+    const from = Math.max(0, at - 500);
+    const to = Math.min(clipMs, at + 15_000, Math.max(next ? Number(next.at) - startAt : clipMs, at + Math.max(1500, [...u.text].length * 150)));
+    const stillOk = async () =>
+      (
+        await tripsDb().query(
+          `${live} AND EXISTS (SELECT 1 FROM utterances WHERE trip_code = $1 AND device = $4 AND seq = $5 AND text = $6 AND generation = $3)`,
+          [code, momentId, generation, u.device, u.seq, u.text]
+        )
+      ).rows.length > 0;
+    const result = to - from < 800 ? { reason: "short" } : await retranscribe(toWav(pcm.subarray(Math.round(from * 16), Math.round(to * 16))), u.text, context, stillOk);
+    // 그 사이 지운 글·클립·철회된 동의면 붙이지 않는다
+    const stored = result.text
+      ? (
+          await tripsDb().query(
+            `UPDATE utterances SET asr_text = $6 WHERE trip_code = $1 AND device = $2 AND seq = $3 AND text = $4 AND generation = $5
+             AND EXISTS (SELECT 1 FROM recordings WHERE trip_code = $1 AND moment_id = $7 AND generation = $5 AND deleted_at IS NULL)`,
+            [code, u.device, u.seq, u.text, generation, result.text, momentId]
+          )
+        ).rowCount > 0
+      : false;
+    const reason = result.reason ?? (stored ? null : "stopped");
+    if (reason) {
+      reasons[reason] = (reasons[reason] ?? 0) + 1;
+      continue;
+    }
     fixed++;
-    if (text.replace(/[\s\p{P}]/gu, "") !== u.text.replace(/[\s\p{P}]/gu, "")) changed++;
-    // 그 사이 지운 글(text = '')이나 바뀐 줄에는 붙이지 않는다
-    await tripsDb().query("UPDATE utterances SET asr_text = $5 WHERE trip_code = $1 AND device = $2 AND seq = $3 AND text = $4", [code, u.device, u.seq, u.text, text]);
+    if (result.text.replace(/[\s\p{P}]/gu, "") !== u.text.replace(/[\s\p{P}]/gu, "")) changed++;
   }
-  // 관측(T75): 다시 받아 적은 줄, 원문으로 남은 줄, 원문과 글자가 달라진 줄, 걸린 시간. 글은 남기지 않는다.
-  log("info", "clip_retranscribed", { lines: rows.length, fixed, fellBack: rows.length - fixed, changed, ms: Date.now() - started });
+  // 관측(T75): 다시 받아 적은 줄, 원문으로 남은 줄과 그 이유(timeout·http_NNN·suspicious·stopped 등), 원문과 글자가 달라진 줄, 걸린 시간.
+  // 글과 토큰은 남기지 않는다.
+  log("info", "clip_retranscribed", { lines: rows.length, fixed, fellBack: rows.length - fixed, reasons, changed, ms: Date.now() - started });
 }
 
 // 지우기는 프로필 DB의 한 트랜잭션에서 한다 — 중간에 실패해도 토큰만 지워지고 프로필이 남는 일이 없게.

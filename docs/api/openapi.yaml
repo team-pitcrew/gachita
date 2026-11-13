@@ -1051,7 +1051,7 @@ components:
           properties:
             device: { type: string }
             profileId: { type: string, format: uuid, description: 서버의 화자 대조(T38)가 붙인 프로필. 아직 없으면 생략 }
-            asrText: { type: string, description: "고른 장면 클립의 소리로 다시 받아 적은 글(T75). 있을 때만, 기록본에만. text(Pleos 원문)는 그대로" }
+            asrText: { type: string, description: "고른 장면 클립의 소리로 다시 받아 적은 글(T75). 있을 때만 — 기록본과 장면 후보의 발화에. text(Pleos 원문)는 그대로" }
     Transcript:
       type: object
       required: [generation, utterances, requests, todos]
