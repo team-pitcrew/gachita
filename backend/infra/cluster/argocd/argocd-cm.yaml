@@ -3,17 +3,25 @@ kind: ConfigMap
 metadata:
   name: argocd-cm
 data:
-  # https://argo-cd.readthedocs.io/en/v3.6.1/operator-manual/health/#argocd-app
+  # 뿌리 앱이 앞 물결 앱의 '건강'을 기다리게 하는 Application 건강 판정.
+  # 바탕은 https://argo-cd.readthedocs.io/en/v3.6.1/operator-manual/health/#argocd-app 이고, 동기화 상태도 본다:
+  # Synced가 아니면 Progressing(메시지에 동기화 상태). Synced일 때만 자식 앱의 건강(Healthy, Degraded 등)을 그대로 넘긴다.
+  # 이유: 자식 앱이 첫 동기화 전에 잠깐 OutOfSync/Healthy로 보여 다음 물결이 일찍 시작됐다(11/13 infra-e2e의 waves,
+  # API가 DB보다 먼저 떠 db-urls 없이 재시작). 11/13 실제 계정에서도 API가 DB보다 먼저 떠 4번 재시작했다.
+  # 위험: 영원히 OutOfSync로 남는 앱이 있으면 뿌리 앱이 끝나지 않는다(구축 7단계가 그 앱 이름을 남김).
   resource.customizations.health.argoproj.io_Application: |
     hs = {}
     hs.status = "Progressing"
     hs.message = ""
-    if obj.status ~= nil then
-      if obj.status.health ~= nil then
-        hs.status = obj.status.health.status
-        if obj.status.health.message ~= nil then
-          hs.message = obj.status.health.message
-        end
+    local sync = obj.status ~= nil and obj.status.sync ~= nil and obj.status.sync.status or nil
+    if sync ~= "Synced" then
+      hs.message = "sync: " .. tostring(sync)
+      return hs
+    end
+    if obj.status.health ~= nil then
+      hs.status = obj.status.health.status
+      if obj.status.health.message ~= nil then
+        hs.message = obj.status.health.message
       end
     end
     return hs
