@@ -395,6 +395,13 @@ test("발화를 기록본으로 저장하고 프로필 피드로 읽는다(T39)"
   assert.equal(feedA4.items.filter((i) => i.kind === "utterance").length, 0);
   const [, r4] = await call("POST", `${t}/utterances`, { device: "car", generation: 2, items: [{ seq: 7, at: at(13), text: "다음" }] }, freshA);
   assert.equal(r4.lastSeq, 7, "지운 뒤에도 확인 순번은 뒤로 가지 않는다");
+  // 여행 하나의 발화는 2만 줄까지(48시간 지우기가 2초 안에 끝나게)
+  await tripsDb().query(
+    "INSERT INTO utterances (trip_code, device, seq, at, text, generation) SELECT $1, 'bulk', g, g, 'x', 2 FROM generate_series(1, 19999) g",
+    [trip.code]
+  );
+  assert.equal((await call("POST", `${t}/utterances`, { device: "car", generation: 2, items: [{ seq: 8, at: at(14), text: "넘침" }] }, freshA))[0], 409);
+  await tripsDb().query("DELETE FROM utterances WHERE trip_code = $1 AND device = 'bulk'", [trip.code]);
 
   // 48시간이 지나면 발화와 확인 순번은 지워지고 앨범에 확정해 둔 장면만 남는다(기준 문서: 선택한 장면만 개인 앨범에)
   const [, mom2] = await call("POST", `${t}/moments`, { label: "바다" }, freshA);
