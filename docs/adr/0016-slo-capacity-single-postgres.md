@@ -197,7 +197,7 @@ Postgres가 하나면 그 노드가 강한 의존성입니다. 요청은 거의 
   - `bootstrap/10-traefik.yaml`을 빼고 AWS Load Balancer Controller의 Application을 넣음. 공식 차트 `eks/aws-load-balancer-controller` 3.6.2(`https://aws.github.io/eks-charts`). 값: `clusterName: gachita-dev`, `region: ap-northeast-2`, `vpcId`(IMDS 홉 1이라 둘 다 꼭 줌), `replicaCount: 1`, `enableCertManager: true`, `enableServiceMutatorWebhook: false`, `defaultTags.Project: gachita`, 서비스 계정의 역할 `gachita-dev-alb-controller`, 컨트롤 플레인 노드 선택자와 테인트 허용, 메모리 요청 64Mi·한도 256Mi(어림). 물결 3에 둠: 컨트롤러의 AWS 자격은 파드 신원 웹훅(물결 2)이 파드를 만들 때 넣는데, 그 웹훅은 실패해도 통과시키므로(`failurePolicy: Ignore`) 웹훅이 준비되기 전에 뜬 파드는 자격 없이 뜨고 저절로 고쳐지지 않음. 웹훅 인증서를 주는 cert-manager는 물결 1이라 이미 있음. 자세한 것은 ADR-0017(PR #104).
   - `apps/edge`: cloudflared, Traefik용 GatewayClass와 Middleware, HTTPRoute의 `ExtensionRef`를 뺌. GatewayClass를 컨트롤러 것으로, Gateway 리스너는 HTTPS 443(ACM 인증서), 대상은 인스턴스·건강 확인 `/healthz`. HTTPRoute의 호스트와 경로는 그대로.
   - `apps/api/base/service.yaml`을 `NodePort`로. 포트 규칙(`platform/cluster-base/port-rules.yaml`)에 `gachita`의 `gachita-api` 서비스 하나만 예외. `network.yaml`의 들어오는 쪽을 Traefik 파드에서 공개 서브넷 대역(ALB)으로.
-- Terraform `backend/infra/terraform`
+- Terraform `backend/infra/terraform`(구현에서 달라진 것: ALB 앞단 보안 그룹은 컨트롤러가 `sourceRanges`로 만들고(ADR-0017), `worker_count`·`worker_instance_type`·`private_nodes` 변수는 2·3단계에서 넣는다. 지금 코드는 그 기본값과 같은 동작)
   - 변수 `worker_count`(기본 0), `worker_instance_type`(기본 `t4g.medium`), `private_nodes`(기본 `false`).
   - `network.tf`: 공개 서브넷 둘(`10.10.0.0/24`, `10.10.1.0/24`)과 컨트롤러가 찾는 태그(`kubernetes.io/role/elb=1`, `kubernetes.io/cluster/gachita-dev=owned`). 사설 서브넷과 NAT는 `private_nodes`일 때만. ALB 앞단 보안 그룹(Cloudflare 대역의 443만)과, 노드 보안 그룹에 그 보안 그룹에서 오는 NodePort 범위.
   - `compute.tf`: 서버 하나(`t4g.large`)와 `worker_count`만큼의 워커(가용 영역을 번갈아).

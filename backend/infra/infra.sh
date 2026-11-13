@@ -2,7 +2,7 @@
 # 펴기와 접기(ADR-0017, T53). infra 워크플로와 사람이 같은 순서로 돌린다. 다시 돌려도 결과가 같게 짰다.
 #
 #   backend/infra/infra.sh up     남는 묶음 → 접는 묶음 → 구축 단계(서버 안) → ALB → 레코드 → 확인
-#   backend/infra/infra.sh down   마지막 백업 → edge 앱 지우기(컨트롤러가 ALB를 지움) → 접는 묶음 destroy → 남은 것 확인
+#   backend/infra/infra.sh down   edge 앱 지우기(길을 닫음, 컨트롤러가 ALB를 지움) → 마지막 백업 → 접는 묶음 destroy → 남은 것 확인
 #
 # 필요한 것: AWS 자격(워크플로는 OIDC 적용 역할), 상태 버킷 TF_STATE_BUCKET, jq.
 # 고를 것: CLOUDFLARE_API_TOKEN과 TF_VAR_cloudflare_zone_id(없으면 인증서·레코드 없이 ALB까지만),
@@ -129,27 +129,13 @@ up() {
 }
 
 down() {
-  local id=""
+  local id="" up=""
   id=$(tf "$TF" output -raw instance_id 2>/dev/null || true)
-  if [[ $id == i-* ]] && ssm_online "$id"; then
-    log 1/4 "마지막 전체 백업(T52). WAL 보관 주기 사이의 마지막 변경까지 S3에 남긴다(최대 20분)"
-    on_server "$id" 1200 '
-      set -euo pipefail
-      export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
-      if kubectl -n gachita-db get cluster db >/dev/null 2>&1; then
-        n=fold-$(date +%Y%m%d%H%M%S)
-        printf "apiVersion: postgresql.cnpg.io/v1\nkind: Backup\nmetadata: {name: %s, namespace: gachita-db}\nspec:\n  cluster: {name: db}\n  method: plugin\n  pluginConfiguration: {name: barman-cloud.cloudnative-pg.io}\n" "$n" | kubectl apply -f -
-        for i in $(seq 1 220); do
-          p=$(kubectl -n gachita-db get backup/$n -o jsonpath="{.status.phase}")
-          case $p in completed) echo "백업 $n 완료"; exit 0 ;; failed) kubectl -n gachita-db get backup/$n -o jsonpath="{.status.error}"; exit 1 ;; esac
-          sleep 5
-        done
-        exit 1
-      else
-        echo "Postgres가 없어 백업을 건너뜀"
-      fi' || fail "마지막 백업이 끝나지 않았습니다. 데이터를 지키려면 접지 않습니다(고친 뒤 다시)"
-
-    log 2/4 "edge 앱을 지운다: Gateway가 지워지며 컨트롤러가 ALB·대상 그룹·보안 그룹을 지운다(최대 10분)"
+  [[ $id == i-* ]] && ssm_online "$id" && up=1
+  # 길을 먼저 닫고 백업한다. 백업 뒤에 길을 닫으면 그사이 들어온 쓰기는 다음 WAL 조각에만 있어(보관 주기 5분)
+  # destroy가 서버를 끝낼 때 사라진다
+  if [ -n "$up" ]; then
+    log 1/5 "들어오는 길을 닫는다: edge 앱을 지우면 Gateway가 지워지며 컨트롤러가 ALB·대상 그룹·보안 그룹을 지운다(최대 10분)"
     on_server "$id" 700 '
       set -euo pipefail
       export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
@@ -158,10 +144,10 @@ down() {
       kubectl -n argocd delete application edge --ignore-not-found --wait=true --timeout=600s' ||
       echo "  edge 앱을 지우지 못했습니다. 태그로 정리합니다"
   else
-    log 1/4 "서버가 없거나 SSM에 붙지 않아 백업과 edge 앱 지우기를 건너뜀(이미 접혔거나 클러스터가 망가짐)"
+    log 1/5 "서버가 없거나 SSM에 붙지 않아 edge 앱 지우기와 백업을 건너뜀(이미 접혔거나 서버가 망가짐)"
   fi
 
-  log 2/4 "컨트롤러가 만든 ALB가 사라졌는지(최대 5분). 남았으면 태그로 지운다"
+  log 2/5 "컨트롤러가 만든 ALB가 사라졌는지(최대 5분). 남았으면 태그로 지운다"
   local i
   for ((i = 0; i < 30; i++)); do [ -z "$(alb_arn)" ] || [ "$(alb_arn)" = None ] && break || sleep 10; done
   for a in $(lbc_resources elasticloadbalancing:loadbalancer); do
@@ -174,7 +160,26 @@ down() {
     aws elbv2 delete-target-group --target-group-arn "$t"
   done
 
-  log 3/4 "접는 묶음 destroy(레코드 포함). 남는 묶음은 건드리지 않는다"
+  if [ -n "$up" ]; then
+    log 3/5 "마지막 전체 백업(T52). 길이 닫힌 뒤라 마지막 쓰기까지 들어간다(최대 20분)"
+    # Postgres가 없는 것(CRD나 클러스터가 없음)과 클러스터에 묻지 못하는 것(API 오류)을 가른다. 묻지 못하면 접지 않는다
+    on_server "$id" 1200 '
+      set -euo pipefail
+      export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+      crd=$(kubectl get crd clusters.postgresql.cnpg.io --ignore-not-found -o name)
+      db=$([ -z "$crd" ] || kubectl -n gachita-db get clusters.postgresql.cnpg.io db --ignore-not-found -o name)
+      if [ -z "$db" ]; then echo "Postgres가 없어 백업을 건너뜀"; exit 0; fi
+      n=fold-$(date +%Y%m%d%H%M%S)
+      printf "apiVersion: postgresql.cnpg.io/v1\nkind: Backup\nmetadata: {name: %s, namespace: gachita-db}\nspec:\n  cluster: {name: db}\n  method: plugin\n  pluginConfiguration: {name: barman-cloud.cloudnative-pg.io}\n" "$n" | kubectl apply -f -
+      for i in $(seq 1 220); do
+        p=$(kubectl -n gachita-db get backup/$n -o jsonpath="{.status.phase}")
+        case $p in completed) echo "백업 $n 완료"; exit 0 ;; failed) kubectl -n gachita-db get backup/$n -o jsonpath="{.status.error}"; exit 1 ;; esac
+        sleep 5
+      done
+      exit 1' || fail "마지막 백업이 끝나지 않았습니다. 데이터를 지키려면 접지 않습니다(고친 뒤 다시). 들어오는 길은 닫혀 있습니다. 다시 열려면 서버에서 kubectl -n argocd patch application root --type merge -p '{\"spec\":{\"syncPolicy\":{\"automated\":{\"prune\":true,\"selfHeal\":true}}}}'"
+  fi
+
+  log 4/5 "접는 묶음 destroy(레코드 포함). 남는 묶음은 건드리지 않는다"
   if ! tf "$TF" destroy -input=false -auto-approve; then
     # 컨트롤러의 보안 그룹이 남아 VPC를 못 지운 때: 노드 보안 그룹(그것을 가리키던 규칙)은 이미 지워졌으니 지울 수 있다
     for sg in $(lbc_resources ec2:security-group); do
@@ -184,7 +189,7 @@ down() {
     tf "$TF" destroy -input=false -auto-approve
   fi
 
-  log 4/4 "남은 것: Project=gachita 태그가 붙은 네트워크·서버·디스크와 컨트롤러가 만든 ALB·대상 그룹이 없어야 한다"
+  log 5/5 "남은 것: Project=gachita 태그가 붙은 네트워크·서버·디스크와 컨트롤러가 만든 ALB·대상 그룹이 없어야 한다"
   # 태그 검색 API(resourcegroupstaggingapi)는 지운 것을 몇 분 넘게 보여 주므로(11/13 실제로 3분 넘게) 서비스마다 직접 묻는다
   local left="" tag=Name=tag:Project,Values=gachita
   for ((i = 0; i < 12; i++)); do
@@ -204,7 +209,13 @@ down() {
     sleep 10
   done
   [ -z "$left" ] || fail "접은 뒤에도 남은 것: $left"
-  echo "  남는 것(접지 않음): 버킷 $(aws s3api list-buckets --query "Buckets[?starts_with(Name,'gachita-')].Name" --output text | xargs)"
+  local acct b kept=""
+  acct=$(aws sts get-caller-identity --query Account --output text)
+  # 적용 역할에는 버킷 목록(ListAllMyBuckets)이 없어 이름으로 하나씩 묻는다
+  for b in "gachita-$ENV_NAME-$acct" "gachita-$ENV_NAME-oidc-$acct" "$TF_STATE_BUCKET"; do
+    aws s3api head-bucket --bucket "$b" 2>/dev/null && kept="$kept $b"
+  done
+  echo "  남는 것(접지 않음): 버킷$kept"
   log 끝 "접었습니다"
 }
 
