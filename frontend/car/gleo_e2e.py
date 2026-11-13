@@ -72,6 +72,18 @@ def play_now(inj, name):
     return done
 
 
+def heard_lines():
+    """화면의 '받아 적은 말' 카드에 보이는 최근 줄('HH:mm · 글'). 차 안 보관함은 암호화돼(T69) 기기 파일로 읽지 않는다."""
+    return [t.split(" · ", 1)[1] for t in texts() if re.match(r"^\d\d:\d\d · ", t)]
+
+
+def front():
+    """우리 창을 앞으로, 입력 포커스도 우리 창으로. 글꼴을 바꾸면 포커스가 왼쪽 운전 화면 창으로 가 화면 덤프가 그 창을 읽었다(11/14).
+    포커스는 우리 창의 빈 곳(제목 줄 옆)을 한 번 눌러 가져온다."""
+    adb("shell", "am", "start", "--user", "10", "-n", f"{PKG}/.MainActivity"); time.sleep(1)
+    adb("shell", "input", "tap", "1600", "150")
+
+
 def gleo_call(fn):
     """Gleo가 함수를 부를 때와 같은 인텐트(component activity, action은 '<패키지>.<함수 이름>'). 매니페스트의 intent-filter로 찾게 컴포넌트를 적지 않는다."""
     adb("shell", "am", "start", "--user", "10", "-a", f"{PKG}.{fn}", "-p", PKG)
@@ -118,17 +130,28 @@ def main(apk):
     time.sleep(1); ui = texts(); shot("1-resumed")
     check("다시 '● 기록 중'이고 마이크를 쥠", "● 기록 중" in ui and ours_recording())
     if not ours_recording(): raise SystemExit("마이크가 열리지 않아 소리를 넣지 않고 멈춥니다")
-    n = len(cap.outbox(code)); inj.play("after"); time.sleep(3)  # 다시 연 우리 녹음에 넣는다(기본 모드); time.sleep(3)
-    got = [u["text"] for u in cap.outbox(code)[n:]]
+    inj.play("after"); time.sleep(3)  # 다시 연 우리 녹음에 넣는다(기본 모드)
+    got = heard_lines()
     check("다시 수음한 뒤 이어 넣은 말이 받아 적힘", any("아이스크림" in cap.norm(x) or "휴게소" in cap.norm(x) for x in got), heard=got)
 
     # 2. 다른 꼴의 호출어 → 버튼을 누르지 않음 → 시간 초과로 다시 수음
     k = len(app_log); done = play_now(inj, "wake2")
     e = wait_log(r"^Gleo에게 넘김 호출어", k, 10); time.sleep(1); held = not ours_recording()
+    # 넘긴 동안 글꼴 크기를 바꿔 화면을 다시 만든다(매니페스트가 fontScale 재생성을 막지 않음). 새 화면이 넘긴 상태를 이어받아야 한다
+    pid = adb("shell", "pidof", PKG).strip()
+    adb("shell", "settings", "put", "--user", "current", "system", "font_scale", "1.1"); time.sleep(2)
+    front()
+    ui = cap.wait_texts(lambda u: "운전대 버튼을 누르세요" in u or "● 기록 중" in u, 6); shot("2-recreated-paused"); note("ui", texts=ui)
+    check("넘긴 동안 화면이 다시 만들어져도 '기록 잠시 멈춤 · 운전대 버튼을 누르세요'를 이어받음(같은 프로세스)",
+          "기록 잠시 멈춤" in ui and "운전대 버튼을 누르세요" in ui and adb("shell", "pidof", PKG).strip() == pid and not ours_recording())
+    adb("shell", "settings", "put", "--user", "current", "system", "font_scale", "1.0"); time.sleep(2); front()
     b = wait_log(r"^다시 수음\(시간 초과\)", k, 25)
     check("버튼이 없으면 15초 뒤 저절로 다시 수음", e and held and b and ours_recording() and done < e["device_ms"] - offset, line=b and b["line"])
+    front(); ui = cap.wait_texts(lambda u: "● 기록 중" in u, 8)
+    check("다시 만들어진 화면도 '● 기록 중'으로 돌아옴", "● 기록 중" in ui)
 
     # 3. 화면의 'Gleo 쓰기'
+    cap.wait_texts(lambda u: "Gleo 쓰기" in u, 8)
     k = len(app_log); tap_text("Gleo 쓰기")
     e = wait_log(r"^Gleo에게 넘김 단추", k, 5)
     ui = texts(); shot("3-button-paused"); held = not ours_recording()
