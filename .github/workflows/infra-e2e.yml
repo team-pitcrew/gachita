@@ -53,6 +53,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
+      # 실행기 디스크는 83%쯤 찬 채로 온다(11/13). K3s의 kubelet은 85%를 넘으면 이미지를 지우기 시작하고 물결이 멈췄다.
+      # 이 잡에서 쓰지 않는 미리 깔린 도구와 Docker 이미지를 지운다(서드파티 액션 없이)
+      - name: 디스크 비우기
+        run: |
+          before=$(df -h / | tail -1)
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          docker system prune -af > /dev/null
+          after=$(df -h / | tail -1)
+          printf '전: %s\n뒤: %s\n' "$before" "$after"
+          printf '### 실행기 디스크(/)\n\n```\n%s\n전: %s\n뒤: %s\n```\n\n' "$(df -h / | head -1)" "$before" "$after" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/checkout@v7
       # docker, kubectl, jq, yq, git은 실행기에 있다. ansible-core는 뿌리 앱 템플릿을 그린다(구축 6단계와 같은 모듈).
       # br_netfilter가 없으면 K3s 안에서 같은 노드의 서비스 응답이 iptables를 거치지 않아 클러스터 DNS가 닿지 않는다
@@ -60,7 +70,6 @@ jobs:
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq ansible-core
           if ! lsmod | grep -q '^br_netfilter'; then echo "br_netfilter가 없어 올립니다"; sudo modprobe br_netfilter; fi
-          df -h / # K3s 이미지 정리는 디스크 사용률을 본다
       - name: 물결 E2E
         run: E2E_OUT="$RUNNER_TEMP/e2e" backend/infra/cluster/e2e-local.sh
       - name: 요약

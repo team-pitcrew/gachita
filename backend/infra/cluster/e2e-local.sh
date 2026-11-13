@@ -61,6 +61,13 @@ diagnose() {
        | "  \(.kind)/\(.namespace)/\(.name): \(.health.status) \(.health.message // "")")' || true
   echo "--- 돌지 않는 파드"
   kubectl get pods -A --no-headers | awk '$4 != "Running" && $4 != "Completed"' || true
+  echo "--- 노드 조건"
+  kubectl get nodes -o jsonpath='{range .items[*].status.conditions[*]}{.type}={.status} {.message}{"\n"}{end}' || true
+  echo "--- gachita-db: Cluster, 파드, PVC, 이벤트"
+  kubectl -n gachita-db get cluster,pods,pvc -o wide || true
+  kubectl -n gachita-db get events --sort-by=.lastTimestamp | tail -20 || true
+  echo "--- CloudNativePG 운영자 로그"
+  kubectl -n cnpg-system logs deploy/cloudnative-pg --tail=30 || true
   echo "--- 경고 이벤트(마지막 20개)"
   kubectl get events -A --field-selector type=Warning --sort-by=.lastTimestamp 2>/dev/null | tail -20 || true
   echo "--- API 로그"
