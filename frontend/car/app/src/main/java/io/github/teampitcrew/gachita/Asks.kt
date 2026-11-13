@@ -53,12 +53,18 @@ fun isRestRequest(text: String): Boolean {
 
 enum class Answer { YES, NO, UNCLEAR }
 
-/** 제안("…에 들를까요?")에 대한 답. 거절 낱말이 먼저다("아니, 가자고 안 했어"는 거절). */
+private val NO_WORDS = setOf("아니", "아니야", "아니요", "아뇨", "나중에", "괜찮아", "괜찮아요", "싫어", "됐어", "안")
+private val YES_WORDS = setOf("응", "네", "예", "그래", "그래요", "좋아", "좋아요", "가자", "들르자", "들렀다")
+
+/**
+ * 제안("…에 들를까요?")에 대한 답. 띄어쓰기로 나눈 낱말이 통째로 같아야 한다("그래서", "좋아하는", "반응"은 답이 아니다).
+ * 거절 낱말이 먼저다("아니 가자고 안 했어"는 거절).
+ */
 fun answerOf(text: String): Answer {
-    val t = squash(text)
+    val words = text.split(Regex("[^가-힣A-Za-z0-9]+")).toSet()
     return when {
-        listOf("아니", "나중에", "괜찮아", "싫어", "안가", "안들러").any { it in t } -> Answer.NO
-        listOf("응", "그래", "좋아", "가자", "들르자", "들렀다가").any { it in t } -> Answer.YES
+        words.any { it in NO_WORDS } -> Answer.NO
+        words.any { it in YES_WORDS } -> Answer.YES
         else -> Answer.UNCLEAR
     }
 }
@@ -73,12 +79,13 @@ fun distanceLabel(meters: Int?, seconds: Int?): String = listOfNotNull(
 ).joinToString(" · ")
 
 /**
- * 제안 하나. 같은 휴게소에 묶인 부탁들(서버 id)과 그 사이의 단계.
- * ASKING 제안을 보이고 답을 기다림 → ADDING 내비에 넣는 중 → ADDED 반영됨 / FAILED 못 넣어 보관으로 되돌림.
+ * 경유지 제안 하나. 한 번에 하나만 열리고, 같은 휴게소에 묶인 부탁들(서버 id)과 단계를 갖는다.
+ * FINDING 휴게소와 거리를 내비에 묻는 중 → ASKING 제안을 보이고 답을 기다림 → ADDING 내비에 넣는 중
+ * → ADDED 반영됨 / FAILED 못 넣어 보관으로 되돌림. id는 늦게 온 콜백이 다른 제안을 건드리지 않게 하는 번호.
  */
 data class Offer(
-    val stop: Place, val requests: List<String>, val meters: Int?, val seconds: Int?,
-    val stage: Stage = Stage.ASKING, val asked: Int = 1,
+    val id: Long, val trip: String, val requests: List<String> = emptyList(), val stop: Place? = null,
+    val meters: Int? = null, val seconds: Int? = null, val stage: Stage = Stage.FINDING, val asked: Int = 1,
 ) {
-    enum class Stage { ASKING, ADDING, ADDED, FAILED }
+    enum class Stage { FINDING, ASKING, ADDING, ADDED, FAILED }
 }

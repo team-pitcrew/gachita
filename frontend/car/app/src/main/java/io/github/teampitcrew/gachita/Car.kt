@@ -83,7 +83,7 @@ class Car(ctx: Context, private val onChange: (CarStatus) -> Unit) {
 
     private val here = Wait<CurrentLocationInfo>(2_000)
     private val trip = Wait<TripInfo>(3_000)
-    private val stop = Wait<Boolean>(20_000) // 11/13: 수락 뒤 onWaypointChanged까지 7.6초
+    private val stop = Wait<Boolean>(30_000) // onWaypointChanged까지 11/13 7.6초, 11/13 밤 9.9~12.9초
 
     private val naviListener = object : NaviHelperEventListener {
         override fun onRouteStarted(routeStartInfo: RouteStartInfo) = naviEvent("경로 시작 ${routeStartInfo.name ?: ""}")
@@ -92,7 +92,10 @@ class Car(ctx: Context, private val onChange: (CarStatus) -> Unit) {
             if (waypointChangedInfo.cmdType == WaypointCmdType.ADD) main.post { stop.answer(true) }
         }
         override fun onRouteCancelled() = naviEvent("안내 취소") // 경유지를 더하면 안내가 한 번 끊겼다 다시 시작한다(11/13). 실패로 보지 않는다
-        override fun onError(errorCode: NaviErrorCode) { naviEvent("내비 오류 ${errorCode.name}"); main.post { stop.answer(false) } }
+        override fun onError(errorCode: NaviErrorCode) {
+            naviEvent("내비 오류 ${errorCode.name}")
+            main.post { if (errorCode == NaviErrorCode.CAUSE_SEARCH_TRIP) trip.answer(null) else stop.answer(false) } // 거리 묻기의 오류는 경유지 실패가 아니다
+        }
         override fun onCurrentLocationInfo(currentLocationInfo: CurrentLocationInfo) { main.post { here.answer(currentLocationInfo) } }
         override fun onTripInfo(tripInfo: TripInfo) { main.post { trip.answer(tripInfo) } }
     }
@@ -162,7 +165,10 @@ class Car(ctx: Context, private val onChange: (CarStatus) -> Unit) {
         runCatching { v.getGear().getCurrentGearSelectionState({ answer(label(it)) }, { answer(null) }) }.onFailure { answer(null) }
     }
 
-    fun speak(text: String) { if (status.voice) runCatching { tts?.speak(text, true) } }
+    fun speak(text: String) {
+        Log.i(TAG, "말함 ${text.length}자" + if (status.voice) "" else " · TTS 준비 안 됨") // 글자는 남기지 않는다(받아 적은 말이 들어갈 수 있음)
+        if (status.voice) runCatching { tts?.speak(text, true) }
+    }
 
     /** 내비가 아는 지금 위치. 화면은 넘어가지 않는다(0.1~0.2초, 11/12). 모르면 null, null. */
     fun here(done: (Double?, Double?) -> Unit) = here.start({ done(it?.latitude, it?.longitude) }) { navi.getCurrentLocationInfo() }
@@ -171,7 +177,7 @@ class Car(ctx: Context, private val onChange: (CarStatus) -> Unit) {
     fun distanceTo(p: Place, done: (Int?, Int?) -> Unit) =
         trip.start({ done(it?.distance, it?.eta) }) { navi.requestTrip(TripRequest(latitude = p.lat, longitude = p.lng, poiId = "", poiName = p.name, poiSubId = "0")) }
 
-    /** 지금 경로에 들를 곳을 더한다. 내비가 앞으로 나오고, 반영 알림(onWaypointChanged ADD)이 오면 true. 오류나 20초 넘으면 false. */
+    /** 지금 경로에 들를 곳을 더한다. 내비가 앞으로 나오고, 반영 알림(onWaypointChanged ADD)이 오면 true. 경로 오류나 30초 넘으면 false. */
     fun addStop(p: Place, done: (Boolean) -> Unit) = stop.start({ done(it == true) }) {
         navi.addWaypoint(RequestWaypointInfo(latitude = p.lat, longitude = p.lng, poiName = p.name, waypointIndex = WaypointIndex.FIRST, poiId = "", address = p.address, poiSubId = "0"))
     }
