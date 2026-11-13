@@ -7,10 +7,12 @@
 | 파일 | 담은 것 | 기준 |
 |---|---|---|
 | [가치타 차량 화면](https://www.figma.com/design/Qc58INq2ECd1ODzzmM7Nja) | [기본 흐름](https://www.figma.com/design/Qc58INq2ECd1ODzzmM7Nja?node-id=2-73): 12개 앱 창 × 주행 중·정차·도착 후. [추가 상태 84개](https://www.figma.com/design/Qc58INq2ECd1ODzzmM7Nja?node-id=22-248): 기록 일시정지(운전자가 누름), 동의 대기, 내비 반영 대기·실패, 연결 끊김, 결과 준비 중·없음. 모두 120프레임 | 기획서 v4, T17([PR #54](https://github.com/team-pitcrew/gachita/pull/54)) |
+| [개편 · 차와 폰](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=0-1) | 차 8장: [C1 주행 중 기록과 말하는 사람 강조](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=2-2), [C2 휴게소 제안과 말로 수락](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=2-121), [C3 도착 브리핑](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=3-93), [C4 Gleo 쓰는 동안 기록 잠시 멈춤](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=3-537), [C5 출발 전](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=3-647), [C6 여행 만들기](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=3-1116)(1682 × 1210), [C1n](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=4-254)·[C2n](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=4-357)(841 × 1210). 폰 8장(390 × 844): P1 홈과 내 기록본 ~ [P8 9:16 숏폼](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=6-651). [근거 보드](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=8-512)(k-style-ui-ux, Android for Cars 등), [토큰 보드](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=8-598)(밝은·어두운) | 11/13 문구정리본, T20 개편(11/14, 지환 Pro 팀) |
 
-- 밝은 화면만 있습니다. 어두운 화면과 폰 화면은 없습니다.
-- 11/13 뒤에 정한 흐름은 피그마에 없습니다. 말로 하는 수락과 도착 브리핑은 시안 없이 차 앱(Compose)에 바로 만들어 에뮬레이터에서 확인했고, 웹 시연(`/demo`)은 차 앱의 흐름과 문구를 따라 그렸습니다. 목소리 등록, 말하는 사람 강조, Gleo를 쓰는 동안의 '기록 잠시 멈춤'은 구현 중입니다(T37, T41). 이 흐름들의 기준은 [차량 화면 문서](../frontend/spec/car.md)입니다. 제출(11/15)까지 피그마를 다시 그리지 않습니다(T20 범위 조정).
-- 파일은 지환의 피그마 계정에 있습니다. 팀원과 심사위원이 보려면 보기 권한을 따로 줘야 합니다.
+- v4 파일은 밝은 화면의 차 화면만 있습니다.
+- 11/13 뒤 흐름은 개편 파일에 있습니다. 말로 하는 수락과 도착 브리핑은 그보다 먼저 차 앱(Compose)에 만들어 에뮬레이터에서 확인했고, 목소리 등록·말하는 사람 강조·기록 잠시 멈춤은 구현 중입니다(T37, T41). 개편 시안을 따른 구현은 웹 [#175](https://github.com/team-pitcrew/gachita/pull/175)(열림)와 뒤이을 차 PR입니다.
+- **화면 문서가 시안보다 앞섭니다.** C5의 '참가 QR', P2 '그룹 초대', P3 '자리 고르기'는 11/14 결정(폰의 동승 연결 QR을 차가 읽음, 그룹 없음, 자리는 차에서 고름) 전에 그렸습니다. 이 셋은 [차량 화면](../frontend/spec/car.md) 흐름 1과 [프로필 화면](../frontend/spec/profile.md)을 따릅니다.
+- 두 파일 모두 지환의 피그마 계정(개편 파일은 Pro 팀)에 있고, 팀원과 심사위원에게 보기 권한을 아직 주지 않았습니다.
 
 ## 토큰의 기준
 
@@ -28,7 +30,8 @@
 | `--r-card` / `--r-ctl` | 20 / 14 | | 같음 | 카드 20dp |
 
 - 피그마 값은 11/14에 피그마 MCP로 [기본 흐름](https://www.figma.com/design/Qc58INq2ECd1ODzzmM7Nja?node-id=2-73) 노드(`2:73`)의 변수를 읽어 확인했습니다. 피그마 변수는 웹 토큰 이름을 그대로 씁니다.
-- **색은 셋이 같습니다**(피그마는 밝은 화면만).
+- **색은 셋이 같습니다**(v4 피그마는 밝은 화면만).
+- **개편 파일의 토큰 보드는 새 값입니다.** 밝은 화면에서 `--bg` #f2f1f6, `--ink` #1d1a28, `--ink-2` #514c66, `--line` #e7e5ed, `--accent-soft` #edebf6, `--ok` #177a41로 바뀌고 `--surface-2`, `--warn`(주의), 틴트 다섯이 더해집니다. `--accent` #5b47b0과 `--rec`는 그대로입니다(11/14 피그마 MCP로 [토큰 보드](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=8-598)의 변수를 읽음). 웹은 #175가 옮기는 중이고, 병합되면 위 표의 값도 바뀝니다. 차는 그 뒤 같은 값으로 맞춥니다.
 - **차 글자 크기는 피그마와 다릅니다.** 같은 노드의 글자 변수(`T17/caption` … `T17/display`)는 20·24·28·32·36·44·56이고, 차 앱은 18·20·24·26·30·36·40·48sp를 화면마다 직접 적었습니다. 단추와 입력란의 크기만 `CarType`(`MainActivity.kt:79`)에 있습니다.
 - 차의 여백(8~32dp)은 피그마 변수 `car-space`(12~48)와 다른 단계이고 이름으로 묶지 않았습니다.
 
