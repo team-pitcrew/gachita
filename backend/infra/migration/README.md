@@ -18,6 +18,8 @@
 
 처음 계획의 기존 S3 endpoint 확장 대신 새 private route table 전용 endpoint를 선언했습니다. 기존 endpoint 업데이트까지 배제하므로 agent plan을 **허용 목록에 있는 자원 생성만**으로 검사할 수 있습니다. Gateway endpoint 자체에는 시간 요금이 없지만 NAT·EIP·EC2·EBS·전송 비용은 별도입니다. [AWS Gateway endpoint 문서](https://docs.aws.amazon.com/vpc/latest/privatelink/gateway-endpoints.html) EBS CSI 및 복구 역할의 확대는 이번 PR에 포함하지 않습니다. 10250/TCP의 출발지는 기존 platform SG로 한정하며 metrics-server도 P04에서 platform 배치를 유지해야 합니다.
 
+SSM 접속용 AWS 관리 정책에는 `GetParameter`·`GetParameters`의 넓은 허용이 포함됩니다. agent 정책은 bootstrap 두 경로 밖의 읽기와 모든 `GetParametersByPath`를 명시적으로 거부해 이 권한이 앱 비밀 값으로 확장되지 않게 합니다. 기존 server 역할의 정책은 변경하지 않습니다. [AmazonSSMManagedInstanceCore 원문](https://docs.aws.amazon.com/aws-managed-policy/latest/reference/AmazonSSMManagedInstanceCore.html)
+
 ## 애플리케이션: 동결과 재개의 순서
 
 `infra.sh migration freeze`는 Argo CD의 13개 앱에 진행 중인 sync가 없는지 확인합니다. 원래 `automated` 정책, 앱 UID, 활성 DB, 목표 노드 역할을 `kube-system/gachita-cluster-migration` ConfigMap에 먼저 저장한 뒤 **root → 자식 앱** 순서로 자동 동기화를 끕니다. 앱 수정은 resourceVersion 검사를 사용합니다. 중간 실패 시 상태와 원래 정책이 남으므로 같은 명령을 재시도하거나 `resume`으로 되돌릴 수 있습니다.

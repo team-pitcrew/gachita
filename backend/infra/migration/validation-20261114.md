@@ -11,6 +11,7 @@
 | 저장소 검사 | `make check`: 웹 26개·API 43개 통과 | API 테스트는 별도 일회용 PostgreSQL 컨테이너와 DB 주소를 사용했습니다 |
 | 기본 계획 | 기존 관리 자원 30개 모두 `no-op`; 출력 `private_agents = {}`만 추가 | S3의 state 사본(serial 39), `-refresh=false`, 동일한 영역 변수. AWS data source는 읽고 Cloudflare 관리 자원은 refresh하지 않았습니다 |
 | agent 활성화 계획 | **54개 추가, 변경 0, 삭제 0**. 기존 관리 자원 30개 모두 `no-op` | 위와 같은 state 사본. `check_plan.py agents` 통과. 실제 적용 직전 fresh plan이 필요합니다 |
+| agent SSM 권한 | AWS IAM `SimulateCustomPolicy` 18개 조합 통과: bootstrap 2경로의 GetParameter(s) 4개 허용, 다른 경로·재귀 읽기 14개 명시적 거부 | 실제 `AmazonSSMManagedInstanceCore` v2와 렌더링한 agent 정책을 합쳐 판정했습니다. 관리 정책의 넓은 허용이 두 경로 밖으로 확장되지 않습니다. 역할 적용·실제 자격 발급은 하지 않았습니다 |
 
 계획 파일과 전체 state에는 운영 정보가 있어 커밋하지 않았습니다. 사본의 backend만 로컬 경로로 바꾸었고 운영 S3 state에는 쓰지 않았습니다. Cloudflare token은 로컬에 없어 `-refresh=false` 계획의 provider 초기화에 접근 권한이 없는 임시 문자열을 사용했습니다. 이 결과는 Cloudflare의 최신 상태 조회를 증명하지 않습니다.
 

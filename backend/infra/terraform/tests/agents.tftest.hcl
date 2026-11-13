@@ -55,4 +55,12 @@ run "private_agents_by_role" {
     condition     = alltrue([for rule in aws_vpc_security_group_ingress_rule.node_mesh : rule.cidr_ipv4 == null])
     error_message = "Inter-node ports must use source security groups, never public CIDRs."
   }
+  assert {
+    condition = alltrue([
+      for s in data.aws_iam_policy_document.agent.statement :
+      s.effect == "Deny" && s.not_resources == toset(local.agent_bootstrap_parameters) && contains(s.actions, "ssm:GetParameters")
+      if s.sid == "DenyOtherParameters"
+    ]) && length([for s in data.aws_iam_policy_document.agent.statement : s if s.sid == "DenyOtherParameters"]) == 1
+    error_message = "SSM Core's wildcard parameter reads must be explicitly denied outside the two bootstrap paths."
+  }
 }

@@ -13,6 +13,10 @@ locals {
     data-a = { pool = "data", az = local.azs[0], instance_type = "t4g.medium" }
   } : {}
   agent_token_parameter = "/gachita/${var.env}/bootstrap/k3s-agent-token"
+  agent_bootstrap_parameters = [
+    "${local.ssm_prefix}/bootstrap/argocd-repo-token",
+    "${local.ssm_prefix}/bootstrap/k3s-agent-token",
+  ]
 }
 
 resource "aws_subnet" "private" {
@@ -137,11 +141,21 @@ resource "aws_iam_role_policy_attachment" "agent_ssm" {
 
 data "aws_iam_policy_document" "agent" {
   statement {
-    actions = ["ssm:GetParameter"]
-    resources = [
-      "${local.ssm_prefix}/bootstrap/argocd-repo-token",
-      "${local.ssm_prefix}/bootstrap/k3s-agent-token",
-    ]
+    actions   = ["ssm:GetParameter"]
+    resources = local.agent_bootstrap_parameters
+  }
+  # SSM Core 관리 정책 자체의 GetParameter(s) '*' 허용도 제한해야 합니다.
+  statement {
+    sid           = "DenyOtherParameters"
+    effect        = "Deny"
+    actions       = ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParameterHistory"]
+    not_resources = local.agent_bootstrap_parameters
+  }
+  statement {
+    sid       = "DenyRecursiveParameterReads"
+    effect    = "Deny"
+    actions   = ["ssm:GetParametersByPath"]
+    resources = ["*"]
   }
   statement {
     actions   = ["kms:Decrypt"]
