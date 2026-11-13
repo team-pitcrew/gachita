@@ -3,14 +3,17 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
+import { createConnection } from "node:net";
 import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
-import { migrate, server, verifyGoogleLink } from "./server.js";
+import { classify, migrate, server, verifyGoogleLink } from "./server.js";
+import { captureLog } from "./log.js";
 import { endStores, profilesDb, tripsDb } from "./db.js";
 
 let base;
 let fakeProvider; // 가짜 구글(T21). code가 곧 사용자 번호다. 특수 code로 장애 상황도 낸다.
+captureLog(() => {}); // 서버의 구조화 로그는 시험 출력에 섞지 않는다(T71 시험은 따로 받아 본다)
 before(async () => {
   fakeProvider = createServer(async (req, res) => {
     const send = (status, body, raw) => {
@@ -723,6 +726,54 @@ test("글자 칸의 NUL 문자는 400으로 거른다(저장할 때 500이 되�
   assert.equal((await call("POST", "/api/profiles", { name: "x\u0000" }))[0], 400);
   const [, trip] = await call("POST", "/api/trips", {});
   assert.equal((await join(trip.code, "민\u0000준", "ROW_1_LEFT"))[0], 400);
+});
+
+test("오류 종류와 요청 로그(T71)", async () => {
+  // 오류 응답에는 사람이 읽는 문장과 함께 종류(type)가 붙는다
+  const [s404, b404] = await call("GET", "/api/trips/ZZZZZZ");
+  assert.deepEqual([s404, b404.type, typeof b404.error], [404, "not_found", "string"]);
+  assert.equal((await call("POST", "/api/trips", { title: 5 }))[1].type, "invalid");
+  assert.equal((await call("GET", "/api/profiles/me", null, "x".repeat(43)))[1].type, "unauthenticated");
+  assert.equal((await call("DELETE", "/api/trips"))[1].type, "method_not_allowed");
+
+  // DB에 닿지 않거나 질의 시간 제한(T26)은 다시 해도 되는 503, 예상 못 한 것은 500
+  for (const e of [{ code: "57014" }, { code: "08006" }, { code: "57P01" }, { code: "53300" }, { code: "ECONNREFUSED" }, new Error("Connection terminated unexpectedly"), new Error("timeout exceeded when trying to connect")])
+    assert.deepEqual([classify(e).status, classify(e).type], [503, "unavailable"], JSON.stringify(e.code ?? e.message));
+  assert.deepEqual([classify(new TypeError("x is undefined")).status, classify(new TypeError("x")).type], [500, "internal"]);
+  assert.deepEqual(classify({ status: 409, error: "이미 다른 사람이 앉은 자리" }), { status: 409, type: "conflict", message: "이미 다른 사람이 앉은 자리" });
+
+  // 요청 로그: 한 줄 JSON에 경로 틀(코드는 :p), 상태, 걸린 시간, 요청 id. 코드·토큰은 남지 않는다
+  const lines = [];
+  const restore = captureLog((line) => lines.push(line));
+  let trip, p;
+  try {
+    [, trip] = await call("POST", "/api/trips", {});
+    [, p] = await join(trip.code, "민준", "ROW_1_LEFT", true);
+    const res = await fetch(`${base}/api/trips/${trip.code}/transcript`, { headers: { authorization: `Bearer ${p.token}`, "x-amzn-trace-id": "Root=1-abc-def" } });
+    assert.equal(res.headers.get("x-request-id"), "Root=1-abc-def", "ALB의 추적 id를 그대로 쓴다");
+    await res.text();
+    await call("GET", `/api/trips/${trip.code}/nothing`);
+    await (await fetch(`${base}/`)).text(); // 웹 파일은 성공하면 남기지 않는다
+    await new Promise((ok) => setTimeout(ok, 20)); // 응답을 다 보낸 뒤(finish)에 남긴다
+  } finally {
+    restore();
+  }
+  const logged = lines.map((l) => JSON.parse(l)).filter((l) => l.msg === "request");
+  const tr = logged.find((l) => l.requestId === "Root=1-abc-def");
+  assert.deepEqual([tr.level, tr.method, tr.route, tr.status, typeof tr.ms, typeof tr.t], ["info", "GET", "/api/trips/:p/transcript", 200, "number", "string"]);
+  const miss = logged.find((l) => l.status === 404);
+  assert.deepEqual([miss.route, miss.err], ["/api/trips/:p/:p", { type: "not_found" }]);
+  assert.ok(!logged.some((l) => l.route === "/(web)"), "성공한 웹 파일 요청은 남기지 않음");
+  // 주소를 읽지 못하는 요청(new URL이 거절)도 서버를 죽이지 않고 로그에 남는다
+  const raw = await new Promise((ok, no) => {
+    const s = createConnection(server.address().port, "127.0.0.1", () => s.end("GET //a:99999/x HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"));
+    let got = "";
+    s.on("data", (d) => (got += d)).on("end", () => ok(got)).on("error", no);
+  });
+  assert.match(raw, /^HTTP\/1\.1 (400|404|500)/);
+  assert.equal((await fetch(`${base}/healthz`)).status, 200, "서버가 살아 있음");
+  const all = lines.join("\n");
+  assert.ok(!all.includes(trip.code) && !all.includes(p.token) && !all.includes("민준"), "여행 코드·토큰·이름은 로그에 없다");
 });
 
 test("명세(docs/api/openapi.yaml)와 서버의 경로가 같다", async () => {

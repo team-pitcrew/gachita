@@ -4,6 +4,7 @@
 !backend/api/package-lock.json
 !backend/api/server.js
 !backend/api/db.js
+!backend/api/log.js
 !backend/api/providers
 !backend/api/trips.sql
 !backend/api/trips-2-utterances.sql
