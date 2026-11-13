@@ -345,6 +345,8 @@ test("제공자 오류를 코드 거절과 장애으로 나눠 알린다(T21)", 
     "http://localhost.evil.example/cb", "http://evil.example@localhost/", "http:localhost/cb", "https://localhost/cb", "http://[::1]/", "javascript:alert(1)", "x",
     "https://gachita.mangowhois.ai/", "https://gachita.mangowhois.ai/auth/google", "https://gachita.mangowhois.ai/oauth/google/callback?next=x",
     "https://gachita.mangowhois.ai/oauth/google/callback#x", "https://gachita.mangowhois.ai/oauth/google/callback/", "http://localhost:5173/cb",
+    "https://gachita.mangowhois.ai/oauth/google/callback?", "https://gachita.mangowhois.ai/oauth/google/callback#", "http://localhost:5173/oauth/google/callback?",
+    "https://gachita.mangowhois.ai:443/oauth/google/callback", "HTTPS://gachita.mangowhois.ai/oauth/google/callback", "http://localhost:/oauth/google/callback",
   ]) {
     assert.equal(await via(bad), 400, bad);
   }
