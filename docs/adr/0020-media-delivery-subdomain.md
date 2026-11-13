@@ -20,7 +20,7 @@ ADR-0013 7절과 ADR-0014 5절은 클립을 S3 데이터 버킷에 두고 **API�
 |---|---|---|
 | 서명한 S3 주소 그대로(ADR-0013 7절) | 서버가 영상을 나르지 않음 | 위의 넷 |
 | `gachita.mangowhois.ai` 경로로 API가 흘려보냄 | 주소 하나 | Cloudflare CDN 약관 |
-| R2에 두고 Worker가 같은 이름의 경로로 내보냄 | 주소 하나. 약관이 드는 Developer Platform에 R2가 들어감(Cloudflare가 2023년 약관을 바꾸며 R2 등에 둔 콘텐츠는 된다고 설명). 내려받는 비용 없음 | 아이 목소리가 든 클립이 서울 밖에 놓일 수 있어 국외 이전 검토가 다시 붙음(#117). 저장소가 S3와 R2 둘 |
+| R2에 두고 Worker가 같은 이름의 경로로 내보냄 | 주소 하나. 약관이 드는 Developer Platform에 R2가 들어감(Cloudflare가 2023년 약관을 바꾸며 R2 등에 둔 콘텐츠는 된다고 설명, [블로그](https://blog.cloudflare.com/updated-tos/)). 내려받는 비용 없음 | 아이 목소리가 든 클립이 서울 밖에 놓일 수 있어 국외 이전 검토가 다시 붙음(#117). 저장소가 S3와 R2 둘 |
 | **`media` 하위 도메인(DNS만) → ALB → API가 S3에서 흘려보냄** | 클립이 S3 서울에 그대로. 주소에 만료가 없고 회수가 됨. 서명한 S3 주소(자격 증명)가 URL에 실리지 않음. Cloudflare를 지나지 않아 약관과 무관 | 이 이름에는 Cloudflare의 WAF·요청 수 제한·DDoS 보호가 없음. ALB에 이 이름의 인증서가 필요 |
 | CloudFront | AWS 안에서 끝남 | ADR-0010에서 뺌 |
 
@@ -34,7 +34,7 @@ ADR-0013 7절과 ADR-0014 5절은 클립을 S3 데이터 버킷에 두고 **API�
 
 기존 ALB(`gachita-dev`)는 그대로 Cloudflare 대역에서 오는 443만 받는다(ADR-0017, `sourceRanges`). 영상에는 **ALB를 하나 더 둔다**(Gateway `media`, 이름 고정 `gachita-dev-media`). 이 ALB는 443을 모든 곳에서 받고, 호스트 `media.gachita.mangowhois.ai`의 `/media/` 경로만 API로 보내며 나머지는 ALB가 404로 끝낸다.
 
-- **호스트와 경로를 함께 묶는다.** 기존 Gateway의 경로는 `/` 전체를 API로 보내므로(`apps/edge/gateway.yaml`), 그대로 두면 `gachita.mangowhois.ai/media/…`로도 영상이 Cloudflare를 지나 나간다. 기존 경로에서 `/media/`를 빼고(ALB가 404), API도 `/media/`는 `media` 호스트에서만, `media` 호스트에서는 `/media/`만 받는다. API의 경로 정리(`server.js`)는 `/media/%2e%2e/api/…`를 `/api/…`로 바꾸므로, 이 확인은 정리 전의 원래 경로로 한다.
+- **호스트와 경로를 함께 묶는다.** 기존 Gateway의 경로는 `/` 전체를 API로 보내므로(`apps/edge/gateway.yaml`), 그대로 두면 `gachita.mangowhois.ai/media/…`로도 영상이 Cloudflare를 지나 나간다. 기존 경로가 `/media/`를 API로 보내지 않게 한다(표준 HTTPRoute로는 `/`에서 접두사를 빼낼 수 없어, 컨트롤러의 고정 응답 같은 방법을 구현 때 확인). 실제로 막는 것은 API다: `/media/`는 `media` 호스트에서만, `media` 호스트에서는 `/media/`만 받는다. API의 경로 정리(`server.js`)는 `/media/%2e%2e/api/…`를 `/api/…`로 바꾸므로, 이 확인은 정리 전의 원래 경로로 한다.
 
 - 같은 ALB를 모든 곳에 열지 않는 이유: 보안 그룹은 ALB 단위라, 열면 `gachita.mangowhois.ai`도 호스트 이름만 맞추면 Cloudflare를 거치지 않고 닿는다(WAF와 요청 수 제한을 우회). Cloudflare가 붙이는 비밀 머리말로 가르는 방법은 그 값이 Git의 HTTPRoute에 들어가야 해서 쓰지 않는다.
 - 비용: 기존 ALB와 같은 크기다(ADR-0015의 어림, 상시로 켜 두면 월 약 $30). 펴 있는 동안만 난다. 지환님이 이 비용으로 정했다(11/14). 같은 ALB를 열어 우회를 받아들이는 안은 쓰지 않는다.
@@ -62,7 +62,7 @@ ADR-0013 7절과 ADR-0014 5절은 클립을 S3 데이터 버킷에 두고 **API�
 - ADR-0013 7절의 '클립·사진' 줄과 ADR-0014 5절은 이 문서를 가리킨다. 클립을 **올리는** 길은 ADR-0007과 `voice.md`대로 차량 앱 → API(`Authorization` 머리말, #117)이고, ADR-0014 5절의 '서명 주소로 직접 올림'도 이에 맞춰 고친다.
 - 크기 어림: 여행 하나에 고른 장면 클립 약 2 MB(장면 10개, 2.4~3.9초에 150~250 KB, 11/13 실측), 숏폼 30~45초 세로본 약 1 MB(시연용 세로본 44초 1.2 MB). 보는 사람이 가족 몇 명이라 노드 한 대로 흘려보내도 부담이 작다(재지 않음).
 - 할 일
-  - 인프라(T64 또는 T27): 레코드·SLO가 ALB를 이름으로 찾게 바꾸기(먼저), Gateway `media`와 HTTPRoute, 기존 HTTPRoute에서 `/media/` 빼기, `media` 이름의 인증서(따로)와 검증 레코드, Cloudflare 레코드(DNS만), API의 서비스 계정 역할(`clips/*` 읽기)과 네트워크 정책(S3·STS로 나감 — 지금 API는 구글로만 나감), 접기·펴기 순서. 권한 경계는 이미 `gachita-*` 이름으로 두 번째 ALB를 덮는다.
+  - 인프라(T64 또는 T27): 레코드·SLO가 ALB를 이름으로 찾게 바꾸기(먼저), Gateway `media`와 HTTPRoute, 기존 HTTPRoute에서 `/media/` 빼기, `media` 이름의 인증서(따로)와 검증 레코드, Cloudflare 레코드(DNS만), API의 서비스 계정 역할(`clips/*` 읽기·쓰기, 모든 버전 지우기를 위한 `s3:DeleteObjectVersion`·`s3:ListBucketVersions`)과 네트워크 정책(S3·STS로 나감 — 지금 API는 구글로만 나감), 접기·펴기 순서. 권한 경계는 이미 `gachita-*` 이름으로 두 번째 ALB를 덮는다.
   - API(백엔드 · 비즈니스 로직, T43과 맞춤): `/media/` 경로의 권한 확인과 흘려보내기, 호스트·원래 경로 확인, 쿠키 발급, 참가자·주소별 요청 수 제한.
-- 잃는 것: `media` 이름에는 Cloudflare의 WAF와 요청 수 제한이 없다(AWS Shield Standard만). `/media/` 밖의 API 경로는 ALB 규칙과 API의 호스트·원래 경로 확인 두 겹으로 막는다(인코딩한 경로를 ALB가 어떻게 다루는지는 재지 않음).
+- 잃는 것: `media` 이름에는 Cloudflare의 WAF와 요청 수 제한이 없다(AWS Shield Standard만). `/media/` 밖의 API 경로는 ALB 규칙과 API의 호스트·원래 경로 확인으로 막고, 확실히 기대는 것은 API 쪽이다(인코딩한 경로를 ALB가 어떻게 다루는지는 재지 않음).
 - 확인하지 못한 것: 실제로 펴서 본 적이 없다(선언 전). 쿠키 방식의 웹앱 인증, 차량 플레이어의 머리말, 범위 요청 처리 성능, ALB 둘이 같은 노드를 대상으로 삼을 때의 컨트롤러 동작.
