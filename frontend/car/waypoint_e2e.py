@@ -4,13 +4,13 @@
       ./gradlew assembleDebug). 넣는 소리는 macOS say(Yuna) 합성 음성이다.
 실행: python3 frontend/car/waypoint_e2e.py frontend/car/app/build/outputs/apk/debug/app-debug.apk <저장소 밖 폴더> [시도 수]
 
-순서: 앱이 내비에 강릉역 경로를 넣음(--ez route) → 여행 만들기 → P에서 동의 켬 → 기어 D, 우리 화면이 앞
+순서: 앱이 내비에 강릉역 경로를 넣음(--es route) → 여행 만들기 → P에서 동의 켬 → 기어 D, 우리 화면이 앞
       → [시도 수]번: "화장실 가고 싶어" 류 → 제안 → "아니, 나중에 갈게" → 보관(부탁하는 말 끝 → 제안까지 시간)
       → 부탁 둘("화장실 가고 싶어", "나도 화장실 갈래") → 폰에서 첫째를 취소 → "응, 다음 휴게소 가자" → 경유지 → 둘째만 reflected.
 - 지나친 휴게소 건너뛰기는 여기서 보지 않는다(AsksTest). 경로 안내 중인 내비의 지금 위치는 에뮬레이터 GPS를 옮겨도(gRPC setGps) 판교에 머물렀다(11/13).
 - 결과는 OUT/results.json, 앱 로그(글자 없음)는 OUT/app-log.json, 2번 장면의 화면 녹화는 OUT/waypoint.webm.
 """
-import json, re, statistics, subprocess, sys, threading, time, urllib.request
+import json, re, shlex, statistics, subprocess, sys, threading, time, urllib.request
 import e2e, capture_e2e as cap
 from e2e import ADB, PKG, OUT, adb, shot, texts, tap_text, tap_switch, gear, check, note
 
@@ -57,6 +57,7 @@ def heard_after(code, n):
     return [g["text"] for g in cap.outbox(code)[n:]]
 
 
+GANGNEUNG = "37.7645236,128.8996276,강릉역"  # 앱에 --es route로 넘기는 목적지(위도,경도,이름)
 REQUEST_WORDS = ("화장실", "쉬었다가", "쉬어가", "배고파")  # Asks.kt isRestRequest와 같은 낱말
 
 
@@ -77,7 +78,7 @@ def main(apk):
     adb("shell", "am", "force-stop", "--user", "10", PKG); adb("shell", "pm", "clear", "--user", "10", PKG)
     for perm in ("RECORD_AUDIO", "POST_NOTIFICATIONS"): adb("shell", "pm", "grant", "--user", "10", PKG, f"android.permission.{perm}")
     n0 = len(app_log)
-    adb("shell", "am", "start", "--user", "10", "-n", f"{PKG}/.MainActivity", "--es", "server", f"http://10.0.2.2:{PORT}", "--ez", "route", "true")
+    adb("shell", "am", "start", "--user", "10", "-n", f"{PKG}/.MainActivity", "--es", "server", f"http://10.0.2.2:{PORT}", "--es", "route", shlex.quote(GANGNEUNG))
     check("앱이 내비에 강릉역 경로를 넣음(onRouteStarted)", wait_log("경로 시작 강릉역", n0, 30))
     time.sleep(2); front_app(); tap_text("여행 만들기"); time.sleep(4)
     ui = texts(); code = next((t.split()[-1] for t in ui if t.startswith("여행 코드")), None); note("trip", code=code)

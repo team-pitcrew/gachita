@@ -4,6 +4,7 @@ import ai.pleos.playground.navi.constants.NaviErrorCode
 import ai.pleos.playground.navi.constants.WaypointCmdType
 import ai.pleos.playground.navi.constants.WaypointIndex
 import ai.pleos.playground.navi.data.CurrentLocationInfo
+import ai.pleos.playground.navi.data.DestinationInfo
 import ai.pleos.playground.navi.data.RequestWaypointInfo
 import ai.pleos.playground.navi.data.RouteInfo
 import ai.pleos.playground.navi.data.RouteStartInfo
@@ -11,6 +12,7 @@ import ai.pleos.playground.navi.data.RouteWithWaypointsRequest
 import ai.pleos.playground.navi.data.TripInfo
 import ai.pleos.playground.navi.data.TripRequest
 import ai.pleos.playground.navi.data.WaypointChangedInfo
+import ai.pleos.playground.navi.data.WaypointInfo
 import ai.pleos.playground.navi.helper.NaviHelper
 import ai.pleos.playground.navi.helper.listener.NaviHelperEventListener
 import ai.pleos.playground.tts.TextToSpeech
@@ -84,6 +86,8 @@ class Car(ctx: Context, private val onChange: (CarStatus) -> Unit) {
     private val here = Wait<CurrentLocationInfo>(2_000)
     private val trip = Wait<TripInfo>(3_000)
     private val stop = Wait<Boolean>(20_000) // 11/13: 수락 뒤 onWaypointChanged까지 7.6초
+    private val dest = Wait<DestinationInfo>(2_000)
+    private val wps = Wait<List<WaypointInfo>>(2_000)
 
     private val naviListener = object : NaviHelperEventListener {
         override fun onRouteStarted(routeStartInfo: RouteStartInfo) = naviEvent("경로 시작 ${routeStartInfo.name ?: ""}")
@@ -95,6 +99,8 @@ class Car(ctx: Context, private val onChange: (CarStatus) -> Unit) {
         override fun onError(errorCode: NaviErrorCode) { naviEvent("내비 오류 ${errorCode.name}"); main.post { stop.answer(false) } }
         override fun onCurrentLocationInfo(currentLocationInfo: CurrentLocationInfo) { main.post { here.answer(currentLocationInfo) } }
         override fun onTripInfo(tripInfo: TripInfo) { main.post { trip.answer(tripInfo) } }
+        override fun onDestinationInfo(destinationInfo: DestinationInfo) { main.post { dest.answer(destinationInfo) } }
+        override fun onWayPointInfo(waypointInfo: List<WaypointInfo>) { main.post { wps.answer(waypointInfo) } }
     }
 
     /**
@@ -170,6 +176,11 @@ class Car(ctx: Context, private val onChange: (CarStatus) -> Unit) {
     /** 그곳까지의 거리(m)와 시간(초). 들르면 늘어나는 시간이 아니다. 화면은 넘어가지 않는다. */
     fun distanceTo(p: Place, done: (Int?, Int?) -> Unit) =
         trip.start({ done(it?.distance, it?.eta) }) { navi.requestTrip(TripRequest(latitude = p.lat, longitude = p.lng, poiId = "", poiName = p.name, poiSubId = "0")) }
+
+    /** 내비의 목적지와 경유지 이름(T40 도착 판정). 화면은 넘어가지 않는다. 에뮬레이터는 경유지 좌표를 0.0으로 주어 이름만 쓴다. */
+    fun naviPlaces(done: (List<String>) -> Unit) = dest.start({ d ->
+        wps.start({ w -> done((listOf(d?.name) + w.orEmpty().map { it.name }).filterNotNull().filter { it.isNotBlank() }) }) { navi.getWaypointInfo() }
+    }) { navi.getDestinationInfo() }
 
     /** 지금 경로에 들를 곳을 더한다. 내비가 앞으로 나오고, 반영 알림(onWaypointChanged ADD)이 오면 true. 오류나 20초 넘으면 false. */
     fun addStop(p: Place, done: (Boolean) -> Unit) = stop.start({ done(it == true) }) {

@@ -1,6 +1,7 @@
 package io.github.teampitcrew.gachita
 
 import android.Manifest
+import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
@@ -57,6 +58,8 @@ import androidx.compose.ui.unit.sp
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import org.json.JSONArray
+import org.json.JSONObject
 import java.util.UUID
 import java.util.concurrent.Executors
 
@@ -80,6 +83,7 @@ private const val POLL_MS = 10_000L // 웹앱은 2초. 차에서는 주행 중 �
 private const val TITLE = "같이타 가족 여행"
 private const val TAG = "GachitaAsk"
 private const val RESULT_MS = 60_000L // 경유지 결과 카드를 보여 두는 시간
+private const val GLEO_ARRIVAL = "GACHITA_ARRIVAL_TASKS" // assets/schema.json의 함수 이름(T40)
 
 class MainActivity : ComponentActivity() {
     private val io = Executors.newSingleThreadExecutor()
@@ -107,6 +111,11 @@ class MainActivity : ComponentActivity() {
     private var error by mutableStateOf("")
     private var offer by mutableStateOf<Offer?>(null) // 지금 보이는 경유지 제안(T9)
     private val finding = mutableListOf<String>() // 제안할 휴게소를 찾는 동안 들어온 부탁(서버 id)
+    private var todos: Todos? = null // 지금 여행의 장소별 할 일(T40)
+    private var todoList by mutableStateOf(emptyList<Todo>())
+    /** 보이고 있는 도착 브리핑. place가 null이면 모든 장소(Gleo로 부름). 주차해 주행 제한이 풀렸을 때만 그린다. */
+    private data class Brief(val place: String?)
+    private var brief by mutableStateOf<Brief?>(null)
     private var visible = false // onStart ~ onStop
     private var resumed = false // 우리 화면이 앞: 마이크 서비스는 이때만 시작할 수 있다(T10)
     private var askedMic = false
@@ -146,7 +155,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = getSharedPreferences("car", MODE_PRIVATE)
-        // 실행 인자(--es server, --ei widthDp, --ez route)는 디버그 빌드에서만 받는다. 밖에서 연 화면이 서버 주소를 바꾸지 못하게
+        // 실행 인자(--es server, --ei widthDp, --es route)는 디버그 빌드에서만 받는다. 밖에서 연 화면이 서버 주소를 바꾸지 못하게
         val debug = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
         if (debug) intent.getStringExtra("server")?.let { prefs.edit().putString("server", it).apply() }
         server = prefs.getString("server", null) ?: DEFAULT_SERVER
@@ -154,14 +163,19 @@ class MainActivity : ComponentActivity() {
         // 앱을 다시 켜도, 서버에 닿지 않아도 마지막으로 받은 여행과 끄기 대기를 이어 보여 준다
         s = Session.restore(prefs.getString("trip", null), prefs.getBoolean("offPending", false), prefs.getBoolean("started", false))
         s.trip?.let { Live.outbox(this, it.code) } // 앱을 다시 켜도 받아 적은 말과 순번을 이어 보여 준다
-        // 시연·E2E: 내비에 강릉역 경로를 넣는다. 실제로는 운전자가 내비에서 목적지를 정한다
-        var route = debug && intent.getBooleanExtra("route", false)
+        // 시연·E2E: --es route "위도,경도,이름"으로 내비에 목적지를 넣는다. 실제로는 운전자가 내비에서 정한다
+        var route = if (debug) intent.getStringExtra("route")?.split(",")?.takeIf { it.size == 3 } else null
         car = Car(this) {
-            carStatus = it; Live.gear = it.gear; s = s.withGear(it.gear)
-            if (route && it.navi) { route = false; car.route(GANGNEUNG, emptyList()) }
+            carStatus = it; Live.gear = it.gear
+            val was = s.gear
+            s = s.withGear(it.gear)
+            if (was != null && was != "P" && it.gear == "P") arrive() // 앱을 켤 때 처음 읽은 P는 도착이 아니다
+            route?.takeIf { _ -> it.navi }?.let { (la, ln, name) -> route = null; car.route(Place(la.toDouble(), ln.toDouble(), name), emptyList()) }
         }
         car.start()
         Live.onHeard = ::heard
+        s.trip?.let { todosOf(it.code) }
+        gleo(intent)
         setContent {
             MaterialTheme(colorScheme = if (isSystemInDarkTheme()) DarkColors else LightColors, typography = CarType) {
                 ProvideTextStyle(TextStyle(fontSize = 24.sp)) {
@@ -179,6 +193,8 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); gleo(intent) }
 
     override fun onStart() { super.onStart(); visible = true; main.removeCallbacks(tick); main.post(tick) }
     override fun onStop() { visible = false; super.onStop() }
@@ -273,16 +289,22 @@ class MainActivity : ComponentActivity() {
     private fun newTrip() {
         prefs.edit().remove("trip").commit()
         s = Session(gear = s.gear)
-        offer = null; finding.clear()
+        offer = null; finding.clear(); todos = null; todoList = emptyList(); brief = null
     }
 
     // ---- 부탁을 경유지로(T9). 서버의 부탁 상태: held → proposed → accepted → reflected, 못 넣으면 held(openapi.yaml) ----
 
-    /** 받아 적은 말 한 건(메인 스레드). 제안이 열려 있으면 답으로 보고, 아니면 쉬어 가자는 부탁인지 본다. */
+    /** 받아 적은 말 한 건(메인 스레드). 쉬어 가자는 부탁, 장소가 붙은 할 일(T40), 열린 제안에 대한 답 순서로 본다. */
     private fun heard(u: Utterance) {
         val t = s.trip?.takeIf { it.code == u.trip } ?: return
         val o = offer
         if (isRestRequest(u.text)) return hold(t, u)
+        todoOf(u.text)?.let { (place, text) ->
+            val box = todosOf(t.code)
+            box.add(place, text); todoList = box.items
+            Log.i(TAG, "할 일 보관 $place · 이 여행 ${box.open().size}건")
+            return
+        }
         if (o?.stage != Offer.Stage.ASKING) return
         when (answerOf(u.text)) {
             Answer.YES -> if (canAccept(u)) accept() else Log.i(TAG, "뒷줄의 수락은 받지 않음")
@@ -366,6 +388,52 @@ class MainActivity : ComponentActivity() {
         offer = null
         car.speak("부탁은 보관해 둘게요")
         mark(code, o.requests, "held")
+    }
+
+    // ---- 도착 브리핑(T40) ----
+
+    private fun todosOf(code: String): Todos = todos?.takeIf { it.trip == code } ?: Todos(filesDir, code).also { todos = it; todoList = it.items }
+
+    /** 기어가 P로 바뀐 때: 내비의 목적지·경유지가 할 일의 장소면 그곳의 미완료 할 일을 알린다. 아니면 알리지 않는다. */
+    private fun arrive() {
+        val box = s.trip?.let { todosOf(it.code) } ?: return
+        if (box.open().isEmpty()) return
+        car.naviPlaces { names ->
+            val place = box.open().map { it.place }.distinct().firstOrNull { arrivedAt(it, names) }
+            Log.i(TAG, "주차 · 내비 장소 ${names.size}곳 · 할 일 장소에 도착 ${place != null}")
+            if (place != null) briefAt(place, speak = true)
+        }
+    }
+
+    /** 도착 브리핑을 띄운다(주행 제한이 풀린 때만 그려짐). place가 null이면 모든 장소. */
+    private fun briefAt(place: String?, speak: Boolean) {
+        val open = todos?.open(place).orEmpty()
+        brief = Brief(place).takeIf { open.isNotEmpty() }
+        Log.i(TAG, "도착 브리핑 ${place ?: "전체"} ${open.size}건")
+        if (speak && open.isNotEmpty()) car.speak(briefingLine(place, open))
+    }
+
+    private fun complete(item: Todo) {
+        todos?.let { it.done(item.id); todoList = it.items }
+        Log.i(TAG, "할 일 완료 · 남은 ${todos?.open()?.size}건")
+        if (brief?.let { todos?.open(it.place).isNullOrEmpty() } == true) brief = null
+    }
+
+    /**
+     * Gleo가 "도착해서 할 일 알려 줘"로 부른 때(assets/schema.json, component activity). 미완료 할 일 전체를 띄우고
+     * Gleo에 결과를 돌려준다(Callback Schema: message는 영어, 항목은 data). 말은 Gleo가 하므로 우리 TTS는 쓰지 않는다.
+     * Gleo는 함수 이름이나 '<패키지>.<함수 이름>'을 action으로 보낸다(11/1 프로브).
+     */
+    private fun gleo(i: Intent?) {
+        if (i?.action?.substringAfterLast('.') != GLEO_ARRIVAL) return
+        s.trip?.let { todosOf(it.code) }
+        briefAt(null, speak = false)
+        val open = todos?.open().orEmpty()
+        val msg = if (open.isEmpty()) "There are no to-do items for after arriving." else "Found ${open.size} to-do items for after arriving. The list is on the screen once the car is parked."
+        val data = JSONArray(open.map { JSONObject().put("place", it.place).put("task", it.text) }).toString()
+        sendBroadcast(Intent("ai.pleos.playground.intent.action.APP_ACTION_RESPONSE").putExtra("packageName", packageName)
+            .putExtra("response", JSONObject().put("functionName", i.action).put("status", "success").put("message", msg).put("mode", "voice").put("data", data).toString()))
+        Log.i(TAG, "Gleo 도착 할 일 ${open.size}건 응답")
     }
 
     private fun finish(o: Offer, say: String) {
@@ -459,6 +527,7 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
+        brief?.takeIf { !carStatus.restricted }?.let { BriefCard(it) } // 주행 중에는 목록을 띄우지 않는다(T40)
         offer?.let { OfferCard(it) }
         if (s.recording || Live.count > 0) Heard()
         Card {
@@ -470,6 +539,8 @@ class MainActivity : ComponentActivity() {
         }
         Card {
             Text(if (t.heldRequests == 0) "보관한 부탁이 없어요" else "보관한 부탁 ${t.heldRequests}건", fontSize = 30.sp, fontWeight = FontWeight.Bold)
+            val open = todoList.count { !it.done }
+            if (open > 0) Text("도착해서 할 일 ${open}건")
         }
     }
 
@@ -488,6 +559,22 @@ class MainActivity : ComponentActivity() {
                 Text("${hm.format(Date(u.startedAt))} · ${u.text}", maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
             if (Live.pending > 0 && !carStatus.restricted) Text("서버에 보내지 않고 이 차에 보관 중 ${Live.pending}건", color = c.onSurfaceVariant, fontSize = 20.sp)
+        }
+    }
+
+    /** 도착 브리핑(T40): 장소의 미완료 할 일과 항목마다 '완료'. 받아 적은 말 그대로 보인다. */
+    @Composable
+    private fun BriefCard(b: Brief) {
+        val items = todoList.filter { !it.done && (b.place == null || it.place == b.place) }
+        Card {
+            Text(if (b.place != null) "${b.place}에서 할 일" else "도착해서 할 일", fontSize = 36.sp, fontWeight = FontWeight.Bold)
+            items.forEach { item ->
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    Text((if (b.place == null) "${item.place} · " else "") + item.text, Modifier.weight(1f))
+                    OutlinedButton({ complete(item) }, Modifier.heightIn(min = 64.dp)) { Text("완료") }
+                }
+            }
+            OutlinedButton({ brief = null }, Modifier.heightIn(min = 64.dp)) { Text("닫기") }
         }
     }
 

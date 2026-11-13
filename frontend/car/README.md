@@ -52,7 +52,7 @@ adb shell am start --user 10 -n io.github.teampitcrew.gachita/.MainActivity --es
 3. `frontend/car`에서 `./gradlew assembleDebug`.
 4. `python3 frontend/car/e2e.py frontend/car/app/build/outputs/apk/debug/app-debug.apk <저장소 밖 폴더>`
 
-부탁을 경유지로(T9)는 `python3 frontend/car/waypoint_e2e.py <APK> <저장소 밖 폴더> [시도 수]`입니다. 앱이 내비에 강릉역 경로를 넣고(디버그 빌드의 `--ez route true`), 기어 D에서 "화장실 가고 싶어" 류 → 제안 → "아니, 나중에 갈게"를 [시도 수]번 돌려 부탁하는 말 끝에서 제안까지의 시간을 재고, 부탁 둘 중 하나를 폰처럼 취소한 뒤 "응, 다음 휴게소 가자"로 남은 하나만 경유지에 들어가는지 봅니다. 준비는 아래 `capture_e2e.py`와 같습니다.
+부탁을 경유지로(T9)는 `python3 frontend/car/waypoint_e2e.py <APK> <저장소 밖 폴더> [시도 수]`입니다. 앱이 내비에 강릉역 경로를 넣고(디버그 빌드의 `--es route "위도,경도,이름"`), 기어 D에서 "화장실 가고 싶어" 류 → 제안 → "아니, 나중에 갈게"를 [시도 수]번 돌려 부탁하는 말 끝에서 제안까지의 시간을 재고, 부탁 둘 중 하나를 폰처럼 취소한 뒤 "응, 다음 휴게소 가자"로 남은 하나만 경유지에 들어가는지 봅니다. 준비는 아래 `capture_e2e.py`와 같습니다.
 
 수음과 받아쓰기는 `python3 frontend/car/capture_e2e.py <APK> <저장소 밖 폴더> [분]`입니다. 에뮬레이터를 `-grpc 8556 -grpc-use-token -audio none`으로 켜 두면 macOS 합성 음성으로 만든 가족 대화를 gRPC `injectAudio`로 가상 마이크에 넣고(호스트 마이크는 쓰지 않음), 내비를 앞에 둔 기어 D에서 보관함에 쌓인 발화를 넣은 문장과 맞춰 봅니다. 30초마다 CPU·메모리를 재고, 내비가 앞일 때 시스템 마이크 차단(`cmd sensor_privacy`) → '기록 멈춤', 동의 끄기 → 마이크 놓음, 앱 다시 켜기 → 순번 이어짐까지 확인합니다. 공용 DB를 다른 시험이 비울 수 있으면 따로 띄운 서버를 `GACHITA_PORT`로 줍니다. 넣은 문장과 받아 적은 문장은 `transcript.tsv`에 나란히 남습니다.
 

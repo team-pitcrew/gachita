@@ -20,6 +20,8 @@
   <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTop" android:resizeableActivity="true">
    <meta-data android:name="distractionOptimized" android:value="true" />
    <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
+   <!-- Gleo 함수(assets/schema.json, T40). Gleo는 함수 이름이나 '<패키지>.<함수 이름>'을 action으로 보낸다 -->
+   <intent-filter><action android:name="GACHITA_ARRIVAL_TASKS" /><action android:name="io.github.teampitcrew.gachita.GACHITA_ARRIVAL_TASKS" /><category android:name="android.intent.category.DEFAULT" /></intent-filter>
   </activity>
   <service android:name=".CaptureService" android:exported="false" android:foregroundServiceType="microphone" />
  </application>
