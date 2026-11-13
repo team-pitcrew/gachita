@@ -3,14 +3,8 @@
 // 이 폰이 누구인지(프로필 토큰, 여행마다 참가자 id와 토큰)는 localStorage에 둔다. 폰에서는 수음하지 않는다.
 // 사용자가 쓴 글은 textContent로만 넣는다(innerHTML 금지).
 
-const SEATS = [
-  ["ROW_1_LEFT", "운전석"],
-  ["ROW_1_RIGHT", "조수석"],
-  ["ROW_2_LEFT", "뒤 왼쪽"],
-  ["ROW_2_CENTER", "뒤 가운데"],
-  ["ROW_2_RIGHT", "뒤 오른쪽"],
-];
-const SEAT = Object.fromEntries(SEATS);
+import { SEATS, SEAT, WHEN, REQ, CLOSED, api, h, toast } from "/shared.js";
+
 const TRIP = {
   boarding: ["탑승 중", "모두 타면 운전자가 출발을 눌러요."],
   driving: ["주행 중", "부탁은 아래 단추로 언제든 남길 수 있어요."],
@@ -18,16 +12,6 @@ const TRIP = {
   ended: ["여행 종료", "이 여행은 만든 뒤 48시간까지 볼 수 있어요."],
 };
 const NEXT_TRIP = { boarding: ["출발", "driving"], driving: ["주차", "parked"], parked: ["여행 끝내기", "ended"] };
-const WHEN = { now: "다음에 쉴 때", return: "돌아가는 길에", before_arrival: "도착하기 전에", after_parking: "주차한 뒤에" };
-const REQ = {
-  held: ["보관", ""],
-  proposed: ["제안 중", "accent"],
-  accepted: ["수락됨", "accent"],
-  reflected: ["경유 반영", "ok"],
-  done: ["완료", "ok"],
-  cancelled: ["취소됨", ""],
-};
-const CLOSED = ["done", "cancelled"];
 const LEVEL = ["끔", "1", "2", "3"];
 // 프로필 캐릭터. 사진이 없을 때 이 그림으로 보인다(목록 고정은 T46).
 const CHARACTERS = [
@@ -50,7 +34,6 @@ const QUICK = [
 
 const app = document.getElementById("app");
 const sheet = document.getElementById("sheet");
-const toastEl = document.getElementById("toast");
 const code = () => (location.hash === "#me" ? "" : location.hash.slice(1).toUpperCase());
 const inviteCode = () => /^\/j\/([\w-]+)$/.exec(location.pathname)?.[1];
 // 이 폰이 기억하는 것. store(키)는 읽기, store(키, 값)은 쓰기, store(키, null)은 지우기.
@@ -69,26 +52,7 @@ let offline = false;
 let stale = false; // 입력 중에 온 변경은 입력이 끝난 뒤 그린다
 const draft = { join: "", step: 0, name: "", seat: "", tempC: 22, heat: 0, vent: 0 };
 
-let toastTimer;
-function toast(message) {
-  toastEl.textContent = message;
-  toastEl.hidden = false;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => (toastEl.hidden = true), 3000);
-}
-
-// API 부르기. 여행 경로는 토큰 없이, 프로필 경로(mine)는 이 폰의 프로필 토큰으로. 사진은 이진 본문 그대로.
-async function api(method, path, body, token) {
-  const res = await fetch(`/api${path}`, {
-    method,
-    headers: token ? { authorization: `Bearer ${token}` } : {},
-    body: body instanceof Blob ? body : body && JSON.stringify(body),
-  });
-  if (res.status === 304 || res.status === 204) return null;
-  const data = await res.json().catch(() => ({})); // 앞단(ALB 등)의 HTML 오류 쪽은 JSON이 아니다
-  if (!res.ok) throw Object.assign(new Error(data.error ?? `서버가 잠시 답하지 못했어요(${res.status}). 잠시 뒤 다시 해 주세요.`), { status: res.status });
-  return data;
-}
+// 여행 경로는 토큰 없이, 프로필 경로(mine)는 이 폰의 프로필 토큰으로.
 const call = (method, path, body) => api(method, `/trips${path}`, body);
 const mine = (method, path, body) => api(method, path, body, store("profile"));
 
@@ -119,13 +83,13 @@ async function shrink(file) {
   return new Promise((ok) => c.toBlob(ok, "image/jpeg", 0.85));
 }
 
-// 단추와 폼이 부르는 동작. 실패하면 이유를 알린다. 통신이 끊기면 fetch가 TypeError를 던진다.
+// 단추와 폼이 부르는 동작. 실패하면 이유를 알린다. 서버에 닿지 않으면 api()가 status 0으로 던진다.
 async function act(fn) {
   try {
     await fn();
     await refresh(true);
   } catch (e) {
-    toast(e instanceof TypeError ? "연결이 끊겨서 보내지 못했어요." : e.message);
+    toast(e.status === 0 ? "연결이 끊겨서 보내지 못했어요." : e.message);
   }
 }
 
@@ -141,7 +105,7 @@ async function refresh(force) {
       trip = next;
       failed = "";
     } catch (e) {
-      if (e instanceof TypeError) {
+      if (e.status === 0) {
         // 터널 같은 곳에서는 마지막 화면을 그대로 두고 계속 다시 묻는다
         if (!offline) toast("연결이 끊겼어요. 다시 이어지면 새로 보여 드려요.");
         offline = true;
@@ -155,13 +119,6 @@ async function refresh(force) {
   else render();
 }
 
-// 작은 DOM 도우미: h("button", { onclick }, "글자")
-function h(tag, props = {}, ...kids) {
-  const el = Object.assign(document.createElement(tag), props);
-  for (const [k, v] of Object.entries(props)) if (k.startsWith("aria-")) el.setAttribute(k, v);
-  el.append(...kids.flat().filter((k) => k || k === 0)); // 조건이 거짓인 자리(false, undefined)는 뺀다
-  return el;
-}
 const button = (label, onclick, className = "") => h("button", { type: "button", className, onclick }, label);
 const bar = (...kids) => h("div", { className: "bar" }, h("div", {}, kids));
 const header = (...kids) => h("div", { className: "top" }, kids);
