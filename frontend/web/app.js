@@ -4,6 +4,7 @@
 // 사용자가 쓴 글은 textContent로만 넣는다(innerHTML 금지).
 
 import { SEATS, SEAT, WHEN, REQ, CLOSED, api, h, toast } from "/shared.js";
+import { createShares } from "/shares.js";
 import { createCaptions } from "/captions.js";
 import qrcode from "/qrcode.js";
 import { createRecords } from "/records.js";
@@ -67,6 +68,14 @@ let failed = ""; // 여행을 불러오지 못한 이유
 let offline = false;
 let stale = false; // 입력 중에 온 변경은 입력이 끝난 뒤 그린다
 let reading = false; // 여행 화면의 '동의 켜기': 켜기 전에 동의 문구 전문을 보이는 중
+const shares = createShares({
+  getProfile: () => profile,
+  getProfileToken: () => store("profile"),
+  getTrip: () => trip,
+  getParticipant: () => trip?.participants.find((p) => p.id === myId()),
+  getParticipantToken: () => myToken(),
+  onProfile: () => (location.hash = "me"),
+});
 
 // 여행 경로는 토큰 없이, 프로필 경로(mine)는 이 폰의 프로필 토큰으로.
 const call = (method, path, body) => api(method, `/trips${path}`, body);
@@ -372,6 +381,7 @@ function home() {
           h("p", { className: "meta" }, "이름과 캐릭터를 정하면 동승 연결 QR을 띄울 수 있어요."),
           button("프로필 만들기", () => (location.hash = "me")),
         ),
+    profile && h("section", { className: "card" }, h("h2", {}, "동승자와 나눈 장면"), h("div", { className: "shares-actions" }, button("받은 공유", () => shares.openList("received")), button("보낸 공유", () => shares.openList("sent")))),
     (profile || last) && bar(profile && button("동승 연결", startRide, "primary"), last && button("지금 탄 여행", () => (location.hash = last), profile ? "" : "primary")),
   ];
 }
@@ -602,6 +612,7 @@ function tripView(me) {
           ),
         ),
       ),
+    profile && me.profileId === profile.id && me.consent && myToken() && trip.moments.length > 0 && h("section", { className: "card" }, h("h2", {}, "함께 나눌 장면"), h("p", { className: "meta" }, "내 앨범에 남긴 장면과 받는 동승자를 직접 골라요."), button("내 장면 공유", () => shares.openCompose())),
     trip.status !== "ended" && bar(button("부탁 남기기", () => (sheet.showModal(), sheet.querySelector("#sheet-text").focus()), "primary")),
   ];
 }
@@ -700,6 +711,7 @@ function shortView() {
 }
 
 function render() {
+  shares.sync();
   captions.sync();
   records.sync();
   stale = false;
