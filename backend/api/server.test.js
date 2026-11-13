@@ -1,7 +1,7 @@
 // 실행: 저장소 루트에서 make check
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import { createConnection } from "node:net";
 import { after, before, test } from "node:test";
@@ -530,86 +530,84 @@ test("발화를 기록본으로 저장하고 프로필 피드로 읽는다(T39)"
   assert.deepEqual(feedA5.items.map((i) => i.id), [mom2.id]);
 });
 
-test("가족 그룹과 초대: 대표·아이·수락, 기기 토큰(T45)", async () => {
-  // 대표가 가족 그룹을 만든다
+// 이전 이미지가 이미 저장한 그룹 자료다. 종료된 API로 새로 만들지 않고 DB에 넣어 호환성을 시험한다.
+async function legacyGroup(ownerId, memberId = ownerId) {
+  const groupId = randomUUID().slice(0, 8);
+  const kidId = randomUUID();
+  const code = randomUUID();
+  await profilesDb().query("INSERT INTO profiles (id, name, managed_by) VALUES ($1, '옛 아이', $2)", [kidId, ownerId]);
+  await profilesDb().query("INSERT INTO groups (id, kind, name, owner_id) VALUES ($1, 'family', '옛 그룹', $2)", [groupId, ownerId]);
+  for (const id of new Set([ownerId, memberId, kidId])) await profilesDb().query("INSERT INTO group_members (group_id, profile_id) VALUES ($1, $2)", [groupId, id]);
+  await profilesDb().query("INSERT INTO invites (code, group_id, expires_at) VALUES ($1, $2, now()+interval '1 hour')", [code, groupId]);
+  return { groupId, kidId, code };
+}
+
+test("옛 그룹·초대와 대리 참가를 410으로 닫되 기존 자료의 프로필 삭제는 보존한다(T46)", async () => {
+  const [, owner] = await call("POST", "/api/profiles", { name: "대표" });
+  const [, member] = await call("POST", "/api/profiles", { name: "기존 구성원" });
+  const { groupId, kidId, code } = await legacyGroup(owner.id, member.id);
+  await migrate(); // 다시 기동해도 롤백에 필요한 옛 표와 자료를 파괴하지 않는다.
+  const count = async (table) => (await profilesDb().query(`SELECT count(*)::int AS n FROM ${table}`)).rows[0].n;
+  const tables = ["profiles", "tokens", "groups", "group_members", "invites"];
+  const before = await Promise.all(tables.map(count));
+  const paths = ["/api/groups", `/api/groups/${groupId}`, `/api/groups/${groupId}/members`, `/api/groups/${groupId}/members/${kidId}`, `/api/groups/${groupId}/members/${kidId}/voice`, `/api/groups/${groupId}/invites`, `/api/groups/${groupId}/invites/${code}`, "/api/j", `/api/j/${code}`, `/api/j/${code}/extra`];
+  const logs = [];
+  captureLog((line) => logs.push(line));
+  try {
+    for (const path of paths) {
+      for (const method of ["GET", "POST", "PUT", "PATCH", "DELETE"]) {
+        const res = await fetch(base + path, { method, headers: { authorization: `Bearer ${owner.token}` }, body: ["POST", "PUT", "PATCH"].includes(method) ? "not-json" : undefined });
+        const body = await res.json();
+        assert.equal(res.status, 410, `${method} ${path}`);
+        assert.match(res.headers.get("cache-control"), /no-store/);
+        assert.deepEqual(Object.keys(body).sort(), ["error", "type"]);
+        assert.equal(body.type, "gone");
+        assert.match(body.error, /폰.*동승 연결 QR.*주차/);
+        for (const value of [owner.token, code, groupId, kidId]) assert.ok(!JSON.stringify(body).includes(value), "옛 코드·토큰·개인 식별자를 응답에 넣지 않음");
+      }
+    }
+    assert.equal((await call("POST", `/api/j/${code}`, { name: "새 사람" }))[0], 410, "무인증 수락도 토큰을 만들지 않음");
+    assert.equal((await call("POST", "/api/groups", {}, "wrong-token"))[0], 410, "종료 안내는 인증 판정 전에 반환");
+    assert.ok(!logs.join("\n").includes(code), "옛 초대 코드가 로그에 남지 않음");
+    assert.ok(!logs.join("\n").includes(owner.token), "프로필 토큰이 로그에 남지 않음");
+  } finally {
+    captureLog(() => {});
+  }
+  assert.deepEqual(await Promise.all(tables.map(count)), before, "그룹·프로필·초대·토큰을 만들거나 지우지 않음");
+  assert.equal((await profilesDb().query("SELECT uses FROM invites WHERE code=$1", [code])).rows[0].uses, 0);
+
+  const tripCount = () => tripsDb().query("SELECT count(*)::int AS n FROM trips").then((r) => r.rows[0].n);
+  const beforeTrips = await tripCount();
+  assert.equal((await call("POST", "/api/trips", { groupId }, owner.token))[0], 410, "유효한 옛 그룹으로도 여행을 만들 수 없음");
+  assert.equal(await tripCount(), beforeTrips);
+  const [, trip] = await call("POST", "/api/trips", {});
+  const path = `/api/trips/${trip.code}/participants`;
+  for (const profileId of [kidId, owner.id, null]) {
+    assert.equal((await call("POST", path, { seat: "ROW_1_LEFT", profileId }, owner.token))[0], 410, "타 프로필 지정 방식은 종료");
+  }
+  assert.equal((await call("GET", `/api/trips/${trip.code}`))[1].participants.length, 0);
+  const [joined, own] = await call("POST", path, { seat: "ROW_1_LEFT", consent: false }, owner.token);
+  assert.equal(joined, 201, "자기 프로필 참가 유지");
+  assert.equal((await call("PATCH", `${path}/${own.id}`, { consent: true }))[0], 401);
+  assert.equal((await call("PATCH", `${path}/${own.id}`, { consent: true }, own.token))[0], 200);
+  assert.equal((await call("POST", path, { seat: "ROW_1_RIGHT", name: "손님", consent: false }))[0], 201, "손님 참가 유지");
+
+  assert.equal((await call("DELETE", "/api/profiles/me", null, owner.token))[0], 204);
+  assert.equal((await profilesDb().query("SELECT id FROM profiles WHERE id=ANY($1::uuid[])", [[owner.id, kidId]])).rows.length, 0, "대표와 관리 대상 프로필 삭제 유지");
+  assert.equal((await profilesDb().query("SELECT id FROM groups WHERE id=$1", [groupId])).rows.length, 0);
+  assert.equal((await profilesDb().query("SELECT code FROM invites WHERE code=$1", [code])).rows.length, 0);
+  assert.equal((await profilesDb().query("SELECT profile_id FROM group_members WHERE group_id=$1", [groupId])).rows.length, 0);
+  assert.equal((await call("GET", "/api/profiles/me", null, member.token))[1].id, member.id, "계정 있는 다른 구성원은 유지");
+});
+
+test("기기별 프로필 토큰과 사진은 그룹 종료 뒤에도 동작한다", async () => {
   const [, mom] = await call("POST", "/api/profiles", { name: "엄마", character: "bunny" });
-  const [cg, g] = await call("POST", "/api/groups", { kind: "family", name: "우리가족" }, mom.token);
-  assert.equal(cg, 201);
-  assert.deepEqual([g.kind, g.name, g.ownerId === mom.id, g.members.length], ["family", "우리가족", true, 1]);
-
-  // 계정 없는 아이 프로필을 대표가 만든다(토큰 없음)
-  const [ck, kid] = await call("POST", `/api/groups/${g.id}/members`, { name: "아들", character: "bear" }, mom.token);
-  assert.deepEqual([ck, kid.name, kid.character], [201, "아들", "bear"]);
-  assert.equal((await call("POST", `/api/groups/${g.id}/members`, { name: "x" }))[0], 401, "대표 토큰이 필요함");
-
-  // 초대를 만들면 QR에 담을 주소가 돌아온다
-  const [ci, inv] = await call("POST", `/api/groups/${g.id}/invites`, { expiresInMinutes: 60, maxUses: 2 }, mom.token);
-  assert.equal(ci, 201);
-  assert.match(inv.url, /^https:\/\/gachita\.mangowhois\.ai\/j\/[A-Za-z0-9_-]{16,}$/);
-  const code = inv.url.split("/").pop();
-
-  // 거절된 수락은 횟수를 쓰지 않는다
-  assert.equal((await call("POST", `/api/j/${code}`, {}))[0], 400, "이름 없음");
-  assert.equal((await call("POST", `/api/j/${code}`, { name: "x" }, "A".repeat(43)))[0], 401, "틀린 토큰");
-
-  // 수락 1: 계정이 없는 사람 — 새 프로필과 이 기기 토큰을 받고 구성원이 된다
-  const [ca, a] = await call("POST", `/api/j/${code}`, { name: "아빠", device: "phone" });
-  assert.deepEqual([ca, a.group.name, a.profile.name, a.profile.character], [200, "우리가족", "아빠", ""]);
-  assert.match(a.token, /^[A-Za-z0-9_-]{43}$/);
-  assert.equal((await call("POST", `/api/j/${code}`, {}, a.token))[0], 200, "이미 구성원이면 QR을 다시 찍어도 횟수를 쓰지 않음");
-
-  // 수락 2: 프로필이 있는 사람(토큰 헤더) — 있던 프로필로 구성원이 된다
-  const [, uncle] = await call("POST", "/api/profiles", { name: "삼촌" });
-  const [cb, b] = await call("POST", `/api/j/${code}`, {}, uncle.token);
-  assert.equal(cb, 200);
-  assert.equal(b.profile.id, uncle.id);
-  assert.equal(b.token, undefined, "있던 프로필이면 토큰을 새로 주지 않음");
-
-  // 횟수(2)가 다 찼다
-  assert.equal((await call("POST", `/api/j/${code}`, { name: "다른 사람" }))[0], 409, "다 찬 초대");
-
-  // 취소와 만료
-  const [, inv2] = await call("POST", `/api/groups/${g.id}/invites`, { expiresInMinutes: 60 }, mom.token);
-  assert.equal((await call("DELETE", `/api/groups/${g.id}/invites/${inv2.code}`, null, mom.token))[0], 204);
-  assert.equal((await call("POST", `/api/j/${inv2.code}`, { name: "누구" }))[0], 409, "취소된 초대");
-  await profilesDb().query("UPDATE invites SET expires_at = now() - interval '1 minute' WHERE code = $1", [inv2.code]);
-  assert.equal((await call("POST", `/api/j/${inv2.code}`, { name: "누구" }))[0], 409, "만료된 초대");
-  assert.equal((await call("POST", "/api/j/ZZZZZZZZ", { name: "x" }))[0], 404, "없는 초대");
-
   // 같은 프로필의 두 기기 토큰은 서로를 끊지 않는다(티켓 완료 기준)
   const [ct, car] = await call("POST", "/api/profiles/me/tokens", { device: "car" }, mom.token);
   assert.equal(ct, 201);
   const [, fromCar] = await call("GET", "/api/profiles/me", null, car.token);
   const [, fromPhone] = await call("GET", "/api/profiles/me", null, mom.token);
   assert.deepEqual([fromCar.id, fromCar.character, fromPhone.id], [mom.id, "bunny", mom.id]);
-
-  // 그룹 여행: 대표가 만들면(그룹 지정) 수락한 사람은 여행 코드를 받아 자리만 골라 참가한다. 아이 프로필로도 참가시킨다
-  const [ctr, trip] = await call("POST", "/api/trips", { title: "마트", groupId: g.id }, mom.token);
-  assert.equal(ctr, 201);
-  assert.equal((await call("POST", "/api/trips", { groupId: g.id }, uncle.token))[0], 403, "대표만 그룹 여행을 만듦");
-  const [ckj, kp] = await call("POST", `/api/trips/${trip.code}/participants`, { seat: "ROW_2_LEFT", profileId: kid.profileId }, mom.token);
-  assert.deepEqual([ckj, kp.name, kp.consent], [201, "아들", false], "아이는 동의 기본값 꺼짐");
-  const [, stranger] = await call("POST", "/api/profiles", { name: "모르는 사람" });
-  assert.equal((await call("POST", `/api/trips/${trip.code}/participants`, { seat: "ROW_2_RIGHT", profileId: stranger.id }, mom.token))[0], 403, "내 그룹의 구성원만");
-  assert.equal((await call("POST", `/api/trips/${trip.code}/participants`, { seat: "ROW_2_RIGHT", profileId: uncle.id }, mom.token))[0], 403, "계정 있는 어른의 자리와 동의는 그 사람이 정함");
-  const [ckj2, kp2] = await call("POST", `/api/trips/${trip.code}/participants`, { seat: "ROW_2_RIGHT", profileId: kid.profileId }, mom.token);
-  assert.deepEqual([ckj2, kp2.id, kp2.seat], [200, kp.id, "ROW_2_LEFT"], "같은 아이를 다시 참가시키면 두 자리가 아니라 있던 참가자와 새 토큰(T68)");
-  assert.equal((await call("POST", `/api/trips/${trip.code}/participants`, { seat: "ROW_2_RIGHT", profileId: "x" }, mom.token))[0], 400);
-  await call("PATCH", `/api/trips/${trip.code}/participants/${kp.id}`, { consent: true }, kp.token); // 아이의 참가자 토큰은 참가시킨 보호자의 기기에
-  assert.equal((await call("PATCH", `/api/trips/${trip.code}`, { status: "driving", recording: true }))[1].recording, true);
-  const [, inv3] = await call("POST", `/api/groups/${g.id}/invites`, {}, mom.token);
-  const [, joiner] = await call("POST", `/api/j/${inv3.code}`, { name: "이웃" });
-  assert.deepEqual(joiner.trip, { code: trip.code }, "진행 중 그룹 여행의 코드만 받는다");
-  assert.equal((await call("GET", `/api/trips/${trip.code}`))[1].participants.length, 1, "자리를 대신 고르지 않는다");
-  const [cj, jp] = await call("POST", `/api/trips/${trip.code}/participants`, { seat: "ROW_2_RIGHT" }, joiner.token);
-  assert.deepEqual([cj, jp.consent], [201, false]);
-  assert.equal((await call("GET", `/api/trips/${trip.code}`))[1].recording, false, "동의하지 않은 사람이 타면 기록이 멈춘다");
-
-  // 구성원 내보내기와 스스로 나가기. 기록본은 프로필 소유라 그대로다
-  assert.equal((await call("DELETE", `/api/groups/${g.id}/members/${kid.profileId}`, null, uncle.token))[0], 403, "대표만 내보냄");
-  assert.equal((await call("DELETE", `/api/groups/${g.id}/members/not-a-uuid`, null, mom.token))[0], 404);
-  assert.equal((await call("DELETE", `/api/groups/${g.id}/members/${b.profile.id}`, null, uncle.token))[0], 204, "스스로 나감");
-  assert.equal((await call("DELETE", `/api/groups/${g.id}/members/${mom.id}`, null, mom.token))[0], 409, "대표는 그룹을 지워야 나감");
 
   // 프로필 사진: 형식을 확인해 다시 저장하고, 사진이 있는지 프로필에 보인다
   const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(64, 7)]);
@@ -624,24 +622,6 @@ test("가족 그룹과 초대: 대표·아이·수락, 기기 토큰(T45)", asyn
   assert.equal((await call("DELETE", "/api/profiles/me/photo", null, mom.token))[0], 204);
   assert.equal((await fetch(`${base}/api/profiles/me/photo`, { headers: { authorization: `Bearer ${mom.token}` } })).status, 404, "지운 뒤에는 없음");
 
-  // 그룹을 지워도 계정 있는 구성원의 앨범은 프로필 소유라 그대로 남는다. 대표가 만든 아이 프로필은 함께 지운다(ADR-0009)
-  const [, mp] = await call("POST", `/api/trips/${trip.code}/participants`, { seat: "ROW_1_RIGHT", consent: true }, mom.token);
-  await call("POST", `/api/trips/${trip.code}/moments`, { label: "마지막 농담", at: trip.createdAt + 5000 }, mp.token);
-  assert.equal((await call("DELETE", `/api/groups/${g.id}`, null, mom.token))[0], 204);
-  assert.equal((await call("GET", `/api/groups/${g.id}`, null, mom.token))[0], 404, "지워진 그룹");
-  const count = async (sql, args) => (await profilesDb().query(`SELECT count(*)::int AS n FROM ${sql}`, args)).rows[0].n;
-  assert.equal(await count("profile_moments WHERE profile_id = $1", [mom.id]), 1, "대표의 앨범은 그대로");
-  assert.equal(await count("profiles WHERE id = $1", [kid.profileId]), 0, "아이 프로필은 함께 지워짐");
-
-  // 대표가 아이를 내보내면 프로필째 지운다. 대표가 자기 프로필을 지우면 대표인 그룹과 아이 프로필도 함께 지운다
-  const [, g2] = await call("POST", "/api/groups", { kind: "family" }, mom.token);
-  const [, kid2] = await call("POST", `/api/groups/${g2.id}/members`, { name: "딸" }, mom.token);
-  const [, kid3] = await call("POST", `/api/groups/${g2.id}/members`, { name: "막내" }, mom.token);
-  assert.equal((await call("DELETE", `/api/groups/${g2.id}/members/${kid3.profileId}`, null, mom.token))[0], 204);
-  assert.equal(await count("profiles WHERE id = $1", [kid3.profileId]), 0, "내보낸 아이 프로필");
-  assert.equal((await call("DELETE", "/api/profiles/me", null, mom.token))[0], 204);
-  assert.equal(await count("groups WHERE id = $1", [g2.id]), 0, "대표인 그룹");
-  assert.equal(await count("profiles WHERE id = $1", [kid2.profileId]), 0, "만든 아이 프로필");
 });
 
 test("이전 판(프로필마다 토큰 하나)으로 되돌려도 프로필이 읽히고, 다시 올리면 그 토큰이 옮겨진다(T45)", async () => {
@@ -774,19 +754,15 @@ test("목소리 등록으로 발화의 화자를 프로필에 붙인다(T38)", a
   const [consent] = await call("PATCH", `${t}/participants/${pd.id}`, { consent: true }, pd.token);
   assert.deepEqual([consent, ...(await Promise.all(jobs)).map((r) => r.status)], Array(16).fill(200));
 
-  // 아이(계정 없는 구성원)의 목소리는 그 아이를 만든 대표가 대신 등록한다
-  const [, g] = await call("POST", "/api/groups", { kind: "family" }, mom.token);
-  const [, kid] = await call("POST", `/api/groups/${g.id}/members`, { name: "민준" }, mom.token);
-  const kidVoice = `/api/groups/${g.id}/members/${kid.profileId}/voice`;
-  assert.equal((await postRaw(kidVoice, wav(300, 2), dad.token)).status, 403, "대표만");
-  assert.equal((await postRaw(`/api/groups/${g.id}/members/${dad.id}/voice`, wav(300, 2), mom.token)).status, 404, "대표가 만든 구성원만");
-  assert.equal((await postRaw(kidVoice, wav(300, 2), mom.token)).status, 200);
+  // 옛 판이 저장한 관리 프로필의 목소리도 대표의 프로필 삭제에 함께 지워진다.
+  const { kidId } = await legacyGroup(mom.id);
+  await profilesDb().query("INSERT INTO voice_prints (profile_id, vector, seconds) SELECT $1, vector, seconds FROM voice_prints WHERE profile_id=$2", [kidId, mom.id]);
   const prints = async (id) => (await profilesDb().query("SELECT count(*)::int AS n FROM voice_prints WHERE profile_id = $1", [id])).rows[0].n;
-  assert.equal(await prints(kid.profileId), 1);
+  assert.equal(await prints(kidId), 1);
 
   // 프로필을 지우면 목소리 값도 함께 지운다. 대표가 지우면 대표가 만든 아이의 값도
   assert.equal((await call("DELETE", "/api/profiles/me", null, mom.token))[0], 204);
-  assert.deepEqual([await prints(mom.id), await prints(kid.profileId)], [0, 0]);
+  assert.deepEqual([await prints(mom.id), await prints(kidId)], [0, 0]);
 });
 
 test("녹음 클립: 고른 장면의 원음을 받고, 재생하고, 바로 지운다(T76)", async () => {
@@ -1349,10 +1325,18 @@ test("쓰기가 몰려도 서버가 멈추지 않는다", async () => {
   }
 });
 
-test("확장자 없는 주소는 웹 화면으로 연다(초대 /j/<코드>, 시연 /demo)", async () => {
-  for (const path of ["/", "/j/abcDEF123", "/demo", "/oauth/google/callback?code=x&state=y"]) { // 구글 로그인 콜백도 웹앱(T27)
+test("옛 초대 주소는 안내하고 Google 콜백·시연·일반 화면은 유지한다", async () => {
+  for (const path of ["/", "/oauth/google/callback?code=x&state=y", "/demo"]) { // 구글 로그인 콜백도 웹앱(T27)
     const res = await fetch(base + path);
     assert.deepEqual([res.status, res.headers.get("content-type")], [200, "text/html; charset=utf-8"], path);
+  }
+  for (const path of ["/j", "/j/abcDEF123", "/%6a/abcDEF123", "/j/abcDEF123/extra"]) {
+    const res = await fetch(base + path);
+    assert.equal(res.status, 410);
+    assert.match(res.headers.get("cache-control"), /no-store/);
+    const html = await res.text();
+    assert.match(html, /동승 연결 QR/);
+    assert.ok(!html.includes("abcDEF123"), "초대 코드는 화면에 반사하지 않음");
   }
   assert.equal((await fetch(`${base}/app.js`)).headers.get("content-type"), "text/javascript; charset=utf-8");
   assert.equal((await fetch(`${base}/nothing.js`)).status, 404, "없는 파일은 그대로 404");
