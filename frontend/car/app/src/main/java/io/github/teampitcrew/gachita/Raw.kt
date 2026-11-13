@@ -2,11 +2,11 @@ package io.github.teampitcrew.gachita
 
 import java.io.BufferedOutputStream
 import java.io.Closeable
-import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.EOFException
 import java.io.File
 import java.io.FileOutputStream
+import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import javax.crypto.KeyGenerator
@@ -60,23 +60,31 @@ class RawFile(val file: File) {
     val startedAt = m.groupValues[3].toLong()
 
     /**
-     * [from, to](epoch ms)에 걸친 소리(16 kHz 모노 PCM). 이 파일에 그 시각이 없으면 null.
-     * 묶음의 길이만 보고 건너뛰고 걸친 묶음만 푼다. 쓰다 끊긴 꼬리는 버린다. 키가 바뀌어 열리지 않으면 던진다.
+     * [from, to](epoch ms)에 걸친 소리(16 kHz 모노 PCM). 이 파일에 그 시각이 없으면 null. 키가 바뀌어 열리지 않으면 던진다.
+     * 묶음은 거의 늘 0.1초(같은 길이)라 시작 묶음의 자리로 바로 건너뛰고, 그 자리의 길이가 맞지 않으면(짧게 읽힌 묶음이 있었음) 처음부터 길이만 읽으며 찾는다.
+     * 걸친 묶음만 푼다. 쓰다 끊긴 꼬리는 버린다.
      */
     fun cut(seal: Seal, from: Long, to: Long): ByteArray? {
         val a = maxOf(0, (from - startedAt) * RATE / 1000) // 표본 번호
         val b = (to - startedAt) * RATE / 1000
         if (b <= a) return null
         val pcm = java.io.ByteArrayOutputStream()
-        DataInputStream(file.inputStream()).use { input -> // 버퍼 없이: 건너뛰는 묶음은 길이만 읽고 lseek로 넘긴다
-            val data = Seal(SecretKeySpec(seal.open(ByteArray(input.readInt()).also { input.readFully(it) }), "AES"))
+        RandomAccessFile(file, "r").use { f ->
+            val data = Seal(SecretKeySpec(seal.open(ByteArray(f.readInt()).also { f.readFully(it) }), "AES"))
+            val body = f.filePointer
+            val stride = 4L + TAG_BYTES + CHUNK_FRAMES * 2
+            val k = a / CHUNK_FRAMES
             var pos = 0L
+            if (body + k * stride + 4 <= f.length()) {
+                f.seek(body + k * stride)
+                if (f.readInt() == (stride - 4).toInt()) { f.seek(body + k * stride); pos = k * CHUNK_FRAMES } else f.seek(body)
+            }
             try {
                 while (pos < b) {
-                    val n = input.readInt()
+                    val n = f.readInt()
                     val frames = (n - TAG_BYTES) / 2L
-                    if (pos + frames <= a) { skip(input, n); pos += frames; continue }
-                    val chunk = data.open(ByteArray(n).also { input.readFully(it) })
+                    if (pos + frames <= a) { f.seek(f.filePointer + n); pos += frames; continue }
+                    val chunk = data.open(ByteArray(n).also { f.readFully(it) })
                     val s = (maxOf(a, pos) - pos).toInt() * 2
                     val e = (minOf(b, pos + frames) - pos).toInt() * 2
                     pcm.write(chunk, s, e - s)
@@ -85,11 +93,6 @@ class RawFile(val file: File) {
             } catch (_: EOFException) {} // 쓰다 끊긴 꼬리
         }
         return pcm.toByteArray().takeIf { it.isNotEmpty() }
-    }
-
-    private fun skip(input: DataInputStream, n: Int) {
-        var left = n
-        while (left > 0) input.skipBytes(left).also { if (it <= 0) throw EOFException(); left -= it }
     }
 
     companion object {

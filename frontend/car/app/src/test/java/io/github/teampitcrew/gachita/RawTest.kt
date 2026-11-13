@@ -47,6 +47,16 @@ class RawTest {
         assertTrue(runCatching { RawFile(file).cut(other, 1_000_000, 1_000_500) }.isFailure)
     }
 
+    @Test fun 짧게_읽힌_묶음이_있어도_처음부터_찾아_자름() {
+        val file = RawWriter(tmp.root, "ABC234", 1, 1_000_000L, TEST_SEAL).use { w ->
+            w.write(chunk(0).copyOf(1_000)); repeat(10) { w.write(chunk(it + 1)) }; w.file // 첫 묶음만 500표본
+        }
+        // 0.15초 = 2,400표본. 바로 건너뛴 자리(묶음 1)는 길이가 맞지 않아 처음부터 찾음: 묶음 0(0~500) · 1(500~2100) · 2(2100~3700)의 300번째
+        val pcm = RawFile(file).cut(TEST_SEAL, 1_000_150, 1_000_250)!!
+        assertEquals(20_300, sample(pcm, 0))
+        assertEquals(1_600 * 2, pcm.size)
+    }
+
     @Test fun 쓰다_끊긴_꼬리는_버림() {
         val file = record(tmp.root, 10)
         file.writeBytes(file.readBytes().copyOf(file.length().toInt() - 100))
