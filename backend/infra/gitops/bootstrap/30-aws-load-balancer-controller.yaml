@@ -29,7 +29,7 @@ spec:
         serviceAccount:
           name: aws-load-balancer-controller
           annotations:
-            eks.amazonaws.com/role-arn: arn:aws:iam::721622471953ole/gachita-dev-alb-controller
+            eks.amazonaws.com/role-arn: arn:aws:iam::721622471953:role/gachita-dev-alb-controller
         defaultTags:
           Project: gachita # 같이 쓰는 계정에서 컨트롤러가 만든 것을 가리고(권한 경계의 조건), 접은 뒤 남은 것을 찾는다
         enableCertManager: true # 웹훅 인증서를 cert-manager로(차트가 매번 새로 만들면 Argo CD가 늘 바뀐 것으로 봄)
