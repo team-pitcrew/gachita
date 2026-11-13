@@ -108,7 +108,11 @@ class MainActivity : ComponentActivity() {
                 prefs.edit().putBoolean("offPending", v.offPending).putBoolean("started", v.started).commit()
             state = v
             syncCapture() // 동의가 빠졌으면 수음을 먼저 멈춘다
-            v.trip?.let { t -> Live.outbox(this, t.code).let { if (it.see(t.generation, t.createdAt)) Live.show(it) } } // 동의 세대가 오르면 옛 세대 발화의 글을 지운다
+            v.trip?.let { t ->
+                val box = Live.outbox(this, t.code)
+                if (box.see(t.generation, t.createdAt)) Live.show(box) // 동의 세대가 오르면 옛 세대 발화의 글을 지운다
+                dropRaw(filesDir, t.code, below = box.generation) // 옛 세대의 원음도(T63)
+            }
         }
     private var carStatus by mutableStateOf(CarStatus())
     private var server by mutableStateOf(DEFAULT_SERVER)
@@ -119,6 +123,8 @@ class MainActivity : ComponentActivity() {
     private var pendingRoute: List<String>? = null // 내비에 붙으면 보낼 목적지(디버그 인자)
     private var offers = 0L // 제안 번호. 늦게 온 콜백이 다른 제안을 건드리지 않게
     private var todos: Todos? = null // 지금 여행의 장소별 할 일(T40)
+    private var clipping = false // 장면 클립을 올리는 중(T63)
+    private var clipsAfter = 0L // 다시 해도 되는 실패(403·503·끊김) 뒤에는 이때까지 쉰다. 큰 원음 파일을 10초마다 다시 읽지 않게
     private var todoList by mutableStateOf(emptyList<Todo>())
     /** 보이고 있는 도착 브리핑. place가 null이면 모든 장소(Gleo로 부름). 주차해 주행 제한이 풀렸을 때만 그린다. */
     private data class Brief(val place: String?)
@@ -303,6 +309,7 @@ class MainActivity : ComponentActivity() {
                 if (s.trip?.code != t.code) return@onSuccess // 그사이 지운 여행(48시간·404)이나 새 여행: 늦게 온 응답으로 되살리지 않는다
                 s = if (got == null) s.copy(online = true) else s.withTrip(keep(got))
                 upload(t, resync, prune) // 받은 여행의 동의 세대를 보관함에 반영한(철회면 글을 지운) 뒤에만 올린다
+                s.trip?.let(::clips)
             }
                 .onFailure { if (it is Gone) forget(t.code) else s = s.copy(online = it is ApiError, note = if (it is ApiError) reason(it) else s.note) } // 조회를 못 하면 이번에는 올리지 않는다
         }
@@ -336,6 +343,51 @@ class MainActivity : ComponentActivity() {
             Live.forget(code)
             if (s.trip?.code == code) { newTrip(); error = "만든 지 48시간이 지난 여행이라 이 차에 남은 기록을 지웠어요" }
         }
+    }
+
+    /**
+     * 사람이 확정한 장면(moments)의 구간을 이 차의 원음에서 16 kHz 모노 WAV로 잘라 올린다(T63 → T76 POST /recordings). 모두 동의한 동안만.
+     * 구간이 끝나고 3초가 지난 장면만 본다(아직 녹음 중인 구간을 자르지 않게). 원음이 이 차에 없거나 서버가 버리라고 하면(400·404·409·413) 다시 하지 않는다.
+     * ponytail: 차 앱이 켜져 있을 때만 올린다. 폰에서 장면을 고른 뒤 차가 꺼져 있으면 다음에 앱을 켤 때(48시간 안).
+     */
+    private fun clips(t: Trip) {
+        val up = tokens.minByOrNull { it.key }?.value ?: return
+        val now = System.currentTimeMillis()
+        if (clipping || now < clipsAfter || !s.consented) return
+        val log = ClipLog(filesDir, t.code)
+        val todo = t.moments.filter { it.id !in log.done && it.window.last + 3_000 < now }
+        if (todo.isEmpty()) return
+        clipping = true
+        val url = server; val dir = filesDir
+        bg({
+            val api = Server(url)
+            val files = RawFile.of(dir, t.code)
+            for (m in todo) {
+                val w = m.window
+                val f = clipFile(files, w)
+                val pcm = f?.let { runCatching { it.cut(Live.seal, w.first, w.last) }.getOrNull() }
+                if (f == null || pcm == null) { log.add(m.id); Log.i(TAG, "장면 ${m.id}: 이 차에 그 구간의 원음이 없어 올리지 않음"); continue }
+                try {
+                    api.recording(t.code, up, m.id, f.generation, maxOf(w.first, f.startedAt), wav(pcm))
+                    log.add(m.id); Log.i(TAG, "장면 ${m.id} 클립 ${pcm.size / 32}ms 올림")
+                } catch (e: ApiError) {
+                    if (e.status in listOf(400, 404, 409, 413)) { log.add(m.id); Log.i(TAG, "장면 ${m.id} 클립 버림 ${e.status}") } else throw e
+                }
+            }
+        }) { r ->
+            clipping = false
+            r.exceptionOrNull()?.let { clipsAfter = System.currentTimeMillis() + 5 * 60_000; Log.i(TAG, "클립 올리기 미룸 ${if (it is ApiError) it.status else "연결"}") }
+        }
+    }
+
+    /**
+     * 이 여행의 원음 지우기(사람의 요청, T63). 지난 것을 지우는 요청이라 동의 철회(앞으로를 멈춤)와 다르다(ADR-0007): 기록은 이어 가고 받아 적은 글·올린 클립은 그대로.
+     * 수음 중이면 쓰던 파일까지 수음 스레드가 지우고 새 파일로 이어 쓴다.
+     */
+    private fun dropRawNow() {
+        val t = s.trip ?: return
+        if (CaptureService.running) Live.dropRaw = true else RawFile.of(filesDir, t.code).forEach { it.file.delete() }
+        s = s.copy(note = "이 차에 둔 지난 원음을 지웠어요")
     }
 
     /** 서버가 모르는 여행(48시간이 지나 지워짐): 기록을 멈추고 이 차의 사본(보관함·할 일)을 지운 뒤 처음 화면으로. */
@@ -793,6 +845,7 @@ class MainActivity : ComponentActivity() {
             }
         }
         if (!carStatus.restricted) OutlinedButton(::newTrip, Modifier.heightIn(min = 64.dp), enabled = !s.agreed && !s.switchOn && !s.busy) { Text("새 여행 만들기") }
+        if (!carStatus.restricted) OutlinedButton(::dropRawNow, Modifier.heightIn(min = 64.dp)) { Text("이 차에 둔 원음 지우기") }
     }
 
     @Composable

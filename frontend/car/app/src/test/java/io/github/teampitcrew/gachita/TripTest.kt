@@ -44,6 +44,11 @@ class TripTest {
         assertNotNull(s.copy(gear = "P", ours = emptySet()).blockOn()) // 이 차가 참가시킨 사람이 없으면 켤 것이 없다
     }
 
+    @Test fun `장면을 읽는다(구간은 있을 때만)`() {
+        val t = parseTrip(json(true).replace("\"moments\":[]", "\"moments\":[{\"id\":\"m1\",\"at\":5000,\"label\":\"\"},{\"id\":\"m2\",\"at\":9000,\"from\":8000,\"to\":9500,\"label\":\"바다\"}]"))
+        assertEquals(listOf(Moment("m1", 5000), Moment("m2", 9000, 8000, 9500)), t.moments)
+    }
+
     @Test fun `여행의 동의 세대와 만든 시각을 읽는다`() {
         val t = parseTrip(json(true).replace("\"version\":3", "\"version\":3,\"generation\":4"))
         assertEquals(4, t.generation); assertEquals(1L, t.createdAt)
