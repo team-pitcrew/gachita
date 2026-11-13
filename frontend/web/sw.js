@@ -7,7 +7,7 @@ const TRIP = /^\/api\/trips\/[A-Z0-9]+$/;
 const KEEP_MS = 48 * 3600 * 1000; // 서버가 여행을 지우는 때(만든 뒤 48시간). 그 뒤로는 끊겨도 보이지 않게 한다
 
 // 설치할 때 화면 파일을 받아 둔다. 첫 방문 뒤 바로 끊겨도(이 파일들은 워커가 켜지기 전에 읽혔다) 다시 열 수 있게.
-const SHELL = ["/", "/app.js", "/shared.js", "/style.css", "/manifest.webmanifest", "/icon.svg"];
+const SHELL = ["/", "/app.js", "/shared.js", "/qrcode.js", "/style.css", "/manifest.webmanifest", "/icon.svg"];
 
 addEventListener("install", (e) => e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => skipWaiting())));
 addEventListener("activate", (e) => e.waitUntil(clients.claim()));
