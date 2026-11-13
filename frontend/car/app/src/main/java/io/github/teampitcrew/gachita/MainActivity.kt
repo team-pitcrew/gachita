@@ -106,6 +106,7 @@ class MainActivity : ComponentActivity() {
             if (v.offPending != state.offPending || v.started != state.started)
                 prefs.edit().putBoolean("offPending", v.offPending).putBoolean("started", v.started).commit()
             state = v
+            v.trip?.let { t -> Live.outbox(this, t.code).let { if (it.see(t.generation)) Live.show(it) } } // 동의 세대가 오르면 옛 세대 발화의 글을 지운다
             syncCapture()
         }
     private var carStatus by mutableStateOf(CarStatus())
@@ -127,12 +128,13 @@ class MainActivity : ComponentActivity() {
     private lateinit var handoff: Handoff // Gleo와 마이크 주고받기(T41). ponytail: 화면이 다시 만들어지면(configChanges 밖, 글꼴·언어) 넘긴 상태는 옛 화면의 시간 초과로 풀린다
     /** Gleo로 '기록 멈추기'를 부름(T41). 동의는 그대로 두고 수음만 멈춘다. 앱이 다시 켜져도 멋대로 다시 기록하지 않게 저장한다. */
     private var muted by mutableStateOf(false)
-    private lateinit var device: String // 보관함의 기기 값. 설치 단위(ADR-0014 초안의 device_id)
-    private val uplink: Uplink = KEEP // ponytail: 발화 저장 API(T39)가 생기면 그 호출로 바꾼다. 지금은 보관함에 쌓기만
+    private lateinit var device: String // 보관함의 기기 값. 설치 단위(ADR-0014의 device)
+    /** 이 차가 참가시킨 사람의 참가자 토큰(id → 토큰). 그 사람의 동의 켜기와 발화 올리기에 쓴다(T68). 참가할 때 한 번만 온다. */
+    private var tokens: Map<String, String> = emptyMap()
 
     /** 화면이 보이는 동안, 그리고 수음 중이면 화면 뒤에서도 조회해 폰에서 끈 동의를 반영한다. */
     private val tick = object : Runnable {
-        override fun run() { refresh(); if (visible || s.recording) main.postDelayed(this, POLL_MS) }
+        override fun run() { refresh(); locate(); if (visible || s.recording) main.postDelayed(this, POLL_MS) }
     }
 
     /** 마이크(꼭 필요)와 알림(화면 뒤에서 '기록 멈춤'을 보이는 데 씀. 없으면 API 33부터 알림이 올라가지 않음)을 한 번에 묻는다. */
@@ -158,7 +160,6 @@ class MainActivity : ComponentActivity() {
             else Live.set(Mic.FAILED, "마이크 권한이 없어 기록할 수 없어요")
             return
         }
-        Live.outbox(this, code)
         CaptureService.start(this, code)
     }
 
@@ -172,11 +173,11 @@ class MainActivity : ComponentActivity() {
         if (debug) intent.getStringExtra("server")?.let { prefs.edit().putString("server", it).apply() }
         server = prefs.getString("server", null) ?: DEFAULT_SERVER
         device = prefs.getString("device", null) ?: UUID.randomUUID().toString().also { prefs.edit().putString("device", it).apply() }
-        // 앱을 다시 켜도, 서버에 닿지 않아도 마지막으로 받은 여행과 끄기 대기를 이어 보여 준다
-        s = Session.restore(prefs.getString("trip", null), prefs.getBoolean("offPending", false), prefs.getBoolean("started", false))
-        s.trip?.let { Live.outbox(this, it.code) } // 앱을 다시 켜도 받아 적은 말과 순번을 이어 보여 준다
+        tokens = prefs.getString("tokens", null)?.let { j -> JSONObject(j).let { o -> o.keys().asSequence().associateWith { o.getString(it) } } }.orEmpty()
+        // 앱을 다시 켜도, 서버에 닿지 않아도 마지막으로 받은 여행과 끄기 대기, 받아 적은 말과 순번을 이어 보여 준다
+        s = Session.restore(prefs.getString("trip", null), prefs.getBoolean("offPending", false), prefs.getBoolean("started", false), tokens.keys)
         car = Car(this) {
-            carStatus = it; Live.gear = it.gear
+            carStatus = it
             val was = s.gear
             s = s.withGear(it.gear)
             if (was != null && was != "P" && it.gear == "P") arrive() // 앱을 켤 때 처음 읽은 P는 도착이 아니다
@@ -255,10 +256,14 @@ class MainActivity : ComponentActivity() {
         bg({
             val api = Server(url)
             val code = api.createTrip(TITLE).trip.code
-            members.forEach { api.join(code, it) }
-            api.trip(code)!!
+            val got = members.associate { api.join(code, it) }
+            api.trip(code)!! to got
         }) { r ->
-            r.onSuccess { s = Session(gear = s.gear).withTrip(keep(it)); Live.outbox(this, it.trip.code) }
+            r.onSuccess { (got, mine) ->
+                tokens = mine
+                prefs.edit().putString("tokens", JSONObject(mine).toString()).commit() // 다시 받을 수 없는 값이라 디스크에 쓰고 돌아온다
+                s = Session(gear = s.gear, ours = mine.keys).withTrip(keep(got))
+            }
                 .onFailure { s = s.copy(busy = false); error = "여행을 만들지 못했어요 · ${reason(it)}" }
         }
     }
@@ -271,6 +276,7 @@ class MainActivity : ComponentActivity() {
         val url = server
         val box = Live.box?.takeIf { it.trip == t.code }
         val dev = device
+        val up = tokens.minByOrNull { it.key }?.value // 올리는 사람은 늘 같은 참가자(서버는 기기를 처음 올린 참가자에 묶는다)
         bg({
             val api = Server(url)
             off.forEach { api.consent(t.code, it, false) }
@@ -279,21 +285,31 @@ class MainActivity : ComponentActivity() {
             r.onSuccess { got -> s = if (got == null) s.copy(online = true) else s.withTrip(keep(got)) }
                 .onFailure { s = s.copy(online = it is ApiError, note = if (it is ApiError) reason(it) else s.note) }
         }
-        // 받아 적은 말은 동의와 따로 보낸다. 지금은 KEEP이라 보내지 않고 남은 수만 다시 센다
-        if (box != null) bg({ box.flush(uplink, dev) }) { Live.show(box) }
+        // 받아 적은 말은 동의와 따로 보낸다. 못 보내면(끊김, 동의 대기 403) 보관함에 두었다 다음 조회에 다시 보낸다
+        if (box != null && up != null && box.pending > 0) bg({ box.flush({ d, items -> Server(url).utterances(t.code, up, d, items) }, dev) }) { r ->
+            r.exceptionOrNull()?.let { Log.i(TAG, "발화 올리기 못 함 ${if (it is ApiError) it.status else "연결"}") }
+            Live.show(box)
+        }
     }
 
-    /** 켜기 직전에 기어를 다시 읽고, 서버가 모두의 동의를 저장한 뒤에만 '기록 중'으로 바꾼다. */
+    /** 기록 중이면 내비에 지금 위치를 물어 둔다. 발화에 붙인다(FIX_MS). 휴게소를 찾는 중이면 그 물음을 끊지 않게 묻지 않는다. */
+    private fun locate() {
+        if (!s.recording || offer?.stage == Offer.Stage.FINDING) return
+        car.here { la, ln -> if (la != null && ln != null) Live.fix = Fix(la, ln, System.currentTimeMillis()) }
+    }
+
+    /** 켜기 직전에 기어를 다시 읽고, 이 차가 참가시킨 사람의 동의를 그 사람의 토큰으로 켠다. 서버에서 모두 동의한 뒤에만 '기록 중'. */
     private fun turnOn() {
         car.readGear { g ->
             s = s.withGear(g)
             s.blockOn()?.let { s = s.copy(note = it); return@readGear }
             val t = s.trip!!
             val url = server
+            val mine = tokens
             s = s.copy(busy = true, note = "")
             bg({
                 val api = Server(url)
-                t.people.forEach { api.consent(t.code, it.id, true) }
+                t.people.forEach { p -> mine[p.id]?.let { api.consent(t.code, p.id, true, it) } } // 폰으로 들어온 사람은 자기 폰에서
                 api.trip(t.code)!!
             }) { r ->
                 r.onSuccess { s = s.copy(busy = false).turnedOn(keep(it)); if (s.recording) car.speak("기록을 시작했어요") }
@@ -310,7 +326,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun newTrip() {
-        prefs.edit().remove("trip").commit()
+        prefs.edit().remove("trip").remove("tokens").commit()
+        tokens = emptyMap()
         s = Session(gear = s.gear)
         offer = null; todos = null; todoList = emptyList(); brief = null
     }
@@ -618,7 +635,7 @@ class MainActivity : ComponentActivity() {
             Text("일행 ${t.people.size}명", fontSize = 30.sp, fontWeight = FontWeight.Bold)
             t.people.forEach { p ->
                 val seat = runCatching { Seat.valueOf(p.seat).label }.getOrDefault(p.seat)
-                Text("${p.name} · $seat" + if (p.consent) " · 동의" else "")
+                Text("${p.name} · $seat" + if (p.consent) " · 동의" else if (s.waitsFor(p)) " · 동의 대기" else "")
             }
         }
         Card {
@@ -642,7 +659,7 @@ class MainActivity : ComponentActivity() {
             Live.recent.asReversed().forEach { u ->
                 Text("${hm.format(Date(u.startedAt))} · ${u.text}", maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
-            if (Live.pending > 0 && !carStatus.restricted) Text("서버에 보내지 않고 이 차에 보관 중 ${Live.pending}건", color = c.onSurfaceVariant, fontSize = 20.sp)
+            if (Live.pending > 0 && !carStatus.restricted) Text("서버에 아직 보내지 못하고 이 차에 보관 중 ${Live.pending}건", color = c.onSurfaceVariant, fontSize = 20.sp)
         }
     }
 
@@ -700,7 +717,7 @@ class MainActivity : ComponentActivity() {
                     Text("대화 기록 동의", fontSize = 30.sp, fontWeight = FontWeight.Bold)
                     if (!carStatus.restricted) Text("기본값은 꺼짐 · 주차 중에만 켤 수 있어요", color = c.onSurfaceVariant, fontSize = 20.sp)
                 }
-                Switch(s.agreed, { if (it) turnOn() else turnOff() }, enabled = !s.busy && (s.agreed || !carStatus.restricted)) // 주행 제한 중에는 끄기(한 번 누름)만
+                Switch(s.switchOn, { if (it) turnOn() else turnOff() }, enabled = !s.busy && (s.switchOn || !carStatus.restricted)) // 주행 제한 중에는 끄기(한 번 누름)만
             }
             if (s.note.isNotEmpty()) Text(s.note, color = c.error)
             // 우리가 수음하는 동안 Gleo는 운전대 버튼을 무시한다. 한 번 눌러 마이크를 넘긴다(T41). 주행 중에도 한 번 누름이라 둔다
@@ -715,7 +732,7 @@ class MainActivity : ComponentActivity() {
                 Text("여행 코드 ${t.code}", color = c.onSurfaceVariant, fontSize = 20.sp)
             }
         }
-        if (!carStatus.restricted) OutlinedButton(::newTrip, Modifier.heightIn(min = 64.dp), enabled = !s.agreed && !s.busy) { Text("새 여행 만들기") }
+        if (!carStatus.restricted) OutlinedButton(::newTrip, Modifier.heightIn(min = 64.dp), enabled = !s.agreed && !s.switchOn && !s.busy) { Text("새 여행 만들기") }
     }
 
     @Composable

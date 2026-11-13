@@ -1,5 +1,7 @@
 package io.github.teampitcrew.gachita
 
+import org.json.JSONArray
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -64,58 +66,116 @@ class CaptureTest {
     @Test fun 보관함_순번과_다시_켜면_이어짐() {
         val dir = tmp.root
         val o = Outbox(dir, "ABC123")
-        assertEquals(1, o.add(d(1), "P").seq)
-        assertEquals(2, o.add(d(2), "D").seq)
+        assertEquals(1, o.add(d(1), null).seq)
+        assertEquals(2, o.add(d(2), Fix(37.5, 127.0, 2_400)).seq)
         val again = Outbox(dir, "ABC123")
         assertEquals(2, again.size)
         assertEquals(listOf("말 1", "말 2"), again.recent(5).map { it.text })
-        assertEquals("D", again.recent(1)[0].gear)
+        assertEquals(37.5, again.recent(1)[0].lat!!, 0.0)
         assertEquals(3, again.add(d(3), null).seq)
-        assertEquals(1, Outbox(dir, "XYZ999").add(d(1), "D").seq) // 여행마다 1부터
+        assertEquals(1, Outbox(dir, "XYZ999").add(d(1), null).seq) // 여행마다 1부터
+    }
+
+    @Test fun 위치는_발화_끝에서_30초_안의_것만() {
+        val o = Outbox(tmp.root, "ABC123")
+        assertNull(o.add(d(100), Fix(37.5, 127.0, 100_500 - FIX_MS - 1)).lat)
+        assertEquals(127.0, o.add(d(101), Fix(37.5, 127.0, 101_500 - FIX_MS)).lng!!, 0.0)
+    }
+
+    /** 서버(POST /utterances)처럼 lastSeq를 돌려주는 가짜. 받은 묶음을 남긴다. */
+    private class Fake(var lastSeq: (List<JSONObject>) -> Long) : Uplink {
+        val sent = mutableListOf<List<JSONObject>>()
+        override fun send(device: String, items: JSONArray): Long {
+            assertEquals("dev-1", device)
+            val l = List(items.length()) { items.getJSONObject(it) }
+            sent += l
+            return lastSeq(l)
+        }
     }
 
     @Test fun 받은_데_뒤만_보내고_일부만_받아도_이어서_보냄() {
         val dir = tmp.root
         val o = Outbox(dir, "ABC123")
-        repeat(5) { o.add(d(it + 1), "D") }
-        val sent = mutableListOf<List<Long>>()
-        var serverAck = 0L
-        val up = Uplink { trip, device, items ->
-            assertEquals("ABC123", trip); assertEquals("dev-1", device)
-            sent += items.map { it.seq }
-            serverAck = minOf(items.last().seq, 3); serverAck // 서버가 3까지만 받음
-        }
+        repeat(5) { o.add(d(it + 1), Fix(37.5, 127.0, 1_000L * (it + 1))) }
+        val up = Fake { 3 } // 서버가 3까지만 받음
         o.flush(up, "dev-1", max = 4)
-        assertEquals(listOf(1L, 2, 3, 4), sent[0])
+        assertEquals(listOf(1L, 2, 3, 4), up.sent[0].map { it.getLong("seq") })
         assertEquals(3, o.acked); assertEquals(2, o.pending)
-        serverAck = 0
-        o.flush(Uplink { _, _, items -> sent += items.map { it.seq }; items.last().seq }, "dev-1")
-        assertEquals(listOf(4L, 5), sent[1])
+        up.lastSeq = { it.last().getLong("seq") }
+        o.flush(up, "dev-1")
+        assertEquals(listOf(4L, 5), up.sent[1].map { it.getLong("seq") })
         assertEquals(0, o.pending)
         assertEquals(5, Outbox(dir, "ABC123").acked) // 받은 데까지도 다시 켜면 남음
-        o.flush(Uplink { _, _, _ -> error("보낼 것이 없으면 부르지 않음") }, "dev-1")
+        o.flush(Fake { error("보낼 것이 없으면 부르지 않음") }, "dev-1")
     }
 
-    @Test fun 지금_꽂힌_KEEP은_보내지_않고_쌓아_둠() {
+    @Test fun 올리는_칸은_서버_계약과_같음() {
         val o = Outbox(tmp.root, "ABC123")
-        o.add(d(1), "D")
-        o.flush(KEEP, "dev-1")
+        o.add(d(1), Fix(37.5, 127.0, 1_000)); o.add(d(2), null)
+        val up = Fake { 2 }
+        o.flush(up, "dev-1")
+        val (a, b) = up.sent[0]
+        assertEquals(setOf("seq", "at", "text", "generation", "lat", "lng"), a.keys().asSequence().toSet())
+        assertEquals(1_000L, a.getLong("at")); assertEquals("말 1", a.getString("text")); assertEquals(1, a.getInt("generation"))
+        assertEquals(setOf("seq", "at", "text", "generation"), b.keys().asSequence().toSet()) // 위치를 모르면 둘 다 뺀다
+    }
+
+    @Test fun 못_보내면_보관함에_남고_다음에_다시_보냄() {
+        val o = Outbox(tmp.root, "ABC123")
+        o.add(d(1), null)
+        assertTrue(runCatching { o.flush(Fake { throw ApiError(403, "동의하지 않은 탑승자가 있어 올릴 수 없음") }, "dev-1") }.isFailure)
         assertEquals(0, o.acked); assertEquals(1, o.pending)
+        o.flush(Fake { 1 }, "dev-1")
+        assertEquals(0, o.pending)
+    }
+
+    @Test fun 서버가_준_순번이_작으면_내리고_그_뒤를_다시_보냄() { // DB를 백업에서 되살린 경우(ADR-0014 2절)
+        val o = Outbox(tmp.root, "ABC123")
+        repeat(4) { o.add(d(it + 1), null) }
+        o.flush(Fake { 4 }, "dev-1")
+        o.add(d(5), null)
+        o.flush(Fake { 2 }, "dev-1") // 5를 보냈는데 서버는 2까지만 안다
+        assertEquals(2, o.acked)
+        val up = Fake { 5 }
+        o.flush(up, "dev-1")
+        assertEquals(listOf(3L, 4, 5), up.sent[0].map { it.getLong("seq") })
+    }
+
+    @Test fun 동의_세대가_오르면_옛_발화의_글을_지우고_순번과_세대만_보냄() {
+        val dir = tmp.root
+        val o = Outbox(dir, "ABC123")
+        o.add(d(1), Fix(37.5, 127.0, 1_000)); o.add(d(2), null)
+        o.flush(Fake { 1 }, "dev-1")
+        assertFalse(o.see(1))
+        assertTrue(o.see(3)) // 동의 철회
+        assertEquals(0, o.size); assertTrue(o.recent(5).isEmpty())
+        assertFalse(java.io.File(dir, "utterances-ABC123.jsonl").readText().contains("말 ")) // 파일에서도 지워짐
+        assertEquals(3, o.add(d(3), null).generation) // 새 발화는 새 세대
+        val up = Fake { 3 }
+        o.flush(up, "dev-1")
+        assertEquals(setOf("seq", "generation"), up.sent[0][0].keys().asSequence().toSet())
+        assertEquals(1, up.sent[0][0].getInt("generation"))
+        assertEquals("말 3", up.sent[0][1].getString("text"))
+        val again = Outbox(dir, "ABC123") // 다시 켜도 세대와 지운 것이 남음
+        assertEquals(3, again.generation); assertEquals(1, again.size); assertEquals(3, again.acked)
     }
 
     @Test fun 쓰다_끊긴_줄은_건너뛰고_다음_줄을_붙여_쓰지_않음() {
         val dir = tmp.root
-        Outbox(dir, "ABC123").add(d(1), "D")
+        Outbox(dir, "ABC123").add(d(1), null)
         java.io.File(dir, "utterances-ABC123.jsonl").appendText("{\"seq\":2,\"trip\":\"ABC") // 쓰는 중에 꺼짐
         val o = Outbox(dir, "ABC123")
         assertEquals(1, o.size)
-        assertEquals(2, o.add(d(2), "D").seq)
+        assertEquals(2, o.add(d(2), null).seq)
         assertEquals(listOf(1L, 2), Outbox(dir, "ABC123").recent(5).map { it.seq })
     }
 
     @Test fun 발화_JSON_왕복() {
-        val u = Utterance(7, "ABC123", 1_000, 2_000, "바다는 왜 짜?", 300, 1_300, null, 1)
+        val u = Utterance(7, "ABC123", 1_000, 2_000, "바다는 왜 짜?", 300, 1_300, 2, 37.5, 127.0, 1)
         assertEquals(u, Utterance.parse(u.json().toString()))
-        assertTrue(u.json().isNull("gear"))
+        val bare = Utterance(8, "ABC123", 1_000, 2_000, "응", 300, 1_300, 1)
+        assertEquals(bare, Utterance.parse(bare.json().toString()))
+        assertFalse(bare.json().has("gear"))
+        assertFalse(u.wire(2).has("seatZone")) // 구역은 차에만
     }
 }
