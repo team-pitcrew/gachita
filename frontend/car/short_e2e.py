@@ -10,7 +10,8 @@
 - 클립 소리는 macOS say(Yuna) 합성 음성이다.
 순서: 여행 만들기 → P에서 동의 켬 → '숏폼 보기' → 장면 1 재생(자막·말한 사람, 우리 수음은 멈춤) → 기어 D(재생 멈춤·카드 가림)
       → P → 다시 '숏폼 보기' → 끝까지(장면 2) → 수음 다시 → Gleo로 멈춘 채 듣기 → 듣는 중 동의 끔
-      → 망을 끊고(가짜 프록시가 답하지 않음) 멈춘 채 동의 끔 → 결과 OUT/results.json
+      → 클립을 받는 중에 동의 끔(가짜 프록시가 클립을 천천히 보냄) → 망을 끊고(가짜 프록시가 답하지 않음) 멈춘 채 동의 끔
+      → 결과 OUT/results.json
 """
 import http.server, json, os, re, subprocess, sys, tempfile, threading, time, urllib.request, wave
 import numpy as np
@@ -43,6 +44,8 @@ def clip(lines):
 class Proxy(http.server.BaseHTTPRequestHandler):
     clips = {}
     down = False  # 참이면 답하지 않고 연결을 닫는다(차 쪽에서 보면 망이 끊김)
+    slow = False  # 참이면 클립을 30초 동안 조금씩 보낸다(받는 중에 그만두는지 보려고)
+    cut = None  # 느린 클립을 보내다 차가 연결을 끊은 때(time.time())
 
     def log_message(self, *a): pass
 
@@ -69,7 +72,14 @@ class Proxy(http.server.BaseHTTPRequestHandler):
             self.send(200, json.dumps(body, ensure_ascii=False).encode())
         else:
             i = int(m.group(3)[1:]) - 1
-            self.send(200, self.clips[i][0], "audio/wav")
+            body = self.clips[i][0]
+            if not Proxy.slow: self.send(200, body, "audio/wav"); return True
+            self.send_response(200); self.send_header("Content-Type", "audio/wav"); self.send_header("Content-Length", str(len(body))); self.end_headers()
+            try:
+                self.wfile.write(body[:16384]); self.wfile.flush()
+                for k in range(60): time.sleep(0.5); self.wfile.write(body[16384 + k:16385 + k]); self.wfile.flush()
+                self.wfile.write(body[16444:])
+            except OSError: Proxy.cut = time.time()
         return True
 
     def forward(self):
@@ -132,6 +142,20 @@ def main(apk):
     tap_switch(); time.sleep(3); ui = texts(); shot("5-consent-off"); note("ui", texts=ui)
     left = [f for f in adb("exec-out", "run-as", PKG, "--user", "10", "ls", "cache").split() if f.startswith("short")]
     check("듣는 동안 동의를 끄면 숏폼을 닫고 받은 클립이 남지 않음", cached and not left and not any(t[:5] in ("1 / 2", "2 / 2") for t in ui) and "기록 꺼짐" in ui, cached=cached, left=left)
+
+    # 클립을 받는 중에 동의를 끄면 다 받기를 기다리지 않고 연결을 끊고 받던 파일을 지운다. 동의 끄기 요청은 받기 뒤에 서지 않는다(Astra #238 재리뷰)
+    tap_switch(); cap.wait_texts(lambda u: "● 기록 중" in u, 15)
+    Proxy.slow = True; Proxy.cut = None
+    tap_text("숏폼 보기"); time.sleep(4)  # 구성은 바로, 클립은 30초에 걸쳐 온다
+    part = [f for f in adb("exec-out", "run-as", PKG, "--user", "10", "ls", "cache").split() if f.startswith("short")]
+    t0 = time.time(); tap_switch(); time.sleep(4); ui = texts(); shot("6-off-while-downloading"); note("ui", texts=ui)
+    left = [f for f in adb("exec-out", "run-as", PKG, "--user", "10", "ls", "cache").split() if f.startswith("short")]
+    code = re.search(r"/api/trips/(\w+)/", served[0]["path"]).group(1)
+    off = not any(p["consent"] for p in json.load(urllib.request.urlopen(f"{UP}/api/trips/{code}", timeout=5))["participants"])
+    cut = round(Proxy.cut - t0, 1) if Proxy.cut else None  # 화면 읽기·탭 지연 포함(1회차 3.6초). 고치기 전에는 30초를 다 받아 끊기지 않았다
+    check("클립을 받는 중에 동의를 끄면 연결을 끊고 받던 파일을 지우며, 서버의 동의 끄기는 받기를 기다리지 않음",
+          bool(part) and not left and cut is not None and cut < 10 and off, part=part, left=left, cut_s=cut, server_off=off)
+    Proxy.slow = False
 
     # 망이 끊긴 채 차에서 동의를 꺼도 서버 답을 기다리지 않고 숏폼을 닫고 클립을 지운다. 철회가 서버에 닿기 전에는 새 숏폼도 받지 않는다
     tap_switch(); cap.wait_texts(lambda u: "● 기록 중" in u, 15)

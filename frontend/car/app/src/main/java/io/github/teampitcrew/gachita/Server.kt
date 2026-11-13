@@ -38,15 +38,26 @@ class Server(base: String) {
     /** 숏폼 구성(T43, #63 계약). 녹음에 동의한 참가자의 토큰으로. */
     fun shortform(code: String, token: String): String = call("GET", "/api/trips/$code/shortform", null, token)!!
 
-    /** 클립 소리를 file에 받는다(url은 clipUrl이 거른 것). 토큰은 머리말로만. */
-    fun download(url: String, token: String, file: File) {
+    /**
+     * 클립 소리를 file에 받는다(url은 clipUrl이 거른 것). 토큰은 머리말로만.
+     * 받는 중에 그만둘 수 있게 opened로 연결을 넘기고(부르는 쪽이 disconnect해 막힌 읽기를 깨움) 덩어리마다 alive를 본다.
+     * disconnect는 연결 전에는 아무 일도 하지 않아 alive 검사가 그 틈을 막는다.
+     */
+    fun download(url: String, token: String, file: File, opened: (HttpURLConnection) -> Unit = {}, alive: () -> Boolean = { true }) {
         val c = URL(url).openConnection() as HttpURLConnection
+        opened(c)
         try {
             c.connectTimeout = 5000
             c.readTimeout = 10000
             c.setRequestProperty("Authorization", "Bearer $token")
             if (c.responseCode >= 400) throw ApiError(c.responseCode, c.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty())
-            c.inputStream.use { i -> file.outputStream().use { i.copyTo(it) } }
+            if (!alive()) throw java.io.IOException("받기를 그만둠")
+            c.inputStream.use { i ->
+                file.outputStream().use { o ->
+                    val b = ByteArray(8192)
+                    while (true) { if (!alive()) throw java.io.IOException("받기를 그만둠"); val n = i.read(b); if (n < 0) break; o.write(b, 0, n) }
+                }
+            }
         } finally {
             c.disconnect()
         }
