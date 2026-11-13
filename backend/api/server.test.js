@@ -303,7 +303,7 @@ test("발화를 기록본으로 저장하고 프로필 피드로 읽는다(T39)"
   assert.deepEqual([u1, r1.lastSeq], [200, 3], "1~3을 다 받으면 마지막 순번은 3. 좌석 구역을 모르는 발화도 받는다");
   await call("POST", `${t}/utterances`, { device: "car", generation: 1, items: [items[1]] }, pa.token);
   // 순번 1이 빠진 기기는 빠짐없이 받은 마지막이 0이다
-  const [, r2] = await call("POST", `${t}/utterances`, { device: "phone", items: [{ seq: 5, at: at(5), text: "콜라 사줘", seatArea: "ROW_2_RIGHT", generation: 1 }] }, pg.token);
+  const [, r2] = await call("POST", `${t}/utterances`, { device: "car-2", items: [{ seq: 5, at: at(5), text: "콜라 사줘", seatArea: "ROW_2_RIGHT", generation: 1 }] }, pg.token);
   assert.equal(r2.lastSeq, 0);
   await speak([1, 2], meA.id);
   await speak([3], meB.id);
