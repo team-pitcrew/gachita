@@ -4,6 +4,7 @@
 // 사용자가 쓴 글은 textContent로만 넣는다(innerHTML 금지).
 
 import { SEATS, SEAT, WHEN, REQ, CLOSED, api, h, toast } from "/shared.js";
+import { createShares } from "/shares.js";
 
 const TRIP = {
   boarding: ["탑승 중", "모두 타면 운전자가 출발을 눌러요."],
@@ -54,6 +55,14 @@ let failed = ""; // 여행을 불러오지 못한 이유
 let offline = false;
 let stale = false; // 입력 중에 온 변경은 입력이 끝난 뒤 그린다
 const draft = { join: "", step: 0, name: "", seat: "" };
+const shares = createShares({
+  getProfile: () => profile,
+  getProfileToken: () => store("profile"),
+  getTrip: () => trip,
+  getParticipant: () => trip?.participants.find((p) => p.id === myId()),
+  getParticipantToken: () => myToken(),
+  onProfile: () => (location.hash = "me"),
+});
 
 // 여행 경로는 토큰 없이, 프로필 경로(mine)는 이 폰의 프로필 토큰으로.
 const call = (method, path, body) => api(method, `/trips${path}`, body);
@@ -319,6 +328,7 @@ function home() {
       ),
       h("button", {}, "코드로 참가"),
     ),
+    profile && h("section", { className: "card" }, h("h2", {}, "동승자와 나눈 장면"), h("div", { className: "shares-actions" }, button("받은 공유", () => shares.openList("received")), button("보낸 공유", () => shares.openList("sent")))),
     bar(button("새 여행 만들기", () => act(async () => (location.hash = (await call("POST", "", {})).code)), "primary")),
   ];
 }
@@ -492,11 +502,13 @@ function tripView(me) {
         h("h2", {}, `남긴 장면 ${trip.moments.length}개`),
         h("ul", {}, trip.moments.map((m) => h("li", {}, h("span", { className: "what" }, m.label || "이름 없는 장면"), h("span", { className: "meta" }, new Date(m.at).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" }))))),
       ),
+    profile && me.profileId === profile.id && me.consent && myToken() && trip.moments.length > 0 && h("section", { className: "card" }, h("h2", {}, "함께 나눌 장면"), h("p", { className: "meta" }, "내 앨범에 남긴 장면과 받는 동승자를 직접 골라요."), button("내 장면 공유", () => shares.openCompose())),
     trip.status !== "ended" && bar(button("부탁 남기기", () => (sheet.showModal(), sheet.querySelector("#sheet-text").focus()), "primary")),
   ];
 }
 
 function render() {
+  shares.sync();
   stale = false;
   const me = trip?.participants.find((p) => p.id === myId());
   const view = inviteCode() ? inviteView() : location.hash === "#me" ? profileView() : !code() ? home() : failed ? missing() : !trip ? loading() : me ? tripView(me) : join();
