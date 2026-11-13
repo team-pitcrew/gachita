@@ -153,6 +153,109 @@ paths:
                 additionalProperties: false
                 properties:
                   googleClientId: { type: string, description: 구글 공개 Client ID. 로그인을 시작할 수 없으면 빈 문자열 }
+  /api/trips/{code}/shares:
+    parameters:
+      - { name: code, in: path, required: true, schema: { type: string } }
+    post:
+      tags: [장면]
+      summary: 선택한 내 장면과 확인한 문구를 같은 여행 동승자에게 공유
+      description: |
+        본인 프로필 앨범의 장면만 공유합니다. 기록에 동의한 프로필 참가자가 같은 여행의 다른 프로필 참가자를 고릅니다.
+        녹음 동의와 별도로 내용·대상을 미리 본 뒤 명시적으로 실행해야 합니다. 원음·클립·참가 토큰은 복사하지 않습니다.
+        위치는 includeLocation=true일 때만 포함합니다. 공유는 여행 생성 후 48시간까지 유효합니다.
+        동의 세대 변경 시 공유 행을 지우고, 원본 앨범·프로필이 삭제되면 조회에서 제외합니다.
+        HTTP 응답은 공유 생성 확인이며 상대방의 수신·열람을 증명하지 않습니다.
+      security: [{ participantToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [momentId, recipientIds, caption, includeLocation, generation]
+              properties:
+                momentId: { type: string, maxLength: 40 }
+                recipientIds: { type: array, minItems: 1, maxItems: 4, uniqueItems: true, items: { type: string }, description: 같은 여행의 참가자 ID. 프로필이 있고 동의한 다른 사람만 가능 }
+                caption: { type: string, maxLength: 500, description: 사용자가 직접 확인한 문구. 빈 문자열도 가능 }
+                includeLocation: { type: boolean, description: 위치 없는 장면에서 true이면 400 }
+                generation: { type: integer, minimum: 1 }
+      responses:
+        "201":
+          description: 공유 생성. id·장면 정보·시각과 수신자 수만 반환하며 여행 코드나 토큰은 없음
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, at, label, caption, createdAt, expiresAt, recipientCount]
+                properties:
+                  id: { type: string, format: uuid }
+                  at: { type: integer }
+                  label: { type: string }
+                  caption: { type: string }
+                  lat: { type: number }
+                  lng: { type: number }
+                  createdAt: { type: integer, description: epoch ms }
+                  expiresAt: { type: integer, description: 여행 생성 시각 + 48시간의 epoch ms }
+                  recipientCount: { type: integer }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/profiles/me/shares:
+    get:
+      tags: [프로필]
+      summary: 받은 공유와 보낸 공유 읽기
+      description: |
+        프로필 토큰으로 본인에게 보냈거나 본인이 보낸 공유만 반환합니다. 최근 200개 중 유효한 것만 최신순으로 내보냅니다.
+        동의 세대·여행 만료·양쪽 프로필·원본 앨범·현재 참가 동의를 다시 확인합니다. 캐시하지 않습니다.
+        응답에는 여행 코드, 원음/클립 주소, 참가자 토큰이 없습니다. 받은 사람에게 다른 수신자 목록은 보이지 않습니다.
+      security: [{ profileToken: [] }]
+      responses:
+        "200":
+          description: 유효한 공유 목록
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, direction, sender, at, label, caption, createdAt, expiresAt]
+                      properties:
+                        id: { type: string, format: uuid }
+                        direction: { enum: [sent, received] }
+                        sender:
+                          type: object
+                          required: [name, character]
+                          properties: { name: { type: string }, character: { type: string } }
+                        recipients:
+                          type: array
+                          description: 보낸 사람에게만 현재 유효한 받는 사람을 표시
+                          items: { type: object, properties: { name: { type: string }, character: { type: string } } }
+                        at: { type: integer }
+                        label: { type: string }
+                        caption: { type: string }
+                        lat: { type: number }
+                        lng: { type: number }
+                        createdAt: { type: integer }
+                        expiresAt: { type: integer }
+        "401": { $ref: "#/components/responses/Error" }
+  /api/profiles/me/shares/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    delete:
+      tags: [프로필]
+      summary: 내가 보낸 공유 회수
+      description: 공유 행을 지웁니다. 받는 사람에게 보이지 않으며 원본 앨범은 그대로 남습니다. 이미 보거나 별도로 저장한 내용까지 되돌리는 기능은 아닙니다.
+      security: [{ profileToken: [] }]
+      responses:
+        "204": { description: 회수됨 }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { description: 없거나 보낸 사람이 아님 }
   /healthz:
     get:
       tags: [상태 확인]

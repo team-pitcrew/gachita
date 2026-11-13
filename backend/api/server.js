@@ -11,6 +11,7 @@ import { createServer } from "node:http";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { profilesDb, tripsDb } from "./db.js";
+import { createShare, sharedResults } from "./result-shares.js";
 import { errFields, log } from "./log.js";
 import { asrReady, contextOf, retranscribe, toWav } from "./providers/asr.js";
 import { clipStore } from "./providers/clips.js";
@@ -108,6 +109,7 @@ export async function migrate() {
   await tripsDb().query(await readFile(new URL("trips-5-ride-links.sql", import.meta.url), "utf8"));
   await tripsDb().query(await readFile(TRIP_VOICE_SQL, "utf8"));
   await tripsDb().query(await readFile(CAPTIONS_SQL, "utf8"));
+  await tripsDb().query(await readFile(new URL("trips-7-result-shares.sql", import.meta.url), "utf8"));
   await profilesDb().query(await readFile(PROFILES_SQL, "utf8"));
   await profilesDb().query(await readFile(LINKS_SQL, "utf8"));
   await profilesDb().query(await readFile(ALBUM_SQL, "utf8"));
@@ -260,6 +262,10 @@ async function profiles(req, seg, b) {
     return [201, { ...p, hasPhoto: false, links: [], token }]; // 토큰은 이때 한 번만 준다. 서버에는 해시만 남는다.
   }
   if (seg[0] !== "me") fail(404, "없는 경로");
+  if (seg[1] === "shares" && !seg[3]) {
+    if (m !== (seg[2] ? "DELETE" : "GET")) fail(405, seg[2] ? "DELETE만 됨" : "GET만 됨");
+    return sharedResults((await profileOf(req)) ?? fail(401, "프로필 토큰이 필요함"), m, seg[2]);
+  }
   if (seg[1] === "links" && seg[2] === "google") return googleLink(req, m, b);
   if (seg[1] === "feed" && !seg[2]) {
     // 자기 피드: 발화(여행이 살아 있는 동안)와 장면 앨범(여행이 닫힌 뒤에도 남는 복사본)을
@@ -1058,6 +1064,10 @@ export async function sweep() {
 }
 
 async function handle(trip, { req, m, sub, id, leaf, b, query, profile }, client) {
+  if (sub === "shares" && !id) {
+    if (m !== "POST") fail(405, "POST만 됨");
+    return createShare(client, trip, participantOf(req, trip), b);
+  }
   const changed = (status, data) => {
     trip.version++;
     return [status, data];
