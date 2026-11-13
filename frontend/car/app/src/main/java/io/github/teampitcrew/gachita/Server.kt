@@ -28,6 +28,15 @@ class Server(base: String) {
         call("PATCH", "/api/trips/$code/participants/$id", JSONObject().put("consent", on))
     }
 
+    /** 부탁 남기기(T9). 새 부탁의 id. 처음 상태는 held. */
+    fun request(code: String, by: String, text: String): String =
+        JSONObject(call("POST", "/api/trips/$code/requests", JSONObject().put("by", by).put("text", text.take(200)).put("when", "now"))!!).getString("id")
+
+    /** 부탁 상태 바꾸기. 갈 수 없는 길이면(그사이 폰에서 취소됨 등) 409 ApiError. */
+    fun requestStatus(code: String, id: String, status: String) {
+        call("PATCH", "/api/trips/$code/requests/$id", JSONObject().put("status", status))
+    }
+
     /** 최신 여행. 보낸 version에서 바뀐 것이 없으면(304) null. */
     fun trip(code: String, version: Int? = null): Got? = call("GET", "/api/trips/$code" + (version?.let { "?v=$it" } ?: ""), null)?.let(::got)
 
