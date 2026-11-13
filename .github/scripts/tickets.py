@@ -185,7 +185,12 @@ def list_issues():
 
 def set_labels(number, add, remove):
     for name in remove:
-        gh("api", "-X", "DELETE", f"repos/{REPO}/issues/{number}/labels/{quote(name, safe='')}", write=True)
+        try:
+            gh("api", "-X", "DELETE", f"repos/{REPO}/issues/{number}/labels/{quote(name, safe='')}", write=True)
+        except RuntimeError as e:
+            # 브랜치와 PR 이벤트가 몇 초 사이에 겹치면 다른 실행이 먼저 뗀다. 이미 없는 라벨은 뗀 것으로 본다.
+            if "HTTP 404" not in str(e):
+                raise
     if add:
         gh("api", "-X", "POST", f"repos/{REPO}/issues/{number}/labels", *[x for name in add for x in ("-f", f"labels[]={name}")], write=True)
 
