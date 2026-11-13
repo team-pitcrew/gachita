@@ -34,21 +34,20 @@ async function fetchJson(url, options) {
   return [res, body];
 }
 
-// 코드를 돌려받는 주소는 우리 출처만 받는다(T27): https 실제 주소와 http 로컬 개발(localhost·127.0.0.1의 아무 포트).
-// 적힌 그대로가 정규형이어야 하고 사용자 정보는 안 된다 — 대소문자·역슬래시·blob: 같은 변형을 구글로 넘기지 않는다.
-// 경로까지 맞는지는 구글이 등록된 리다이렉트 주소와 다시 본다.
-// ponytail: 주소 목록은 코드에 둔다. 주소가 더 생기면 그때 환경 변수로.
-const REDIRECT_HOSTS = ["gachita.mangowhois.ai"];
-const ourRedirect = (uri) => {
-  const u = URL.parse(uri);
-  return Boolean(u) && u.href === uri && !u.username && !u.password &&
-    ((u.protocol === "https:" && REDIRECT_HOSTS.includes(u.host)) || (u.protocol === "http:" && ["localhost", "127.0.0.1"].includes(u.hostname)));
-};
+// 코드를 돌려받는 주소는 우리 콜백 하나다(T27): https 실제 주소, 또는 http 로컬 개발(localhost·127.0.0.1의 아무 포트)의
+// /oauth/google/callback. 받은 글자 그대로가 이 모양과 정확히 같아야 한다 — URL로 읽어 비교하면 빈 '?'·'#',
+// 대소문자, 사용자 정보 같은 변형이 걸러지지 않는 틈이 생긴다. 구글 콘솔에 등록된 것은 실제 주소의 콜백 하나다.
+// ponytail: 주소는 코드에 둔다. 더 생기면 그때 환경 변수로.
+const REDIRECT_PATH = "/oauth/google/callback";
+const ourRedirect = (uri) => uri === `https://gachita.mangowhois.ai${REDIRECT_PATH}` || /^http:\/\/(localhost|127\.0\.0\.1)(:[0-9]{1,5})?\/oauth\/google\/callback$/.test(uri);
+// PKCE(RFC 7636)의 code_verifier. 웹 로그인은 늘 보낸다 — 가로챈 코드만으로는 교환하지 못하게.
+const VERIFIER = /^[A-Za-z0-9._~-]{43,128}$/;
 
 // 인증 코드를 구글 사용자 번호(sub)와 이름으로 바꾼다. 이메일은 요청하지 않는다.
 // 결과가 불확실해도 같은 코드로 다시 시도하지 않는다 — 코드는 한 번만 쓸 수 있다.
-export async function googleIdentity(code, redirectUri) {
-  if (!ourRedirect(redirectUri)) fail(400, "redirectUri: https://gachita.mangowhois.ai 또는 http://localhost·127.0.0.1의 주소를 정규형으로(예: 끝의 /)");
+export async function googleIdentity(code, redirectUri, codeVerifier) {
+  if (!ourRedirect(redirectUri)) fail(400, `redirectUri: https://gachita.mangowhois.ai${REDIRECT_PATH} 또는 http://localhost·127.0.0.1의 같은 경로만`);
+  if (typeof codeVerifier !== "string" || !VERIFIER.test(codeVerifier)) fail(400, "codeVerifier: PKCE code_verifier(43~128자, A-Z a-z 0-9 - . _ ~)");
   const tokenUrl = process.env.GOOGLE_TOKEN_URL ?? "https://oauth2.googleapis.com/token";
   const infoUrl = process.env.GOOGLE_USERINFO_URL ?? "https://openidconnect.googleapis.com/v1/userinfo";
   const [token, tokenBody] = await fetchJson(tokenUrl, {
@@ -58,6 +57,7 @@ export async function googleIdentity(code, redirectUri) {
       grant_type: "authorization_code",
       code,
       redirect_uri: redirectUri,
+      code_verifier: codeVerifier,
       client_id: process.env.GOOGLE_CLIENT_ID ?? "",
       client_secret: process.env.GOOGLE_CLIENT_SECRET ?? "",
     }),
