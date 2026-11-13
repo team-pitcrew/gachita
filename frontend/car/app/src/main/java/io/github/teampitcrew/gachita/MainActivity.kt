@@ -2,6 +2,7 @@ package io.github.teampitcrew.gachita
 
 import android.Manifest
 import android.content.Intent
+import android.content.ClipData
 import android.content.SharedPreferences
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
@@ -19,6 +20,7 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -55,11 +57,13 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
@@ -81,10 +85,14 @@ import org.json.JSONObject
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.Executors
+import java.util.concurrent.CancellationException
+import java.util.concurrent.atomic.AtomicReference
+import java.net.HttpURLConnection
+import java.net.URI
 
 private const val DEFAULT_SERVER = "https://gachita.mangowhois.ai" // 실서비스(T27). 로컬 서버는 디버그 빌드에서 '서버 주소'나 --es server로
 private const val POLL_MS = 10_000L // 웹앱은 2초. 차에서는 주행 중 자원 기준(CPU 5% 미만)을 생각해 길게 둔다
-private const val TITLE = "가치타 가족 여행"
+private const val TITLE = "함께하는 여행"
 private const val TAG = "GachitaAsk"
 private const val RESULT_MS = 60_000L // 경유지 결과 카드를 보여 두는 시간
 private const val GLEO_ARRIVAL = "GACHITA_ARRIVAL_TASKS" // assets/schema.json의 함수 이름(T40)
@@ -97,6 +105,8 @@ private const val OFFER_MS = 30_000L // 제안에 답이 없으면 보관으로 
 class MainActivity : ComponentActivity() {
     private val io = Executors.newSingleThreadExecutor()
     private val clipIo = Executors.newSingleThreadExecutor() // 장면 클립 올리기(T63). 동의 끄기 요청이 클립 묶음 뒤에 서지 않게 따로
+    private val shortExportIo = Executors.newSingleThreadExecutor() // 인코딩이 동의 확인·일반 API를 막지 않게 분리합니다.
+    private val shortExportCheckIo = Executors.newSingleThreadExecutor()
     @Volatile private var clipsAllowed = false // 모두 동의했고 끄기 대기가 없음. 클립을 하나 올릴 때마다 본다
     private val main = Handler(Looper.getMainLooper())
     private lateinit var prefs: SharedPreferences
@@ -115,6 +125,8 @@ class MainActivity : ComponentActivity() {
                 prefs.edit().putBoolean("offPending", v.offPending).putBoolean("started", v.started).commit()
             state = v
             clipsAllowed = v.consented && !v.offPending // 끄면 남은 클립을 더 올리지 않는다
+            if (transcriptOf != contentScope()) clearTranscript()
+            checkShortExportState()
             syncCapture() // 동의가 빠졌으면 수음을 먼저 멈춘다
             v.trip?.let { t ->
                 // 등록값은 그 사람의 동의가 꺼지면 서버가 지운다. 꺼졌다 10초 안에 다시 켜져 차가 못 봤어도 세대가 오르므로 세대가 바뀌면 다시 등록한다
@@ -129,6 +141,19 @@ class MainActivity : ComponentActivity() {
                 if ("${t.code}:${box.generation}" != rawSeen) { rawSeen = "${t.code}:${box.generation}"; dropRaw(filesDir, t.code, below = box.generation) } // 옛 세대의 원음은 지운다
             }
         }
+    private enum class Destination(val label: String) { RIDE("함께 타는 중"), CONVERSATION("대화 기록"), SHORTS("쇼츠") }
+    private var destination by mutableStateOf(Destination.RIDE)
+    private var managing by mutableStateOf(false)
+    private var conversationOpen by mutableStateOf(false)
+    private var navigationNote by mutableStateOf("")
+    private data class ContentScope(val code: String, val generation: Int, val token: String)
+    private var transcriptOf: ContentScope? = null
+    private var transcript by mutableStateOf(emptyList<TranscriptLine>())
+    private var transcriptLoading by mutableStateOf(false)
+    private var transcriptNote by mutableStateOf("")
+    private var transcriptRequest = 0
+    private var shortMuted by mutableStateOf(false)
+    private var shortRequest = 0
     private var carStatus by mutableStateOf(CarStatus())
     private var server by mutableStateOf(DEFAULT_SERVER)
     private val picked = mutableStateListOf<String>().apply { addAll(FAMILY.map { it.name }) }
@@ -179,6 +204,36 @@ class MainActivity : ComponentActivity() {
     private var shortGen = 0 // 장면을 열 때마다 하나씩. 늦게 끝난 받기가 닫힌 숏폼이나 다른 장면을 건드리지 않게
     private var shortOf: Pair<String, Int>? = null // 숏폼을 요청할 때의 여행 코드와 동의 세대. 바뀌면(철회·새 여행) 닫는다
     private var shortFile: File? = null // 지금 트는 장면의 클립(장면마다 다른 파일, 닫으면 지움)
+    private class NativeShortExport(val scope: ContentScope, val url: String, val preview: Short, val short: Short, val people: List<Person>, val cache: File) {
+        val control = ShortExportControl()
+        val connection = AtomicReference<HttpURLConnection?>(null)
+        val saved = AtomicReference<SavedShortVideo?>(null)
+        @Volatile var verifying = false
+    }
+    private var shortExport: NativeShortExport? = null
+    private var shortExportBusy by mutableStateOf(false)
+    private var shortExportProgress by mutableStateOf(0f)
+    private var shortExportNote by mutableStateOf("")
+    private var savedShortVideo by mutableStateOf<SavedShortVideo?>(null)
+    private var savedShortScope: ContentScope? = null
+    private var sharingShort by mutableStateOf(false)
+    private val shortExportTick = object : Runnable {
+        override fun run() {
+            val job = shortExport ?: return
+            if (!shortExportValid(job)) { cancelShortExport("상태가 바뀌어 영상 만들기를 멈췄어요"); return }
+            if (!job.verifying && !shortExportCheckIo.isShutdown) {
+                job.verifying = true
+                shortExportCheckIo.execute {
+                    val checked = runCatching { verifyShortExport(job) }
+                    job.verifying = false
+                    main.post {
+                        if (shortExport === job && checked.isFailure) cancelShortExport("기록 권한을 확인할 수 없어 영상 만들기를 멈췄어요")
+                    }
+                }
+            }
+            main.postDelayed(this, 2000)
+        }
+    }
     private val media = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build()
     /** 사용자 음악은 듣는 동안만 멈춘다. 전화·Gleo 등이 포커스를 가져가면 닫는다(내비 안내처럼 줄여 달라는 것은 시스템이 줄임). */
     private val playFocus = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT).setAudioAttributes(media)
@@ -196,6 +251,7 @@ class MainActivity : ComponentActivity() {
             val every = ++n % RESYNC_EVERY == 0
             if (every) expire() // 앱이 며칠 켜져 있어도 48시간이 지난 사본을 지운다
             refresh(resync = every || !s.online, prune = every); locate()
+            if (destination == Destination.CONVERSATION && !carStatus.restricted) loadTranscript()
             if (visible || s.recording) main.postDelayed(this, POLL_MS)
         }
     }
@@ -232,7 +288,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         prefs = getSharedPreferences("car", MODE_PRIVATE)
         handoff = Handoff.of(this) // 화면이 다시 만들어져도 넘긴 상태를 이어받는다
-        cacheDir.listFiles { f -> f.name.startsWith("short") }?.forEach { it.delete() } // 앱이 듣던 중에 끝났으면 받은 클립이 남는다
+        cacheDir.listFiles { f -> f.name.startsWith("short") }?.forEach { it.deleteRecursively() } // 중단된 미리듣기·영상 생성 캐시만 정리합니다.
         muted = prefs.getBoolean("muted", false)
         // 실행 인자(--es server, --ei widthDp, --es route)는 디버그 빌드에서만 받는다. 밖에서 연 화면이 서버 주소를 바꾸지 못하게
         debug = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
@@ -254,8 +310,10 @@ class MainActivity : ComponentActivity() {
         if (s.offPending) s.trip?.let { dropRawAll(it.code) } // 끈 뒤 지우기 전에 앱이 꺼졌으면 마저 지운다
         car = Car(this) {
             carStatus = it
+            if (it.restricted) cancelShortExport("주행 중에는 영상 만들기를 멈춰요")
+            if (it.restricted) { managing = false; conversationOpen = false; destination = Destination.RIDE; clearTranscript() }
             if (it.restricted) closeCamera() // 주행 중에는 카메라를 닫는다(T11). 카드도 그리지 않는다
-            if (it.restricted && shortAt >= 0) stopShort() // 주행 중에는 숏폼을 틀지 않는다(T11)
+            if (it.restricted && shortOf != null) stopShort() // 주행 중에는 숏폼을 틀지 않는다(T11)
             val was = s.gear
             s = s.withGear(it.gear)
             if (was != null && was != "P" && it.gear == "P") arrive() // 앱을 켤 때 처음 읽은 P는 도착이 아니다
@@ -297,7 +355,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onStart() { super.onStart(); visible = true; main.removeCallbacks(tick); main.post(tick) }
-    override fun onStop() { visible = false; closeCamera(); super.onStop() }
+    override fun onStop() { visible = false; closeCamera(); stopShort(); super.onStop() }
 
     override fun onResume() {
         super.onResume()
@@ -313,7 +371,7 @@ class MainActivity : ComponentActivity() {
         main.removeCallbacksAndMessages(null) // 조회, 제안 시간 초과, 결과 카드 닫기
         if (Live.onHeard == ::heard) Live.onHeard = null
         if (!isChangingConfigurations) { handoff.stop(); CaptureService.stop(this) } // 동의를 확인할 화면이 없어지면 수음도 멈춘다
-        car.stop(); io.shutdown(); clipIo.shutdownNow(); super.onDestroy()
+        car.stop(); io.shutdown(); clipIo.shutdownNow(); shortExportIo.shutdownNow(); shortExportCheckIo.shutdownNow(); super.onDestroy()
     }
 
     /** 통신은 한 줄로 차례대로 돌리고 결과만 메인 스레드로 돌려받는다. */
@@ -594,6 +652,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun newTrip() {
+        destination = Destination.RIDE; managing = false; conversationOpen = false; clearTranscript()
         prefs.edit().remove("trip").remove("tokens").commit()
         sweep(filesDir, Live.seal(this), System.currentTimeMillis()).forEach(Live::forget)
         tokens = emptyMap()
@@ -812,22 +871,187 @@ class MainActivity : ComponentActivity() {
 
     // ---- 숏폼 그 자리 재생(T43, #63 계약: GET /shortform, 클립은 참가자 토큰 머리말) ----
 
+    private fun shortExportValid(job: NativeShortExport): Boolean = shortExport === job && !job.control.isCancelled &&
+        visible && !isDestroyed && !carStatus.restricted && s.online && contentScope() == job.scope && server == job.url && short === job.preview
+
+    private fun checkShortExportState() {
+        shortExport?.let { if (!shortExportValid(it)) cancelShortExport("기록 상태가 바뀌어 영상 만들기를 멈췄어요") }
+        if (savedShortScope != null && savedShortScope != contentScope()) {
+            savedShortScope = null; savedShortVideo = null; sharingShort = false
+        }
+    }
+
+    private fun verifyShortExport(job: NativeShortExport) {
+        if (job.control.isCancelled) throw CancellationException()
+        val generation = JSONObject(Server(job.url).transcript(job.scope.code, job.scope.token)).getInt("generation")
+        if (generation != job.scope.generation) throw CancellationException("기록 동의가 바뀌었어요")
+        if (job.control.isCancelled) throw CancellationException()
+    }
+
+    /** 이 여행의 같은 출처 클립만 받습니다. 헤더 토큰을 다른 호스트·다른 여행으로 보내지 않습니다. */
+    private fun exportClipAddress(job: NativeShortExport, scene: Scene): String {
+        val address = clipUrl(job.url, scene.clip) ?: throw IllegalArgumentException("장면 소리 주소를 확인하지 못했어요")
+        val base = URI(job.url.trim().trimEnd('/'))
+        val clip = URI(address)
+        require(clip.scheme == base.scheme && clip.host == base.host && clip.port == base.port && clip.rawQuery == null && clip.fragment == null &&
+            Regex("/api/trips/${Regex.escape(job.scope.code)}/recordings/[A-Za-z0-9-]+").matches(clip.path.orEmpty())) { "이 여행의 장면 소리가 아니에요" }
+        return address
+    }
+
+    private fun discardUnshownVideo(job: NativeShortExport) {
+        job.saved.getAndSet(null)?.let { runCatching { contentResolver.delete(it.uri, null, null) } }
+    }
+
+    private fun cancelShortExport(note: String = "영상 만들기를 취소했어요") {
+        val job = shortExport ?: return
+        shortExport = null
+        job.control.cancel()
+        job.connection.getAndSet(null)?.disconnect()
+        job.cache.deleteRecursively()
+        discardUnshownVideo(job)
+        main.removeCallbacks(shortExportTick)
+        shortExportBusy = false; shortExportProgress = 0f; shortExportNote = note
+    }
+
+    private fun makeShortVideo() {
+        val preview = short ?: return
+        val scope = contentScope() ?: return
+        val trip = s.trip ?: return
+        if (shortExportBusy || !visible || carStatus.restricted || !s.online || !shortValid() || shortExportIo.isShutdown) return
+        var seconds = 0.0
+        val scenes = preview.scenes.takeWhile { scene -> (seconds < 45.0).also { if (it) seconds += scene.seconds } }
+        if (scenes.isEmpty()) return
+        val directory = File(cacheDir, "short-export-input-${UUID.randomUUID()}")
+        if (!directory.mkdirs()) { shortExportNote = "영상 만들 공간을 준비하지 못했어요"; return }
+        val job = NativeShortExport(scope, server, preview, preview.copy(scenes = scenes), trip.people.toList(), directory)
+        shortExport = job; shortExportBusy = true; shortExportProgress = 0f; shortExportNote = "장면 소리를 준비하고 있어요"
+        savedShortVideo = null; savedShortScope = null; sharingShort = false
+        shortPaused = true
+        player?.release(); player = null
+        shortFile?.delete(); shortFile = null
+        shortPos = 0.0
+        shortGen++ // 아직 내려받는 미리듣기가 뒤늦게 다시 소리를 내지 않게 합니다.
+        main.removeCallbacks(shortTick)
+        CaptureService.hold(true)
+        main.removeCallbacks(shortExportTick); main.postDelayed(shortExportTick, 2000)
+        shortExportIo.execute {
+            val result = runCatching {
+                verifyShortExport(job)
+                val api = Server(job.url)
+                val clips = job.short.scenes.mapIndexed { index, scene ->
+                    verifyShortExport(job)
+                    val file = File(job.cache, "scene-$index.wav")
+                    api.downloadShort(exportClipAddress(job, scene), job.scope.token, file,
+                        cancelled = { job.control.isCancelled }, connection = { active ->
+                            job.connection.set(active)
+                            if (job.control.isCancelled) active?.disconnect()
+                        })
+                    verifyShortExport(job)
+                    main.post { if (shortExportValid(job)) shortExportProgress = .1f * (index + 1) / job.short.scenes.size }
+                    file
+                }
+                verifyShortExport(job)
+                main.post { if (shortExportValid(job)) shortExportNote = "목소리와 캐릭터로 영상을 만들고 있어요" }
+                val made = exportShortVideo(applicationContext, job.short, clips, job.people, job.control,
+                    beforePublish = { verifyShortExport(job) },
+                    onProgress = { progress -> main.post { if (shortExportValid(job)) shortExportProgress = .1f + .9f * progress.coerceIn(0f, 1f) } })
+                job.saved.set(made)
+                verifyShortExport(job)
+                made
+            }
+            job.cache.deleteRecursively()
+            if (result.isFailure || job.control.isCancelled) discardUnshownVideo(job)
+            main.post {
+                if (!shortExportValid(job)) { job.control.cancel(); discardUnshownVideo(job); return@post }
+                shortExport = null; shortExportBusy = false; main.removeCallbacks(shortExportTick)
+                result.onSuccess { made ->
+                    // 취소 쪽과 원자적으로 소유권을 나눕니다. 이미 회수한 결과를 UI가 다시 전달하지 않습니다.
+                    val owned = job.saved.getAndSet(null)
+                    if (owned == null) { shortExportNote = "영상 만들기를 취소했어요"; return@onSuccess }
+                    savedShortVideo = owned; savedShortScope = job.scope
+                    shortExportProgress = 1f; shortExportNote = "저장 완료 · MP4"
+                }.onFailure { failure ->
+                    shortExportProgress = 0f
+                    shortExportNote = when (failure) {
+                        is CancellationException -> "기록 상태가 바뀌어 영상 만들기를 멈췄어요"
+                        is ApiError -> "장면 소리를 받지 못했어요 · 서버 응답 ${failure.status}"
+                        else -> failure.message?.take(120)?.takeIf { it.isNotBlank() } ?: "영상을 만들지 못했어요. 다시 시도해 주세요"
+                    }
+                }
+            }
+        }
+    }
+
+    private fun shareShortVideo() {
+        val video = savedShortVideo ?: return
+        val scope = savedShortScope ?: return
+        if (sharingShort || shortExportBusy || !visible || carStatus.restricted || !s.online || contentScope() != scope) return
+        val url = server
+        sharingShort = true
+        bg({ JSONObject(Server(url).transcript(scope.code, scope.token)).getInt("generation") }) { result ->
+            sharingShort = false
+            if (isDestroyed || !visible || carStatus.restricted || contentScope() != scope || savedShortVideo != video || server != url) return@bg
+            if (result.getOrNull() != scope.generation) { shortExportNote = "기록 권한을 확인하지 못해 공유를 열지 않았어요"; return@bg }
+            val send = Intent(Intent.ACTION_SEND).apply {
+                type = "video/mp4"
+                putExtra(Intent.EXTRA_STREAM, video.uri)
+                putExtra(Intent.EXTRA_TITLE, video.displayName)
+                clipData = ClipData.newUri(contentResolver, "가치타 쇼츠", video.uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            runCatching { startActivity(Intent.createChooser(send, "쇼츠 공유").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)) }
+                .onFailure { shortExportNote = "이 차에는 영상을 공유할 앱이 없어요. 영상은 갤러리에 저장됐어요" }
+        }
+    }
+
     /** 녹음에 동의한, 이 차가 참가시킨 사람의 토큰. 숏폼은 기록본처럼 동의한 참가자만 본다. */
     private fun viewer(): String? = s.trip?.people?.firstOrNull { it.consent && it.id in tokens }?.let { tokens[it.id] }
 
+    private fun contentScope(): ContentScope? {
+        val t = s.trip ?: return null
+        if (s.offPending || System.currentTimeMillis() - t.createdAt >= KEEP_MS) return null
+        return viewer()?.let { ContentScope(t.code, t.generation, it) }
+    }
+
+    private fun clearTranscript() {
+        transcriptRequest++; transcriptOf = null; transcript = emptyList(); transcriptLoading = false; transcriptNote = ""
+    }
+
+    private fun loadTranscript() {
+        val scope = contentScope() ?: run { clearTranscript(); return }
+        if (carStatus.restricted || transcriptLoading) return
+        val request = ++transcriptRequest
+        transcriptOf = scope; transcriptLoading = true; transcriptNote = ""
+        val url = server
+        bg({ parseTranscript(Server(url).transcript(scope.code, scope.token)) }) { result ->
+            if (isDestroyed || request != transcriptRequest || contentScope() != scope || carStatus.restricted) return@bg
+            transcriptLoading = false
+            result.onSuccess { data ->
+                if (data.generation != scope.generation) { clearTranscript(); refresh(); return@onSuccess }
+                transcript = data.lines
+            }.onFailure {
+                transcript = emptyList()
+                transcriptNote = "대화를 불러오지 못했어요 · ${reason(it)}"
+            }
+        }
+    }
+
     /** 숏폼을 요청할 때와 같은 여행·동의 세대이고, 아직 동의한 시청자가 있다. */
-    private fun shortValid(): Boolean = shortOf?.let { (code, gen) -> s.trip?.code == code && s.trip?.generation == gen && viewer() != null } == true
+    private fun shortValid(): Boolean = !s.offPending && shortOf?.let { (code, gen) -> contentScope()?.let { it.code == code && it.generation == gen } } == true
 
     private fun showShort() {
         val t = s.trip ?: return
+        if (s.offPending || carStatus.restricted) return
+        val request = ++shortRequest
         val tok = viewer() ?: run { shortNote = "기록에 동의한 사람만 볼 수 있어요"; return }
         val url = server
         shortNote = "숏폼을 받고 있어요"
         shortOf = t.code to t.generation
         bg({ parseShort(Server(url).shortform(t.code, tok)) }) { r ->
-            if (isDestroyed) return@bg
+            if (isDestroyed || request != shortRequest) return@bg
             if (!shortValid()) { shortOf = null; shortNote = ""; return@bg } // 받는 사이 동의 철회·새 여행
             r.onSuccess { sh ->
+                if (sh.generation != s.trip?.generation) { stopShort(); refresh(); return@bg }
                 if (sh.scenes.isEmpty()) { shortOf = null; shortNote = "아직 숏폼으로 만들 장면 클립이 없어요"; return@bg }
                 if (carStatus.restricted || handoff.state != Handoff.State.OFF) { shortOf = null; shortNote = ""; return@bg }
                 if (getSystemService(AudioManager::class.java).requestAudioFocus(playFocus) != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) { shortOf = null; shortNote = "지금은 소리를 낼 수 없어요"; return@bg }
@@ -839,6 +1063,7 @@ class MainActivity : ComponentActivity() {
 
     /** 장면 i의 클립을 받아 튼다. 끝나면 다음 장면, 마지막이면 닫는다. 트는 동안은 수음을 멈춰 재생 소리가 기록에 다시 들어가지 않게 한다. */
     private fun play(i: Int) {
+        if (shortExportBusy) return
         val sh = short ?: return
         val tok = viewer()
         val url = server
@@ -849,14 +1074,14 @@ class MainActivity : ComponentActivity() {
         shortAt = i; shortPos = 0.0; shortPaused = false
         CaptureService.hold(true)
         val gen = ++shortGen
-        val f = File.createTempFile("short", ".wav", cacheDir) // 요청마다 다른 파일(화면이 다시 만들어져도 겹치지 않게). 이 요청이 만든 것만 지운다
+        val f = runCatching { File.createTempFile("short", ".wav", cacheDir) }.getOrElse { shortNote = "재생 공간을 준비하지 못했어요"; return stopShort() } // 요청마다 다른 파일(화면이 다시 만들어져도 겹치지 않게). 이 요청이 만든 것만 지운다
         bg({ Server(url).download(clip, tok, f) }) { r ->
             if (isDestroyed || gen != shortGen || short !== sh) { f.delete(); return@bg } // 그사이 닫혔거나 다른 장면
             if (!shortValid()) { f.delete(); return@bg stopShort() } // 받는 사이 동의 철회·새 여행
             r.exceptionOrNull()?.let { f.delete(); shortNote = "클립을 받지 못했어요 · ${reason(it)}"; return@bg stopShort() }
             shortFile = f
             val mp = MediaPlayer()
-            runCatching { mp.setAudioAttributes(media); mp.setDataSource(f.path); mp.prepare(); mp.setOnCompletionListener { if (gen == shortGen) play(i + 1) }; mp.start() }
+            runCatching { mp.setAudioAttributes(media); mp.setDataSource(f.path); mp.prepare(); mp.setOnCompletionListener { if (gen == shortGen) { if (i + 1 < sh.scenes.size) play(i + 1) else { mp.seekTo(0); shortPos = 0.0; shortPaused = true } } }; mp.setVolume(if (shortMuted) 0f else 1f, if (shortMuted) 0f else 1f); if (!shortPaused) mp.start() }
                 .onFailure { Log.w(TAG, "클립 재생 실패", it); mp.release(); shortNote = "클립을 틀지 못했어요"; return@bg stopShort() }
             player = mp
             Log.i(TAG, "숏폼 장면 ${i + 1}/${sh.scenes.size} ${f.length()}바이트")
@@ -865,6 +1090,9 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun stopShort() {
+        cancelShortExport()
+        shortRequest++
+        if (shortNote == "숏폼을 받고 있어요") shortNote = ""
         player?.release(); player = null
         shortGen++ // 받는 중인 클립은 끝나면 스스로 지운다
         main.removeCallbacks(shortTick)
@@ -877,6 +1105,16 @@ class MainActivity : ComponentActivity() {
             Log.i(TAG, "숏폼 닫음")
             syncCapture() // 듣는 사이 '다시 기록'을 눌렀거나 동의가 바뀌었으면 지금 상태에 맞춘다
         }
+    }
+
+    private fun toggleShortPlayback() {
+        if (shortExportBusy) return
+        val current = player
+        if (current == null) { play(shortAt.coerceAtLeast(0)); return }
+        shortPaused = !shortPaused
+        runCatching { if (shortPaused) current.pause() else current.start() }
+        main.removeCallbacks(shortTick)
+        if (!shortPaused) main.post(shortTick)
     }
 
     private fun mute(on: Boolean) { prefs.edit().putBoolean("muted", on).commit(); muted = on; Log.i(TAG, "기록 멈추기 $on") }
@@ -974,32 +1212,177 @@ class MainActivity : ComponentActivity() {
      */
     @Composable
     private fun TripScreen(t: Trip) {
+        val c = MaterialTheme.colorScheme
         val parked = !carStatus.restricted
-        BoxWithConstraints(Modifier.fillMaxSize().padding(32.dp)) {
-            val wide = maxWidth >= 1200.dp
-            Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
-                AppBar(t.title.ifEmpty { "가족 여행" }, listening = s.recording && Live.mic == Mic.ON && !muted && handoff.state == Handoff.State.OFF, *pills(s.online))
-                if (wide) {
-                    Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(32.dp)) {
-                        Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(24.dp)) {
-                            if (takeover()) Takeover(t, Modifier.weight(1f)) else { StatusHero(t); Focus(t, Modifier.weight(1f)); Counts(t) }
-                        }
-                        Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(24.dp)) {
-                            People(t, Modifier.weight(1f), fill = true)
-                            if (parked) Tools(t)
-                            Consent()
+        val scope = contentScope()
+        LaunchedEffect(destination, scope) {
+            if (destination == Destination.CONVERSATION && parked) loadTranscript()
+        }
+        Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            Row(Modifier.fillMaxWidth().height(72.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                Mascot(listening = s.recording && Live.mic == Mic.ON && !muted && handoff.state == Handoff.State.OFF, size = 60.dp)
+                Column(Modifier.weight(1f)) {
+                    Text("가치타", fontSize = 30.sp, fontWeight = FontWeight.Bold)
+                    Text(t.title.takeUnless { it.isBlank() || it == "가치타" } ?: "함께하는 여행", fontSize = 22.sp, color = c.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                Pill(if (parked) "주차 중" else "주행 중")
+                if (!s.online) Pill("연결 대기", ok = false)
+            }
+            Row(Modifier.fillMaxWidth().height(68.dp).clip(RoundedCornerShape(22.dp)).background(c.surfaceVariant).padding(5.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                Destination.entries.forEach { tab ->
+                    val selected = destination == tab
+                    Surface(onClick = {
+                        if (destination != tab) { stopShort(); closeCamera(); rideQr = null; managing = false; conversationOpen = false; destination = tab }
+                    }, enabled = parked || tab == Destination.RIDE, modifier = Modifier.weight(1f).fillMaxHeight(), shape = RoundedCornerShape(18.dp),
+                        color = if (selected) c.surface else Color.Transparent) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Text(tab.label, color = if (selected) c.primary else c.onSurfaceVariant, fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium, fontSize = 24.sp, maxLines = 1)
                         }
                     }
-                } else {
-                    // 한 칸: 넘치면 손으로 스크롤한다(자동 스크롤 없음). 주행 중에 누를 수 있는 유일한 조작(기록 동의 끄기)은 스크롤 밖 아래에 붙인다
-                    Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(24.dp)) {
-                        if (takeover()) Takeover(t, Modifier.height(900.dp)) else { StatusHero(t); Focus(t, Modifier.height(360.dp)); Counts(t) }
-                        People(t, compact = !parked)
-                        if (parked) Tools(t)
-                    }
-                    Consent()
                 }
             }
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                when {
+                    takeover() -> Takeover(t, Modifier.fillMaxSize())
+                    managing && parked -> ManageTrip(t, Modifier.fillMaxSize())
+                    destination == Destination.CONVERSATION && parked -> Conversations(t, Modifier.fillMaxSize())
+                    destination == Destination.SHORTS && parked -> ShortsLibrary(t, Modifier.fillMaxSize())
+                    else -> RideOverview(t, Modifier.fillMaxSize())
+                }
+            }
+            Consent()
+        }
+    }
+
+    @Composable
+    private fun RideOverview(t: Trip, modifier: Modifier) {
+        BoxWithConstraints(modifier) {
+            val viewportHeight = maxHeight
+            if (viewportHeight < 680.dp && carStatus.restricted) {
+                Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    StatusHero(t)
+                    Text("${t.people.size}명이 함께 타고 있어요", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Focus(t, Modifier.weight(1f))
+                }
+            } else if (viewportHeight < 720.dp) {
+                Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+                    RideOverviewBody(t, Modifier.fillMaxWidth().height(720.dp))
+                }
+            } else RideOverviewBody(t, Modifier.fillMaxSize())
+        }
+    }
+
+    @Composable
+    private fun RideOverviewBody(t: Trip, modifier: Modifier) {
+        val c = MaterialTheme.colorScheme
+        Column(modifier, verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            StatusHero(t)
+            BoxWithConstraints(Modifier.weight(1f)) {
+                if (maxWidth >= 1000.dp) Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+                    People(t, Modifier.weight(1f).fillMaxHeight(), fill = true)
+                    Focus(t, Modifier.weight(1f).fillMaxHeight())
+                } else Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    People(t, Modifier.weight(1.35f), compact = true, fill = true)
+                    Focus(t, Modifier.weight(1f))
+                }
+            }
+            Row(Modifier.fillMaxWidth().height(56.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("보관한 부탁 ${t.heldRequests} · 도착 할 일 ${todoList.count { !it.done }}", fontSize = 24.sp, color = c.onSurfaceVariant)
+                if (!carStatus.restricted) Text("여행 관리", Modifier.clickable { managing = true }.padding(horizontal = 12.dp, vertical = 8.dp), color = c.primary, fontSize = 24.sp)
+            }
+            if (!carStatus.restricted) Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                FilledTonalButton(::scan, Modifier.weight(1f).height(64.dp), enabled = freeSeats(t).isNotEmpty(), colors = ButtonDefaults.filledTonalButtonColors(containerColor = c.primaryContainer, contentColor = c.onPrimaryContainer)) { Text("동승자 연결") }
+                OutlinedButton({ navigationNote = requestNavigationAlongside(this@MainActivity).message }, Modifier.weight(1f).height(64.dp)) { Text("기본 내비 열기") }
+            }
+        }
+    }
+
+    @Composable
+    private fun ManageTrip(t: Trip, modifier: Modifier) {
+        val c = MaterialTheme.colorScheme
+        Card(modifier = modifier) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("여행 관리", Modifier.weight(1f), fontSize = 32.sp, fontWeight = FontWeight.Bold)
+                OutlinedButton({ managing = false }, Modifier.heightIn(min = 56.dp)) { Text("닫기") }
+            }
+            Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                Text("함께 탄 사람 ${t.people.size}명", fontWeight = FontWeight.Bold)
+                Text("폰의 동승 QR을 연결하면 그 사람이 직접 동의하고 대화 기록을 볼 수 있어요.", color = c.onSurfaceVariant)
+                if (s.recording) EnrollCard(t, Modifier.fillMaxWidth().heightIn(min = 300.dp))
+                if (Live.recent.isNotEmpty()) {
+                    Text("말한 사람 고치기", fontSize = 28.sp, fontWeight = FontWeight.Bold)
+                    Live.recent.asReversed().forEach { HeardLine(t, it, fix = true) }
+                }
+                OutlinedButton({ briefAt(null, speak = false); managing = false }, Modifier.fillMaxWidth().heightIn(min = 64.dp)) { Text("도착해서 할 일") }
+                OutlinedButton(::dropRawNow, Modifier.fillMaxWidth().heightIn(min = 64.dp)) { Text("이 차에 둔 원음 지우기") }
+                OutlinedButton(::newTrip, Modifier.fillMaxWidth().heightIn(min = 64.dp), enabled = !s.agreed && !s.switchOn && !s.busy) { Text("새 여행 만들기") }
+                Text("새 여행은 대화 기록 동의를 끈 뒤 만들 수 있어요.", color = c.onSurfaceVariant, fontSize = 22.sp)
+            }
+        }
+    }
+
+    @Composable
+    private fun Conversations(t: Trip, modifier: Modifier) {
+        val c = MaterialTheme.colorScheme
+        Card(modifier = modifier) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(if (conversationOpen) "우리의 대화" else "대화 기록", Modifier.weight(1f), fontSize = 32.sp, fontWeight = FontWeight.Bold)
+                OutlinedButton({ if (conversationOpen) conversationOpen = false else loadTranscript() }, Modifier.heightIn(min = 56.dp)) { Text(if (conversationOpen) "목록" else "새로고침") }
+            }
+            Text(if (conversationOpen) "${t.people.size}명이 함께한 여행" else "지금 함께 타고 있는 여행의 기록이에요", color = c.onSurfaceVariant, fontSize = 24.sp)
+            if (!conversationOpen) {
+                Surface(onClick = { conversationOpen = true; loadTranscript() }, enabled = contentScope() != null, shape = RoundedCornerShape(24.dp), color = c.surfaceVariant, modifier = Modifier.fillMaxWidth()) {
+                    Row(Modifier.padding(24.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+                        Character(0, 80.dp)
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(t.title.ifEmpty { "함께하는 여행" }, fontSize = 28.sp, fontWeight = FontWeight.Bold)
+                            Text(SimpleDateFormat("M월 d일 · HH:mm", Locale.KOREA).format(Date(t.createdAt)), color = c.onSurfaceVariant)
+                            Text(transcript.lastOrNull()?.text ?: "대화방 열기", maxLines = 2, overflow = TextOverflow.Ellipsis, color = c.onSurfaceVariant)
+                        }
+                        Text("열기", color = c.primary)
+                    }
+                }
+                Spacer(Modifier.weight(1f))
+                Text("여행을 만든 뒤 48시간 동안 볼 수 있어요.", color = c.onSurfaceVariant, fontSize = 22.sp)
+            } else {
+                Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(22.dp)) {
+                    transcript.forEach { line ->
+                        val person = t.people.firstOrNull { it.id == line.participantId }
+                        Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                            if (person != null) Character(runCatching { Seat.valueOf(person.seat).ordinal }.getOrDefault(0), 52.dp)
+                            else Box(Modifier.size(52.dp).clip(CircleShape).background(c.surfaceVariant))
+                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text("${person?.name ?: "말한 사람 미확인"} · ${SimpleDateFormat("HH:mm", Locale.KOREA).format(Date(line.at))}", color = c.onSurfaceVariant, fontSize = 22.sp)
+                                Surface(shape = RoundedCornerShape(4.dp, 22.dp, 22.dp, 22.dp), color = c.surfaceVariant) {
+                                    Text(line.text, Modifier.padding(18.dp), fontSize = 26.sp, lineHeight = 38.sp)
+                                }
+                                if (line.edited) Text("수정한 자막", color = c.onSurfaceVariant, fontSize = 20.sp)
+                            }
+                        }
+                    }
+                    if (transcript.isEmpty() && !transcriptLoading) Text("아직 대화 기록이 없어요. 모두 동의하면 대화를 받아 적어요.", color = c.onSurfaceVariant)
+                }
+            }
+            Text(when { contentScope() == null -> "대화 기록에 동의한 참가자만 볼 수 있어요"; transcriptLoading -> "대화를 불러오고 있어요"; else -> transcriptNote.ifEmpty { "서버에 저장된 대화 · ${transcript.size}개" } }, color = c.onSurfaceVariant, fontSize = 22.sp, maxLines = 2)
+        }
+    }
+
+    @Composable
+    private fun ShortsLibrary(t: Trip, modifier: Modifier) {
+        val c = MaterialTheme.colorScheme
+        Card(modifier = modifier) {
+            Text("우리 여행의 쇼츠", fontSize = 36.sp, fontWeight = FontWeight.Bold)
+            Text("함께 남긴 목소리를 짧은 장면으로 다시 들어요", color = c.onSurfaceVariant)
+            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(24.dp)) {
+                    Character(3, 160.dp)
+                    Text(t.title.ifEmpty { "함께하는 여행" }, fontSize = 30.sp, fontWeight = FontWeight.Bold)
+                    Text("우리 대화로 만든 장면만 모았어요", color = c.onSurfaceVariant)
+                }
+            }
+            Text(shortNote.ifEmpty { "장면 클립이 있으면 소리와 자막이 함께 재생돼요" }, color = c.onSurfaceVariant, fontSize = 22.sp, maxLines = 2)
+            if (savedShortVideo != null) ShortExportControls(canCreate = false)
+            Button(::showShort, Modifier.fillMaxWidth().height(72.dp), enabled = contentScope() != null && shortNote != "숏폼을 받고 있어요" && handoff.state == Handoff.State.OFF) { Text("생성된 쇼츠 보기") }
         }
     }
 
@@ -1009,7 +1392,47 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun Takeover(t: Trip, modifier: Modifier) {
         val sh = short
-        if (sh != null && shortAt >= 0) ShortStage(sh, modifier) else RideStage(t, modifier)
+        if (sh != null && shortAt >= 0) Column(modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            GeneratedShortStage(sh, shortAt, shortPos, shortPaused, shortMuted, t.people, Modifier.weight(1f).fillMaxWidth(),
+                onPrevious = { play((shortAt - 1).coerceAtLeast(0)) }, onNext = { play((shortAt + 1).coerceAtMost(sh.scenes.lastIndex)) },
+                onPause = ::toggleShortPlayback,
+                onMute = { if (!shortExportBusy) { shortMuted = !shortMuted; val volume = if (shortMuted) 0f else 1f; player?.setVolume(volume, volume) } },
+                onClose = ::stopShort, controlsEnabled = !shortExportBusy)
+            ShortExportControls()
+        } else RideStage(t, modifier)
+    }
+
+    @Composable
+    private fun ShortExportControls(canCreate: Boolean = true) {
+        val c = MaterialTheme.colorScheme
+        val saved = savedShortVideo
+        Surface(Modifier.fillMaxWidth(), color = c.surfaceVariant, shape = RoundedCornerShape(20.dp)) {
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        Text(if (shortExportBusy) "영상 만드는 중 · ${(shortExportProgress * 100).toInt()}%" else shortExportNote.ifBlank { "우리 목소리로 영상 만들기" },
+                            fontSize = 22.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        Text(when {
+                            shortExportBusy -> shortExportNote
+                            saved != null -> saved.displayName
+                            short?.scenes?.sumOf { it.seconds }?.let { it > 45 } == true -> "앞 45초까지 원래 목소리와 함께 갤러리에 저장해요"
+                            else -> "원래 목소리와 함께 갤러리에 저장해요"
+                        }, fontSize = 16.sp, color = c.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    }
+                    when {
+                        shortExportBusy -> OutlinedButton(onClick = { cancelShortExport() }, modifier = Modifier.heightIn(min = 56.dp)) { Text("취소", fontSize = 22.sp) }
+                        saved != null -> {
+                            if (canCreate) OutlinedButton(onClick = ::makeShortVideo, modifier = Modifier.heightIn(min = 56.dp), enabled = !sharingShort && s.online && !carStatus.restricted) { Text("다시 만들기", fontSize = 20.sp) }
+                            Button(onClick = ::shareShortVideo, modifier = Modifier.heightIn(min = 56.dp), enabled = !sharingShort && s.online && !carStatus.restricted && savedShortScope == contentScope()) {
+                                Text(if (sharingShort) "확인 중" else "공유", fontSize = 22.sp)
+                            }
+                        }
+                        canCreate -> Button(onClick = ::makeShortVideo, modifier = Modifier.heightIn(min = 56.dp), enabled = s.online && contentScope() != null && !carStatus.restricted) { Text("영상 만들기", fontSize = 22.sp) }
+                    }
+                }
+                if (shortExportBusy) LinearProgressIndicator(progress = { shortExportProgress }, modifier = Modifier.fillMaxWidth())
+            }
+        }
     }
 
     private data class Status(val big: String, val sub: String, val bigColor: Color = Color.Unspecified, val strong: Boolean = false)
@@ -1042,20 +1465,16 @@ class MainActivity : ComponentActivity() {
     private fun StatusHero(t: Trip) {
         val c = MaterialTheme.colorScheme
         val st = status(t)
-        Card(statusTone(), Modifier.height(168.dp)) {
+        Card(statusTone(), Modifier.height(144.dp)) {
             Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(st.big, fontSize = 48.sp, fontWeight = FontWeight.Bold, color = st.bigColor, maxLines = 1)
-                    Text(st.sub, color = if (st.strong) c.onSurface else c.onSurfaceVariant, fontWeight = if (st.strong) FontWeight.Bold else null, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(st.big, fontSize = 32.sp, fontWeight = FontWeight.Bold, color = st.bigColor, maxLines = 1)
+                    Text(navigationNote.ifEmpty { st.sub }, fontSize = 24.sp, color = if (st.strong) c.onSurface else c.onSurfaceVariant, fontWeight = if (st.strong) FontWeight.Bold else null, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 if (s.recording && muted) Button({ mute(false); syncCapture() }, Modifier.heightIn(min = 72.dp)) { Text("다시 기록", fontSize = 26.sp) }
             }
         }
     }
-
-    /** 이 차가 참가시킨 사람 가운데 아직 목소리를 등록하지 않은 사람(T37). 출발 전(받아 적은 말이 없을 때)에만 초점 칸에 띄운다. */
-    private fun enrollShown(t: Trip) =
-        !carStatus.restricted && s.recording && (enrolling != null || voiceNote.isNotEmpty() || (Live.count == 0 && t.people.any { it.id in s.ours && it.id !in voiced }))
 
     /** 초점 칸(크기 고정): 지금 가장 급한 것 하나만. 제안 > 도착 브리핑 > 목소리 등록 > 받아 적은 말. */
     @Composable
@@ -1065,7 +1484,7 @@ class MainActivity : ComponentActivity() {
         when {
             o != null -> OfferCard(o, modifier)
             b != null -> BriefCard(b, modifier)
-            enrollShown(t) -> EnrollCard(t, modifier)
+            enrolling != null && !carStatus.restricted -> EnrollCard(t, modifier)
             else -> Heard(t, modifier)
         }
     }
@@ -1077,7 +1496,8 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun People(t: Trip, modifier: Modifier = Modifier, compact: Boolean = false, fill: Boolean = false) {
         val c = MaterialTheme.colorScheme
-        Card(modifier = modifier) {
+        Surface(modifier.fillMaxWidth(), shape = RoundedCornerShape(28.dp), color = c.surface) {
+            Column(Modifier.fillMaxSize().padding(if (compact) 16.dp else 28.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("일행 ${t.people.size}명", Modifier.weight(1f), fontSize = 30.sp, fontWeight = FontWeight.Bold)
                 Text("차 앞쪽 ▲", color = c.onSurfaceVariant)
@@ -1087,29 +1507,12 @@ class MainActivity : ComponentActivity() {
             val last = Live.recent.lastOrNull()?.takeIf { s.recording }
             val map = @Composable {
                 SeatMap(
-                    t.people, last?.seatZone, highlight = last?.let { u -> speakers?.takeIf { it.trip == t.code }?.get(u.seq)?.who }, size = if (compact) 56.dp else if (fill) 96.dp else 80.dp, car = carStatus,
+                    t.people, last?.seatZone, highlight = last?.let { u -> speakers?.takeIf { it.trip == t.code }?.get(u.seq)?.who }, compact = compact, size = if (compact) 48.dp else if (fill) 96.dp else 80.dp, car = carStatus,
                     note = if (compact) null else { p -> if (p.consent) "동의" to c.tertiary else if (s.waitsFor(p)) "동의 대기" to c.secondary else "동의 전" to c.onSurfaceVariant },
                 )
             }
             if (fill) Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) { map() } else map()
         }
-    }
-
-    /** 보관한 부탁 수와 도착해서 할 일 수(C1의 두 칸, 높이 고정). */
-    @Composable
-    private fun Counts(t: Trip) {
-        val open = todoList.count { !it.done }
-        Row(Modifier.fillMaxWidth().height(136.dp), horizontalArrangement = Arrangement.spacedBy(24.dp)) {
-            Stat("보관한 부탁", if (t.heldRequests == 0) "없음" else "${t.heldRequests}건", Modifier.weight(1f))
-            Stat("도착해서 할 일", if (open == 0) "없음" else "${open}건", Modifier.weight(1f))
-        }
-    }
-
-    @Composable
-    private fun Stat(label: String, value: String, modifier: Modifier) {
-        Card(modifier = modifier.fillMaxHeight()) {
-            Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(value, fontSize = 40.sp, fontWeight = FontWeight.Bold)
         }
     }
 
@@ -1122,15 +1525,15 @@ class MainActivity : ComponentActivity() {
         val c = MaterialTheme.colorScheme
         val parked = !carStatus.restricted
         heardTick // 말한 사람이 바뀌면 다시 그린다
-        val lines = if (parked) remember(Live.count, Live.recent) { Live.box?.recent(Live.count).orEmpty() } else Live.recent
+        val lines = Live.recent
         Card(modifier = modifier) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(if (parked) "대화록" else "방금 받아 적은 말", Modifier.weight(1f), fontSize = 30.sp, fontWeight = FontWeight.Bold)
+                Text("방금 나눈 대화", Modifier.weight(1f), fontSize = 30.sp, fontWeight = FontWeight.Bold)
                 Text("${Live.count}건", color = c.onSurfaceVariant)
             }
             if (lines.isEmpty()) Text("아직 받아 적은 말이 없어요", color = c.onSurfaceVariant)
             Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(20.dp)) {
-                lines.asReversed().forEachIndexed { i, u -> HeardLine(t, u, fix = parked && i < 2) }
+                lines.asReversed().forEachIndexed { i, u -> HeardLine(t, u, fix = false) }
             }
             if (parked && Live.pending > 0) Text("서버에 아직 보내지 못하고 이 차에 보관 중 ${Live.pending}건", color = c.onSurfaceVariant, fontSize = 20.sp, maxLines = 1)
         }
@@ -1244,40 +1647,13 @@ class MainActivity : ComponentActivity() {
     private fun Consent() {
         val c = MaterialTheme.colorScheme
         val sub = s.note.ifEmpty { if (carStatus.restricted) "끄기는 주행 중에도 한 번에 돼요" else "기본값은 꺼짐 · 주차 중에만 켤 수 있어요" }
-        Card(modifier = Modifier.height(144.dp)) {
+        Card(modifier = Modifier.height(128.dp)) {
             Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("대화 기록 동의", fontSize = 30.sp, fontWeight = FontWeight.Bold)
+                    Text("대화 기록 동의", fontSize = 26.sp, fontWeight = FontWeight.Bold)
                     Text(sub, color = if (s.note.isEmpty()) c.onSurfaceVariant else c.error, fontSize = if (carStatus.restricted) 24.sp else 20.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
                 Switch(s.switchOn, { if (it) turnOn() else turnOff() }, enabled = !s.busy && (s.switchOn || !carStatus.restricted)) // 주행 제한 중에는 끄기(한 번 누름)만
-            }
-        }
-    }
-
-    /**
-     * 주차 중 도구(높이 고정): 동승자 연결(T46)·숏폼(T43)을 여는 단추, 여행 코드와 진단 한 줄(알림이 있으면 그 자리에), 새 여행·원음 지우기.
-     * 주행 중에는 그리지 않는다(T11).
-     */
-    @Composable
-    private fun Tools(t: Trip) {
-        val c = MaterialTheme.colorScheme
-        val free = freeSeats(t)
-        val tool = ButtonDefaults.filledTonalButtonColors(containerColor = c.primaryContainer, contentColor = c.onPrimaryContainer)
-        val note = rideNote.ifEmpty { shortNote }.ifEmpty { if (free.isEmpty()) "빈자리가 없어 동승자를 더 넣을 수 없어요" else "" }
-        Card {
-            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                FilledTonalButton(::scan, Modifier.weight(1f).height(72.dp), enabled = free.isNotEmpty(), colors = tool) { Text("폰 QR 읽기") }
-                FilledTonalButton(::showShort, Modifier.weight(1f).height(72.dp), enabled = shortNote != "숏폼을 받고 있어요" && handoff.state == Handoff.State.OFF, colors = tool) { Text("숏폼 보기") }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("여행 코드 ${t.code}", color = c.onSurfaceVariant, fontSize = 20.sp)
-                Text(note.ifEmpty { "기어 ${s.gear ?: "모름"} · 내비 ${if (carStatus.navi) "연결됨" else "연결 안 됨"} · 음성 ${if (carStatus.voice) "준비됨" else "준비 안 됨"}" },
-                    color = if (note.isEmpty()) c.onSurfaceVariant else c.onSurface, fontSize = 20.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                OutlinedButton(::newTrip, Modifier.heightIn(min = 64.dp), enabled = !s.agreed && !s.switchOn && !s.busy) { Text("새 여행 만들기") }
-                OutlinedButton(::dropRawNow, Modifier.heightIn(min = 64.dp)) { Text("이 차에 둔 원음 지우기") }
             }
         }
     }
@@ -1288,68 +1664,6 @@ class MainActivity : ComponentActivity() {
         s.recording && Live.mic == Mic.ON -> Tone.Rec
         s.recording && (Live.mic == Mic.BLOCKED || Live.mic == Mic.FAILED) || s.waiting -> Tone.Wait
         else -> Tone.Plain
-    }
-
-    /**
-     * 숏폼(T43)을 왼쪽 무대 전체에(릴스·틱톡·쇼츠의 세로 화면처럼). 주차 중에만.
-     * 위: 장면마다 한 칸인 진행 막대와 '2 / 6 · 장면 이름'. 아래 왼쪽: 말한 사람과 큰 자막. 아래 오른쪽: 세로 단추(멈춤·다음 장면·닫기).
-     * 영상이 아니라 장면 클립 소리 + 자막 큐 + 말한 사람이라(#63) 바탕은 어둡게 두고 글을 크게 쓴다.
-     */
-    @Composable
-    private fun ShortStage(sh: Short, modifier: Modifier) {
-        val sc = sh.scenes[shortAt]
-        val cue = cueAt(sc.cues, shortPos) ?: sc.cues.lastOrNull { shortPos >= it.start } ?: sc.cues.firstOrNull() // 줄 사이에도 앞 자막을 둔다(쇼츠처럼 비지 않게)
-        val ink = Color(0xFFF4F1EC)
-        val face = cue?.who?.let { name -> s.trip?.people?.firstOrNull { it.name == name } }?.let { p -> runCatching { Seat.valueOf(p.seat).ordinal }.getOrNull() }
-        Box(modifier.fillMaxWidth().clip(RoundedCornerShape(32.dp)).background(Brush.verticalGradient(listOf(Color(0xFF1C3A2D), Color(0xFF12110F))))) {
-            Column(Modifier.fillMaxWidth().padding(28.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    sh.scenes.forEachIndexed { i, scene ->
-                        val f = when { i < shortAt -> 1f; i > shortAt -> 0f; else -> (shortPos / scene.seconds).toFloat().coerceIn(0f, 1f) }
-                        Box(Modifier.weight(1f).height(6.dp).clip(CircleShape).background(ink.copy(alpha = 0.3f))) { Box(Modifier.fillMaxWidth(f).fillMaxHeight().background(ink)) }
-                    }
-                }
-                Text("${shortAt + 1} / ${sh.scenes.size} · ${sc.label}", color = ink, fontSize = 28.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-            // 가운데: 지금 말하는 사람(영상 자리). 이름을 못 붙인 줄은 가치타 마스코트
-            Box(Modifier.align(Alignment.Center).padding(bottom = 200.dp)) { if (face != null) Character(face, 240.dp, ring = true) else Mascot(listening = true, size = 200.dp) }
-            Column(Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(start = 32.dp, end = 152.dp, bottom = 40.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                if (!cue?.who.isNullOrEmpty()) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    if (face != null) Character(face, 72.dp, ring = true)
-                    Text(cue!!.who, color = ink, fontSize = 30.sp, fontWeight = FontWeight.Bold)
-                }
-                Text(cue?.text ?: "", color = Color.White, fontSize = 48.sp, fontWeight = FontWeight.Bold, lineHeight = 60.sp, maxLines = 5, overflow = TextOverflow.Ellipsis)
-            }
-            Column(Modifier.align(Alignment.BottomEnd).padding(end = 24.dp, bottom = 40.dp), verticalArrangement = Arrangement.spacedBy(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                RailButton(if (shortPaused) "이어 듣기" else "멈춤", if (shortPaused) Glyph.PLAY else Glyph.PAUSE) {
-                    player?.let { if (it.isPlaying) it.pause() else it.start(); shortPaused = !it.isPlaying }
-                }
-                RailButton("다음 장면", Glyph.NEXT) { play(shortAt + 1) } // 마지막 장면에서 누르면 닫힌다
-                RailButton("닫기", Glyph.CLOSE, ::stopShort)
-            }
-        }
-    }
-
-    private enum class Glyph { PLAY, PAUSE, NEXT, CLOSE }
-
-    /** 숏폼 오른쪽 세로 단추: 둥근 단추와 아래 이름(릴스의 오른쪽 줄). 그림은 Canvas로 그려 글꼴에 기대지 않는다. */
-    @Composable
-    private fun RailButton(label: String, glyph: Glyph, onClick: () -> Unit) {
-        val ink = Color(0xFFF4F1EC)
-        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Surface(onClick = onClick, shape = CircleShape, color = Color.White.copy(alpha = 0.16f), modifier = Modifier.size(88.dp)) {
-                Canvas(Modifier.padding(28.dp)) {
-                    val w = size.width; val h = size.height; val stroke = Stroke(6.dp.toPx(), cap = StrokeCap.Round)
-                    when (glyph) {
-                        Glyph.PLAY -> drawPath(Path().apply { moveTo(w * 0.15f, 0f); lineTo(w, h / 2); lineTo(w * 0.15f, h); close() }, ink)
-                        Glyph.PAUSE -> { drawRect(ink, Offset(w * 0.1f, 0f), Size(w * 0.28f, h)); drawRect(ink, Offset(w * 0.62f, 0f), Size(w * 0.28f, h)) }
-                        Glyph.NEXT -> { drawPath(Path().apply { moveTo(0f, 0f); lineTo(w * 0.7f, h / 2); lineTo(0f, h); close() }, ink); drawRect(ink, Offset(w * 0.78f, 0f), Size(w * 0.2f, h)) }
-                        Glyph.CLOSE -> { drawLine(ink, Offset(0f, 0f), Offset(w, h), stroke.width, StrokeCap.Round); drawLine(ink, Offset(w, 0f), Offset(0f, h), stroke.width, StrokeCap.Round) }
-                    }
-                }
-            }
-            Text(label, color = ink, fontSize = 20.sp)
-        }
     }
 
     /** 동승 연결(T46)을 왼쪽 무대 전체에(C7): 카메라로 폰의 QR 읽기 → 읽으면 빈자리 고르기. 폰이 없는 아이는 여행 만들 때 손님으로 넣는다. */

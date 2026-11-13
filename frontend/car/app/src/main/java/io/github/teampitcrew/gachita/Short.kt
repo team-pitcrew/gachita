@@ -10,7 +10,7 @@ data class Cue(val start: Double, val end: Double, val text: String, val who: St
 
 data class Scene(val label: String, val clip: String, val seconds: Double, val cues: List<Cue>)
 
-data class Short(val title: String, val scenes: List<Scene>)
+data class Short(val title: String, val scenes: List<Scene>, val generation: Int = 1)
 
 /**
  * 숏폼 구성을 읽는다. 말한 사람은 cast의 이름으로, 못 붙인 큐(participantId null)는 자리 구역 이름으로만 적는다
@@ -23,6 +23,7 @@ fun parseShort(json: String): Short {
     val ss = o.getJSONArray("scenes")
     return Short(
         title = o.optString("title"),
+        generation = o.getInt("generation"),
         scenes = List(ss.length()) { i ->
             val s = ss.getJSONObject(i)
             val cs = s.getJSONArray("cues")

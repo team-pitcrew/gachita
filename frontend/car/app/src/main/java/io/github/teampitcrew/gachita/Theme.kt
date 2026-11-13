@@ -75,7 +75,8 @@ private val Dark = darkColorScheme(
 )
 
 /**
- * 원본 캐릭터 조각(res/drawable-nodpi/char_*.webp, 디자인 1급 문서의 '말랑' 10종에서 잘라 냄). 다시 그리지 않는다.
+ * 원본 시트에서 캐릭터별 전신을 분리하고 가려진 부분을 복원한 투명 PNG(res/drawable-nodpi/char_*.png).
+ * 원본의 형태·색·소품을 유지하며 얼굴만 자르거나 이웃 캐릭터를 함께 표시하지 않는다.
  * 차의 손님 참가자에는 캐릭터 값이 없어 자리 순서로 고른다(운전석부터 기본·캡모자·안경·여행·게임).
  */
 private val SEAT_CHARS = listOf(R.drawable.char_basic, R.drawable.char_cap, R.drawable.char_glasses, R.drawable.char_travel, R.drawable.char_game)
@@ -126,11 +127,11 @@ private fun DrawScope.face(y: Float, closed: Boolean) {
     }
 }
 
-/** 가족 캐릭터: 원본 조각을 원 안에. 말하는 사람 강조는 바깥 링 하나뿐이고 깜박이거나 움직이지 않는다(주행 중 동적 표시 금지). */
+/** 투명 PNG 전신을 Fit로 표시한다. 강조 테두리는 이미지를 자르지 않으며, 이 공통 컴포넌트는 움직이지 않는다. */
 @Composable
 fun Character(index: Int, size: Dp, ring: Boolean = false) {
-    val ringMod = if (ring) Modifier.border(6.dp, MaterialTheme.colorScheme.onPrimaryContainer, CircleShape) else Modifier
-    Image(painterResource(SEAT_CHARS.getOrElse(index) { SEAT_CHARS[0] }), null, Modifier.size(size).then(ringMod).clip(CircleShape), contentScale = ContentScale.Crop)
+    val ringMod = if (ring) Modifier.border(3.dp, MaterialTheme.colorScheme.onPrimaryContainer, RoundedCornerShape(16.dp)).padding(3.dp) else Modifier
+    Image(painterResource(SEAT_CHARS.getOrElse(index) { SEAT_CHARS[0] }), null, Modifier.size(size).then(ringMod), contentScale = ContentScale.Fit)
 }
 
 /** 빈자리: 점선 동그라미. */
@@ -179,13 +180,13 @@ fun Pill(text: String, ok: Boolean = true) {
 @Composable
 fun SeatMap(
     people: List<Person>, zone: Int?, highlight: String? = null, size: Dp = 80.dp, car: CarStatus = CarStatus(),
-    note: ((Person) -> Pair<String, Color>)?,
+    note: ((Person) -> Pair<String, Color>)?, compact: Boolean = false,
 ) {
     val c = MaterialTheme.colorScheme
-    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(40.dp)).background(c.surfaceVariant).padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(40.dp)).background(c.surfaceVariant).padding(if (compact) 8.dp else 16.dp), verticalArrangement = Arrangement.spacedBy(if (compact) 4.dp else 8.dp)) {
         for ((row, seats) in seatRows(car.seats).withIndex()) {
             Row(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(28.dp)).then(if (zone == row) Modifier.background(c.primaryContainer).border(3.dp, c.onPrimaryContainer, RoundedCornerShape(28.dp)) else Modifier).padding(vertical = 12.dp),
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(28.dp)).then(if (zone == row) Modifier.background(c.primaryContainer).border(3.dp, c.onPrimaryContainer, RoundedCornerShape(28.dp)) else Modifier).padding(vertical = if (compact) 6.dp else 12.dp),
                 horizontalArrangement = Arrangement.SpaceEvenly,
             ) {
                 for (seat in seats) {

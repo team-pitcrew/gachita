@@ -6,7 +6,7 @@ import org.junit.Test
 
 class ShortTest {
     private val json = """
-        {"title":"강릉 가는 길","cast":[{"participantId":"p1","name":"하은","character":"rabbit","seat":"ROW_2_RIGHT"}],
+        {"generation":7,"title":"강릉 가는 길","cast":[{"participantId":"p1","name":"하은","character":"rabbit","seat":"ROW_2_RIGHT"}],
          "scenes":[{"momentId":"m1","label":"바다 이야기","at":1,"clip":"/api/trips/ABC123/recordings/m1","startAt":0,"seconds":20.5,
            "cues":[{"start":0.5,"end":2.0,"text":"바다는 왜 짜?","participantId":"p1","seatArea":"ROW_2_RIGHT"},
                    {"start":1.5,"end":4.0,"text":"소금이 있어서","participantId":null,"seatArea":"ROW_1_LEFT"},
@@ -16,6 +16,7 @@ class ShortTest {
     @Test fun readsScenesAndSpeakers() {
         val s = parseShort(json)
         assertEquals("강릉 가는 길", s.title)
+        assertEquals(7, s.generation)
         val c = s.scenes.single().cues
         assertEquals(listOf("하은", "운전석", ""), c.map { it.who }) // 못 붙인 사람은 자리 이름만, 자리도 없으면 비움
         assertEquals(20.5, s.scenes.single().seconds, 0.0)
