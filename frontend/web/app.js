@@ -12,7 +12,7 @@ const TRIP = {
   ended: ["여행 종료", "이 여행은 만든 뒤 48시간까지 볼 수 있어요."],
 };
 const NEXT_TRIP = { boarding: ["출발", "driving"], driving: ["주차", "parked"], parked: ["여행 끝내기", "ended"] };
-const ONLY_HERE = "이 폰에서 참가한 사람만 켤 수 있어요.";
+const ONLY_HERE = "이 폰에서 연결한 사람만 켤 수 있어요.";
 // 켜져 있던 동의를 끄면 서버가 동의 세대를 올려 그 여행의 받아 적은 글을 모두 지운다(ADR-0007). 누르기 전에 알린다.
 const OFF_WIPES = "동의를 끄면 기록이 멈추고, 이 여행에서 지금까지 받아 적은 글이 모두 지워져요. 끌까요?";
 // 기록 동의 문구. 마지막 줄 앞까지는 #156에서 고친 docs/api/voice.md '동의 문구'와 글자까지 같다(voice.md는 api-media가 T75 서버 PR에서 고침).
@@ -219,7 +219,7 @@ const saveProfile = () =>
 
 function profileView() {
   const remove = () =>
-    confirm("프로필과 남긴 장면 앨범까지 지워져요. 지울까요?") &&
+    confirm("프로필과 남긴 장면 앨범이 지워져요. 지울까요?") &&
     act(async () => {
       await mine("DELETE", "/profiles/me");
       store("profile", null);
@@ -267,7 +267,7 @@ function home() {
           h("p", { className: "meta" }, "이름과 캐릭터를 정하면 동승 연결 QR을 띄울 수 있어요."),
           button("프로필 만들기", () => (location.hash = "me")),
         ),
-    last && bar(button("지난 여행 열기", () => (location.hash = last), "primary")),
+    last && bar(button("지금 탄 여행", () => (location.hash = last), "primary")),
   ];
 }
 
@@ -294,10 +294,11 @@ function consentView(me) {
   const decide = (on) => () => (store(`${trip.code}:asked`, "1"), on ? consentOn(me) : render());
   return [
     header(h("span", { className: "brand" }, "가치타"), h("span", { className: "meta" }, trip.title || "가치타 여행")),
+    h("p", { className: "state" }, `${SEAT[me.seat] ?? "차"}에 탔어요`),
     h("h1", {}, "이동 중 대화를 기록해도 될까요?"),
-    h("p", { className: "sub" }, `${SEAT[me.seat] ?? "자리"}에 앉은 ${me.name} 님으로 들어왔어요. 도착한 뒤 재미있던 장면을 클립으로 남기는 데 써요.`),
+    h("p", { className: "sub" }, "도착한 뒤 재미있던 장면을 클립으로 남기는 데 써요. 한 명이라도 동의하지 않으면 기록하지 않아요."),
     h("ul", { className: "card" }, CONSENT.map((line) => h("li", {}, line))),
-    bar(myToken() ? button("동의하고 시작", decide(true), "primary") : h("p", { className: "meta" }, ONLY_HERE), button("동의하지 않고 시작", decide(false))),
+    bar(myToken() ? button("동의해요", decide(true), "primary") : h("p", { className: "meta" }, ONLY_HERE), button("동의하지 않아요", decide(false))),
   ];
 }
 
