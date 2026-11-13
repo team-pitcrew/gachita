@@ -377,10 +377,14 @@ test("발화를 기록본으로 저장하고 프로필 피드로 읽는다(T39)"
   assert.equal((await call("GET", t))[1].generation, 2, "이미 꺼진 동의를 다시 꺼도 세대는 그대로");
   assert.equal((await call("GET", `${t}/transcript`, null, pb.token))[0], 403, "녹음에 동의한 참가자만 읽음");
   const late = [
-    { seq: 4, at: at(4), text: "철회 전에 받아 적음", generation: 1 },
+    { seq: 4, generation: 1 }, // 철회 전에 받아 적은 것: 차량은 내용을 버리고 순번만 보낸다
     { seq: 5, at: at(11), text: "다시 시작", generation: 2 },
     { seq: 6, at: at(12), text: "응 좋아", generation: 2 },
   ];
+  const [s403] = await call("POST", `${t}/utterances`, { device: "car", items: late }, freshA);
+  assert.equal(s403, 403, "동의하지 않은 탑승자가 있는 동안은 받지 않는다");
+  await call("PATCH", `${t}/participants/${pb.id}`, { consent: true });
+  assert.equal((await call("GET", t))[1].generation, 2, "동의를 다시 켜도 세대는 그대로");
   const [s3, r3] = await call("POST", `${t}/utterances`, { device: "car", items: late }, freshA);
   assert.deepEqual([s3, r3.lastSeq, r3.generation], [200, 6, 2], "확인 순번은 지워진 줄을 넘어 앞으로만 간다");
   const [, kept] = await call("GET", `${t}/utterances?device=car&after=0`, null, freshA);

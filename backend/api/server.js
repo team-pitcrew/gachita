@@ -472,24 +472,30 @@ async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
       // 기기 이름은 처음 올린 참가자의 것이다. 다른 참가자가 같은 이름으로 순번을 먼저 차지해 진짜 발화를 밀어내지 못하게.
       const { rows: ack } = await client.query("SELECT last_seq, participant_id FROM utterance_acks WHERE trip_code = $1 AND device = $2", [trip.code, device]);
       if (ack[0] && ack[0].participant_id !== caller.id) fail(403, "다른 참가자가 올리는 기기");
+      // 동의하지 않은 탑승자가 있는 동안은 받지 않는다(voice.md). 확인 순번도 오르지 않으니 차량은 모두 동의한 뒤 다시 보낸다.
+      if (!everyoneConsents(trip)) fail(403, "동의하지 않은 탑승자가 있어 올릴 수 없음");
       const items = Array.isArray(b.items) ? b.items : fail(400, "items: 배열");
       if (items.length > 500) fail(400, "items: 한 번에 500개까지");
       // 화자(profileId)는 받지 않는다. 서버의 화자 대조(T38)만 붙인다 — 올리는 쪽이 남의 이름을 붙이지 못하게.
       const rows = items.map((it, i) => {
         const u = obj(it, `items[${i}]`);
+        const seq = int(u.seq, 1, 1_000_000_000, `items[${i}].seq`);
+        const generation = int(u.generation ?? b.generation, 1, current, `items[${i}].generation`);
+        // 옛 세대는 저장하지 않으니 순번과 세대만 본다. 차량은 동의가 꺼질 때 내용을 버리고 {seq, generation}만 보내 확인받는다(ADR-0007).
+        if (generation < current) return [trip.code, device, seq, null, null, null, null, null, null, generation];
         const hasLat = u.lat !== undefined;
         if (hasLat !== (u.lng !== undefined)) fail(400, `items[${i}].lat, lng: 둘 다 있거나 둘 다 없음`);
         return [
           trip.code,
           device,
-          int(u.seq, 1, 1_000_000_000, `items[${i}].seq`),
+          seq,
           int(u.at, 0, Date.now() + 600_000, `items[${i}].at`),
           text(u.text, 500, `items[${i}].text`),
           u.seatArea == null ? null : oneOf(u.seatArea, SEATS, `items[${i}].seatArea`), // 모르는 구역은 비워 둔다(T37)
           u.confidence === undefined ? null : num(u.confidence, 0, 1, `items[${i}].confidence`),
           hasLat ? num(u.lat, -90, 90, `items[${i}].lat`) : null,
           hasLat ? num(u.lng, -180, 180, `items[${i}].lng`) : null,
-          int(u.generation ?? b.generation, 1, current, `items[${i}].generation`),
+          generation,
         ];
       });
       const fresh = rows.filter((r) => r[9] === current);
