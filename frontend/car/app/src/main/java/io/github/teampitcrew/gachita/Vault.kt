@@ -72,8 +72,8 @@ class Seal(private val key: SecretKey) {
     }
 }
 
-/** 여행 하나에 딸린 차 안 파일: 보관함(utterances-<코드>.jsonl·.acked·.tmp), 할 일(todos-<코드>.json·.tmp), 원음(audio-<코드>-…raw, T63), 올린 장면(clips-<코드>.done). */
-private val TRIP_FILE = Regex("^(?:utterances|todos|audio|clips)-([A-Z0-9]+)[.-]")
+/** 여행 하나에 딸린 차 안 파일: 보관함(utterances-<코드>.jsonl·.acked·.tmp), 할 일(todos-<코드>.json·.tmp), 원음(audio-<코드>-…raw, T63), 올린 장면(clips-<코드>.done), 말한 사람(speakers-<코드>.jsonl, T37). */
+private val TRIP_FILE = Regex("^(?:utterances|todos|audio|clips|speakers)-([A-Z0-9]+)[.-]")
 
 fun tripFiles(dir: File, code: String): List<File> = dir.listFiles().orEmpty().filter { TRIP_FILE.find(it.name)?.groupValues?.get(1) == code }
 

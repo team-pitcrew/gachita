@@ -59,6 +59,19 @@ class Server(base: String) {
         call("POST", "/api/trips/$code/recordings?moment=" + java.net.URLEncoder.encode(moment, "UTF-8") + "&generation=$generation&from=$from", wav, token)
     }
 
+    /** 출발 전 목소리 등록(#65): 그 참가자 본인의 토큰으로, 녹음 동의가 켜져 있을 때만. wav는 16 kHz 모노 1~20초. */
+    fun voice(code: String, id: String, token: String, wav: ByteArray) {
+        call("POST", "/api/trips/$code/participants/$id/voice", wav, token)
+    }
+
+    /**
+     * 발화 목소리 대조(#65). row는 1 앞줄·2 뒷줄, 모르면 null(모든 참가자가 후보). device·seq를 주면 서버가 그 발화 줄에 화자를 붙인다.
+     * 찾은 참가자(확신이 기준보다 낮으면 null)와 확신도.
+     */
+    fun voiceMatch(code: String, token: String, row: Int?, device: String, seq: Long, wav: ByteArray): Speaker =
+        JSONObject(call("POST", "/api/trips/$code/voice-match?" + (row?.let { "row=$it&" } ?: "") + "device=" + java.net.URLEncoder.encode(device, "UTF-8") + "&seq=$seq", wav, token)!!)
+            .let { Speaker(if (it.isNull("participantId")) null else it.getString("participantId"), it.optDouble("confidence", 0.0)) }
+
     private fun call(method: String, path: String, body: Any?, token: String? = null): String? {
         val c = URL(base + path).openConnection() as HttpURLConnection
         try {

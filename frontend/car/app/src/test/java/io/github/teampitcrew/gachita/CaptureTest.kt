@@ -22,6 +22,58 @@ class CaptureTest {
         assertFalse(c.allZero)
     }
 
+    @Test fun 합치기_전_채널별_에너지를_셈() {
+        val c = downmix(shortArrayOf(100, 0, -100, 0, 0, 10), 6)
+        assertEquals(20_000.0, c.left, 0.0); assertEquals(100.0, c.right, 0.0)
+    }
+
+    @Test fun 좌석_구역은_두_채널_크기_차로_가르고_작으면_모름() {
+        assertEquals(0, zoneOf(1e8, 1e2)) // 왼쪽 = 앞줄(에뮬레이터 기준)
+        assertEquals(1, zoneOf(1e2, 1e8))
+        assertNull(zoneOf(1e6, 0.5e6)) // 3 dB 차
+        assertNull(zoneOf(0.0, 0.0))
+    }
+
+    @Test fun 발화_구간의_묶음만_더해_구역을_냄() {
+        val lv = Levels(size = 50)
+        repeat(30) { lv.add(it.toLong(), 1e6, 1.0) } // 0~3초 앞줄
+        repeat(30) { lv.add(30L + it, 1.0, 1e6) } // 3~6초 뒷줄
+        assertEquals(0, lv.zone(500, 2_500))
+        assertEquals(1, lv.zone(3_500, 5_900))
+        assertNull(lv.zone(2_000, 4_000)) // 반반이면 모름
+        assertNull(lv.zone(0, 900)) // 50묶음(5초)보다 오래된 구간은 없음
+        assertNull(lv.zone(7_000, 8_000)) // 아직 없는 구간
+    }
+
+    @Test fun 말한_사람은_덧붙여_쌓고_사람이_고친_것을_대조가_덮지_않음() {
+        val sp = Speakers(tmp.root, "ABC123", TEST_SEAL)
+        sp.set(1, Speaker("p1", 0.95)); sp.set(2, Speaker(null, 0.4))
+        sp.set(2, Speaker("p2", 1.0, byPerson = true)); sp.set(2, Speaker(null, 0.5))
+        val again = Speakers(tmp.root, "ABC123", TEST_SEAL)
+        assertEquals(Speaker("p1", 0.95), again[1]); assertEquals(Speaker("p2", 1.0, true), again[2]); assertNull(again[3])
+        assertFalse(java.io.File(tmp.root, "speakers-ABC123.jsonl").readText().contains("{")) // 줄마다 Base64 봉투(평문 JSON이 아님)
+    }
+
+    @Test fun 짧게_읽힌_조각은_같은_묶음_자리에_더함() {
+        val lv = Levels(size = 10)
+        repeat(4) { lv.add(0, 1e6, 0.0) } // 같은 번호로 네 번(짧게 읽힘)
+        lv.add(1, 0.0, 1e6)
+        assertEquals(0, lv.zone(0, 199)) // 4e6 대 1e6 = 6 dB. 덮어쓰면 1e6 대 1e6이라 모름
+    }
+
+    @Test fun 대조를_마친_순번과_세대가_오르면_말한_사람을_지움() {
+        val sp = Speakers(tmp.root, "ABC123", TEST_SEAL)
+        sp.see(1); sp.set(1, Speaker("p1", 0.95)); sp.done(1); sp.done(3)
+        val again = Speakers(tmp.root, "ABC123", TEST_SEAL)
+        assertEquals(3, again.through); assertEquals("p1", again[1]?.who) // 다시 켜면 그 뒤부터
+        again.see(1) // 같은 세대
+        assertEquals("p1", again[1]?.who)
+        again.see(2) // 동의 철회
+        assertNull(again[1]); assertEquals(3, again.through)
+        val after = Speakers(tmp.root, "ABC123", TEST_SEAL)
+        assertNull(after[1]); assertEquals(3, after.through)
+    }
+
     @Test fun 모두_0이면_0인_조각() {
         assertTrue(downmix(ShortArray(CHUNK_FRAMES * 2), CHUNK_FRAMES * 2).allZero)
         assertFalse(downmix(ShortArray(CHUNK_FRAMES * 2).also { it[3199] = 1 }, CHUNK_FRAMES * 2).allZero) // 오른쪽 채널 끝 하나만 있어도
@@ -281,6 +333,6 @@ class CaptureTest {
         val bare = Utterance(8, "ABC123", 1_000, 2_000, "응", 300, 1_300, 1)
         assertEquals(bare, Utterance.parse(bare.json().toString()))
         assertFalse(bare.json().has("gear"))
-        assertFalse(u.wire(2)!!.has("seatZone")) // 구역은 차에만
+        assertFalse(u.wire(2)!!.has("seatZone")) // 구역은 차에만(서버 seatArea는 좌석 하나, 대조는 row로)
     }
 }

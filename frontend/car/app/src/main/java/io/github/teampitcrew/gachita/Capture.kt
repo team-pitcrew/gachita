@@ -64,26 +64,67 @@ data class Utterance(
     }
 }
 
-/** STT에 넣을 0.1초 모노(16비트 LE)와, 두 채널 값이 모두 0이었는지. */
-class Chunk(val mono: ByteArray, val allZero: Boolean)
+/** STT에 넣을 0.1초 모노(16비트 LE), 두 채널 값이 모두 0이었는지, 채널별 에너지(표본 제곱의 합, 좌석 구역 T37). */
+class Chunk(val mono: ByteArray, val allZero: Boolean, val left: Double = 0.0, val right: Double = 0.0)
 
 /**
- * 2채널 인터리브(좌, 우, 좌, 우…) 값 n개를 좌+우 모노로 합친다. 넘치면 자른다.
+ * 2채널 인터리브(좌, 우, 좌, 우…) 값 n개를 좌+우 모노로 합친다. 넘치면 자른다. 합치기 전 채널별 에너지를 따로 센다(합치면 어느 쪽 소리였는지 잃음).
  * ponytail: 더하기는 11/13 실측과 같은 방식. 에뮬레이터는 두 채널이 완전히 갈려 넘치지 않았다.
  * 실차에서 두 채널에 같은 소리가 크게 들어와 잘리면 평균((좌+우)/2)으로 바꾼다.
  */
 fun downmix(buf: ShortArray, n: Int): Chunk {
     val out = ByteArray(n / 2 * 2)
     var zero = true
+    var el = 0.0; var er = 0.0
     var i = 0
     while (i + 1 < n) {
         val l = buf[i].toInt(); val r = buf[i + 1].toInt()
         if (l != 0 || r != 0) zero = false
+        el += l.toDouble() * l; er += r.toDouble() * r
         val m = (l + r).coerceIn(-32768, 32767)
         out[i] = m.toByte(); out[i + 1] = (m shr 8).toByte() // 모노 표본 하나 = 2바이트 = 입력 값 둘의 자리
         i += 2
     }
-    return Chunk(out, zero)
+    return Chunk(out, zero, el, er)
+}
+
+// 좌석 구역(T37): 발화 구간의 두 채널 크기를 견줘 앞줄(0)·뒷줄(1)·모름(null).
+// ponytail: 채널과 줄의 짝, 문턱은 에뮬레이터 기준이다(왼쪽 = 앞줄, 두 채널이 완전히 갈려 60 dB 차, 11/13). 실차의 마이크 수·배치를 보고 이 두 값을 고친다.
+const val LEFT_IS_FRONT = true
+const val ZONE_DB = 6.0 // 두 채널 크기 차가 이보다 작으면 모름
+
+fun zoneOf(left: Double, right: Double): Int? {
+    if (left + right <= 0) return null
+    val db = 10 * kotlin.math.log10((left + 1) / (right + 1))
+    val front = if (LEFT_IS_FRONT) 0 else 1
+    return when {
+        db >= ZONE_DB -> front
+        db <= -ZONE_DB -> 1 - front
+        else -> null
+    }
+}
+
+/** 최근 60초 묶음(0.1초)의 채널별 에너지. 발화의 원음 구간(수음 시작부터 ms)을 더해 구역을 낸다. 읽기 스레드가 쓰고 메인 스레드가 읽는다. */
+class Levels(private val size: Int = 600) {
+    private val l = DoubleArray(size)
+    private val r = DoubleArray(size)
+    private var last = -1L
+
+    /** index는 수음 시작부터 센 묶음 번호(0부터). 짧게 읽힌 조각이 같은 번호로 다시 오면 더한다. */
+    @Synchronized fun add(index: Long, left: Double, right: Double) {
+        val i = (index % size).toInt()
+        if (index == last) { l[i] += left; r[i] += right } else { l[i] = left; r[i] = right }
+        last = index
+    }
+
+    @Synchronized fun zone(fromMs: Long, toMs: Long): Int? {
+        val a = maxOf(fromMs / 100, last - size + 1, 0)
+        val b = minOf(toMs / 100, last)
+        if (b < a) return null
+        var sl = 0.0; var sr = 0.0
+        for (k in a..b) { sl += l[(k % size).toInt()]; sr += r[(k % size).toInt()] }
+        return zoneOf(sl, sr)
+    }
 }
 
 /** 묶기가 만든 발화. 순번과 여행은 보관함이 붙인다. */
@@ -180,15 +221,18 @@ class Outbox(dir: File, val trip: String, private val seal: Seal) {
 
     @Synchronized fun recent(n: Int): List<Utterance> = said.takeLast(n)
 
+    /** 서버가 받은 순번 (after, acked]의 글이 있는 발화. 화자 대조(T37)에 쓴다. */
+    @Synchronized fun ackedAfter(after: Long): List<Utterance> = items.filter { it.seq in (after + 1)..acked && it.text.isNotEmpty() }
+
     /**
-     * 위치는 발화 끝에서 FIX_MS 안에 받은 것만 붙인다. 세대가 오른 것을 알기 전에 시작한 말(동의 철회 사이에 한 말일 수 있음)은
+     * 위치는 발화 끝에서 FIX_MS 안에 받은 것만 붙인다. zone은 좌석 구역(T37). 세대가 오른 것을 알기 전에 시작한 말(동의 철회 사이에 한 말일 수 있음)은
      * 앞 세대로, 글 없이 남긴다(폰에서 끄고 10초 조회 안에 다시 켜 기록이 이어진 경우).
      */
-    @Synchronized fun add(d: Draft, fix: Fix?): Utterance {
+    @Synchronized fun add(d: Draft, fix: Fix?, zone: Int? = null): Utterance {
         val old = d.startedAt < bumpedAt
         val f = fix?.takeIf { !old && kotlin.math.abs(d.endedAt - it.at) <= FIX_MS }
         val u = Utterance((items.lastOrNull()?.seq ?: 0) + 1, trip, d.startedAt, d.endedAt, if (old) "" else d.text, d.audioFromMs, d.audioToMs,
-            if (old) before else generation, f?.lat, f?.lng)
+            if (old) before else generation, f?.lat, f?.lng, zone)
         file.appendText(seal.line(u.json().toString()) + "\n")
         items += u
         return u
@@ -265,4 +309,60 @@ class Outbox(dir: File, val trip: String, private val seal: Seal) {
         fun createdAtOf(dir: File, trip: String, seal: Seal): Long? =
             state(File(dir, "utterances-$trip.acked"), seal)?.optLong("createdAt")?.takeIf { it > 0 }
     }
+}
+
+// ---- 말한 사람(T37): 좌석 구역 + 서버의 목소리 대조(POST /voice-match?row=, #65 계약) ----
+
+/** 출발 전 목소리 등록에서 읽는 두 문장(약 7초, #65 정확도 표의 '2문장'). 등록하는 동안 받아 적힌 말은 보관함에 넣지 않는다. */
+val ENROLL_LINES = listOf("오늘도 안전하게 같이 타고 가요.", "바다가 보이면 창문을 조금 열어 볼까요?")
+const val ENROLL_MS = 10_000L
+const val ENROLL_BYTES = (ENROLL_MS * RATE / 1000 * 2).toInt() // 10초 16 kHz 모노
+
+/** 발화 한 건의 말한 사람: 참가자 id(모르면 null), 대조 확신도, 사람이 화면에서 고쳤는지. */
+data class Speaker(val who: String?, val confidence: Double, val byPerson: Boolean = false)
+
+/**
+ * 발화 순번별 말한 사람. speakers-<여행>.jsonl에 한 줄씩 덧붙이고(암호화, 뒤의 줄이 앞을 덮음) 앱을 다시 켜면 이어 읽는다.
+ * 보관함을 다시 쓰지 않으려고 따로 둔다(발화마다 보관함 전체를 다시 쓰지 않게). 메인 스레드와 통신 스레드가 같이 쓴다.
+ * through는 대조를 마친(또는 버린) 마지막 순번: 실패하거나 앱이 꺼져도 그 뒤부터 다시 대조한다.
+ * 동의 세대가 오르면(동의 철회) 옛 발화의 말한 사람을 지운다(서버도 목소리 등록값을 지움).
+ */
+class Speakers(dir: File, val trip: String, private val seal: Seal) {
+    private val file = File(dir, "speakers-$trip.jsonl")
+    private val map = HashMap<Long, Speaker>()
+    var through = 0L
+        private set
+    private var gen = 0
+
+    init {
+        if (file.exists()) file.forEachLine { line ->
+            runCatching { JSONObject(seal.unline(line)) }.getOrNull()?.let { o ->
+                when {
+                    o.has("through") -> through = o.getLong("through")
+                    o.has("gen") -> gen = o.getInt("gen")
+                    else -> map[o.getLong("seq")] = Speaker(o.optString("who").ifEmpty { null }, o.getDouble("confidence"), o.optBoolean("byPerson"))
+                }
+            }
+        }
+    }
+
+    @Synchronized operator fun get(seq: Long): Speaker? = map[seq]
+
+    @Synchronized fun set(seq: Long, s: Speaker) {
+        if (map[seq]?.byPerson == true && !s.byPerson) return // 사람이 고친 것은 대조가 덮지 않는다
+        map[seq] = s
+        put(JSONObject().put("seq", seq).put("who", s.who ?: "").put("confidence", s.confidence).put("byPerson", s.byPerson))
+    }
+
+    @Synchronized fun done(seq: Long) { if (seq > through) { through = seq; put(JSONObject().put("through", seq)) } }
+
+    /** 동의 세대. 올랐으면 지금까지의 말한 사람을 모두 지운다(그 발화는 모두 옛 세대). 처음 본 세대면 적기만 한다. */
+    @Synchronized fun see(g: Int) {
+        if (g <= gen) return
+        if (gen > 0) { map.clear(); file.delete() } // through는 그대로: 옛 발화를 다시 대조하지 않게
+        gen = g
+        put(JSONObject().put("gen", g)); if (through > 0) put(JSONObject().put("through", through))
+    }
+
+    private fun put(o: JSONObject) = file.appendText(seal.line(o.toString()) + "\n")
 }
