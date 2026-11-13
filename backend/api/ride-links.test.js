@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { before, after, test } from "node:test";
+import { setTimeout as sleep } from "node:timers/promises";
 import pg from "pg";
 import { migrate, server } from "./server.js";
 import { endStores, tripsDb } from "./db.js";
@@ -121,4 +122,35 @@ test("같은 QR을 두 여행에서 동시에 읽어도 한 참가자만 생긴�
   assert.deepEqual(results.map((r) => r.status).sort(), [201, 409]);
   const trips = await Promise.all([call("GET", `/trips/${a.code}`), call("GET", `/trips/${b.code}`)]);
   assert.equal(trips.reduce((count, r) => count + r.data.participants.filter((p) => p.profileId === phone.id).length, 0), 1);
+});
+
+test("여행 잠금을 기다리는 사이 48시간이 지나면 참가자 추가와 QR 사용을 되돌린다", async () => {
+  const phone = await profile("만료 경계");
+  const link = await issue(phone);
+  const t = await trip();
+  const holder = await tripsDb().connect();
+  let pending;
+  try {
+    await holder.query("BEGIN");
+    await holder.query("SELECT 1 FROM trips WHERE code=$1 FOR UPDATE", [t.code]);
+    pending = redeem(t, link);
+    let waiting = false;
+    for (let i = 0; i < 100; i++) {
+      const { rows } = await tripsDb().query("SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'SELECT doc FROM trips WHERE code=%'");
+      if (rows.length) { waiting = true; break; }
+      await sleep(20);
+    }
+    assert.ok(waiting, "상환이 여행 잠금을 기다리는 상태를 먼저 확인");
+    await holder.query("UPDATE trips SET created_at=clock_timestamp()-interval '48 hours'+interval '100 milliseconds' WHERE code=$1", [t.code]);
+    await sleep(150);
+    await holder.query("COMMIT");
+    assert.equal((await pending).status, 404);
+    const { rows } = await tripsDb().query("SELECT doc FROM trips WHERE code=$1", [t.code]);
+    assert.equal(rows[0].doc.participants.length, 0);
+    assert.equal((await call("GET", `/ride-links/${link.id}`, undefined, phone.token)).data.status, "pending");
+  } finally {
+    await holder.query("ROLLBACK").catch(() => {});
+    holder.release();
+    await pending;
+  }
 });

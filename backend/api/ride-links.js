@@ -65,7 +65,8 @@ export async function redeemRideLink(req, tripCode, body, { profileById, seats }
     trip.participants.push(participant);
     trip.recording = false;
     trip.version++;
-    await client.query("UPDATE trips SET doc=$2 WHERE code=$1", [trip.code, trip]);
+    const updated = await client.query("UPDATE trips SET doc=$2 WHERE code=$1 AND created_at > clock_timestamp()-interval '48 hours'", [trip.code, trip]);
+    if (!updated.rowCount) fail(404, "보관 기간이 지난 여행");
     const consumed = await client.query("UPDATE ride_links SET trip_code=$2, participant_id=$3, expires_at=clock_timestamp()+interval '5 minutes' WHERE id=$1 AND expires_at > clock_timestamp()", [link.id, trip.code, participant.id]);
     if (!consumed.rowCount) fail(404, "만료된 동승 연결");
     await client.query("COMMIT");
