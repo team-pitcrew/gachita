@@ -53,6 +53,7 @@ const pdraft = { name: "", character: "", photo: null, preview: "", consentDefau
 let failed = ""; // 여행을 불러오지 못한 이유
 let offline = false;
 let stale = false; // 입력 중에 온 변경은 입력이 끝난 뒤 그린다
+let reading = false; // 여행 화면의 '동의 켜기': 켜기 전에 동의 문구 전문을 보이는 중
 const draft = { join: "", step: 0, name: "", seat: "" };
 
 // 여행 경로는 토큰 없이, 프로필 경로(mine)는 이 폰의 프로필 토큰으로.
@@ -429,6 +430,15 @@ function tripView(me) {
           throw e.status === 401 || e.status === 403 ? new Error(ONLY_HERE) : e;
         });
     });
+  // 켜기 전에 동의 문구 전문을 보인다: 참가 때 동의하지 않았거나 참가한 뒤 문구가 바뀐 사람도 무엇에 동의하는지 보고 켠다
+  if (reading)
+    return [
+      header(button("이전", () => ((reading = false), render()), "plain"), h("span", { className: "meta" }, trip.title || `코드 ${trip.code}`)),
+      h("h1", {}, "이동 중 대화를 기록해도 될까요?"),
+      h("p", { className: "sub" }, "도착한 뒤 재미있던 장면을 클립으로 남기는 데 써요. 한 명이라도 동의하지 않으면 기록하지 않아요."),
+      h("ul", { className: "card" }, CONSENT.map((line) => h("li", {}, line))),
+      bar(button("동의해요", () => ((reading = false), consentOn()), "primary"), button("동의하지 않아요", () => ((reading = false), render()))),
+    ];
   const open = trip.requests.filter((r) => !CLOSED.includes(r.status));
   const rec = trip.recording ? ["기록 중", "rec"] : trip.status !== "driving" ? ["기록 안 함", ""] : waiting.length ? ["동의 대기", ""] : ["기록 일시정지", ""];
   const next = NEXT_TRIP[trip.status];
@@ -489,8 +499,10 @@ function tripView(me) {
         "div",
         { className: "between" },
         h("div", {}, h("p", { className: "what" }, "대화 기록 동의"), h("p", { className: "meta" }, me.consent ? "동의했어요." : "동의하지 않았어요.")),
-        me.consent ? button("동의 끄기", () => confirm(OFF_WIPES) && patch(`/participants/${me.id}`, { consent: false })()) : myToken() ? button("동의 켜기", consentOn) : h("p", { className: "meta" }, ONLY_HERE),
+        me.consent ? button("동의 끄기", () => confirm(OFF_WIPES) && patch(`/participants/${me.id}`, { consent: false })()) : myToken() ? button("동의 켜기", () => ((reading = true), render(), scrollTo(0, 0))) : h("p", { className: "meta" }, ONLY_HERE),
       ),
+      // 이미 동의한 사람도 지금의 동의 문구(바뀐 것 포함)를 언제든 다시 본다
+      h("details", {}, h("summary", { className: "meta" }, "동의 문구 보기"), h("ul", {}, CONSENT.map((line) => h("li", {}, line)))),
     ),
     trip.moments.length > 0 &&
       h(
@@ -540,7 +552,7 @@ function render() {
   };
 }
 
-addEventListener("hashchange", () => (location.hash === "#me" && fillDraft(), (trip = null), (failed = ""), (draft.step = 0), refresh(true)));
+addEventListener("hashchange", () => ((reading = false), location.hash === "#me" && fillDraft(), (trip = null), (failed = ""), (draft.step = 0), refresh(true)));
 app.addEventListener("focusout", () => setTimeout(() => stale && !typing() && render())); // 입력이 끝나면 밀린 변경을 그린다
 setInterval(refresh, 2000); // ponytail: 2초마다 묻는다(바뀐 게 없으면 304). 지연이 문제가 되면 SSE로 바꾼다.
 render();
