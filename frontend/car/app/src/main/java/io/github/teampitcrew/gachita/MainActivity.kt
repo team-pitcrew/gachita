@@ -111,6 +111,8 @@ class MainActivity : ComponentActivity() {
     private val picked = mutableStateListOf<String>().apply { addAll(FAMILY.map { it.name }) }
     private var error by mutableStateOf("")
     private var offer by mutableStateOf<Offer?>(null) // 지금 보이는 경유지 제안(T9)
+    private var debug = false
+    private var pendingRoute: List<String>? = null // 내비에 붙으면 보낼 목적지(디버그 인자)
     private var offers = 0L // 제안 번호. 늦게 온 콜백이 다른 제안을 건드리지 않게
     private var todos: Todos? = null // 지금 여행의 장소별 할 일(T40)
     private var todoList by mutableStateOf(emptyList<Todo>())
@@ -157,26 +159,25 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         prefs = getSharedPreferences("car", MODE_PRIVATE)
         // 실행 인자(--es server, --ei widthDp, --es route)는 디버그 빌드에서만 받는다. 밖에서 연 화면이 서버 주소를 바꾸지 못하게
-        val debug = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+        debug = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
         if (debug) intent.getStringExtra("server")?.let { prefs.edit().putString("server", it).apply() }
         server = prefs.getString("server", null) ?: DEFAULT_SERVER
         device = prefs.getString("device", null) ?: UUID.randomUUID().toString().also { prefs.edit().putString("device", it).apply() }
         // 앱을 다시 켜도, 서버에 닿지 않아도 마지막으로 받은 여행과 끄기 대기를 이어 보여 준다
         s = Session.restore(prefs.getString("trip", null), prefs.getBoolean("offPending", false), prefs.getBoolean("started", false))
         s.trip?.let { Live.outbox(this, it.code) } // 앱을 다시 켜도 받아 적은 말과 순번을 이어 보여 준다
-        // 시연·E2E: --es route "위도,경도,이름"으로 내비에 목적지를 넣는다. 실제로는 운전자가 내비에서 정한다
-        var route = if (debug) intent.getStringExtra("route")?.split(",")?.takeIf { it.size == 3 } else null
         car = Car(this) {
             carStatus = it; Live.gear = it.gear
             val was = s.gear
             s = s.withGear(it.gear)
             if (was != null && was != "P" && it.gear == "P") arrive() // 앱을 켤 때 처음 읽은 P는 도착이 아니다
-            route?.takeIf { _ -> it.navi }?.let { (la, ln, name) -> route = null; car.route(Place(la.toDouble(), ln.toDouble(), name), emptyList()) }
+            routeIfReady()
         }
         car.start()
         Live.onHeard = ::heard
         s.trip?.let { todosOf(it.code) }
-        gleo(intent)
+        routeFrom(intent)
+        if (savedInstanceState == null) gleo(intent) // 다시 만들어진 화면이 지난 호출에 또 답하지 않게
         setContent {
             MaterialTheme(colorScheme = if (isSystemInDarkTheme()) DarkColors else LightColors, typography = CarType) {
                 ProvideTextStyle(TextStyle(fontSize = 24.sp)) {
@@ -195,7 +196,19 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); gleo(intent) }
+    override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); routeFrom(intent); gleo(intent) }
+
+    /** 시연·E2E: --es route "위도,경도,이름"으로 내비에 목적지를 넣는다(디버그 빌드). 실제로는 운전자가 내비에서 정한다. */
+    private fun routeFrom(i: Intent?) {
+        if (debug) pendingRoute = i?.getStringExtra("route")?.split(",")?.takeIf { it.size == 3 } ?: pendingRoute
+        routeIfReady()
+    }
+
+    private fun routeIfReady() {
+        val (la, ln, name) = pendingRoute?.takeIf { carStatus.navi } ?: return
+        pendingRoute = null
+        car.route(Place(la.toDouble(), ln.toDouble(), name), emptyList())
+    }
 
     override fun onStart() { super.onStart(); visible = true; main.removeCallbacks(tick); main.post(tick) }
     override fun onStop() { visible = false; super.onStop() }
@@ -308,7 +321,8 @@ class MainActivity : ComponentActivity() {
         if (isRestRequest(u.text)) return hold(t, u)
         todoOf(u.text)?.let { (place, text) ->
             val box = todosOf(t.code)
-            box.add(place, text); todoList = box.items
+            if (box.add(place, text) == null) { Log.i(TAG, "같은 할 일이 있어 더하지 않음"); return }
+            todoList = box.items
             Log.i(TAG, "할 일 보관 $place · 이 여행 ${box.open().size}건")
             return
         }
@@ -415,13 +429,18 @@ class MainActivity : ComponentActivity() {
 
     private fun todosOf(code: String): Todos = todos?.takeIf { it.trip == code } ?: Todos(filesDir, code).also { todos = it; todoList = it.items }
 
-    /** 기어가 P로 바뀐 때: 내비의 목적지·경유지가 할 일의 장소면 그곳의 미완료 할 일을 알린다. 아니면 알리지 않는다. */
+    /**
+     * 기어가 P로 바뀐 때: 내비가 향하는 다음 곳(첫 경유지, 없으면 목적지)이 할 일의 장소면 그곳의 미완료 할 일을 알린다.
+     * 그 앞의 휴게소 등에 서면 다음 곳이 그 휴게소라 알리지 않는다.
+     * ponytail: 다음 곳에 닿기 전에 P로 바꿔도(신호 대기·주유소) 알린다. 남은 거리(remainDistance)로 거르는 것은
+     * 차가 움직이는 데서 확인한 뒤 넣는다(에뮬레이터는 차를 옮기지 않아 남은 거리가 줄지 않음).
+     */
     private fun arrive() {
         val box = s.trip?.let { todosOf(it.code) } ?: return
         if (box.open().isEmpty()) return
-        car.naviPlaces { names ->
-            val place = box.open().map { it.place }.distinct().firstOrNull { arrivedAt(it, names) }
-            Log.i(TAG, "주차 · 내비 장소 ${names.size}곳 · 할 일 장소에 도착 ${place != null}")
+        car.nextStopName { next ->
+            val place = box.open().map { it.place }.distinct().firstOrNull { arrivedAt(it, next) }
+            Log.i(TAG, "주차 · 다음 곳 ${if (next == null) "모름" else "있음"} · 할 일 장소에 도착 ${place != null}")
             if (place != null) briefAt(place, speak = true)
         }
     }
@@ -443,7 +462,7 @@ class MainActivity : ComponentActivity() {
     /**
      * Gleo가 "도착해서 할 일 알려 줘"로 부른 때(assets/schema.json, component activity). 미완료 할 일 전체를 띄우고
      * Gleo에 결과를 돌려준다(Callback Schema: message는 영어, 항목은 data). 말은 Gleo가 하므로 우리 TTS는 쓰지 않는다.
-     * Gleo는 함수 이름이나 '<패키지>.<함수 이름>'을 action으로 보낸다(11/1 프로브).
+     * Gleo는 함수 이름이나 '<패키지>.<함수 이름>'을 action으로 보낸다(11/1 프로브). 응답의 functionName은 schema의 함수 이름 그대로.
      */
     private fun gleo(i: Intent?) {
         if (i?.action?.substringAfterLast('.') != GLEO_ARRIVAL) return
@@ -453,8 +472,8 @@ class MainActivity : ComponentActivity() {
         val msg = if (open.isEmpty()) "There are no to-do items for after arriving." else "Found ${open.size} to-do items for after arriving. The list is on the screen once the car is parked."
         val data = JSONArray(open.map { JSONObject().put("place", it.place).put("task", it.text) }).toString()
         sendBroadcast(Intent("ai.pleos.playground.intent.action.APP_ACTION_RESPONSE").putExtra("packageName", packageName)
-            .putExtra("response", JSONObject().put("functionName", i.action).put("status", "success").put("message", msg).put("mode", "voice").put("data", data).toString()))
-        Log.i(TAG, "Gleo 도착 할 일 ${open.size}건 응답")
+            .putExtra("response", JSONObject().put("functionName", GLEO_ARRIVAL).put("status", "success").put("message", msg).put("mode", "voice").put("data", data).toString()))
+        Log.i(TAG, "Gleo 도착 할 일 ${open.size}건 응답 $GLEO_ARRIVAL")
     }
 
     /** 제안을 결과 단계로 닫고 말로 알린다. 그 제안이 이미 바뀌었으면(새 여행) 화면은 두고 말도 하지 않는다. */

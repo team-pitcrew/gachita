@@ -183,10 +183,14 @@ class Car(ctx: Context, private val onChange: (CarStatus) -> Unit) {
     fun distanceTo(p: Place, done: (Int?, Int?) -> Unit) =
         trip.start({ done(it?.distance, it?.eta) }) { navi.requestTrip(TripRequest(latitude = p.lat, longitude = p.lng, poiId = "", poiName = p.name, poiSubId = "0")) }
 
-    /** 내비의 목적지와 경유지 이름(T40 도착 판정). 화면은 넘어가지 않는다. 에뮬레이터는 경유지 좌표를 0.0으로 주어 이름만 쓴다. */
-    fun naviPlaces(done: (List<String>) -> Unit) = dest.start({ d ->
-        wps.start({ w -> done((listOf(d?.name) + w.orEmpty().map { it.name }).filterNotNull().filter { it.isNotBlank() }) }) { navi.getWaypointInfo() }
-    }) { navi.getDestinationInfo() }
+    /**
+     * 내비가 지금 향하는 다음 곳의 이름: 첫 경유지, 없으면 목적지(T40 도착 판정). 모르면 null. 화면은 넘어가지 않는다.
+     * 에뮬레이터는 경유지 좌표를 0.0으로 주어 이름만 쓴다. 지난 경유지는 내비가 목록에서 뺀다고 보고 있다(실차 확인 전).
+     */
+    fun nextStopName(done: (String?) -> Unit) = wps.start({ w ->
+        w?.map { it.name }?.firstOrNull { !it.isNullOrBlank() }?.let { return@start done(it) }
+        dest.start({ d -> done(d?.name?.takeIf { it.isNotBlank() }) }) { navi.getDestinationInfo() }
+    }) { navi.getWaypointInfo() }
 
     /** 지금 경로에 들를 곳을 더한다. 내비가 앞으로 나오고, 반영 알림(onWaypointChanged ADD)이 오면 true. 경로 오류나 30초 넘으면 false. */
     fun addStop(p: Place, done: (Boolean) -> Unit) = stop.start({ done(it == true) }) {
