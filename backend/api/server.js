@@ -455,7 +455,7 @@ async function inProfilesTx(fn) {
     await client.query("COMMIT");
     return result;
   } catch (e) {
-    await client.query("ROLLBACK");
+    await client.query("ROLLBACK").catch(() => {}); // 끊긴 연결이면 되돌릴 것도 없다. 원래 오류를 가리지 않게
     throw e;
   } finally {
     client.release();
@@ -649,7 +649,7 @@ async function withTrip(code, write, fn) {
     await client.query("COMMIT");
     return result;
   } catch (e) {
-    await client.query("ROLLBACK");
+    await client.query("ROLLBACK").catch(() => {}); // 끊긴 연결이면 되돌릴 것도 없다. 원래 오류를 가리지 않게
     throw e;
   } finally {
     client.release();

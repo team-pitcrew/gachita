@@ -57,7 +57,7 @@ before(async () => {
   await migrate();
   await migrate(); // 여러 번 실행해도 같아야 한다
   // 예전에 한 DB에 같이 두던 표가 남았으면 치운다.
-  await tripsDb().query("DROP TABLE IF EXISTS profiles");
+  await tripsDb().query("DROP TABLE IF EXISTS voice_prints, profiles"); // make run(한 DB)이면 목소리 값이 프로필을 가리킨다(외래 키째 다시 만들어짐)
   await tripsDb().query("TRUNCATE trips");
   await profilesDb().query("TRUNCATE profiles CASCADE"); // 목소리 값(voice_prints)은 외래 키로 함께
   await new Promise((ok) => server.listen(0, () => ok((base = `http://localhost:${server.address().port}`))));
@@ -695,6 +695,27 @@ test("확장자 없는 주소는 웹 화면으로 연다(초대 /j/<코드>, 시
   assert.equal((await fetch(`${base}/..%2F..%2Fbackend%2Fapi%2Fserver.js`)).status, 404, "웹 폴더 밖은 404");
   const outside = await fetch(`${base}/..%2F..%2Fbackend%2Fapi`);
   assert.ok((await outside.text()).includes("<title>같이타</title>"), "확장자 없는 주소로 웹 폴더 밖을 가리켜도 웹앱 첫 화면만 나옴");
+});
+
+test("DB가 연결을 끊어도 서버가 살아 있고 다음 요청에서 다시 맺는다(Postgres 재시작·장애 조치)", async () => {
+  assert.equal((await fetch(`${base}/healthz`)).status, 200); // 두 저장소의 풀에 쉬는 연결이 생긴다
+  // 빌려 간 연결(트랜잭션 중)에도 오류 처리기가 있어야 한다. 풀은 빌려 줄 때 자기 처리기를 뗀다
+  const held = await tripsDb().connect();
+  try {
+    assert.ok(held.listenerCount("error") > 0, "빌려 간 연결의 오류 처리기");
+    await held.query("BEGIN");
+    const admin = new pg.Client({ connectionString: process.env.DATABASE_URL });
+    await admin.connect();
+    const { rows } = await admin.query(
+      "SELECT count(pg_terminate_backend(pid))::int AS n FROM pg_stat_activity WHERE datname LIKE current_database() || '%' AND pid <> pg_backend_pid()"
+    );
+    await admin.end();
+    assert.ok(rows[0].n > 0, "끊은 연결이 있어야 시험이 된다");
+    await new Promise((ok) => setTimeout(ok, 200)); // 끊긴 것을 알아채고 버릴 때까지
+  } finally {
+    held.release(true); // 끊긴 연결은 풀에 돌려주지 않고 버린다
+  }
+  assert.equal((await fetch(`${base}/healthz`)).status, 200, "처리기가 없으면 여기 오기 전에 프로세스가 죽는다");
 });
 
 test("명세(docs/api/openapi.yaml)와 서버의 경로가 같다", async () => {
