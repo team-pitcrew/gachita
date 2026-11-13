@@ -650,15 +650,81 @@ button.share-icon.primary { width: 56px; min-width: 56px; }
   flex: 1;
 }
 
-/* 동승 연결 QR(#71). 카메라가 읽게 테마와 관계없이 흰 바탕·검은 칸(T20 개편도 이 색을 유지) */
+/* 동승 연결 QR(#71). 카메라가 읽게 테마와 관계없이 흰 바탕·검은 칸(T20 개편도 이 색을 유지).
+   결제 QR처럼 카드 하나에 이름·QR·남은 시간·새로 띄우기만(11/14). QR을 누르면 화면 가득(.qr-zoom). */
 .qr {
   display: block;
-  width: min(100%, 300px);
-  margin: 0 auto;
+  width: 100%;
   border-radius: var(--r-ctl);
 }
 .qr.expired {
-  opacity: 0.2;
+  opacity: 0.15;
+}
+.pass {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  max-width: 360px;
+  margin: 24px auto 16px;
+  padding: 24px 24px 20px;
+  border-radius: var(--r-card);
+  background: var(--surface);
+  box-shadow: 0 8px 28px rgb(0 0 0 / 0.08);
+  text-align: center;
+}
+.pass-name {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+}
+.pass-qr {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-ctl);
+  background: #fff;
+  cursor: zoom-in;
+}
+.pass-qr:disabled {
+  cursor: default;
+}
+.pass-left {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+}
+.pass.expired .pass-left {
+  font-size: 16px;
+  color: var(--ink-2);
+}
+.qr-zoom {
+  width: 100vw;
+  height: 100dvh;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 24px;
+  border: 0;
+  background: #fff;
+  color: #28221b;
+  text-align: center;
+}
+.qr-zoom[open] {
+  display: grid;
+  place-content: center;
+  gap: 16px;
+}
+.qr-zoom::backdrop {
+  background: #fff;
+}
+.qr-zoom .qr {
+  width: min(92vw, 80dvh);
+}
+.qr-zoom p {
+  margin: 0;
+  color: #5a5044;
 }
 .center {
   text-align: center;

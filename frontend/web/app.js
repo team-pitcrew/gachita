@@ -448,18 +448,37 @@ function qrSvg(text, expired) {
   return svg;
 }
 
+// 동승 연결 QR 화면(지환님 11/14: QR만 깔끔하게, 누르면 크게 — 네이버페이·토스 결제 QR처럼).
+// 카드 하나에 이름·QR·남은 시간(분:초)·새로 띄우기만 둔다. QR을 누르면 화면 가득 크게 보이고, 아무 데나 누르면 닫힌다.
+const leftText = (ms) => `${Math.floor(ms / 60_000)}:${String(Math.floor((ms % 60_000) / 1000)).padStart(2, "0")}`;
+function zoomQr(text) {
+  const d = h("dialog", { className: "qr-zoom", "aria-label": "동승 연결 QR 크게 보기" }, qrSvg(text, false), h("p", {}, "누르면 닫혀요"));
+  d.addEventListener("click", () => d.close());
+  d.addEventListener("close", () => d.remove());
+  document.body.append(d);
+  d.showModal();
+}
 function rideView() {
   const left = ride.expiresAt - Date.now();
+  const live = left > 0;
   return [
     header(button("닫기", cancelRide, "plain"), h("span", { className: "meta" }, "동승 연결")),
-    h("h1", {}, "차에 이 QR을 보여 주세요"),
-    h("p", { className: "sub" }, "주차 중인 차 화면의 '동승자 연결'에서 이 QR을 읽으면, 운전자가 고른 자리로 여행에 들어가요."),
-    profile && h("div", { className: "card face" }, avatar(profile, photo), h("p", { className: "what grow" }, `${profile.name} 님`)),
-    qrSvg(ride.qr, left <= 0),
-    h("p", { className: "meta center", "aria-live": "polite" }, left > 0 ? `${Math.ceil(left / 60_000)}분 남았어요` : "QR이 만료됐어요. 새로 띄워 주세요."),
-    bar(button("새로 띄우기", startRide, left > 0 ? "" : "primary")),
+    h(
+      "section",
+      { className: `pass${live ? "" : " expired"}` },
+      h("p", { className: "pass-name" }, profile ? `${profile.name} 님` : "동승 연결"),
+      h("button", { type: "button", className: "pass-qr", disabled: !live, "aria-label": "QR 크게 보기", onclick: () => zoomQr(ride.qr) }, qrSvg(ride.qr, !live)),
+      h("p", { className: "pass-left", "aria-live": "polite" }, live ? leftText(left) : "QR이 만료됐어요"),
+      h("button", { type: "button", className: live ? "plain" : "primary", onclick: startRide }, "↻ 새로 띄우기"),
+    ),
+    h("p", { className: "meta center" }, "주차 중인 차에서 '폰 QR 읽기'를 누르고 이 QR을 보여 주세요"),
   ];
 }
+// 남은 시간은 1초마다 글만 바꾼다(화면 전체는 2초마다 다시 그림)
+setInterval(() => {
+  const el = document.querySelector(".pass-left");
+  if (el && ride && ride.expiresAt > Date.now()) el.textContent = leftText(ride.expiresAt - Date.now());
+}, 1000);
 
 const loading = () => [header(h("span", { className: "brand" }, "가치타")), h("div", { className: "skeleton" }), h("div", { className: "skeleton" })];
 
