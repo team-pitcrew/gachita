@@ -23,12 +23,16 @@ Terraform(AWS·Cloudflare) → 첫 부팅(user_data: 도구, 저장소 자격, �
 
 ## 다시 돌리기
 
-같은 결과가 되도록 짜여 있습니다. 단계마다 먼저 이미 됐는지 봅니다.
+같은 결과가 되도록 짜여 있습니다. 단계마다 먼저 이미 됐는지 봅니다. 상태 보기, 손 백업, 지정 시점 복구도 같은 길(SSM)로 합니다(T57).
 
 ```sh
-# 내 컴퓨터에서(SSM Run Command). 명령은 terraform output converge
-aws ssm send-command --region ap-northeast-2 --instance-ids <id> --document-name AWS-RunShellScript \
-  --parameters 'commands=["/usr/local/sbin/gachita-converge"]'
+# GitHub: Actions → ops → Run workflow(action: status, converge, backup, restore, clean-e2e). 내 컴퓨터에서도 같다
+backend/infra/infra.sh status                       # 노드, 단계, 앱 물결, Postgres·WAL 보관·백업, ALB 대상, 실제 주소
+backend/infra/infra.sh converge argocd,verify       # 고른 단계만(비우면 전부)
+backend/infra/infra.sh backup                       # 손 전체 백업
+backend/infra/infra.sh restore 2026-11-13T15:00:00+09:00        # 연습: 옆에 db-pitr을 세워 걸린 시간과 행 수 비교, db는 그대로
+backend/infra/infra.sh restore 2026-11-13T15:00:00+09:00 apply  # db를 먼저 백업하고 그 시점 데이터로 덮어씀
+# 덮어쓰기는 데이터베이스(trips, profiles)마다 따로다. 중간에 실패했거나 되돌리려면 출력의 before-restore 백업이 끝난 시각으로 다시 restore … apply
 # 서버 안에서(SSM 세션)
 sudo gachita-converge                  # 전부
 sudo gachita-converge --tags argocd    # 한 단계만(os, k3s, cilium, oidc, argocd, root, verify)
