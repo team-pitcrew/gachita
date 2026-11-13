@@ -59,6 +59,7 @@
   | `gachita-db/db` | `gachita-dev-pg` | 데이터 버킷의 `postgres/db/` 읽기·쓰기(Postgres 하나, ADR-0016) |
   | `gachita-db/db-pitr` | `gachita-dev-pg-restore` | 같은 접두사 읽기만(지정 시점 복구가 잠깐 세우는 옆 클러스터, T57) |
   | `kube-system/aws-load-balancer-controller` | `gachita-dev-alb-controller` | 공식 정책. 권한 경계가 우리 태그(`Project=gachita`)와 ALB 이름 `gachita-*`로 좁힘 |
+  | `gachita/gachita-api` | `gachita-dev-api` | 클립 버킷(`gachita-dev-clips-<계정>`)의 객체 읽기·쓰기·지우기와 목록(T64) |
 
 - 토큰은 AWS의 공개 웹훅([amazon-eks-pod-identity-webhook](https://github.com/aws/amazon-eks-pod-identity-webhook))이 서비스 계정 주석(`eks.amazonaws.com/role-arn`)을 보고 파드에 넣는다. EKS가 아니어도 쓰도록 만든 것이고, cert-manager가 웹훅 인증서를 만든다. External Secrets는 웹훅 없이 같은 주석을 읽어 스스로 토큰을 받는다.
 - 서버의 IMDS 홉 제한을 1로 내린다. 파드는 인스턴스 역할에 닿지 못한다. 인스턴스 역할은 SSM 세션, 배포 키 읽기, 발급자 공개 키 올리기만 한다.
