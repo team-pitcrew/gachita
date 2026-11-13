@@ -34,6 +34,9 @@ for i in $(seq 1 30); do
   echo "[0/7 first-boot] 서버 역할 자격을 기다림($i/30)"
   sleep 10
 done
+# 기다려야 했다면 SSM 에이전트도 처음에 자격을 못 받고 약 30분 물러나 있다(같은 날 기록: 'Sleeping for 29m34s').
+# 다시 띄워 바로 붙게 한다. 그러지 않으면 infra.sh가 그동안 서버에 닿지 못한다
+if [ "$i" -gt 1 ]; then snap restart amazon-ssm-agent || systemctl restart amazon-ssm-agent || true; fi
 
 # 저장소를 읽는 배포 키(읽기 전용). 사람이 GitHub 비밀 값으로 넣고 워크플로가 SSM에 옮긴 값(ADR-0011의 예외).
 install -d -m 700 /root/.ssh
