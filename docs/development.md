@@ -158,8 +158,9 @@ make deploy-tag TAG=<올린 태그>   # dev 환경의 태그를 바꾼다
 |---|---|---|
 | 로컬 `make push` | 자기 `gh` 토큰의 `write:packages` | 지환의 토큰에 있음 |
 | `publish-api-image` 워크플로(병합 때 `ci.yml`의 `publish` 잡이 부름. 손으로도 돌림) | Actions 기본 토큰(`packages: write`, 그 잡에만). 비밀 값 없음 | 이 워크플로로 올린 기록 있음(11/12, 그때는 push로 돎). 병합 때 올리기는 T47 병합 뒤 확인 |
-| 클러스터가 이미지를 받을 때 | `read:packages`만 있는 토큰 | 클러스터를 만들 때 필요(T24). 아직 없음 |
+| 클러스터가 이미지를 받을 때 | `read:packages`만 있는 클래식 토큰을 비밀 값 `GHCR_PULL_TOKEN`으로. `infra-secrets` 워크플로가 SSM으로 옮기고 External Secrets가 `gachita` 네임스페이스의 imagePullSecret으로 만듦([ADR-0012](adr/0012-cluster-build-and-node-size.md)) | 클러스터를 만들 때 필요(T24). 아직 없음 |
 | 워크플로가 프로젝트 보드에 쓸 때 | 비밀 값 `PROJECT_TOKEN`([프로젝트 보드](project-board.md)) | 아직 없음 |
+| `terraform` 워크플로(PR 계획, develop 수동 적용) | AWS 열쇠 없음. OIDC로 역할을 받음. 저장소 변수 `AWS_PLAN_ROLE_ARN`·`AWS_APPLY_ROLE_ARN`·`TF_STATE_BUCKET`([ADR-0011](adr/0011-aws-credentials-via-oidc.md)) | 역할을 아직 만들지 않음. 그동안은 "역할이 없어 건너뜀" |
 - 깨끗한 환경에서 다시 만들어야 할 때만 `publish-api-image` 워크플로를 손으로 돌립니다.
 - 클러스터가 아직 없어 '병합되면 내보낸다'는 실제로 본 적이 없습니다(T24).
 
