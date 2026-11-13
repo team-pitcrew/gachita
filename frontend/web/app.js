@@ -53,6 +53,7 @@ const pdraft = { name: "", character: "", photo: null, preview: "", consentDefau
 let failed = ""; // 여행을 불러오지 못한 이유
 let offline = false;
 let stale = false; // 입력 중에 온 변경은 입력이 끝난 뒤 그린다
+let reading = false; // 여행 화면의 '동의 켜기': 켜기 전에 동의 문구 전문을 보이는 중
 const draft = { join: "", step: 0, name: "", seat: "" };
 
 // 여행 경로는 토큰 없이, 프로필 경로(mine)는 이 폰의 프로필 토큰으로.
@@ -104,7 +105,8 @@ const claim = () => (claiming ??= rejoin().finally(() => (claiming = null)));
 async function rejoin() {
   const c = trip?.code;
   if (!c || (store(c) && store(`${c}:token`)) || !profile || !trip.participants.some((p) => p.profileId === profile.id)) return false;
-  const p = await api("POST", `/trips/${c}/participants`, {}, store("profile"));
+  const seat = trip.participants.find((p) => p.profileId === profile.id).seat; // openapi는 seat 필수. 있던 참가자라 서버는 자리를 바꾸지 않는다
+  const p = await api("POST", `/trips/${c}/participants`, { seat }, store("profile"));
   store(c, p.id);
   store(`${c}:token`, p.token);
   return true;
@@ -450,6 +452,15 @@ function tripView(me) {
       const { deleted } = await asMe(me, (c, token) => api("DELETE", `/trips/${c}/utterances`, null, token));
       toast(deleted ? `내 이름이 붙은 글 ${deleted}줄을 지웠어요.` : "지울 내 글이 없어요.");
     });
+  // 켜기 전에 동의 문구 전문을 보인다: 참가 때 동의하지 않았거나 참가한 뒤 문구가 바뀐 사람도 무엇에 동의하는지 보고 켠다
+  if (reading)
+    return [
+      header(button("이전", () => ((reading = false), render()), "plain"), h("span", { className: "meta" }, trip.title || `코드 ${trip.code}`)),
+      h("h1", {}, "이동 중 대화를 기록해도 될까요?"),
+      h("p", { className: "sub" }, "도착한 뒤 재미있던 장면을 클립으로 남기는 데 써요. 한 명이라도 동의하지 않으면 기록하지 않아요."),
+      h("ul", { className: "card" }, CONSENT.map((line) => h("li", {}, line))),
+      bar(button("동의해요", () => ((reading = false), consentOn()), "primary"), button("동의하지 않아요", () => ((reading = false), render()))),
+    ];
   const open = trip.requests.filter((r) => !CLOSED.includes(r.status));
   const rec = trip.recording ? ["기록 중", "rec"] : trip.status !== "driving" ? ["기록 안 함", ""] : waiting.length ? ["동의 대기", ""] : ["기록 일시정지", ""];
   const next = NEXT_TRIP[trip.status];
@@ -510,12 +521,14 @@ function tripView(me) {
         "div",
         { className: "between" },
         h("div", {}, h("p", { className: "what" }, "대화 기록 동의"), h("p", { className: "meta" }, me.consent ? "동의했어요." : "동의하지 않았어요.")),
-        me.consent ? button("동의 끄기", () => confirm(OFF_WIPES) && patch(`/participants/${me.id}`, { consent: false })()) : myToken() ? button("동의 켜기", consentOn) : h("p", { className: "meta" }, ONLY_HERE),
+        me.consent ? button("동의 끄기", () => confirm(OFF_WIPES) && patch(`/participants/${me.id}`, { consent: false })()) : myToken() ? button("동의 켜기", () => ((reading = true), render(), scrollTo(0, 0))) : h("p", { className: "meta" }, ONLY_HERE),
       ),
       // 동의 문구가 약속한 지우기: 프로필로 참가한 사람의 자기 글(손님 발화는 누구 것인지 가릴 수 없어 서버가 403)
       me.profileId &&
         myToken() &&
         h("div", { className: "between" }, h("div", {}, h("p", { className: "what" }, "내 글"), h("p", { className: "meta" }, "내 이름이 붙은 받아 적은 글")), button("내 글 지우기", eraseMine, "plain")),
+      // 이미 동의한 사람도 지금의 동의 문구(바뀐 것 포함)를 언제든 다시 본다
+      h("details", {}, h("summary", { className: "meta" }, "동의 문구 보기"), h("ul", {}, CONSENT.map((line) => h("li", {}, line)))),
     ),
     trip.moments.length > 0 &&
       h(
@@ -546,12 +559,15 @@ let short = null; // 보고 있는 구성 { title, cast, scenes, code, generatio
 const audio = new Audio(); // DOM 밖에 두어 화면을 다시 그려도 끊기지 않는다
 
 async function openShort(me) {
-  const data = await asMe(me, (c, token) => api("GET", `/trips/${c}/shortform`, null, token)).catch((e) => {
+  const c = trip.code;
+  const generation = trip.generation;
+  const data = await asMe(me, (code, token) => api("GET", `/trips/${code}/shortform`, null, token)).catch((e) => {
     throw e.status === 401 || e.status === 403 ? new Error("기록에 동의한 사람만 숏폼을 볼 수 있어요.") : e;
   });
+  if (trip?.code !== c || trip.generation !== generation) return; // 기다리는 사이 다른 여행으로 옮겼거나 동의가 바뀌었다
   if (!data.scenes.length) return toast("아직 숏폼으로 만들 장면 클립이 없어요.");
   // 연 때의 여행·동의 세대를 남긴다: 보는 사이 바뀌면 render()가 닫는다
-  short = { ...data, code: trip.code, generation: trip.generation, at: 0, clips: [], started: false, req: 0 };
+  short = { ...data, code: c, generation, at: 0, clips: [], started: false, req: 0 };
   render();
 }
 // 장면 소리를 머리말 인증으로 받아 object URL로. 실패하면 그 자리를 비워 연결이 돌아오면 다시 받는다.
@@ -566,13 +582,13 @@ const clip = (s, i) =>
 async function playScene(i) {
   const s = short;
   const req = ++s.req; // 늦게 끝난 옛 받기가 새 재생의 소리를 덮지 않게 마지막 요청만 튼다
-  const first = !s.started;
-  Object.assign(s, { at: i, started: true });
-  if (first) render(); // '재생' 단추가 '다시 보기'로 바뀐다
-  else s.paint?.();
+  if (!s.started) ((s.started = true), render()); // '재생' 단추가 '다시 보기'로 바뀐다
   const url = await clip(s, i);
   if (short !== s || s.req !== req) return; // 받는 사이 닫았거나 다른 장면을 틀었다
+  // 소리를 받은 뒤에 장면과 소리를 함께 바꾼다: 받기에 실패하면 지금 장면에 머물러 자막과 소리가 어긋나지 않는다
+  s.at = i;
   audio.src = url;
+  s.paint?.();
   await audio.play();
   if (i + 1 < s.scenes.length) clip(s, i + 1).catch(() => {}); // 다음 장면을 미리 받는다
 }
@@ -670,7 +686,7 @@ function render() {
   };
 }
 
-addEventListener("hashchange", () => (short && closeShort(), location.hash === "#me" && fillDraft(), (trip = null), (failed = ""), (draft.step = 0), refresh(true)));
+addEventListener("hashchange", () => ((reading = false), short && closeShort(), location.hash === "#me" && fillDraft(), (trip = null), (failed = ""), (draft.step = 0), refresh(true)));
 app.addEventListener("focusout", () => setTimeout(() => stale && !typing() && render())); // 입력이 끝나면 밀린 변경을 그린다
 setInterval(refresh, 2000); // ponytail: 2초마다 묻는다(바뀐 게 없으면 304). 지연이 문제가 되면 SSE로 바꾼다.
 render();

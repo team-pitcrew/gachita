@@ -423,6 +423,7 @@ dialog input:not([type="radio"]) {
 
 #toast {
   position: fixed;
+  z-index: 20; /* 숏폼 재생(.short, 10) 위에서도 보이게 */
   left: var(--pad);
   right: var(--pad);
   bottom: calc(96px + env(safe-area-inset-bottom));
