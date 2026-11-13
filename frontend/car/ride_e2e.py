@@ -42,7 +42,8 @@ def qr_png(text, out):
 
 
 WALL, NORMAL = (-0.807, 0.320, 5.316), (-0.5, 0.0, -0.866)  # 벽 포스터의 가운데와 앞쪽(Toren1BD.posters: rotation 0 -150 0)
-AIM = (2.4, 220)  # 포스터 앞 거리(m)와 카메라 회전(도). 더 멀면 탁자·의자가 QR 아래를 가렸다(11/14 실험)
+AIM = (2.4, (220, 212, 228, 205, 235))  # 포스터 앞 거리(m)와 카메라 회전(도). 더 멀면 탁자·의자가 QR 아래를 가렸다(11/14 실험).
+# 같은 값이어도 실행마다 QR이 화면 끝에 걸려 잘린 적이 있어, 사람이 폰 각도를 맞추듯 몇 방향을 차례로 본다
 
 
 def poster(png):
@@ -51,13 +52,35 @@ def poster(png):
          table=subprocess.run(ADB + ["emu", "virtualscene-image", "table"], capture_output=True, text=True).stdout.strip()[-40:])
 
 
-def aim(inj, on=True):
+def aim(inj, on=True, yaw=None):
     """가상 카메라를 벽 포스터 앞으로 옮겨 그쪽을 보게 한다. on=False면 처음 자리로."""
-    pb = inj.pb; d, yaw = AIM
+    pb = inj.pb; d, yaws = AIM
     def set(t, v): inj.stub.setPhysicalModel(pb.PhysicalModelValue(target=t, value=pb.ParameterValue(data=list(v))), metadata=inj.md, timeout=5)
     set(pb.PhysicalModelValue.POSITION, [WALL[i] + d * NORMAL[i] for i in range(3)] if on else (0, 0, 0))
-    set(pb.PhysicalModelValue.ROTATION, (0, yaw, 0) if on else (0, 0, 0))
-    note("aim", on=on)
+    set(pb.PhysicalModelValue.ROTATION, (0, yaw or yaws[0], 0) if on else (0, 0, 0))
+    note("aim", on=on, yaw=yaw)
+
+
+def read_qr(inj):
+    """'폰 QR 읽기'를 누르고 자리를 물을 때까지 카메라 방향을 바꿔 가며 기다린다. 마지막 화면 글을 돌려준다."""
+    tap_text("폰 QR 읽기")
+    for yaw in AIM[1]:
+        aim(inj, yaw=yaw)
+        ui = cap.wait_texts(lambda u: "어느 자리에 앉았나요?" in u, 8)
+        if "어느 자리에 앉았나요?" in ui: return ui
+    return ui
+
+
+def pick_all_but_mom():
+    """여행 만들기 칩을 아빠·서준·하은만 고른 상태로 맞춘다(칩 차례는 FAMILY 차례). 고른 상태는 화면 트리의 checked로 본다."""
+    want = [True, False, True, True]
+    for _ in range(3):
+        import re
+        got = [c == "true" for c in re.findall(r'checkable="true" checked="(\w+)"', e2e.nodes()[1])[:4]]
+        if got == want: return True
+        for name, g, w in zip(("아빠 · 운전석", "엄마 · 조수석", "서준 · 뒷자리 왼쪽", "하은 · 뒷자리 오른쪽"), got, want):
+            if g != w: tap_text(name); time.sleep(1)
+    return False
 
 
 def main(apk):
@@ -75,12 +98,11 @@ def main(apk):
     adb("shell", "am", "force-stop", "--user", "10", PKG); adb("shell", "pm", "clear", "--user", "10", PKG)
     for perm in ("RECORD_AUDIO", "POST_NOTIFICATIONS", "CAMERA"): adb("shell", "pm", "grant", "--user", "10", PKG, f"android.permission.{perm}")
     adb("shell", "am", "start", "--user", "10", "-n", f"{PKG}/.MainActivity", "--es", "server", f"http://10.0.2.2:{cap.PORT}")
-    time.sleep(4); tap_text("엄마 · 조수석"); time.sleep(1); tap_text("여행 만들기"); time.sleep(5)
+    time.sleep(5); note("pick", ok=pick_all_but_mom()); tap_text("여행 만들기"); time.sleep(5)
     ui = texts(); code = next((t.split()[-1] for t in ui if t.startswith("여행 코드")), None); note("trip", code=code)
     check("엄마를 빼고 여행을 만듦(좌석 지도에 빈자리)", code and "엄마" not in ui and "빈자리" in ui)
 
-    tap_text("폰 QR 읽기")
-    ui = cap.wait_texts(lambda u: "어느 자리에 앉았나요?" in u, 30); shot("1-scanned"); note("ui", texts=ui)
+    ui = read_qr(inj); shot("1-scanned"); note("ui", texts=ui)
     check("주차 중 카메라가 폰의 동승 QR을 읽고 자리를 물음(빈자리만)", "어느 자리에 앉았나요?" in ui and "조수석" in ui and "운전석" not in ui)
     tap_text("조수석")
     ui = cap.wait_texts(lambda u: "엄마" in u, 15); shot("2-seated"); note("ui", texts=ui)
@@ -92,8 +114,7 @@ def main(apk):
     check("폰의 결과 조회가 linked(그 여행)", got.get("status") == "linked" and got.get("tripCode") == code, status=got.get("status"))
 
     # 같은 QR을 다시 읽히면 이미 쓴 QR → 409 안내
-    tap_text("폰 QR 읽기")
-    ui = cap.wait_texts(lambda u: "어느 자리에 앉았나요?" in u, 30)
+    ui = read_qr(inj)
     if "어느 자리에 앉았나요?" in ui:
         tap_text(next(t for t in ("뒷자리 가운데", "뒷자리 왼쪽", "뒷자리 오른쪽") if t in ui))
         ui = cap.wait_texts(lambda u: any("이미 연결한 QR" in t for t in u), 10); shot("3-reused"); note("ui", texts=ui)
