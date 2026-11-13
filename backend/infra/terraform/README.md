@@ -114,8 +114,14 @@ terraform state list | grep 'aws_s3_bucket.*\.data' | xargs -n1 terraform state 
 export CLOUDFLARE_API_TOKEN=<토큰> TF_VAR_cloudflare_account_id=<계정 번호> TF_VAR_cloudflare_zone_id=<영역 번호>
 terraform init -backend-config=backend.hcl && terraform destroy
 # 3. 터널 경로 설정은 'Terraform이 지우지 못한다'고 경고하지만 터널을 지우면 함께 사라진다. Cloudflare 대시보드에서 터널과 gachita 레코드가 없는지, 메일 레코드가 그대로인지 본다
-# 4. account/(OIDC 역할)는 남겨도 비용이 없다. 지우려면 terraform -chdir=account destroy, 상태 버킷은 마지막에
+# 4. 남은 것이 없는지 태그로 확인한다(같이 쓰는 계정이라 다른 프로젝트 것은 건드리지 않았는지도 함께 본다)
+aws resourcegroupstaggingapi get-resources --region ap-northeast-2 --tag-filters Key=Project,Values=gachita \
+  --query 'ResourceTagMappingList[].ResourceARN' --output text           # 데이터 버킷(남긴 경우)과 상태 버킷만 남아야 함
+aws iam list-roles --query "Roles[?starts_with(RoleName,'gachita-')].RoleName" --output text   # account/의 gachita-github-* 둘만
+# 5. account/(OIDC 역할)는 남겨도 비용이 없다. 지우려면 terraform -chdir=account destroy(GitHub 제공자는 읽기만 해서 지우지 않음), 상태 버킷은 마지막에
 ```
+
+Terraform은 상태에 든 것만 지웁니다. 적용 역할도 `Project=gachita` 태그와 `gachita-*` 이름이 맞는 자원만 고치고 지울 수 있습니다(ADR-0011의 '같이 쓰는 계정에서 남는 길').
 
 ## 확인한 것
 
