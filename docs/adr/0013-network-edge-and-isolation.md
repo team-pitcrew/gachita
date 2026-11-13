@@ -102,7 +102,7 @@
 | 웹앱의 정적 파일 | API가 내보내고 **Cloudflare가 엣지에 캐시**(CDN) | 공개 |
 | API 응답 | 캐시하지 않음(API가 `cache-control: no-store`) | - |
 | Postgres 백업(WAL 포함) | S3 데이터 버킷 `postgres/<db>/` | 비공개, 버전 관리, 30일 뒤 지난 버전 삭제 |
-| 클립·사진(나중) | S3 데이터 버킷. 영상과 클립은 `media.gachita.mangowhois.ai`(Cloudflare 프록시 끔)에서 API가 권한을 확인하고 흘려보냄([ADR-0020](0020-media-delivery-subdomain.md), 서명 주소를 주지 않음) | 비공개. **개인 데이터는 CDN에 올리지 않는다** |
+| 녹음 클립 | S3 클립 전용 버킷(T64, 버전 관리 끔이라 지우면 바로 사라짐, 2일 뒤 만료). 영상과 클립은 `media.gachita.mangowhois.ai`(Cloudflare 프록시 끔)에서 API가 권한을 확인하고 흘려보냄([ADR-0020](0020-media-delivery-subdomain.md), 서명 주소를 주지 않음) | 비공개. **개인 데이터는 CDN에 올리지 않는다** |
 | 서비스 계정 발급자의 공개 키 | S3 발급자 버킷(두 파일) | 공개(공개 키) |
 
 CloudFront는 만들지 않는다(ADR-0010). Cloudflare가 CDN을 겸한다. 정적 파일을 서버에서 떼어 S3에서 바로 내보내야 하면(서버가 멈춰도 웹앱이 떠야 할 때) 그때 Cloudflare → S3 경로를 따로 정한다.

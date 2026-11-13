@@ -100,6 +100,15 @@ locals {
         { actions = ["s3:GetObject"], resources = ["${data.aws_s3_bucket.data.arn}/postgres/db/*"] },
       ]
     }
+    # API(T64): 클립 버킷만 읽고 쓰고 지운다. 버전 관리가 꺼져 있어 버전 권한은 없다.
+    # ListBucket은 없는 키를 읽을 때 403 대신 404(NoSuchKey)를 받으려고
+    api = {
+      sa = "gachita:gachita-api"
+      statements = [
+        { actions = ["s3:ListBucket"], resources = [local.clips_arn] },
+        { actions = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"], resources = ["${local.clips_arn}/*"] },
+      ]
+    }
     # ALB 컨트롤러(ADR-0017): 공식 정책(v3.6.2 docs/install/iam_policy.json)의 동작에서 WAF·Shield·Cognito를 뺀 것.
     # ponytail: 자원 범위는 여기서 다시 적지 않고 권한 경계(account/의 gachita-workload-boundary)가 우리 태그와
     #           ALB 이름(gachita-*)으로 좁힌다. 이 역할의 실제 권한은 둘의 교집합이다.
