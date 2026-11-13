@@ -212,6 +212,46 @@ const saveProfile = () =>
     location.hash = "";
   });
 
+// 구글 로그인(OAuth 인증 코드). 새 로그인은 프로필 없이, 연결은 이 폰의 프로필 토큰과 함께 코드를 서버에 넘긴다.
+// 복귀 주소는 이 웹앱의 /oauth/google/callback(서버가 첫 화면을 준다). Client ID는 서버가 준다(웹에 박지 않음).
+const GOOGLE_BACK = `${location.origin}/oauth/google/callback`;
+const GOOGLE_KEY = "gachita:google"; // sessionStorage: { state, draft } — 돌아와서 확인하고, 실패하면 입력을 되돌린다
+const random = () => btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(24)))).replace(/[+/=]/g, (c) => ({ "+": "-", "/": "_", "=": "" })[c]);
+
+async function google() {
+  const { googleClientId } = await api("GET", "/config");
+  if (!googleClientId) throw new Error("지금은 구글 로그인을 쓸 수 없어요.");
+  const state = random();
+  const { name, character, consentDefault } = pdraft; // 사진은 옮기지 못한다(돌아오면 다시 고른다)
+  sessionStorage.setItem(GOOGLE_KEY, JSON.stringify({ state, draft: { name, character, consentDefault } }));
+  location.href = `https://accounts.google.com/o/oauth2/v2/auth?${new URLSearchParams({ client_id: googleClientId, redirect_uri: GOOGLE_BACK, response_type: "code", scope: "openid profile", state, prompt: "select_account" })}`;
+}
+
+// 구글에서 돌아옴. 코드가 기록에 남지 않게 먼저 주소창을 /#me로 바꾸고, state가 맞을 때만 코드를 넘긴다.
+// 실패·취소면 프로필은 그대로 두고, 구글로 가기 전에 쓰던 입력을 돌려준다(성공이면 null).
+async function googleBack() {
+  const q = new URLSearchParams(location.search);
+  history.replaceState(null, "", "/#me");
+  const saved = JSON.parse(sessionStorage.getItem(GOOGLE_KEY) ?? "null");
+  sessionStorage.removeItem(GOOGLE_KEY);
+  const fail = (message) => (toast(message), saved?.draft ?? null);
+  if (q.get("error")) return fail(q.get("error") === "access_denied" ? "구글 로그인을 취소했어요." : "구글 로그인을 마치지 못했어요. 다시 해 주세요.");
+  if (!saved || !q.get("code") || q.get("state") !== saved.state) return fail("로그인 요청을 확인하지 못했어요. 다시 해 주세요.");
+  try {
+    const res = await api("POST", "/profiles/me/links/google", { code: q.get("code"), redirectUri: GOOGLE_BACK, device: "폰" }, store("profile"));
+    if (res.token) store("profile", res.token);
+    toast(res.token ? "구글 계정으로 들어왔어요." : "이 프로필에 구글 계정을 연결했어요.");
+    return null;
+  } catch (e) {
+    return fail(
+      e.status === 409 ? "이미 다른 프로필에 연결된 구글 계정이에요. 그 프로필로 들어가려면 이 폰의 프로필을 지우고 구글로 로그인해 주세요."
+      : e.status === 401 ? "구글 로그인을 확인하지 못했어요. 다시 해 주세요."
+      : e.status === 0 || e.status >= 500 ? "구글이나 서버가 잠시 답하지 않아요. 잠시 뒤 다시 해 주세요."
+      : e.message,
+    );
+  }
+}
+
 function profileView() {
   const remove = () =>
     confirm("프로필과 남긴 장면 앨범, 내가 대표인 그룹과 내가 만든 아이 프로필까지 지워져요. 지울까요?") &&
@@ -224,7 +264,16 @@ function profileView() {
   return [
     header(button("이전", () => (location.hash = ""), "plain"), h("span", { className: "meta" }, profile ? "내 프로필" : "프로필 만들기")),
     h("h1", {}, profile ? "내 프로필" : "나를 소개해 주세요"),
-    h("p", { className: "sub" }, "같이 타는 사람들에게 보이는 이름과 얼굴이에요. 이 폰에서만 이 프로필로 들어가요."),
+    h("p", { className: "sub" }, "같이 타는 사람들에게 보이는 이름과 얼굴이에요."),
+    !profile?.links?.includes("google") &&
+      h(
+        "section",
+        { className: "card" },
+        h("p", { className: "what" }, profile ? "다른 기기에서도 쓰기" : "구글 계정이 있나요?"),
+        h("p", { className: "meta" }, profile ? "구글 계정을 연결하면 다른 폰에서 구글로 로그인해 이 프로필로 들어와요." : "구글로 로그인하면 다른 폰에서도 같은 프로필로 들어와요. 전에 만든 프로필이 있으면 그대로 이어져요."),
+        button(profile ? "구글 계정 연결" : "구글로 로그인", () => google().catch((e) => toast(e.status === 0 ? "연결이 끊겨서 열지 못했어요." : e.message))),
+      ),
+    profile?.links?.includes("google") && h("p", { className: "meta" }, "구글 계정을 연결했어요. 다른 폰에서 구글로 로그인하면 이 프로필로 들어와요."),
     form(saveProfile, ...profileFields(true), bar(h("button", { className: "primary" }, "저장"))),
     profile &&
       h(
@@ -531,7 +580,9 @@ addEventListener("hashchange", () => (location.hash === "#me" && fillDraft(), (t
 app.addEventListener("focusout", () => setTimeout(() => stale && !typing() && render())); // 입력이 끝나면 밀린 변경을 그린다
 setInterval(refresh, 2000); // ponytail: 2초마다 묻는다(바뀐 게 없으면 304). 지연이 문제가 되면 SSE로 바꾼다.
 render();
+const back = location.pathname === "/oauth/google/callback" && (await googleBack());
 await loadProfile();
 fillDraft();
+if (back) Object.assign(pdraft, back); // 구글에서 실패·취소로 돌아오면 쓰던 입력을 되돌린다
 refresh(true);
 navigator.serviceWorker?.register("/sw.js").catch(() => {}); // 홈 화면 설치와 끊겼을 때의 마지막 화면(T6)
