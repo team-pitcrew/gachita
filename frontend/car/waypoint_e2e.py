@@ -5,8 +5,10 @@
 실행: python3 frontend/car/waypoint_e2e.py frontend/car/app/build/outputs/apk/debug/app-debug.apk <저장소 밖 폴더> [시도 수]
 
 순서: 앱이 내비에 강릉역 경로를 넣음(--es route) → 여행 만들기 → P에서 동의 켬 → 기어 D, 우리 화면이 앞
-      → [시도 수]번: "화장실 가고 싶어" 류 → 제안 → "아니, 나중에 갈게" → 보관(부탁하는 말 끝 → 제안까지 시간)
-      → 부탁 둘("화장실 가고 싶어", "나도 화장실 갈래") → 폰에서 첫째를 취소 → "응, 다음 휴게소 가자" → 경유지 → 둘째만 reflected.
+      → [시도 수]번: "화장실 가고 싶어" 류 → 제안(카드와 TTS) → "아니, 나중에 갈게" → 보관(부탁하는 말 끝 → 제안까지 시간).
+        마지막 시도는 모호한 말 → 다시 물음 → 화면의 '나중에' 단추
+      → 부탁 둘("화장실 가고 싶어", "나도 화장실 갈래") → 폰에서 첫째를 취소 → "응, 다음 휴게소 가자" → 경유지를 넣는 동안 셋째("나도 화장실 급해")
+      → 둘째와 셋째만 reflected, 새 제안은 뜨지 않음.
 - 지나친 휴게소 건너뛰기는 여기서 보지 않는다(AsksTest). 경로 안내 중인 내비의 지금 위치는 에뮬레이터 GPS를 옮겨도(gRPC setGps) 판교에 머물렀다(11/13).
 - 결과는 OUT/results.json, 앱 로그(글자 없음)는 OUT/app-log.json, 2번 장면의 화면 녹화는 OUT/waypoint.webm.
 """
@@ -18,6 +20,8 @@ PORT = cap.PORT
 TRIES = int(sys.argv[3]) if len(sys.argv) > 3 else 8
 ASKS = ["화장실 가고 싶어", "나 배고파", "엄마 화장실 급해", "조금 쉬었다 가자"]
 NO = ("아빠", "아니, 나중에 갈게")
+UNCLEAR = ("아빠", "바다는 언제 보여?")
+GANGNEUNG = "37.7645236,128.8996276,강릉역"  # 앱에 --es route로 넘기는 목적지(위도,경도,이름)
 YES = ("아빠", "응, 다음 휴게소 가자")
 app_log = []
 
@@ -57,7 +61,6 @@ def heard_after(code, n):
     return [g["text"] for g in cap.outbox(code)[n:]]
 
 
-GANGNEUNG = "37.7645236,128.8996276,강릉역"  # 앱에 --es route로 넘기는 목적지(위도,경도,이름)
 REQUEST_WORDS = ("화장실", "쉬었다가", "쉬어가", "배고파")  # Asks.kt isRestRequest와 같은 낱말
 
 
@@ -70,7 +73,8 @@ def main(apk):
     threading.Thread(target=logcat, daemon=True).start()
     inj = cap.Injector()
     for i, a in enumerate(ASKS): cap.fixture(f"ask{i}", [("아들", a)], tail=4.0)
-    for name, line in (("no", NO), ("yes", YES), ("ask-b", ("딸", "나도 화장실 갈래"))): cap.fixture(name, [line], tail=4.0)
+    for name, line in (("no", NO), ("yes", YES), ("unclear", UNCLEAR), ("ask-b", ("딸", "나도 화장실 갈래")), ("ask-c", ("아들", "나도 화장실 급해"))):
+        cap.fixture(name, [line], tail=4.0)
     offset = cap.clock_offset()
     note("apk", sha256=e2e.hashlib.sha256(open(apk, "rb").read()).hexdigest())
     note("install", out=subprocess.run(ADB + ["install", "--user", "10", "-r", "-g", apk], capture_output=True, text=True).stdout.strip()[-120:])
@@ -102,9 +106,18 @@ def main(apk):
         elif not is_req: missed.append(got)  # 받아쓰기가 부탁 낱말을 놓침(규칙이 아니라 STT 쪽)
         note("propose", try_=i + 1, said=meta["utterances"][0]["text"], heard=got, line=e and e["line"], after_speech_end_s=lat[-1] if e else None)
         if not e and not is_req: continue
-        if i == 0: shot("01-offer-drive"); note("ui", texts=texts())
-        k = len(app_log); inj.play("no")
-        check(f"시도 {i + 1}: '나중에'로 보관", wait_log(r"부탁 1/1건 held", k, 15))
+        if i == 0:
+            check("제안을 말(TTS)로도 알림", e and wait_log(r"^말함 ", app_log.index(e), 2))
+            shot("01-offer-drive"); note("ui", texts=texts())
+        if i < TRIES - 1:
+            k = len(app_log); inj.play("no")
+            check(f"시도 {i + 1}: 말로 '나중에' → 보관", wait_log(r"부탁 1/1건 held", k, 15))
+        else:  # 모호한 말에는 한 번 다시 묻고, 화면 단추로도 답한다
+            k = len(app_log); inj.play("unclear")
+            u = wait_log(r"^발화 ", k, 12)  # 모호한 말이 받아 적힌 뒤에 나온 '말함'만 센다
+            check(f"시도 {i + 1}: 모호한 말에는 다시 물음(보관하지 않음)", u and wait_log(r"^말함 ", app_log.index(u), 3) and not wait_log(r"held", k, 0.1))
+            k = len(app_log); tap_text("나중에")
+            check(f"시도 {i + 1}: 화면의 '나중에' → 보관", wait_log(r"부탁 1/1건 held", k, 10))
     p95 = sorted(lat)[max(0, round(0.95 * len(lat)) - 1)] if lat else None
     note("latency", seconds=lat, median=statistics.median(lat) if lat else None, p95=p95, n=len(lat))
     note("stt.missed", count=len(missed), heard=missed)
@@ -123,14 +136,19 @@ def main(apk):
     cancel_from_phone(code, reqs[0]["id"])
     k = len(app_log); t_yes = inj.play("yes")
     acc = wait_log(r"부탁 \d/2건 accepted", k, 15); req = wait_log(r"^경유지 요청", k, 15)
+    k2 = len(app_log); inj.play("ask-c")  # 내비가 앞으로 나와 경유지를 넣는 동안 들어온 부탁
     added = wait_log(r"경유지 ADD", k, 40); done = wait_log(r"^경유지 (반영|실패)", k, 40)
+    joined = wait_log(r"^부탁 보관", k2, 15)
+    check("넣는 동안 들어온 부탁은 같은 제안에 묶이고 새 제안은 뜨지 않음", joined and not wait_log(r"^제안 ", k2, 0.1))
     note("waypoint", accepted=acc and acc["line"], request=req and req["line"], navi=added and added["line"], done=done and done["line"],
          yes_to_callback_s=round((added["device_ms"] - offset - t_yes) / 1000, 2) if added else None)
     check("수락: 취소된 A는 빠지고 B만 accepted", acc and "1/2건" in acc["line"])
-    check("onWaypointChanged(ADD)를 받고 반영", added and done and "반영" in done["line"])
-    time.sleep(3)
-    final = {r["id"]: r["status"] for r in trip(code)["requests"]}
-    check("서버: A cancelled, B reflected", final.get(reqs[0]["id"]) == "cancelled" and final.get(reqs[1]["id"]) == "reflected", statuses=final)
+    check("onWaypointChanged(ADD)를 받고 반영, 반영 뒤 말로 알림", added and done and "반영" in done["line"] and wait_log(r"^말함 ", app_log.index(done), 2))
+    time.sleep(4)
+    rs = trip(code)["requests"]; final = {r["id"]: r["status"] for r in rs}
+    c = next((r for r in rs if r["id"] not in (reqs[0]["id"], reqs[1]["id"]) and r["createdAt"] > reqs[1]["createdAt"]), None)
+    check("서버: A cancelled, B·C reflected", final.get(reqs[0]["id"]) == "cancelled" and final.get(reqs[1]["id"]) == "reflected" and c and c["status"] == "reflected",
+          statuses=[(r["text"], r["status"]) for r in rs[-3:]])
     note("top", activity=cap.top()); shot("03-navi-with-waypoint")
     front_app(); shot("04-offer-added"); ui = texts(); note("ui", texts=ui)
     check("우리 화면으로 돌아오면 '경유지를 추가했어요'", "경유지를 추가했어요" in ui)

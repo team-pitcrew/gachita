@@ -23,6 +23,12 @@ class AsksTest {
         assertEquals(Answer.NO, answerOf("휴게소 안 가도 돼"))
         assertEquals(Answer.NO, answerOf("아니 가자고 안 했어")) // 거절 낱말이 먼저
         assertEquals(Answer.UNCLEAR, answerOf("바다는 언제 보여?"))
+        assertEquals(Answer.YES, answerOf("그래, 쉬었다 가자")) // 쉬어 가자는 말이 섞여도 제안이 열려 있으면 수락
+        // 낱말이 통째로 같아야 한다: 다른 말 속에 든 "그래", "좋아", "응"은 답이 아니다
+        assertEquals(Answer.UNCLEAR, answerOf("그래서 언제 도착해?"))
+        assertEquals(Answer.UNCLEAR, answerOf("나 바다 좋아하는데"))
+        assertEquals(Answer.UNCLEAR, answerOf("반응이 빠르네"))
+        assertEquals(Answer.UNCLEAR, answerOf("용인휴게소에 들를지 다시 말해 주세요")) // 다시 묻는 말이 마이크로 돌아와도 답이 아니다
     }
 
     @Test fun onlyFrontRowOrUnknownAccepts() {
