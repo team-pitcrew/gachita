@@ -49,6 +49,7 @@ sudo tee /etc/systemd/system/block-mac-host.service >/dev/null <<'UNIT'
 Description=Block new connections from this runner VM to the Mac (host.lima.internal), except DNS
 After=docker.service
 Wants=docker.service
+PartOf=docker.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
