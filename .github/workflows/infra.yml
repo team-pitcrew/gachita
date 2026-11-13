@@ -23,7 +23,7 @@ concurrency:
 
 jobs:
   infra:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, gachita]
     timeout-minutes: 90
     env:
       TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
