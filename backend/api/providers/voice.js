@@ -40,7 +40,7 @@ export function wavMono(buf) {
     for (let c = 0; c < channels; c++) sum += data.readInt16LE((i * channels + c) * 2);
     samples[i] = sum / channels / 32768;
   }
-  return { samples };
+  return { samples, channels };
 }
 
 // 자리 교체 없는 반복 radix-2 FFT(길이는 2의 거듭제곱).
