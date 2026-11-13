@@ -366,6 +366,7 @@ set -euo pipefail
 export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 k() { kubectl -n gachita-db "$@"; }
 k delete cluster db-pitr --ignore-not-found --wait=true # 지난번에 남은 것. 그 공간까지 세지 않게 먼저 지운다
+for i in $(seq 60); do ls -d /var/lib/rancher/k3s/storage/*_gachita-db_db-pitr-* >/dev/null 2>&1 || break; sleep 2; done # PVC→PV→디렉터리 정리
 # db-pitr도 같은 루트 디스크(local-path)에 선다. 복구본, WAL 재생·임시 파일, apply의 덮어쓰기 WAL을 생각해
 # db 실제 크기(PV 디렉터리, PVC 요청 8Gi가 아님)의 3배와 2 GiB가 남아 있어야 시작한다
 # du는 재는 도중 사라진 파일(WAL 재활용)에도 0이 아닌 값으로 끝나므로 결과만 쓴다

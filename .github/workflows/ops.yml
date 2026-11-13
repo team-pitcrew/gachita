@@ -87,13 +87,21 @@ jobs:
           STAGES: ${{ inputs.stages }}
           TARGET_TIME: ${{ inputs.target_time }}
           APPLY: ${{ inputs.apply && 'apply' || '' }}
+          EVENT: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           case $ACTION in
             converge) set -- converge "$STAGES" ;;
             restore) set -- restore "$TARGET_TIME" "$APPLY" ;;
             *) set -- "$ACTION" ;;
           esac
-          backend/infra/infra.sh "$@" 2>&1 | tee "$RUNNER_TEMP/ops.log"
+          if ! backend/infra/infra.sh "$@" 2>&1 | tee "$RUNNER_TEMP/ops.log"; then
+            # 주기 실행 도중 펴기·접기가 시작됐으면 그 때문에 실패한 것이라 알리지 않는다
+            if [ "$EVENT" = schedule ] && [ "$(gh run list -R "$GITHUB_REPOSITORY" --workflow infra.yml --status in_progress --json databaseId -q length)" != 0 ]; then
+              echo "펴기·접기(infra)가 그사이 시작돼 이번 status는 건너뜀" | tee -a "$GITHUB_STEP_SUMMARY"; exit 0
+            fi
+            exit 1
+          fi
       - name: 요약
         if: always() && steps.folded.outputs.skip != 'true'
         env:
