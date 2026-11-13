@@ -74,6 +74,13 @@ fun answerOf(text: String): Answer {
 /** 수락은 앞줄(좌석 구역 0)이나 구역을 모르는 말만 받는다. 뒷줄 아이의 "응"으로 경로가 바뀌지 않게(T37이 구역을 붙임). */
 fun canAccept(u: Utterance) = u.seatZone == null || u.seatZone == 0
 
+/**
+ * 받아 적은 말의 첫 중간 결과가 우리 TTS가 말하는 동안(끝난 뒤 0.3초까지) 왔는지. 스피커 소리가 마이크로 되돌아오면
+ * 우리가 읽은 할 일·제안이 다시 받아 적혀 판정될 수 있다. 말이 끝난 뒤 바로 한 "응"은 첫 결과가 0.4초 넘게 걸려(11/13) 걸리지 않는다.
+ * ponytail: 실차에서 되돌아오는지는 재지 않았다(에뮬레이터는 되돌아오지 않음). 차의 에코 제거가 막아 주면 필요 없다.
+ */
+fun overlapsSpeech(firstPartialAt: Long, from: Long, to: Long) = from > 0 && firstPartialAt in from..(if (to == Long.MAX_VALUE) to else to + 300)
+
 /** 내비가 앞에 있어도 읽히는 거리·시간. 모르면 빈 글자. */
 fun distanceLabel(meters: Int?, seconds: Int?): String = listOfNotNull(
     meters?.let { if (it >= 1000) "%.0f km".format(it / 1000.0) else "$it m" },

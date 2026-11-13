@@ -51,6 +51,14 @@ class AsksTest {
         assertEquals(null, nextStop(37.7645236, 128.8996276))
     }
 
+    @Test fun ownVoiceWindow() {
+        assertFalse(overlapsSpeech(1_000, 0, 0)) // 아직 말한 적 없음
+        assertTrue(overlapsSpeech(10_500, 10_000, Long.MAX_VALUE)) // 말하는 중에 온 첫 결과
+        assertTrue(overlapsSpeech(12_200, 10_000, 12_000)) // 끝난 뒤 0.3초 안
+        assertFalse(overlapsSpeech(12_500, 10_000, 12_000)) // 말이 끝난 뒤 바로 한 "응"(첫 결과 0.4초 넘게 걸림)
+        assertFalse(overlapsSpeech(9_500, 10_000, 12_000)) // 우리가 말하기 전에 시작된 말
+    }
+
     @Test fun spokenNameAndDistance() {
         assertEquals("용인휴게소", REST_STOPS[0].spoken)
         assertEquals("15 km · 30분", distanceLabel(14766, 1780))
