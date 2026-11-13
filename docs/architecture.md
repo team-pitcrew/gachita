@@ -36,7 +36,7 @@ flowchart LR
     ALB["ALB gachita-dev\n(AWS Load Balancer Controller가 Gateway로 만듦)"]
     API["gachita: API 서버 (backend/api)\nNode 22 · NodePort"]
     PG[("gachita-db: Postgres 하나\ntrips · profiles")]
-    S3[("S3\n백업 · 클립(T64 만드는 중)")]
+    S3[("S3\n백업 · 클립")]
   end
   Car -->|HTTPS| CF
   Phone -->|HTTPS| CF
@@ -82,9 +82,9 @@ Pleos는 주행 중 내비가 아닌 앱의 CPU를 5% 미만, RAM을 400 MB 이�
 | 5 | 말한 사람 맞추기 | 차 → API. 등록 음성(1~20초)과 발화 음성(0.5~10초)을 보내 구역 안 후보의 등록 목소리와 대조, 기준을 넘으면 그 프로필, 아니면 '모름'. 소리는 대조용 값만 남기고 원본은 바로 버림 | 클라우드 화자 API는 원음이 제3자에게 가서 뺌. 지금은 의존성 없는 참조 임베더, 학습된 모델은 정확도 표 뒤([ADR-0019](adr/0019-speaker-matching.md)) | 서버 있음(손님 단위 등록 #176, 사람이 고친 화자 #204). 차의 등록 화면과 좌석 구역은 만드는 중(T37) |
 | 6 | 부탁·할 일 알아채기 | 차. 낱말 규칙 | 말이 끝난 직후 반응해야 해 차 안의 규칙으로 둠. LLM 판정은 뒤로 미룸(`Asks.kt`, `Todos.kt`) | 있음(에뮬레이터) |
 | 7 | 장면 후보 | API. 규칙 | LLM 계약 전이라 규칙으로 고름(11/14) | 서버 있음(#181, 합성 대화 시험) |
-| 8 | 사람이 고른 장면의 클립 | 차가 고른 구간만 올림. 그때까지 차 안에 48시간 암호화 | 원음 전체는 차 밖으로 보내지 않음([ADR-0007](adr/0007-voice-processing-flow.md)). 클립은 `media` 하위 도메인으로 흘려보냄([ADR-0020](adr/0020-media-delivery-subdomain.md)) | 서버와 클립 버킷 있음(#163·#167, 실제 버킷으로는 확인 전). 차에서 고른 클립 올리기는 만드는 중(T63) |
+| 8 | 사람이 고른 장면의 클립 | 차가 고른 구간만 올림. 그때까지 차 안에 48시간 암호화 | 원음 전체는 차 밖으로 보내지 않음([ADR-0007](adr/0007-voice-processing-flow.md)). 클립은 기존 API 주소에서 참가자 토큰을 확인하고 내줌([ADR-0021](adr/0021-shortform-as-composition-data.md), ADR-0020의 `media` 하위 도메인은 두지 않음) | 서버와 클립 버킷 있음(#163·#167, 실제 버킷으로는 확인 전). 차에서 고른 클립 올리기는 만드는 중(T63) |
 | 9 | 고른 클립 다시 받아 적기 | API → 재전사 서버. 고른 클립만, 서버에 설정이 있을 때만 | Pleos 초안이 짧은 물음에서 틀린 것을 자막에서 고침. 동의 화면에 밝힘 | 서버 있음(#183, 실패하면 원문 자막. 서버에 설정이 있을 때만, 길은 #191) |
-| 10 | 숏폼 | 폰 9:16 재생 페이지, 주차 중 차 | 영상 파일을 만들지 않고 클립·자막·말한 사람을 이어 틈 | 폰 있음(#185, 브라우저). 차는 계획 |
+| 10 | 숏폼 | 폰 9:16 재생 페이지, 주차 중 차 | 영상 파일을 만들지 않고 클립·자막·말한 사람을 이어 틈([ADR-0021](adr/0021-shortform-as-composition-data.md)) | 폰 있음(#185, 브라우저). 차는 계획 |
 
 ## 외부 API
 
@@ -101,7 +101,7 @@ Pleos는 주행 중 내비가 아닌 앱의 CPU를 5% 미만, RAM을 400 MB 이�
 | 화자 대조 | API 서버 | 같은 좌석 구역 안의 사람 구분 | 서버 안의 참조 임베더로 만듦([ADR-0019](adr/0019-speaker-matching.md)). 학습된 모델은 정확도 표 뒤(T38). 말소리는 대조에만 쓰고 버림 |
 | LLM(Claude API) | API 서버 | 장면 고르기 | 쓰지 않음. 장면 후보는 규칙으로 고름(T43, #181) |
 | 재전사(Nemotron ASR, 외부 서버) | API 서버 | 고른 장면 클립의 자막 다시 받아 적기 | 있음(T75, #183). 서버에 `ASR_URL`·토큰이 있을 때만, 실패하면 원문 자막. 나가는 길은 #191 |
-| Cloudflare | 가장자리 | 주소 `gachita.mangowhois.ai`, 서버로 가는 길, 요청 수 제한 | 동작(11/13부터, [ADR-0010](adr/0010-domain-and-cloudflare-edge.md)). 길·격리·포트는 [ADR-0013](adr/0013-network-edge-and-isolation.md)과 그 1·3절을 대신한 [ADR-0015](adr/0015-split-nodes-private-subnets-alb.md). 클립 영상은 Cloudflare를 지나지 않는 `media` 하위 도메인으로([ADR-0020](adr/0020-media-delivery-subdomain.md), T64 만드는 중) |
+| Cloudflare | 가장자리 | 주소 `gachita.mangowhois.ai`, 서버로 가는 길, 요청 수 제한 | 동작(11/13부터, [ADR-0010](adr/0010-domain-and-cloudflare-edge.md)). 길·격리·포트는 [ADR-0013](adr/0013-network-edge-and-isolation.md)과 그 1·3절을 대신한 [ADR-0015](adr/0015-split-nodes-private-subnets-alb.md). 클립은 같은 주소의 API가 내주고 영상 파일은 만들지 않음([ADR-0021](adr/0021-shortform-as-composition-data.md)) |
 
 ## 아직 없는 것
 
