@@ -1,6 +1,7 @@
 #!/bin/bash
 # 이 Mac에 자체 러너 VM을 만든다(T65). VM 하나에 러너 하나라 잡끼리 Docker 이름·포트가 겹치지 않는다.
-#   .github/runner/up.sh 1 2 3      gachita-runner-1..3 VM과 러너 gachita-mac-1..3
+#   .github/runner/up.sh 1 2 3      gachita-runner-1..3 VM과 러너 gachita-mac-1..3(11/13 지금은 1..5)
+#   Mac을 다시 켠 뒤: limactl start gachita-runner-N(러너는 VM 안의 서비스라 같이 뜬다)
 #
 # VM: Ubuntu 24.04 + Docker(Lima docker-rootful), 4 CPU · 8 GiB · 60 GiB. Mac 폴더를 붙이지 않고(--mount-none) 포트를 Mac으로
 # 내보내지 않는다. Rosetta: Android SDK의 리눅스 도구(aapt2 등)가 x86_64라서.
