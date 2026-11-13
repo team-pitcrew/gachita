@@ -4,8 +4,9 @@ import { shareOptions } from "./shares.js";
 
 test("공개 여행 장면과 내 앨범의 교집합만 공유 대상으로 보여 준다", () => {
   const trip = { code: "TRIP01", moments: [{ id: "mine" }, { id: "others" }], participants: [] };
-  const own = { kind: "moment", id: "mine", tripCode: "TRIP01", label: "내 장면" };
-  const items = [own, { kind: "moment", id: "old", tripCode: "TRIP01" }, { kind: "moment", id: "others", tripCode: "TRIP02" }, { kind: "utterance", id: "others", tripCode: "TRIP01", text: "대화" }];
+  // 앨범 응답(GET /profiles/me/moments?trip=)의 장면. 공개 여행에 없는 장면(old)과 다른 여행 것은 빠진다.
+  const own = { id: "mine", tripCode: "TRIP01", at: 1, label: "내 장면" };
+  const items = [own, { id: "old", tripCode: "TRIP01", at: 2 }, { id: "others", tripCode: "TRIP02", at: 3 }];
   assert.deepEqual(shareOptions(trip, items, "self").moments, [own]);
   assert.deepEqual(shareOptions(trip, [], "self").moments, [], "원본 앨범을 지운 뒤에는 공개 여행에 남아 있어도 고를 수 없음");
 });
@@ -21,4 +22,10 @@ test("동의한 다른 프로필 참가자만 대상으로 남고, 철회하면 
   assert.deepEqual(shareOptions(trip, [], "self").recipients, [other]);
   other.consent = false;
   assert.deepEqual(shareOptions(trip, [], "self").recipients, []);
+});
+
+test("앨범 장면이 많아도 자르지 않는다(피드 100개 제한과 무관)", () => {
+  const moments = Array.from({ length: 150 }, (_, i) => ({ id: `m${i}`, tripCode: "TRIP01", at: i }));
+  const trip = { code: "TRIP01", moments: moments.map(({ id }) => ({ id })), participants: [] };
+  assert.equal(shareOptions(trip, moments, "self").moments.length, 150);
 });
