@@ -97,7 +97,8 @@ export function createCaptions({ getTrip, getParticipant, request, refreshTrip }
       if (!valid(s)) return sync();
       if (revision !== s.revision) return;
       if (data.generation !== s.generation) { close(true); return toast("기록 동의가 바뀌었어요. 여행 화면에서 다시 확인해 주세요."); }
-      repaint ||= !!s.error || (!s.selected && JSON.stringify(s.rows) !== JSON.stringify(data.utterances));
+      const previousError = s.error;
+      repaint ||= !s.selected && JSON.stringify(s.rows) !== JSON.stringify(data.utterances);
       s.error = "";
       s.rows = data.utterances;
       const selectedKey = s.selected && key(s.selected);
@@ -110,18 +111,19 @@ export function createCaptions({ getTrip, getParticipant, request, refreshTrip }
           s.latest = null;
           s.notice = "내 입력은 유지했어요. 최신 자막과 비교한 뒤 다시 저장해 주세요.";
         } else if (latest.editVersion !== s.selected.editVersion) {
+          repaint ||= !s.conflict || JSON.stringify(s.latest) !== JSON.stringify(latest);
           s.latest = latest;
           s.conflict = true;
           s.error = "다른 사람이 자막을 고쳤어요. 내 입력은 유지했어요. 최신 자막을 읽고 비교해 주세요.";
-          repaint = true;
         } else if (JSON.stringify(latest) !== JSON.stringify(s.selected)) {
           if (!dirty(s)) s.draft = shown(latest);
           s.selected = latest;
           repaint = true;
         }
       }
+      repaint ||= previousError !== s.error;
     } catch (e) {
-      if (revision === s.revision) { await fail(s, e); repaint = true; }
+      if (revision === s.revision) { const previousError = s.error; await fail(s, e); repaint ||= previousError !== s.error; }
     }
     finally {
       clearTimeout(timeout);
@@ -147,6 +149,9 @@ export function createCaptions({ getTrip, getParticipant, request, refreshTrip }
   }
   function editor(s) {
     const row = s.selected;
+    const previous = dialog.querySelector("textarea");
+    const focused = previous === document.activeElement;
+    const selection = focused ? [previous.selectionStart, previous.selectionEnd] : null;
     const status = h("p", { className: "meta", role: "status" }, dirty(s) ? "저장하지 않은 변경이 있어요." : "저장된 자막이에요.");
     const notice = h("p", { role: "status", hidden: !s.notice }, s.notice || "");
     const save = button("변경 저장", () => saveCaption(s, s.draft), "primary");
@@ -176,6 +181,7 @@ export function createCaptions({ getTrip, getParticipant, request, refreshTrip }
       s.conflict && reload,
       h("div", { className: "row" }, save, cancel), reset,
     );
+    if (focused && !input.disabled) { input.focus({ preventScroll: true }); input.setSelectionRange(...selection); }
   }
   async function saveCaption(s, text) {
     if (!valid(s) || s.busy || s.conflict) return;
