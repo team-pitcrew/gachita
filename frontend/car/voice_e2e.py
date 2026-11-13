@@ -63,6 +63,7 @@ def main(apk, n):
     inj = Injector()
     for name, who in VOICE.items(): fixture(f"enroll-{name}", [(who, l) for l in LINES], lead=0.5, tail=0.5)
     talk = fixture("talk", TALK[:n], tail=4.0)
+    fixture("unsure", [("딸", "바다는 왜 짜?")], tail=4.0)  # 서버도 가르지 못하는 짧은 뒷줄 말(기준 모름): 화면에 '누구?'가 남게 해 고치기를 본다
     note("apk", sha256=e2e.hashlib.sha256(open(apk, "rb").read()).hexdigest())
     note("install", out=e2e.subprocess.run(ADB + ["install", "--user", "10", "-r", "-g", apk], capture_output=True, text=True).stdout.strip()[-200:])
     gear("Park")
@@ -131,6 +132,10 @@ def main(apk, n):
           sr and not wrong_known and spk["right"] * len(lines) >= bs["right"] * len(sr) * 0.5, car=spk, baseline=bs, wrong_where_server_knows=wrong_known)
     # 3. 화면: 방금 받아 적은 말에 이름이 붙고, '누구?'면 주차 중에 고칠 수 있다
     adb("shell", "am", "start", "--user", "10", "-n", f"{PKG}/.MainActivity"); time.sleep(3)
+    before = matched(); inj.play("unsure")
+    end = time.time() + 60
+    while not (matched() - before) and time.time() < end: time.sleep(3)
+    time.sleep(2)
     ui = texts(); shot("03-heard-names"); note("ui", texts=ui)
     named = [t for t in ui if re.match(r"\d\d:\d\d · (아빠|엄마|서준|하은|누구\?) · ", t)]
     check("받아 적은 말 줄에 말한 사람 이름(또는 누구?)이 보임", named, lines=named)
