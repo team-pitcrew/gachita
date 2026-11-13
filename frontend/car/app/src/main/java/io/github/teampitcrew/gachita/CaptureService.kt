@@ -77,7 +77,7 @@ object Live {
 
 private const val TAG = "GachitaCapture"
 private const val MIN_FREE = 500L * 1024 * 1024 // 남은 저장 공간이 이보다 적으면 가장 오래된 원음부터 지운다(T63)
-private const val RESYNC_MS = 250L // 원음 파일의 시각(표본 수로 셈)이 기기 시계와 이만큼 어긋나면 새 파일로(T63)
+private const val RESYNC_MS = 250L // 원음 파일의 시각(표본 수로 셈)이 기기 시계와 녹음 버퍼 길이 + 이만큼 어긋나면 새 파일로(T63)
 
 /**
  * 마이크 포그라운드 서비스. AudioRecord(MIC, 16 kHz 2채널)를 쥐고 0.1초씩 읽어, 좌+우 모노로 Pleos STT(ON_DEVICE)에 sendAudio()로 넣는다.
@@ -94,6 +94,11 @@ class CaptureService : Service() {
     private var raw: RawWriter? = null // 읽기 스레드만 만진다
     private var rawOff = false // 저장 공간이 모자라 원음을 남기지 않는 중
     private var rawRetryAt = 0L // 원음 쓰기가 실패하거나 공간이 모자라면 이때까지 쉰다
+    /**
+     * 새 파일로 넘어갈 어긋남(ms). 읽기 스레드가 잠깐 밀리면 버퍼에 쌓인 조각이 한꺼번에 와 기기 시계와 버퍼 길이만큼 어긋나 보이지만
+     * 표본은 잃지 않았다. 그보다 크게 어긋날 때만(표본을 잃음, 시계가 바뀜) 넘어간다.
+     */
+    private var resyncMs = 1_000L
     private var worker: Thread? = null
     private var stt: SpeechToText? = null
     private var sttReady = false
@@ -195,8 +200,9 @@ class CaptureService : Service() {
         rec = r
         try {
             r.startRecording()
+            resyncMs = r.bufferSizeInFrames * 1000L / RATE + RESYNC_MS
             val d = r.routedDevice
-            Log.i(TAG, "녹음 시작 ${r.sampleRate} Hz ${r.channelCount}채널 ${d?.productName}")
+            Log.i(TAG, "녹음 시작 ${r.sampleRate} Hz ${r.channelCount}채널 ${d?.productName} 버퍼 ${r.bufferSizeInFrames * 1000 / RATE}ms")
             val buf = ShortArray(CHUNK_FRAMES * 2)
             var errors = 0
             while (!stopping) {
@@ -231,7 +237,7 @@ class CaptureService : Service() {
             val g = Live.rawGen
             // 새 파일로 넘어갈 때: 처음, 원음 지우기를 눌렀음, 모두 동의한 세대가 바뀜, 기기 시계와 0.25초 넘게 어긋남(읽기가 멈춤, 시계가 바뀜)
             val roll = w == null || Live.rollRaw == box.trip || w.trip != box.trip || w.generation != g ||
-                kotlin.math.abs(at - (w.startedAt + w.frames * 1000 / RATE)) > RESYNC_MS
+                kotlin.math.abs(at - (w.startedAt + w.frames * 1000 / RATE)) > resyncMs
             if (roll) {
                 if (Live.rollRaw == box.trip) Live.rollRaw = null
                 w?.close(); raw = null
