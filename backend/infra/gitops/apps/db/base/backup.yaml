@@ -14,10 +14,11 @@ spec:
       compression: gzip
     data:
       compression: gzip
+  # 전체 백업(barman-cloud-backup, S3 나눠 올리기) 동안 128Mi에서 OOMKilled(11/13 실제 계정, 접기 전 백업이 실패함)
   instanceSidecarConfiguration:
     resources:
-      requests: { cpu: 10m, memory: 128Mi }
-      limits: { memory: 128Mi }
+      requests: { cpu: 10m, memory: 256Mi }
+      limits: { memory: 512Mi }
 ---
 # 매일 03:00(KST) 전체 백업. 처음 한 번은 만들자마자 뜬다.
 apiVersion: postgresql.cnpg.io/v1
