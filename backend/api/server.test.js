@@ -738,7 +738,8 @@ test("녹음 클립: 고른 장면의 원음을 받고, 재생하고, 바로 지
   const [, m1] = await call("POST", `${t}/moments`, { label: "웃음" });
   const [, m2] = await call("POST", `${t}/moments`, {});
   const auth = (token) => (token ? { authorization: `Bearer ${token}` } : {});
-  const up = (moment, body, token, generation = 1) => fetch(`${base}${t}/recordings?moment=${moment}&generation=${generation}`, { method: "POST", headers: auth(token), body });
+  const from = Date.now() - 30_000; // 클립 첫 표본의 시각
+  const up = (moment, body, token, generation = 1) => fetch(`${base}${t}/recordings?moment=${moment}&generation=${generation}&from=${from}`, { method: "POST", headers: auth(token), body });
   const play = (id, token) => fetch(`${base}${t}/recordings/${id}`, { headers: auth(token) });
   const del = (id, token) => fetch(`${base}${t}/recordings/${id}`, { method: "DELETE", headers: auth(token) });
   const gone = async () => {
@@ -750,7 +751,7 @@ test("녹음 클립: 고른 장면의 원음을 받고, 재생하고, 바로 지
   // 올리기: 장면 하나에 클립 하나. 다시 보내면 저장하지 않고 같은 값
   const first = await up(m1.id, clip, mom.token);
   assert.equal(first.status, 201);
-  assert.deepEqual(await first.json(), { id: m1.id, momentId: m1.id, seconds: 2, bytes: clip.length });
+  assert.deepEqual(await first.json(), { id: m1.id, momentId: m1.id, startAt: from, seconds: 2, bytes: clip.length });
   const again = await up(m1.id, clip, son.token);
   assert.deepEqual([again.status, (await again.json()).id, s3.objects.size], [200, m1.id, 1]);
 
@@ -771,7 +772,8 @@ test("녹음 클립: 고른 장면의 원음을 받고, 재생하고, 바로 지
   assert.equal((await up(m2.id, stereo, mom.token)).status, 400, "모노만");
   assert.equal((await up(m2.id, Buffer.alloc(5_000_001), mom.token)).status, 413, "5 MB까지");
   assert.equal((await up("nope", clip, mom.token)).status, 404, "그 여행의 장면만");
-  assert.equal((await fetch(`${base}${t}/recordings?moment=${m2.id}`, { method: "POST", headers: auth(mom.token), body: clip })).status, 400, "세대가 필요");
+  assert.equal((await fetch(`${base}${t}/recordings?moment=${m2.id}&from=${from}`, { method: "POST", headers: auth(mom.token), body: clip })).status, 400, "세대가 필요");
+  assert.equal((await fetch(`${base}${t}/recordings?moment=${m2.id}&generation=1`, { method: "POST", headers: auth(mom.token), body: clip })).status, 400, "클립 시작 시각이 필요");
   assert.equal((await up(m2.id, clip, mom.token, 2)).status, 400, "아직 없는 세대");
   assert.equal(s3.objects.size, 1, "거절한 소리는 버킷에 남지 않음");
 

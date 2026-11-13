@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS recordings (
   generation int NOT NULL,                   -- 녹음할 때의 동의 세대(ADR-0007)
   participant_id text NOT NULL,              -- 올린 참가자
   object_key text NOT NULL,
+  start_at bigint NOT NULL,                  -- 클립 첫 표본의 시각(epoch ms, 차가 자른 구간의 시작). 숏폼 자막을 맞춘다(T43)
   bytes int NOT NULL,
   seconds double precision NOT NULL,
   deleted_at timestamptz,                    -- 사람이 지움. 소리는 버킷에서 이미 지웠다

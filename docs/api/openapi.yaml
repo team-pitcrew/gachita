@@ -580,6 +580,7 @@ paths:
       parameters:
         - { name: moment, in: query, required: true, schema: { type: string }, description: 이 여행의 장면 id }
         - { name: generation, in: query, required: true, schema: { type: integer, minimum: 1 }, description: 녹음할 때의 동의 세대 }
+        - { name: from, in: query, required: true, schema: { type: integer }, description: "클립 첫 표본의 시각(epoch 밀리초, 차가 자른 구간의 시작). 숏폼 자막을 소리에 맞추는 기준(T43). 여행을 만들기 1분 전부터 지금+1분까지" }
       requestBody:
         required: true
         content:
@@ -919,10 +920,11 @@ components:
         label: { type: string }
     Recording:
       type: object
-      required: [id, momentId, seconds, bytes]
+      required: [id, momentId, startAt, seconds, bytes]
       properties:
         id: { type: string, description: 클립 id. 장면 id와 같음 }
         momentId: { type: string }
+        startAt: { type: integer, description: 클립 첫 표본의 시각(epoch 밀리초) }
         seconds: { type: number, description: 소리 길이(초) }
         bytes: { type: integer, description: 받은 WAV 크기 }
     UtteranceInput:

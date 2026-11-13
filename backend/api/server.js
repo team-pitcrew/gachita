@@ -473,7 +473,7 @@ async function voiceMatch(trip, req, query) {
 // 녹음 클립(T76, docs/api/voice.md): 사람이 장면으로 고른 구간의 원음. 장면 하나에 클립 하나라 클립 id는 장면 id다.
 // 소리는 클립 버킷(providers/clips.js)에, 정보는 recordings 표에 둔다. 차가 자른 WAV를 그대로 두고 다시 자르지 않는다.
 const CLIP_MAX = 5_000_000;
-const asRecording = (r) => ({ id: r.moment_id, momentId: r.moment_id, seconds: r.seconds, bytes: r.bytes });
+const asRecording = (r) => ({ id: r.moment_id, momentId: r.moment_id, startAt: Number(r.start_at), seconds: r.seconds, bytes: r.bytes });
 
 // 버킷에서 지운다. 기다리지 않는다 — 여행 줄을 잠근 채 S3를 기다리면 같은 여행의 동의 바꾸기가 2초 제한(T26)에 걸린다.
 // 실패하면 남기기만 하고, 남은 것은 버킷 수명 규칙(2일, T64)이 치운다. 사람이 이미 지운 것(deleted_at)은 버킷에 없다.
@@ -517,10 +517,12 @@ async function recordings(code, id, req, query) {
     const current = trip.generation ?? 1;
     // 녹음할 때의 동의 세대. 옛 세대는 철회 전의 소리라 받지 않는다 — 차는 버린다(ADR-0007).
     if (int(Number(query.get("generation")), 1, current, "generation") < current) fail(409, "동의가 바뀌기 전의 소리라 받지 않음");
+    // 클립 첫 표본의 시각. 자막(발화 시각)을 소리에 맞추는 기준이다(T43).
+    const startAt = int(Number(query.get("from")), trip.createdAt - 60_000, Date.now() + 60_000, "from");
     if (!everyoneConsents(trip)) fail(403, "동의하지 않은 탑승자가 있어 올릴 수 없음"); // 발화 올리기와 같은 규칙
-    const { rows } = await client.query("SELECT moment_id, bytes, seconds, deleted_at FROM recordings WHERE trip_code = $1 AND moment_id = $2", [trip.code, momentId]);
+    const { rows } = await client.query("SELECT moment_id, start_at, bytes, seconds, deleted_at FROM recordings WHERE trip_code = $1 AND moment_id = $2", [trip.code, momentId]);
     if (rows[0]?.deleted_at) fail(409, "지운 클립은 다시 받지 않음");
-    return { caller, momentId, tripCode: trip.code, current, existing: rows[0] };
+    return { caller, momentId, startAt, tripCode: trip.code, current, existing: rows[0] };
   };
   const before = await withTrip(code, false, check);
   if (before.existing) return [200, asRecording(before.existing)]; // 같은 장면을 다시 보냄(멱등)
@@ -539,10 +541,10 @@ async function recordings(code, id, req, query) {
         return [200, asRecording(now.existing)];
       }
       await client.query(
-        "INSERT INTO recordings (trip_code, moment_id, generation, participant_id, object_key, bytes, seconds) VALUES ($1, $2, $3, $4, $5, $6, $7)",
-        [trip.code, now.momentId, now.current, now.caller.id, key, raw.length, seconds]
+        "INSERT INTO recordings (trip_code, moment_id, generation, participant_id, object_key, start_at, bytes, seconds) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        [trip.code, now.momentId, now.current, now.caller.id, key, now.startAt, raw.length, seconds]
       );
-      return [201, { id: now.momentId, momentId: now.momentId, seconds, bytes: raw.length }];
+      return [201, asRecording({ moment_id: now.momentId, start_at: now.startAt, seconds, bytes: raw.length })];
     });
   } catch (e) {
     dropClips([{ object_key: key }]); // 남기지 못한 소리는 버킷에 두지 않는다
