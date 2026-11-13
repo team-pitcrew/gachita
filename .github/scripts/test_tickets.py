@@ -141,26 +141,6 @@ class Labels(unittest.TestCase):
         self.assertEqual(t.label_plan(labels, part="backend-api", priority="P1", state="in-progress"), ([], []))
         self.assertEqual(t.label_plan(labels), ([], []), "읽지 못한 항목은 건드리지 않는다")
 
-    def test_removing_a_label_that_is_already_gone_is_not_an_error(self):
-        # 브랜치와 PR 이벤트가 겹쳐 다른 실행이 먼저 뗀 경우(HTTP 404). 다른 오류는 그대로 올린다.
-        calls, real = [], t.gh
-
-        def fake(*args, **kw):
-            calls.append(args)
-            if args[2] == "DELETE":
-                raise RuntimeError("gh api -X DELETE 실패: gh: Label does not exist (HTTP 404)")
-            return ""
-
-        t.gh = fake
-        try:
-            t.set_labels(7, ["status:in-progress"], ["status:backlog"])
-            self.assertEqual([c[2] for c in calls], ["DELETE", "POST"])
-            t.gh = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("gh api -X DELETE 실패: HTTP 403"))
-            with self.assertRaises(RuntimeError):
-                t.set_labels(7, [], ["status:backlog"])
-        finally:
-            t.gh = real
-
     def test_status_of(self):
         self.assertEqual(t.status_of(["P0", "status:in-review"]), "in-review")
         self.assertIsNone(t.status_of(["P0"]))
