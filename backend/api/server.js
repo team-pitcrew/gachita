@@ -3,8 +3,8 @@
 //
 // ponytail: 여행 하나를 JSONB 문서 한 줄로 저장한다. 바꿀 때는 그 줄을 잠그고 통째로 다시 쓴다.
 //           여행을 가로질러 조회할 일이 생기면 참가자·부탁을 표로 나눈다.
-// ponytail: 프로필 토큰이 없는 손님도 여행 코드만 알면 참가하고 고칠 수 있다.
-//           공개 범위를 좁혀야 하면 참가자마다 토큰을 준다.
+// ponytail: 프로필 토큰이 없는 손님도 여행 코드만 알면 참가하고 자리를 고치고 동의를 끌 수 있다.
+//           동의 켜기와 음성 경로는 참가자 토큰으로 본인만 한다(T68).
 import { createHash, randomBytes, randomInt, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -23,6 +23,7 @@ const UTTERANCES_SQL = fileURLToPath(new URL("trips-2-utterances.sql", import.me
 const ALBUM_SQL = fileURLToPath(new URL("profiles-3-moments.sql", import.meta.url));
 const GROUPS_SQL = fileURLToPath(new URL("profiles-4-groups.sql", import.meta.url));
 const VOICE_SQL = fileURLToPath(new URL("profiles-5-voice.sql", import.meta.url));
+const NO_PREFS_SQL = fileURLToPath(new URL("profiles-6-no-prefs.sql", import.meta.url));
 const INVITE_BASE = process.env.INVITE_BASE_URL ?? "https://gachita.mangowhois.ai/j"; // QR에 담는 초대 주소(ADR-0009·0010)
 const PHOTO_MAX = 1_000_000; // 프로필 사진 상한. 형식은 매직 바이트로만 확인한다(다시 그리기는 T46 화면, ADR-0009 위험)
 const TTL_MS = 48 * 60 * 60 * 1000; // 기획서 v4가 초기 제안으로 적은 보관 기간
@@ -32,10 +33,7 @@ const MAX_TRIP_UTTERANCES = 20_000;
 const CODE_CHARS = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"; // 0·O·1·I·L은 헷갈려서 뺌
 
 // 좌석 이름은 Pleos Vehicle SDK의 SeatArea와 같게 둔다. 차량 앱이 그대로 넘긴다.
-// 프로필은 선호를 자리 종류(운전석·조수석·뒷자리)별로 따로 가진다.
-const ROLE = { ROW_1_LEFT: "driver", ROW_1_RIGHT: "passenger", ROW_2_LEFT: "rear", ROW_2_CENTER: "rear", ROW_2_RIGHT: "rear" };
-export const SEATS = Object.keys(ROLE);
-const ROLES = ["driver", "passenger", "rear"];
+export const SEATS = ["ROW_1_LEFT", "ROW_1_RIGHT", "ROW_2_LEFT", "ROW_2_CENTER", "ROW_2_RIGHT"];
 const TRIP_STATUS = ["boarding", "driving", "parked", "ended"];
 const WHEN = ["now", "return", "before_arrival", "after_parking"];
 // 부탁의 상태 흐름: 기억(held) → 제안(proposed) → 수락(accepted) → 내비 반영 확인(reflected) → 완료(done).
@@ -88,15 +86,6 @@ const oneOf = (v, list, name) => (list.includes(v) ? v : fail(400, `${name}: ${l
 const bool = (v, name) => (typeof v === "boolean" ? v : fail(400, `${name}: true 또는 false`));
 const obj = (v, name) => (v && typeof v === "object" && !Array.isArray(v) ? v : fail(400, `${name}: 객체`));
 
-// 차마다 지원 범위가 다르다. 여기서는 넓게 받고, 차량 앱이 지원 범위에 맞춰 줄인다.
-const prefs = (p, name = "prefs") => ({
-  tempC: num(p.tempC ?? 22, 16, 30, `${name}.tempC`),
-  heat: int(p.heat ?? 0, 0, 3, `${name}.heat`),
-  vent: int(p.vent ?? 0, 0, 3, `${name}.vent`),
-});
-const rolePrefs = (p, base = {}) =>
-  Object.fromEntries(ROLES.map((r) => [r, prefs({ ...base[r], ...obj(p[r] ?? {}, `prefs.${r}`) }, `prefs.${r}`)]));
-
 const everyoneConsents = (trip) => trip.participants.length > 0 && trip.participants.every((p) => p.consent);
 const newCode = () => Array.from({ length: 6 }, () => CODE_CHARS[randomInt(CODE_CHARS.length)]).join("");
 const tokenHash = (token) => createHash("sha256").update(token).digest();
@@ -111,6 +100,7 @@ export async function migrate() {
   await profilesDb().query(await readFile(ALBUM_SQL, "utf8"));
   await profilesDb().query(await readFile(GROUPS_SQL, "utf8"));
   await profilesDb().query(await readFile(VOICE_SQL, "utf8"));
+  await profilesDb().query(await readFile(NO_PREFS_SQL, "utf8"));
 }
 
 async function readBody(req, limit = MAX_BODY) {
@@ -135,7 +125,6 @@ async function readBody(req, limit = MAX_BODY) {
 const asProfile = (r) => ({
   id: r.id,
   name: r.name,
-  prefs: r.prefs,
   consentDefault: r.consent_default,
   character: r.character ?? "",
   hasPhoto: Boolean(r.has_photo),
@@ -149,14 +138,18 @@ async function issueToken(profileId, device = "", token = randomBytes(32).toStri
 }
 
 // 여행 문서의 참가자를 API가 돌려주는 모양으로 바꾼다. 참가자 토큰 해시는 절대 나가지 않는다.
-const asParticipant = ({ tokenHash, ...p }) => p;
+// prefs는 좌석·공조 선호를 걷어내기(T68) 전에 만든 여행 문서에만 있다(48시간 보관 시계와 함께 사라짐).
+const asParticipant = ({ tokenHash, olderTokenHashes, prefs, ...p }) => p;
 const tripView = (trip) => ({ ...trip, participants: trip.participants.map(asParticipant) });
 
 // 참가자 토큰(ADR-0007·docs/api/voice.md). 여행·참가에 묶이고 문서에는 해시만 남는다.
-// 프로필 토큰과 별개다 — 발화 올리기·기록본 같은 음성 경로의 인증에 쓴다.
+// 프로필 토큰과 별개다 — 발화 올리기·기록본·동의 켜기의 인증에 쓴다.
+// 가장 최근에 준 토큰의 해시는 tokenHash, 그 앞의 것은 olderTokenHashes에 둔다(T68) —
+// 배포 중 함께 도는 옛 파드와 되돌린 이미지는 tokenHash만 읽으니, 그쪽에서도 가장 최근 기기는 통한다.
 const participantOf = (req, trip) => {
   const m = /^Bearer ([A-Za-z0-9_-]{40,})$/.exec(req.headers.authorization ?? "");
-  const p = m && trip.participants.find((x) => x.tokenHash === tokenHash(m[1]).toString("hex"));
+  const h = m && tokenHash(m[1]).toString("hex");
+  const p = h && trip.participants.find((x) => x.tokenHash === h || x.olderTokenHashes?.includes(h));
   return p ?? fail(401, "참가자 토큰이 필요함");
 };
 
@@ -181,7 +174,7 @@ const asUtterance = (r) => ({
 
 async function profileById(id) {
   const { rows } = await profilesDb().query(
-    "SELECT id, name, prefs, consent_default, provider, character, (photo IS NOT NULL) AS has_photo FROM profiles WHERE id = $1",
+    "SELECT id, name, consent_default, provider, character, (photo IS NOT NULL) AS has_photo FROM profiles WHERE id = $1",
     [id]
   );
   return asProfile(rows[0]);
@@ -196,7 +189,7 @@ async function profileOf(req) {
   const m = /^Bearer ([A-Za-z0-9_-]{40,})$/.exec(header);
   const { rows } = m
     ? await profilesDb().query(
-        `SELECT p.id, p.name, p.prefs, p.consent_default, p.provider, p.character, (p.photo IS NOT NULL) AS has_photo
+        `SELECT p.id, p.name, p.consent_default, p.provider, p.character, (p.photo IS NOT NULL) AS has_photo
          FROM profiles p WHERE p.id = (SELECT profile_id FROM tokens WHERE token_hash = $1) OR p.token_hash = $1`,
         [tokenHash(m[1])]
       )
@@ -230,13 +223,12 @@ async function profiles(req, seg, b) {
     const p = {
       id: randomUUID(),
       name: text(b.name, 20, "name"),
-      prefs: rolePrefs(obj(b.prefs ?? {}, "prefs")),
       consentDefault: b.consentDefault === undefined ? false : bool(b.consentDefault, "consentDefault"),
       character: b.character === undefined ? "" : text(b.character, 20, "character"),
     };
     // 첫 토큰은 옛 칸(token_hash)에도 적는다 — 이전 이미지로 되돌려도 이 프로필이 읽히게(칸을 지우는 PR에서 뺀다).
     const token = randomBytes(32).toString("base64url");
-    await profilesDb().query("INSERT INTO profiles (id, token_hash, name, prefs, consent_default, character) VALUES ($1, $2, $3, $4, $5, $6)", [p.id, tokenHash(token), p.name, p.prefs, p.consentDefault, p.character]);
+    await profilesDb().query("INSERT INTO profiles (id, token_hash, name, consent_default, character) VALUES ($1, $2, $3, $4, $5)", [p.id, tokenHash(token), p.name, p.consentDefault, p.character]);
     await issueToken(p.id, b.device === undefined ? "" : text(b.device, 20, "device"), token);
     return [201, { ...p, hasPhoto: false, links: [], token }]; // 토큰은 이때 한 번만 준다. 서버에는 해시만 남는다.
   }
@@ -323,13 +315,12 @@ async function profiles(req, seg, b) {
   const next = {
     id: me.id,
     name: b.name === undefined ? me.name : text(b.name, 20, "name"),
-    prefs: b.prefs === undefined ? me.prefs : rolePrefs(obj(b.prefs, "prefs"), me.prefs),
     consentDefault: b.consentDefault === undefined ? me.consentDefault : bool(b.consentDefault, "consentDefault"),
     character: b.character === undefined ? me.character : text(b.character, 20, "character"),
     hasPhoto: me.hasPhoto,
     links: me.links,
   };
-  await profilesDb().query("UPDATE profiles SET name = $2, prefs = $3, consent_default = $4, character = $5, updated_at = now() WHERE id = $1", [me.id, next.name, next.prefs, next.consentDefault, next.character]);
+  await profilesDb().query("UPDATE profiles SET name = $2, consent_default = $3, character = $4, updated_at = now() WHERE id = $1", [me.id, next.name, next.consentDefault, next.character]);
   return [200, next];
 }
 
@@ -348,7 +339,7 @@ export async function verifyGoogleLink(profileId, providerUserId) {
   const { rows } = await profilesDb().query(
     `UPDATE profiles SET updated_at = now()
      WHERE provider = 'google' AND provider_user_id = $1 ${profileId ? "AND id = $2" : ""}
-     RETURNING id, name, prefs, consent_default, provider, character, (photo IS NOT NULL) AS has_photo`,
+     RETURNING id, name, consent_default, provider, character, (photo IS NOT NULL) AS has_photo`,
     profileId ? [providerUserId, profileId] : [providerUserId]
   );
   return rows[0] ?? null;
@@ -378,9 +369,9 @@ async function googleLink(req, m, b) {
       await issueToken(current.id, b.device === undefined ? "" : text(b.device, 20, "device"), token);
       return [200, { ...asProfile(current), token }];
     }
-    const p = { id: randomUUID(), name: identity.name, prefs: rolePrefs({}), consentDefault: false, character: "" };
+    const p = { id: randomUUID(), name: identity.name, consentDefault: false, character: "" };
     try {
-      await db.query("INSERT INTO profiles (id, token_hash, name, prefs, consent_default, character, provider, provider_user_id) VALUES ($1, $2, $3, $4, $5, '', 'google', $6)", [p.id, tokenHash(token), p.name, p.prefs, p.consentDefault, identity.providerUserId]);
+      await db.query("INSERT INTO profiles (id, token_hash, name, consent_default, character, provider, provider_user_id) VALUES ($1, $2, $3, $4, '', 'google', $5)", [p.id, tokenHash(token), p.name, p.consentDefault, identity.providerUserId]);
     } catch (e) {
       // 동시 첫 로그인: 먼저 들어온 요청이 이미 프로필을 만들었다(23505). 그 계정의 프로필로 들어간다.
       if (!isTaken(e)) throw e;
@@ -567,8 +558,8 @@ async function groups(req, seg, b) {
   if (sub === "members" && !arg) {
     // 계정 없는 구성원(아이) 프로필을 대표가 만든다. 토큰은 없다 — 대표의 기기가 참가시킨다.
     if (!isOwner) fail(403, "대표만 구성원을 만들 수 있음");
-    const p = { id: randomUUID(), name: text(b.name, 20, "name"), prefs: rolePrefs({}), consentDefault: false, character: b.character === undefined ? "" : text(b.character, 20, "character") };
-    await db.query("INSERT INTO profiles (id, name, prefs, consent_default, character, managed_by) VALUES ($1, $2, $3, false, $4, $5)", [p.id, p.name, p.prefs, p.character, me.id]);
+    const p = { id: randomUUID(), name: text(b.name, 20, "name"), character: b.character === undefined ? "" : text(b.character, 20, "character") };
+    await db.query("INSERT INTO profiles (id, name, consent_default, character, managed_by) VALUES ($1, $2, false, $3, $4)", [p.id, p.name, p.character, me.id]);
     await db.query("INSERT INTO group_members (group_id, profile_id) VALUES ($1, $2)", [id, p.id]);
     return [201, { profileId: p.id, name: p.name, character: p.character, isOwner: false }];
   }
@@ -623,7 +614,7 @@ async function acceptInvite(req, code, b) {
   // 프로필 토큰이 있으면 있던 프로필로, 없으면 새 프로필을 만들어 이 기기 토큰을 준다.
   // 입력과 토큰은 횟수를 쓰기 전에 본다 — 거절된 수락이 횟수를 쓰지 않게.
   const me = await profileOf(req);
-  const profile = me ?? { id: randomUUID(), name: text(b.name, 20, "name"), prefs: rolePrefs(obj(b.prefs ?? {}, "prefs")), consentDefault: false, character: b.character === undefined ? "" : text(b.character, 20, "character"), links: [] };
+  const profile = me ?? { id: randomUUID(), name: text(b.name, 20, "name"), consentDefault: false, character: b.character === undefined ? "" : text(b.character, 20, "character"), links: [] };
   const device = b.device === undefined ? "" : text(b.device, 20, "device");
   // 이미 구성원이면(QR을 다시 찍음) 횟수를 쓰지 않는다.
   const { rows: member } = me
@@ -646,7 +637,7 @@ async function acceptInvite(req, code, b) {
   const token = me ? null : randomBytes(32).toString("base64url");
   if (!me) {
     // 첫 토큰은 옛 칸에도(POST /profiles와 같은 까닭)
-    await db.query("INSERT INTO profiles (id, token_hash, name, prefs, consent_default, character) VALUES ($1, $2, $3, $4, false, $5)", [profile.id, tokenHash(token), profile.name, profile.prefs, profile.character]);
+    await db.query("INSERT INTO profiles (id, token_hash, name, consent_default, character) VALUES ($1, $2, $3, false, $4)", [profile.id, tokenHash(token), profile.name, profile.character]);
     await issueToken(profile.id, device, token);
   }
   await db.query("INSERT INTO group_members (group_id, profile_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", [rows[0].group_id, profile.id]);
@@ -766,30 +757,31 @@ async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
         if (typeof b.profileId !== "string" || !UUID.test(b.profileId)) fail(400, "profileId: 프로필 id");
         // 내가 만든 계정 없는 구성원(아이)만 — 계정 있는 어른의 자리와 동의는 그 사람이 정한다.
         const { rows: kid } = await profilesDb().query(
-          `SELECT p.id, p.name, p.prefs, p.consent_default FROM profiles p
+          `SELECT p.id, p.name FROM profiles p
            JOIN group_members gm ON gm.profile_id = p.id
            JOIN groups g ON g.id = gm.group_id
            WHERE p.id = $1 AND g.owner_id = $2 AND p.managed_by = $2 LIMIT 1`,
           [b.profileId, profile.id]
         );
         if (!kid[0]) fail(403, "내가 만든 계정 없는 구성원만 참가시킬 수 있음");
-        if (trip.participants.some((p) => p.profileId === kid[0].id)) fail(409, "이미 참가한 구성원");
         kidOf = kid[0];
       }
-      // 같은 프로필이 다시 참가하면 이미 있는 참가자를 돌려준다(폰에서 다시 열었을 때).
-      // 참가자 토큰은 문서에 해시만 남으니 다시 참가할 때마다 새로 만들어 준다(옛 토큰은 못 쓰게 됨).
-      const again = !kidOf && profile && trip.participants.find((p) => p.profileId === profile.id);
+      // 같은 프로필(대표가 참가시킨 아이도)이 다시 참가하면 이미 있는 참가자를 돌려준다(폰을 바꿨거나 토큰을 잃었을 때).
+      // 참가자 토큰은 문서에 해시만 남으니 이 기기에 쓸 토큰을 새로 만들어 준다. 앞서 준 토큰도 최근 4개까지 산다(T68) —
+      // 남이 끈 동의를 본인이 다시 켜려면 토큰이 있어야 하니, 잃었으면 다시 참가해 받는다.
+      const again = profile && trip.participants.find((p) => p.profileId === (kidOf ?? profile).id);
       if (again) {
         const token = randomBytes(32).toString("base64url");
+        again.olderTokenHashes = [...(again.olderTokenHashes ?? []), again.tokenHash].slice(-4);
         again.tokenHash = tokenHash(token).toString("hex");
         return changed(200, { ...asParticipant(again), token });
       }
       const seat = oneOf(b.seat, SEATS, "seat");
       const p = kidOf
-        ? { name: kidOf.name, prefs: kidOf.prefs[ROLE[seat]], consent: b.consent === undefined ? false : bool(b.consent, "consent"), profileId: kidOf.id } // 아이는 동의 기본값 꺼짐
+        ? { name: kidOf.name, consent: b.consent === undefined ? false : bool(b.consent, "consent"), profileId: kidOf.id } // 아이는 동의 기본값 꺼짐
         : profile
-          ? { name: profile.name, prefs: profile.prefs[ROLE[seat]], consent: b.consent === undefined ? profile.consentDefault : bool(b.consent, "consent"), profileId: profile.id }
-          : { name: text(b.name, 20, "name"), prefs: prefs(obj(b.prefs ?? {}, "prefs")), consent: bool(b.consent, "consent") };
+          ? { name: profile.name, consent: b.consent === undefined ? profile.consentDefault : bool(b.consent, "consent"), profileId: profile.id }
+          : { name: text(b.name, 20, "name"), consent: bool(b.consent, "consent") };
       if (!seatFree(seat)) fail(409, "이미 다른 사람이 앉은 자리");
       // 참가자 토큰(프로필·손님 모두)은 이때 한 번씩 준다. 음성 경로의 인증에 쓴다(ADR-0007).
       const token = randomBytes(32).toString("base64url");
@@ -800,21 +792,21 @@ async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
     }
     if (m === "PATCH" && id) {
       const p = trip.participants.find((x) => x.id === id) ?? fail(404, "없는 참가자");
-      if (b.seat !== undefined) {
-        if (!seatFree(oneOf(b.seat, SEATS, "seat"), p)) fail(409, "이미 다른 사람이 앉은 자리");
-        p.seat = b.seat;
-        // 프로필로 참가한 사람은 옮긴 자리의 선호를 프로필 저장소에서 다시 불러온다.
-        // 여행 잠금과는 다른 저장소라 이 읽기에는 원자성이 없다. 값을 읽기만 하니 견딘다.
-        const { rows } = p.profileId ? await profilesDb().query("SELECT prefs FROM profiles WHERE id = $1", [p.profileId]) : { rows: [] };
-        if (rows[0]) p.prefs = rows[0].prefs[ROLE[p.seat]];
+      const seat = b.seat === undefined ? undefined : oneOf(b.seat, SEATS, "seat");
+      const consent = b.consent === undefined ? undefined : bool(b.consent, "consent");
+      // 동의 켜기는 그 참가자 본인의 참가자 토큰으로만(T68, ADR-0009 '각자 따로'). 끄기와 자리는 누구나 —
+      // 끄기는 기록을 멈추는 쪽이고, 자리는 차 화면이 폰으로 들어온 사람의 것을 고른다(T46).
+      if (consent && participantOf(req, trip) !== p) fail(403, "동의는 본인만 켤 수 있음");
+      if (seat !== undefined) {
+        if (!seatFree(seat, p)) fail(409, "이미 다른 사람이 앉은 자리");
+        p.seat = seat;
       }
-      if (b.prefs !== undefined) p.prefs = prefs({ ...p.prefs, ...obj(b.prefs, "prefs") });
-      if (b.consent !== undefined) {
+      if (consent !== undefined) {
         const was = p.consent;
-        p.consent = bool(b.consent, "consent");
-        if (!p.consent) trip.recording = false;
+        p.consent = consent;
+        if (!consent) trip.recording = false;
         // 켜져 있던 동의를 끊을 때만 세대를 올린다. 받아 둔 발화도 못 쓰게 한다(ADR-0007). 이미 꺼진 것을 다시 꺼도 그대로.
-        if (was && !p.consent) await bumpGeneration(trip, client);
+        if (was && !consent) await bumpGeneration(trip, client);
       }
       return changed(200, asParticipant(p));
     }
