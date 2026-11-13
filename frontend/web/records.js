@@ -72,7 +72,7 @@ export function createRecords({ getProfile, getProfileToken, getTrip, getPartici
     const profile = getProfile();
     const token = getProfileToken();
     if (!profile || !token) return onProfile();
-    const s = { mode: "feed", profileId: profile.id, token, items: [], pending: new Set(), deleted: new Set() };
+    const s = { mode: "feed", profileId: profile.id, token, items: [], pending: new Set(), deleted: new Set(), controls: new Map() };
     show(s);
     await loadFeed(s);
   }
@@ -118,14 +118,19 @@ export function createRecords({ getProfile, getProfileToken, getTrip, getPartici
       feedView(s);
       toast("내 앨범에서 장면을 지웠어요.");
     } catch (e) { if (valid(s)) toast(errorText(e)); }
-    finally { s.pending.delete(item.id); control.disabled = false; }
+    finally {
+      s.pending.delete(item.id);
+      if (valid(s) && s.controls.has(item.id)) s.controls.get(item.id).disabled = false;
+    }
   }
   function feedView(s) {
+    s.controls.clear();
     shell(s,
       h("p", { className: "meta" }, "내 이름이 붙은 대화는 여행을 만든 뒤 48시간까지, 내가 고른 장면은 내 앨범에 남아요. 최근 기록 100개를 보여 드려요."),
       s.items.length ? h("ul", { className: "records-list" }, s.items.map((item) => {
         const remove = button("내 앨범에서 지우기", () => erase(s, item, remove), "plain");
         remove.disabled = s.pending.has(item.id);
+        s.controls.set(item.id, remove);
         return h("li", { className: "card" },
           h("div", { className: "between" }, h("span", { className: "pill" }, item.kind === "moment" ? "남긴 장면" : "내가 한 말"), h("time", { className: "meta", dateTime: new Date(item.at).toISOString() }, when(item.at))),
           h("p", { className: "what" }, item.kind === "moment" ? item.label || "이름 없는 장면" : item.text),
@@ -141,7 +146,7 @@ export function createRecords({ getProfile, getProfileToken, getTrip, getPartici
     const trip = getTrip();
     const me = getParticipant();
     if (!trip || !me?.consent || !getParticipantToken()) return toast("기록에 동의한 이 폰의 참가자만 장면을 고를 수 있어요.");
-    const s = { mode: "scenes", code: trip.code, generation: trip.generation, participantId: me.id, items: [], labels: new Map(), pending: new Set() };
+    const s = { mode: "scenes", code: trip.code, generation: trip.generation, participantId: me.id, items: [], labels: new Map(), pending: new Set(), controls: new Map() };
     if (Date.now() >= trip.createdAt + KEEP_MS) return toast("이 여행의 기록 보관 기간이 지났어요.");
     show(s);
     try {
@@ -167,14 +172,19 @@ export function createRecords({ getProfile, getProfileToken, getTrip, getPartici
       toast("장면을 남겼어요. 차가 연결되면 그 구간의 소리를 준비해요.");
       await onSaved();
     } catch (e) { if (valid(s)) toast(errorText(e)); }
-    finally { s.pending.delete(item); control.disabled = false; }
+    finally {
+      s.pending.delete(item);
+      if (valid(s) && s.controls.has(item)) s.controls.get(item).disabled = false;
+    }
   }
   function scenesView(s) {
+    s.controls.clear();
     shell(s,
       h("p", { className: "meta" }, "대화가 오간 구간을 추천해요. 원하는 장면만 직접 남겨 주세요. 소리는 차가 연결돼 있을 때 준비돼요."),
       s.items.length ? h("div", { className: "stack" }, s.items.map((item) => {
         const label = h("input", { value: s.labels.get(item) ?? (item.lines[0]?.text.slice(0, 60) || "함께 남긴 장면"), maxLength: 60, oninput: (e) => s.labels.set(item, e.target.value) });
         const pick = h("button", { type: "submit", className: "primary", disabled: s.pending.has(item) }, "이 장면 남기기");
+        s.controls.set(item, pick);
         return h("form", { className: "card", onsubmit: (e) => (e.preventDefault(), choose(s, item, label.value, pick)) },
           h("h2", {}, when(item.at)),
           h("p", { className: "meta" }, item.why),
