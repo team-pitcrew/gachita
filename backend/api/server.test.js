@@ -793,7 +793,8 @@ test("녹음 클립: 고른 장면의 원음을 받고, 재생하고, 바로 지
 
   // media 하위 도메인에서는 /media/만, /media/는 그 이름에서만. 경로 정리 전의 원래 경로로 본다(ADR-0020)
   const hostCall = (host, path) =>
-    new Promise((ok) => request(`${base}${path}`, { headers: { host, authorization: `Bearer ${son.token}` } }, (r) => (r.resume(), ok(r.statusCode))).end());
+    // 주소 문자열을 주면 클라이언트가 경로를 먼저 정리하므로, 경로를 그대로 보낸다
+    new Promise((ok) => request({ port: new URL(base).port, path, headers: { host, authorization: `Bearer ${son.token}` } }, (r) => (r.resume(), ok(r.statusCode))).end());
   assert.deepEqual(
     [
       await hostCall("media.gachita.mangowhois.ai", `/media/trips/${trip.code}/recordings/${m1.id}`),
@@ -801,9 +802,16 @@ test("녹음 클립: 고른 장면의 원음을 받고, 재생하고, 바로 지
       await hostCall("media.gachita.mangowhois.ai", `/media/%2e%2e/api/trips/${trip.code}`),
       await hostCall("media.gachita.mangowhois.ai", "/healthz"),
       await hostCall("gachita.mangowhois.ai", `/media/trips/${trip.code}/recordings/${m1.id}`),
+      await hostCall("media.gachita.mangowhois.ai.", `/api/trips/${trip.code}`), // 끝에 점
+      await hostCall("gachita.mangowhois.ai", `/media/%2e%2e/api/trips/${trip.code}`), // 다른 이름에서도 경로 정리로 우회 못 함
+      await hostCall("10.0.1.5:8787", `/media/%2e%2e/api/trips/${trip.code}`),
     ],
-    [200, 404, 404, 404, 404]
+    [200, 404, 404, 404, 404, 404, 404, 404]
   );
+  // 없는 여행은 틀린 토큰과 같은 401(여행 코드가 있는지 드러내지 않음). 이상한 범위는 전체로
+  assert.equal((await fetch(`${base}/media/trips/ZZZZZZ/recordings/${m1.id}`, { headers: auth(son.token) })).status, 401);
+  const odd = await play(m1.id, son.token, { range: "bytes=-" });
+  assert.deepEqual([odd.status, (await odd.arrayBuffer()).byteLength], [200, clip.length]);
 
   // 인증: 토큰이 없거나 다른 여행의 토큰이면 401(참가자 토큰은 여행에 묶임)
   const [, other] = await call("POST", "/api/trips", {});
@@ -906,6 +914,8 @@ test("클립 듣기의 요청 수 제한: 인증 전에는 요청 주소(X-Forwa
   const up = await fetch(`${base}${t}/recordings?moment=${m.id}&generation=1&from=${Date.now() - 5000}`, { method: "POST", headers: { authorization: `Bearer ${mom.token}` }, body: wav(200, 1) });
   assert.equal(up.status, 201);
   const path = `/media/trips/${trip.code}/recordings/${m.id}`;
+  // 1분 창이 시험 도중에 넘어가지 않게, 분이 끝나 가면 다음 분까지 기다린다
+  if (Date.now() % 60_000 > 50_000) await new Promise((ok) => setTimeout(ok, 60_000 - (Date.now() % 60_000) + 50));
   const get = (headers) => fetch(base + path, { headers }).then((r) => (r.body?.cancel(), r.status));
   const many = async (n, headersOf) => {
     const out = [];
@@ -915,6 +925,8 @@ test("클립 듣기의 요청 수 제한: 인증 전에는 요청 주소(X-Forwa
   // 참가자마다 1분에 300번
   const mine = await many(301, () => ({ authorization: `Bearer ${mom.token}`, "x-forwarded-for": "198.51.100.1" }));
   assert.deepEqual([mine.filter((s) => s === 200).length, mine.filter((s) => s === 429).length], [300, 1]);
+  const over = await fetch(base + path, { headers: { authorization: `Bearer ${mom.token}` } });
+  assert.deepEqual([over.status, (await over.json()).type, Number(over.headers.get("retry-after")) > 0], [429, "rate_limited", true]);
   // 요청 주소마다 1분에 600번(인증 전에 센다). ALB가 붙인 마지막 값으로 세고, 앞의 값은 꾸밀 수 있어 보지 않는다
   const anon = await many(601, (i) => ({ "x-forwarded-for": `10.0.0.${i % 250}, 203.0.113.9` }));
   assert.deepEqual([anon.filter((s) => s === 401).length, anon.filter((s) => s === 429).length], [600, 1]);

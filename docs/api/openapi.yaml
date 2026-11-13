@@ -619,7 +619,7 @@ paths:
       summary: 폰의 <audio>가 쓸 클립 쿠키 받기
       description: |
         `<audio>`는 머리말을 붙일 수 없어서, 웹앱이 참가자 토큰 머리말로 이 경로를 부르면 쿠키를 줍니다(ADR-0020).
-        `Set-Cookie: gachita_media=<참가자 토큰>; Path=/media/trips/{code}/; Max-Age=<여행이 닫힐 때까지>; HttpOnly; Secure; SameSite=Lax; Domain=<부른 주소>`.
+        `Set-Cookie: gachita_media=<참가자 토큰>; Path=/media/trips/{code}/; Max-Age=<여행이 닫힐 때까지>; HttpOnly; Secure; SameSite=Lax; Domain=gachita.mangowhois.ai`(media 주소의 부모 이름). 경로의 여행 코드는 대문자(API가 돌려준 그대로).
         Domain이 `gachita.mangowhois.ai`라 `media.gachita.mangowhois.ai`에도 실리고, 그 여행의 `/media/` 경로에만 쓰입니다. 로컬 주소(localhost)에는 Domain을 붙이지 않습니다.
         녹음에 동의한 참가자만 받습니다(`403`).
       security: [{ participantToken: [] }]
@@ -641,7 +641,7 @@ paths:
         인증은 참가자 토큰 머리말(차) 또는 `media-cookie`가 준 쿠키(폰의 `<audio>`). 기록본처럼 녹음에 동의한 참가자만 듣습니다(`403`).
         `Range: bytes=시작-끝` 하나를 그대로 전해 `206`과 `Content-Range`로 답합니다(범위가 크기를 벗어나면 `416`). 응답은 `Cache-Control: private, no-store`.
         media 하위 도메인에서는 `/media/`만, `/media/`는 그 이름에서만 받습니다(다른 경로·이름은 `404`, 경로 정리 전의 원래 경로로 확인). 로컬 주소는 둘 다 받습니다.
-        요청 수 제한(파드마다, 1분): 요청 주소마다 600(인증 전, `X-Forwarded-For`의 마지막 값), 참가자마다 300. 넘으면 `429`.
+        토큰이 없거나 여행이 없으면 `401`(여행 코드가 있는지 드러내지 않음). 요청 수 제한(파드마다, 1분): 요청 주소마다 600(인증 전, `X-Forwarded-For`의 마지막 값, IPv6는 /64), 참가자마다 300. 넘으면 `429`와 `Retry-After`.
       security: [{ participantToken: [] }, { mediaCookie: [] }]
       parameters:
         - { name: Range, in: header, schema: { type: string }, description: "bytes=시작-끝" }
@@ -884,7 +884,7 @@ components:
               error: { type: string, description: 사람이 읽는 이유(바뀔 수 있음) }
               type:
                 type: string
-                enum: [invalid, unauthenticated, forbidden, not_found, method_not_allowed, conflict, too_large, unavailable, internal]
+                enum: [invalid, unauthenticated, forbidden, not_found, method_not_allowed, conflict, too_large, rate_limited, unavailable, internal]
                 description: "오류 종류(T71). 클라이언트는 문장이 아니라 이것으로 가른다. unavailable(503)은 DB에 닿지 않거나 질의 시간 제한 — 잠시 뒤 다시 해도 된다"
       headers:
         x-request-id: { schema: { type: string }, description: "요청 id(로그와 맞춰 볼 때). 성공 응답에도 같은 머리말이 있다(경로마다 적지 않음)" }
