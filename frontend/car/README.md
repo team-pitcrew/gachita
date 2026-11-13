@@ -1,6 +1,6 @@
 # 같이타 차량 앱
 
-Pleos Connect용 Kotlin·Compose 앱입니다(`io.github.teampitcrew.gachita`). 차량에서 가족을 골라 여행을 만들고 '기록 중' 화면과 기록 동의를 보여 줍니다(T7). 기록 중이면 차량 마이크로 수음해 Pleos STT(ON_DEVICE)로 받아 적고, 발화를 순번과 함께 앱 안 보관함에 쌓습니다(T36).
+Pleos Connect용 Kotlin·Compose 앱입니다(`io.github.teampitcrew.gachita`). 차량에서 가족을 골라 여행을 만들고 '기록 중' 화면과 기록 동의를 보여 줍니다(T7). 기록 중이면 차량 마이크로 수음해 Pleos STT(ON_DEVICE)로 받아 적고, 발화를 순번과 함께 앱 안 보관함에 쌓습니다(T36). 주행 중에도 앞에 남는 화면이고, 주행 제한 중에는 설정과 진단을 가립니다(T11).
 
 ## 빌드와 실행
 
@@ -17,6 +17,14 @@ adb shell am start --user 10 -n io.github.teampitcrew.gachita/.MainActivity --es
 - 서버 주소는 첫 화면의 '서버 주소'나 `--es server <주소>`로 바꾸고, 앱이 기억합니다.
 - 기어 값은 Cold boot한 에뮬레이터에서만 읽힙니다(`docs/emulator/README.md`).
 - 마이크 권한(`RECORD_AUDIO`)과 알림 권한(`POST_NOTIFICATIONS`, 화면 뒤에서 '기록 멈춤'을 알림으로 보임)은 처음 기록할 때 함께 묻습니다. `-g`로 설치하면 미리 허용됩니다.
+
+## 주행 중 화면(T11)
+
+- **선언:** `MainActivity`에 `distractionOptimized`. 선언하지 않으면 기어 D에서 Pleos 차단 화면이 앱을 덮습니다.
+- **판단:** 기어나 속도로 직접 정하지 않고 플랫폼의 주행 제한 값(AAOS `CarUxRestrictionsManager`, `isRequiresDistractionOptimization`)을 따릅니다(Pleos 주행 규제 개발 가이드). 값을 받기 전이거나 받지 못하면 제한된 화면입니다. 에뮬레이터에서 기어 D는 제한 80(설정 64 + 동영상 16), P는 0이었습니다.
+- **주행 중 보이는 것:** 기록 상태, 받아 적은 말 두 줄, 일행, 보관한 부탁 수, 기록 동의 스위치(주행 제한 중에는 끄기만 눌림. 켜기는 지금처럼 기어 P에서만), 연결 상태. 글자는 24sp 이상입니다.
+- **주행 중 가리는 것:** 여행 만들기(가족 고르기와 서버 주소 입력: 설정·키보드), 새 여행 만들기, 설명과 진단 줄(20sp). 영상·긴 기록·시트 설정은 아직 앱에 없습니다. 생기면 같은 값으로 가립니다.
+- 에뮬레이터에서 제한이 걸리지 않거나 차단 화면이 뜨지 않았다고 심사 기준을 통과한다는 뜻은 아닙니다.
 
 ## 수음과 받아쓰기(T36)
 
@@ -37,13 +45,13 @@ adb shell am start --user 10 -n io.github.teampitcrew.gachita/.MainActivity --es
 
 수음과 받아쓰기는 `python3 frontend/car/capture_e2e.py <APK> <저장소 밖 폴더> [분]`입니다. 에뮬레이터를 `-grpc 8556 -grpc-use-token -audio none`으로 켜 두면 macOS 합성 음성으로 만든 가족 대화를 gRPC `injectAudio`로 가상 마이크에 넣고(호스트 마이크는 쓰지 않음), 내비를 앞에 둔 기어 D에서 보관함에 쌓인 발화를 넣은 문장과 맞춰 봅니다. 30초마다 CPU·메모리를 재고, 내비가 앞일 때 시스템 마이크 차단(`cmd sensor_privacy`) → '기록 멈춤', 동의 끄기 → 마이크 놓음, 앱 다시 켜기 → 순번 이어짐까지 확인합니다. 공용 DB를 다른 시험이 비울 수 있으면 따로 띄운 서버를 `GACHITA_PORT`로 줍니다. 넣은 문장과 받아 적은 문장은 `transcript.tsv`에 나란히 남습니다.
 
-`e2e.py`의 스크립트는 설치 → 여행 만들기(가족 4명) → 기어 D에서 동의 켜기(안 켜짐) → 기어 P에서 켜기(기록 중) → 기어 D에서 유지 → 끄기(바로 멈춤) → 반쪽 폭(841) 순서로 화면을 캡처하고, 단계마다 서버의 여행(`GET /api/trips/{코드}`)을 함께 적어 `results.json`에 판정을 남깁니다. 실패가 있으면 종료 코드 1입니다.
+`e2e.py`의 스크립트는 설치 → 기어 D에서 여행 만들기가 가려지고 앞 화면이 우리 앱(차단 화면 아님) → 여행 만들기(가족 4명) → 기어 D에서 동의 켜기(안 켜짐) → 기어 P에서 켜기(기록 중) → 기어 D에서 유지 → 끄기(바로 멈춤) → 반쪽 폭(841) 순서로 화면을 캡처하고, 단계마다 서버의 여행(`GET /api/trips/{코드}`)을 함께 적어 `results.json`에 판정을 남깁니다. 실패가 있으면 종료 코드 1입니다.
 
 ## 파일
 
 | 파일 | 하는 일 |
 |---|---|
-| `Car.kt` | Pleos SDK: 기어 읽기·알림, 순정 내비 경로·경유지 알림, TTS, 공조 적용·확인·복원(T8에서 부름). 차박지도 앱에서 옮김 |
+| `Car.kt` | Pleos SDK: 기어 읽기·알림, 순정 내비 경로·경유지 알림, TTS, 공조 적용·확인·복원(T8에서 부름). 차박지도 앱에서 옮김. AAOS 주행 제한 값(T11) |
 | `Trip.kt` | 여행 응답 해석과 기록 동의 규칙(단위 테스트 `TripTest.kt`) |
 | `Server.kt` | 같이타 API 호출(`docs/api/openapi.yaml`) |
 | `Capture.kt` | 수음에서 화면·SDK와 무관한 것: 모노 합치기, 발화 묶기, 막힘 판정, 보관함과 보내는 쪽 이음매(단위 테스트 `CaptureTest.kt`) |

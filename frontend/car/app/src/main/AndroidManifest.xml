@@ -12,11 +12,12 @@
  <!-- 공조 권한(CAR_CLIMATE, CONTROL_CAR_CLIMATE)은 공조를 부르는 T8에서 넣는다.
       평문 http는 디버그 빌드에서 개발 서버 주소에만 허용한다(src/debug/res/xml/network_security_config.xml). 릴리스는 https만.
       minSdk 29: 마이크 유형 포그라운드 서비스와 녹음 막힘 확인(AudioRecordingConfiguration)이 API 29부터. Pleos Connect는 API 34.
-      주행 중 화면 선언(distractionOptimized)은 T11에서 한다. -->
+      주행 중 쓰는 화면으로 선언(distractionOptimized)해 기어 D에서도 앞에 남는다. 막을 것은 앱이 주행 제한 값을 보고 가린다(T11). -->
  <application android:label="같이타" android:icon="@drawable/ic_launcher" android:theme="@android:style/Theme.Material.Light.NoActionBar"
   android:allowBackup="false" android:networkSecurityConfig="@xml/network_security_config">
   <uses-library android:name="ai.pleos.playground.car" android:required="true" />
   <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTop" android:resizeableActivity="true">
+   <meta-data android:name="distractionOptimized" android:value="true" />
    <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
   </activity>
   <service android:name=".CaptureService" android:exported="false" android:foregroundServiceType="microphone" />

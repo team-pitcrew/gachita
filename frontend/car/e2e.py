@@ -48,6 +48,11 @@ def tap_text(text, last=True):
     note("tap", text=text); return True
 
 
+def switch_enabled():
+    m = re.search(r'checkable="true"[^>]*?enabled="(\w+)"', nodes()[1])
+    return m and m.group(1) == "true"
+
+
 def tap_switch():
     # Compose Switch는 글자 없이 checkable 노드로 나온다
     m = re.search(r'checkable="true"[^>]*?bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', nodes()[1])
@@ -111,6 +116,13 @@ def phone_consent(code, pid, on):
     urllib.request.urlopen(req, timeout=5).read(); note("phone.consent", id=pid, on=on)
 
 
+def app_on_top():
+    """기어 D에서 앞 화면이 우리 앱인지. 주행 중 화면으로 선언하지 않았으면 Pleos 차단 화면이 앞에 온다(T11)."""
+    tops = re.findall(r"topResumedActivity=ActivityRecord\{\S+ \S+ (\S+)", adb("shell", "dumpsys", "activity", "activities"))
+    note("top", activities=tops)
+    return any(PKG in t for t in tops)
+
+
 def activity_state():
     out = adb("shell", "dumpsys", "activity", "activities")
     m = re.search(rf"{PKG}/\.MainActivity[^\n]*\n(?:.*\n){{0,40}}?.*?state=(\w+)", out)
@@ -128,32 +140,38 @@ def main(apk):
         adb("shell", "pm", "grant", "--user", "10", PKG, f"android.permission.{perm}")
     adb("shell", "am", "start", "--user", "10", "-n", f"{PKG}/.MainActivity", "--es", "server", "http://10.0.2.2:8787")
     time.sleep(4); shot("01-setup"); ui = texts(); note("ui", texts=ui)
-    check("첫 화면", "여행 만들기" in ui)
+    check("첫 화면", "여행 만들기" in ui and "서버 주소" in ui)
+    # 주행 제한 중에는 여행 만들기(가족 고르기·서버 주소 입력)를 가린다(T11)
+    gear("Drive"); time.sleep(1)
+    shot("01b-setup-drive-locked"); ui = texts(); note("ui", texts=ui)
+    check("기어 D: 차단 화면 없이 우리 앱이 앞에 있고 여행 만들기는 가려짐", app_on_top() and "주차(P)한 뒤 여행을 만들 수 있어요" in ui and "서버 주소" not in ui)
+    gear("Park"); time.sleep(1); ui = texts()
+    check("기어 P로 돌아오면 여행 만들기가 다시 보임", "서버 주소" in ui)
     tap_text("여행 만들기"); time.sleep(4)
     ui = texts(); code = next((t.split()[-1] for t in ui if t.startswith("여행 코드")), None)
     shot("02-trip-consent-off"); note("ui", texts=ui)
     t = server(code)
     check("서버에 여행과 가족 4명, 동의는 모두 꺼짐", len(t["participants"]) == 4 and not any(p["consent"] for p in t["participants"]))
     check("기록 꺼짐 화면과 기어 P", "기록 꺼짐" in ui and any(u.startswith("기어 P") for u in ui))
-    # 기어 D: 주행 중 화면 선언(T11) 전이라 Pleos 차단 화면이 앱을 덮는다. 누른 것이 앱에 닿지 않아야 한다
-    gear("Drive"); tap_switch(); time.sleep(2)
-    shot("03-drive-blocked"); ui = texts(); note("ui", texts=ui); t = server(code)
-    check("기어 D에서는 켜지지 않음(서버 동의 그대로 꺼짐)", "● 기록 중" not in ui and not any(p["consent"] for p in t["participants"]))
+    # 기어 D: 주행 제한 중에는 켜는 쪽 조작을 막는다(T11). 눌러도 켜지지 않아야 한다
+    gear("Drive"); on = switch_enabled(); tap_switch(); time.sleep(2)
+    shot("03-drive-not-on"); ui = texts(); note("ui", texts=ui); t = server(code)
+    check("기어 D에서는 동의 스위치가 꺼진 채 눌리지 않음(서버 동의 그대로 꺼짐)", not on and "● 기록 중" not in ui and not any(p["consent"] for p in t["participants"]))
     gear("Park"); tap_switch(); time.sleep(3)
     shot("04-recording"); ui = texts(); note("ui", texts=ui); t = server(code)
     check("기어 P에서 켜면 기록 중, 서버 동의 모두 켜짐", "● 기록 중" in ui and all(p["consent"] for p in t["participants"]))
     # 주행 중 재동의: 폰 참가자가 동의를 껐다 다시 켠다. 주차할 때까지 '기록 대기'
     gear("Drive"); activity_state()
-    shot("05-recording-drive-blocked"); ui = texts(); note("ui", texts=ui)
-    check("기어 D 동안 앱 상태는 기록 중 유지(화면은 차단)", "● 기록 중" in ui)
+    shot("05-recording-drive"); ui = texts(); note("ui", texts=ui)
+    check("기어 D: 차단 화면 없이 기록 중 화면 유지", app_on_top() and "● 기록 중" in ui and "일행 4명" in ui)
+    check("기어 D: 새 여행 만들기·진단 줄은 가려짐", "새 여행 만들기" not in ui and not any(u.startswith(("여행 코드", "기어 ")) for u in ui))
     phone = t["participants"][1]["id"]
     phone_consent(code, phone, False); time.sleep(12)
     ui = texts(); note("ui", texts=ui); activity_state()
     check("주행 중 폰에서 동의를 끄면 멈춤", "● 기록 중" not in ui and "기록 꺼짐" in ui)
     phone_consent(code, phone, True); time.sleep(12)
-    # 캡처는 Pleos 차단 화면이라 05와 같다. '기록 대기'는 화면 트리(uiautomator)로만 확인한다(basis=ui-tree)
-    shot("06-drive-reconsent-blocked"); ui = texts(); note("ui", texts=ui)
-    check("주행 중 동의가 다시 채워지면 기록 대기(기록 중 아님) · 화면 트리 기준, 캡처는 차단 화면", "기록 대기" in ui and "● 기록 중" not in ui, basis="ui-tree")
+    shot("06-drive-reconsent"); ui = texts(); note("ui", texts=ui)
+    check("주행 중 동의가 다시 채워지면 기록 대기(기록 중 아님)", "기록 대기" in ui and "● 기록 중" not in ui)
     gear("Park")
     shot("07-park-starts"); ui = texts(); note("ui", texts=ui)
     check("주차하면 기록 중", "● 기록 중" in ui)
@@ -173,7 +191,7 @@ def main(apk):
     t = server(code)
     check("서버가 돌아오면 끄기가 서버에 반영됨", not any(p["consent"] for p in t["participants"]))
     shot("11-synced"); ui = texts(); note("ui", texts=ui)
-    check("다시 연결됨", "서버에 연결됐어요" in ui and "기록 꺼짐" in ui)
+    check("다시 연결됨, 앱을 다시 켠 뒤에도 P에서 주행 제한이 풀림", "서버에 연결됐어요" in ui and "기록 꺼짐" in ui and "새 여행 만들기" in ui)
     # 반쪽 창(약 841): 에뮬레이터가 창을 나누지 않아 앱 안에서 폭을 줄여 그린다(디버그 빌드)
     adb("shell", "am", "start", "--user", "10", "-S", "-n", f"{PKG}/.MainActivity", "--ei", "widthDp", "841")
     time.sleep(4); shot("12-half-width-841"); ui = texts(); note("ui", texts=ui)
