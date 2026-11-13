@@ -165,6 +165,7 @@ make deploy-tag TAG=<올린 태그>   # dev 환경의 태그를 바꾼다
 - 올라간 태그 보기: `gh api /orgs/team-pitcrew/packages/container/gachita-api/versions --jq '.[:5][] | {tags: .metadata.container.tags, created_at}'`
 - `make push`는 CI를 거치지 않고 로컬에서 올릴 때 씁니다. `make e2e`를 통과해야 올립니다.
 - 되돌릴 때는 `make deploy-tag`로 이전 태그를 다시 적어 PR로 올립니다.
+- 클러스터가 선 뒤에는 실제 주소에 대고 같은 E2E를 돕니다: Actions → `live-e2e` → Run workflow(기본 주소 `https://gachita.mangowhois.ai`). 닿지 않으면 첫 단계에서 실패합니다(T54).
 - 이미지 저장소는 GHCR입니다. `gachita-api`는 조직의 비공개 패키지이고 이 저장소에 이어져 있습니다. 2026-11-13에 로컬에서 `make push`로 ARM64 이미지를 올려 확인했습니다.
 
 토큰과 권한은 이렇게 씁니다. 따로 만든 토큰은 `gh secret set`으로 저장소 비밀 값에 둡니다.
