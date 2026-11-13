@@ -19,6 +19,10 @@ locals {
   "CreateVpcEndpoint", "RunInstances", "AuthorizeSecurityGroupEgress", "AuthorizeSecurityGroupIngress"]
   # 우리 발급자 하나(본 설정의 storage.tf: gachita-<env>-oidc-<계정> 버킷 주소)
   cluster_oidc_arn = "arn:aws:iam::${local.account}:oidc-provider/gachita-*-oidc-${local.account}.s3.${var.region}.amazonaws.com"
+  # ALB는 클러스터의 AWS Load Balancer Controller가 만든다(ADR-0017). 이름은 gachita-<env>로 고정
+  elb_arn = "arn:aws:elasticloadbalancing:${var.region}:${local.account}"
+  alb_named = ["${local.elb_arn}:loadbalancer/app/gachita-*/*", "${local.elb_arn}:listener/app/gachita-*/*",
+  "${local.elb_arn}:listener-rule/app/gachita-*/*"]
 }
 
 # ---- 계획(PR): 읽기만. 계정 전체 읽기(ReadOnlyAccess)는 같이 쓰는 계정의 다른 프로젝트 SSM 값·로그·DB 내용까지
@@ -37,6 +41,11 @@ data "aws_iam_policy_document" "plan_read" {
   # IAM 설정 읽기(역할·정책·제공자의 설정. 비밀 값이 아니다)
   statement {
     actions   = ["iam:Get*", "iam:List*", "sts:GetCallerIdentity"]
+    resources = ["*"]
+  }
+  # 인증서(남는 묶음)와 컨트롤러가 만든 ALB(레코드가 가리킬 곳) 읽기
+  statement {
+    actions   = ["acm:DescribeCertificate", "acm:ListCertificates", "acm:ListTagsForCertificate", "elasticloadbalancing:Describe*"]
     resources = ["*"]
   }
   # 우리 버킷의 설정 읽기(버킷 ARN만. 객체는 아래 상태 파일만)
@@ -174,6 +183,58 @@ data "aws_iam_policy_document" "apply" {
   }
   statement {
     actions   = ["ssm:DescribeParameters", "sts:GetCallerIdentity", "iam:ListOpenIDConnectProviders", "iam:GetPolicy", "iam:GetPolicyVersion"]
+    resources = ["*"]
+  }
+  # ---- 인증서(남는 묶음): 우리 태그를 달아 만들고, 우리 태그가 있는 것만 고치고 지운다 ----
+  statement {
+    actions   = ["acm:RequestCertificate", "acm:AddTagsToCertificate"]
+    resources = ["*"]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestTag/Project"
+      values   = [local.project]
+    }
+  }
+  statement {
+    actions   = ["acm:DeleteCertificate", "acm:AddTagsToCertificate", "acm:RemoveTagsFromCertificate"]
+    resources = ["*"]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:ResourceTag/Project"
+      values   = [local.project]
+    }
+  }
+  # ALB 읽기(레코드), 남은 것 확인(태그로 찾기)
+  statement {
+    actions   = ["acm:DescribeCertificate", "acm:ListCertificates", "acm:ListTagsForCertificate", "elasticloadbalancing:Describe*", "tag:GetResources"]
+    resources = ["*"]
+  }
+  # 접기에서 클러스터가 이미 망가져 컨트롤러가 ALB를 못 지울 때의 정리(ADR-0017 3절). 우리 태그가 있는 것만
+  statement {
+    actions   = ["elasticloadbalancing:DeleteLoadBalancer", "elasticloadbalancing:DeleteTargetGroup"]
+    resources = ["*"]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:ResourceTag/Project"
+      values   = [local.project]
+    }
+  }
+  # 펴기·접기 워크플로가 서버에 명령을 보낸다(구축 단계 확인, 마지막 백업, edge 앱 지우기). 우리 서버에만
+  statement {
+    actions   = ["ssm:SendCommand"]
+    resources = ["${local.ec2_arn}:instance/*"]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:ResourceTag/Project"
+      values   = [local.project]
+    }
+  }
+  statement {
+    actions   = ["ssm:SendCommand"]
+    resources = ["arn:aws:ssm:${var.region}::document/AWS-RunShellScript"]
+  }
+  statement {
+    actions   = ["ssm:GetCommandInvocation", "ssm:ListCommandInvocations", "ssm:DescribeInstanceInformation"]
     resources = ["*"]
   }
   # ---- IAM: 이름(gachita-*)과 태그(Project=gachita)가 둘 다 맞는 것만 ----
@@ -343,6 +404,46 @@ data "aws_iam_policy_document" "boundary" {
   statement {
     actions   = ["s3:GetEncryptionConfiguration"]
     resources = ["*"]
+  }
+  # ALB 컨트롤러(ADR-0017). 역할 자체의 권한은 공식 정책(본 설정 iam.tf). 공식 정책은 보안 그룹 규칙과 리스너를
+  # 자원 조건 없이 고칠 수 있어, 같이 쓰는 계정에서는 여기서 우리 것으로 좁힌다.
+  statement {
+    actions = ["elasticloadbalancing:Describe*", "ec2:Describe*", "ec2:GetSecurityGroupsForVpc", "acm:ListCertificates",
+    "acm:DescribeCertificate", "iam:ListServerCertificates", "iam:GetServerCertificate"]
+    resources = ["*"]
+  }
+  statement { # 만들 때 우리 태그를 단다(차트 값 defaultTags)
+    actions = ["elasticloadbalancing:CreateLoadBalancer", "elasticloadbalancing:CreateTargetGroup",
+    "elasticloadbalancing:AddTags", "ec2:CreateSecurityGroup", "ec2:CreateTags"]
+    resources = ["*"]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestTag/Project"
+      values   = [local.project]
+    }
+  }
+  statement { # 우리 태그가 있는 것만 고치고 지운다(ALB·대상 그룹·보안 그룹, 노드 보안 그룹, 보안 그룹을 만들 VPC)
+    actions = ["elasticloadbalancing:*", "ec2:CreateSecurityGroup", "ec2:AuthorizeSecurityGroupIngress",
+    "ec2:RevokeSecurityGroupIngress", "ec2:DeleteSecurityGroup", "ec2:CreateTags", "ec2:DeleteTags"]
+    resources = ["*"]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:ResourceTag/Project"
+      values   = [local.project]
+    }
+  }
+  statement { # 리스너와 규칙은 태그가 늦게 붙을 수 있어 ALB 이름으로
+    actions   = ["elasticloadbalancing:*"]
+    resources = local.alb_named
+  }
+  statement { # 계정에 ELB 서비스 연결 역할이 아직 없을 때 한 번
+    actions   = ["iam:CreateServiceLinkedRole"]
+    resources = ["*"]
+    condition {
+      test     = "StringEquals"
+      variable = "iam:AWSServiceName"
+      values   = ["elasticloadbalancing.amazonaws.com"]
+    }
   }
   # 상태 버킷은 어떤 서버·파드도 닿지 않는다
   statement {
