@@ -64,6 +64,11 @@ class ShortTest {
         val ambiguous = shortSceneActor(first, short.cast, people + people)
         assertNull(ambiguous.participantId)
         assertNull(ambiguous.character)
+        val scene = short.scenes.single().copy(cues = listOf(first.copy(participantId = null, who = "")))
+        val neutral = shortSceneCast(short, scene, scene.cues.single(), people)
+        assertEquals(listOf(null, null), neutral.map { it.participantId })
+        assertEquals(listOf("화자 미확인", "화자 미확인"), neutral.map { it.label })
+        assertEquals(listOf(ShortCharacter.BASIC, ShortCharacter.BASIC_SMALL), neutral.map { it.character })
     }
 
     @Test fun `빈 캐릭터의 확인된 손님만 폰과 같은 좌석 기본값을 쓴다`() {

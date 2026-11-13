@@ -96,7 +96,10 @@ internal fun shortSceneCast(short: Short, scene: Scene?, cue: Cue?, people: List
         .distinctBy { it.participantId }.take(2).toMutableList()
     while (cast.size < 2) cast += ShortSceneActor("unidentified:${cast.size}", "화자 미확인", null)
     cue?.let { shortSceneActor(it, short.cast, people) }?.let { current -> if (cast.none { it.key == current.key }) cast[1] = current }
-    return cast
+    // 화자 미확인은 이름·ID를 추측하지 않고, 중립 캐릭터 두 종류로만 표현합니다.
+    return cast.mapIndexed { slot, actor ->
+        actor.copy(character = actor.character ?: if (slot == 0) ShortCharacter.BASIC else ShortCharacter.BASIC_SMALL)
+    }
 }
 
 /**
