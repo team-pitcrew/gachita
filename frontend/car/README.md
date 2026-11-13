@@ -23,7 +23,7 @@ adb shell am start --user 10 -n io.github.teampitcrew.gachita/.MainActivity --es
 - **선언:** `MainActivity`에 `distractionOptimized`. 선언하지 않으면 기어 D에서 Pleos 차단 화면이 앱을 덮습니다.
 - **판단:** 기어나 속도로 직접 정하지 않고 플랫폼의 주행 제한 값(AAOS `CarUxRestrictionsManager`, `isRequiresDistractionOptimization`)을 따릅니다(Pleos 주행 규제 개발 가이드). 값을 받기 전이거나 받지 못하면 제한된 화면입니다. 에뮬레이터에서 기어 D는 제한 80(설정 64 + 동영상 16), P는 0이었습니다.
 - **주행 중 보이는 것:** 기록 상태, 받아 적은 말 두 줄, 일행, 보관한 부탁 수, 기록 동의 스위치(주행 제한 중에는 끄기만 눌림. 켜기는 지금처럼 기어 P에서만), 연결 상태. 글자는 24sp 이상입니다.
-- **주행 중 가리는 것:** 여행 만들기(가족 고르기와 서버 주소 입력: 설정·키보드), 새 여행 만들기, 설명과 진단 줄(20sp). 영상·긴 기록·시트 설정은 아직 앱에 없습니다. 생기면 같은 값으로 가립니다.
+- **주행 중 가리는 것:** 여행 만들기(가족 고르기와 서버 주소 입력: 설정·키보드), 새 여행 만들기, 설명과 진단 줄(20sp). 영상·긴 기록은 아직 앱에 없습니다. 생기면 같은 값으로 가립니다.
 - 에뮬레이터에서 제한이 걸리지 않거나 차단 화면이 뜨지 않았다고 심사 기준을 통과한다는 뜻은 아닙니다.
 
 ## 부탁을 경유지로(T9)
@@ -73,7 +73,7 @@ adb shell am start --user 10 -n io.github.teampitcrew.gachita/.MainActivity --es
 
 | 파일 | 하는 일 |
 |---|---|
-| `Car.kt` | Pleos SDK: 기어 읽기·알림, 순정 내비 경로·경유지 추가와 알림, 지금 위치·장소까지 거리, TTS, 공조 적용·확인·복원(T8에서 부름). 차박지도 앱에서 옮김. AAOS 주행 제한 값(T11) |
+| `Car.kt` | Pleos SDK: 기어 읽기·알림, 순정 내비 경로·경유지 추가와 알림, 지금 위치·장소까지 거리, TTS. 차박지도 앱에서 옮김. AAOS 주행 제한 값(T11) |
 | `Asks.kt` | 부탁을 경유지로(T9)에서 화면·SDK와 무관한 규칙: 부탁·답 낱말, 휴게소 목록과 다음 후보, 제안 단계(단위 테스트 `AsksTest.kt`) |
 | `Todos.kt` | 도착 브리핑(T40)에서 화면·SDK와 무관한 것: 할 일 뽑기, 도착 판정, 차 안 저장(단위 테스트 `TodosTest.kt`) |
 | `assets/schema.json` | Gleo 함수 목록(T40). 이름을 바꾸면 `MainActivity`의 `GLEO_ARRIVAL`과 매니페스트의 intent-filter도 같이 |
