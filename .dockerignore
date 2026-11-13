@@ -6,7 +6,9 @@
 !backend/api/db.js
 !backend/api/providers
 !backend/api/trips.sql
+!backend/api/trips-2-utterances.sql
 !backend/api/profiles.sql
 !backend/api/profiles-2-links.sql
+!backend/api/profiles-3-moments.sql
 !frontend/web
 frontend/web/*.test.mjs
