@@ -3,13 +3,14 @@
 * **상태:** 일부 채택, 2026-11-13
   * 채택(지환, 11/12~13): 클러스터 구축은 Terraform 필수에 단계가 분명한 구축 스크립트(Ansible 가능), 노드 사양은 구성 요소별 요청·한도의 합으로 숫자로 정함, 다른 프로젝트와 같이 쓰는 지금 계정.
   * 제안(승인 전): t4g.large와 그 비용(월 약 $69), 실제 자원을 만드는 것, 배포 키.
+  * 대신함(11/13): 노드 위 구성(Traefik·cloudflared·터널 토큰 없음, Postgres 하나, ALB 컨트롤러)과 요청 합계는 [ADR-0016](0016-slo-capacity-single-postgres.md) 3절, 들어오는 길과 펴기·접기 순서는 ADR-0017. 아래 표는 그에 맞춰 고쳤다.
 * **관련:** T24, #30, T25(ADR-0011), T26, T27(ADR-0010), T28, ADR-0013
 
 ## 배경
 
 - 클러스터 구축은 Terraform이 필수이고, 클러스터를 세우는 스크립트는 Ansible을 써도 된다. 단계가 분명해야 한다(지환, 11/12).
 - 지금은 첫 부팅 스크립트(`user_data.sh.tftpl`) 한 덩어리가 K3s → Argo CD → 뿌리 앱을 올린다. 어디서 멈췄는지 알기 어렵고, 다시 돌리면 같은 결과가 된다는 보장이 없고, 고치려면 서버를 새로 만들어야 한다.
-- 한 대에 K3s, Argo CD, cert-manager, CloudNativePG, Postgres 둘(T26), API, Traefik, Cilium(ADR-0013), External Secrets, cloudflared(ADR-0010)가 올라간다. 동기화 중에 메모리가 모자라 파드가 죽거나 Argo CD가 흔들리면 안 된다.
+- 한 대에 K3s, Argo CD, cert-manager, CloudNativePG, Postgres 하나(ADR-0016), API, Cilium(ADR-0013), External Secrets, AWS Load Balancer Controller(ADR-0017)가 올라간다. 동기화 중에 메모리가 모자라 파드가 죽거나 Argo CD가 흔들리면 안 된다.
 - 서버에 SSH를 열지 않는다. 들어갈 때는 SSM 세션을 쓴다.
 
 ## 검토한 선택
@@ -49,7 +50,7 @@
 
 | 층 | 맡는 것 | 바꾸는 법 |
 |---|---|---|
-| Terraform(`backend/infra/terraform`) | AWS(네트워크, 서버, IAM, S3, SSM)와 Cloudflare(터널, `gachita` 레코드) | PR 계획 → develop 수동 적용(ADR-0011) |
+| Terraform(`backend/infra/terraform`) | AWS(네트워크, 서버, IAM, S3, SSM, ACM)와 Cloudflare(`gachita` 레코드, 요청 수 제한). ALB는 만들지 않음(컨트롤러) | PR 계획 → develop 수동 적용(ADR-0011) |
 | 구축 단계(`backend/infra/cluster`, Ansible) | 서버 OS, K3s, Cilium, 서비스 계정 발급자, Argo CD, 뿌리 앱 | `gachita-converge`(SSM Run Command) |
 | Argo CD(`backend/infra/gitops`) | 나머지 전부를 물결 순서로(ADR-0013) | PR 병합 |
 
@@ -83,11 +84,10 @@
 | CloudNativePG 운영자 + 백업 플러그인 | 2 | 144 | 576 |
 | External Secrets | 3 | 120 | 480 |
 | 파드 신원 웹훅 | 1 | 24 | 64 |
-| Traefik | 2 | 128 | 512 |
-| cloudflared | 2 | 96 | 384 |
-| Postgres trips 512 + profiles 384 + 백업 사이드카 128×2(요청=한도) | 2 | 1,152 | 1,152 |
+| AWS Load Balancer Controller(요청은 어림) | 1 | 64 | 256 |
+| Postgres 하나 512 + 백업 사이드카 256(한도 512. 11/13 실제 계정에서 128은 접기 전 전체 백업 중 OOMKilled) | 2 | 768 | 1,024 |
 | API | 2 | 192 | 512 |
-| **파드 합계** | | **3,252** | **8,426** |
+| **파드 합계** | | **2,708** | **7,658** |
 
 | 인스턴스 | 메모리 | 파드에 쓸 수 있는 것 | 요청 대비 | 서울 시간당(가격표 API, 11/13) | 한 달 |
 |---|---|---|---|---|---|
@@ -97,7 +97,7 @@
 | t4g.xlarge | 16 GiB | 14,080 | 23% | $0.1664 | $121.5 |
 
 - '파드에 쓸 수 있는 것' = 메모리 − 예약 2,304(OS 512 + K3s 1,536 + 축출 기준 256). K3s 예약은 처음에 768로 잡았으나, 독립 검증의 로컬 K3s에서 서버 프로세스가 RSS 1.6 GiB를 써서 1,536으로 올렸다.
-- **t4g.large**로 정한다. 파드 요청 3,252를 넣고도 2,636 MiB가 남아, 동기화 때 repo-server와 controller가 차트를 그리며 1 GiB 안팎 더 써도 견딘다. 로컬 E2E의 실제 유휴 사용량(파드 1,121 MiB)은 요청보다 훨씬 작다. 한도 합계(8,426)는 넘지만 모든 구성 요소가 동시에 한도까지 쓰는 일은 없고, 넘치면 우선순위가 낮은 API부터 밀려난다(ADR-0013의 가용성).
+- **t4g.large**로 정한다. 파드 요청 2,708을 넣고도 3,180 MiB가 남아, 동기화 때 repo-server와 controller가 차트를 그리며 1 GiB 안팎 더 써도 견딘다. 로컬 E2E의 실제 유휴 사용량(파드 1,121 MiB)은 요청보다 훨씬 작다. 한도 합계(8,426)는 넘지만 모든 구성 요소가 동시에 한도까지 쓰는 일은 없고, 넘치면 우선순위가 낮은 API부터 밀려난다(ADR-0013의 가용성).
 - CPU 요청 합계 1,040m / 쓸 수 있는 1,700m. CPU 한도는 두지 않는다(스로틀링으로 프로브가 실패하는 것을 막음). t4g는 버스트형이라 기준(30%/vCPU, 둘이면 0.6 vCPU)을 오래 넘기면 vCPU·시간당 $0.04가 더 붙는다. 평소에는 기준 안으로 본다. 늘 넘기면 m7g.large(고정 성능)로 바꾼다.
 - 디스크는 gp3 40 GB: 이미지 약 5 GB, OS 3 GB, Postgres 볼륨 5+2 GiB, WAL·로그 여유. 이미지 정리가 시작되는 85% 전에 60% 안쪽으로 둔다. 30 GB보다 월 $0.9 더 든다.
 
@@ -107,7 +107,7 @@
 사람: gh secret set → GitHub 비밀 값
   → infra-secrets 워크플로(develop 수동, 적용 역할. 쓰기만) → SSM SecureString /gachita/dev/app/*, bootstrap/*
   → External Secrets(서비스 계정 역할 ssm-reader, 읽기만) → 네임스페이스의 Secret
-Terraform이 만든 값(터널 토큰) → SSM /gachita/dev/tf/* → 같은 길
+Terraform이 만든 값(`/tf/`) → SSM /gachita/dev/tf/* → 같은 길
 ```
 
 | GitHub 비밀 값 | SSM | 권한·내용 | 만드는 사람 | 쓰는 곳 |
@@ -115,8 +115,7 @@ Terraform이 만든 값(터널 토큰) → SSM /gachita/dev/tf/* → 같은 길
 | `GHCR_PULL_TOKEN` | `app/ghcr-pull-token` | 클래식 토큰, `read:packages` 하나 | 사람 | `gachita`의 imagePullSecret |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | `app/google/*` | 구글 OAuth 웹 클라이언트, 리다이렉트 `https://gachita.mangowhois.ai/…` | 사람 | API 환경 변수. 없어도 서버는 뜬다 |
 | `ARGOCD_DEPLOY_KEY` | `bootstrap/argocd-deploy-key` | 저장소 배포 키(읽기 전용 SSH) | 승인 뒤 | 첫 부팅(ansible-pull), Argo CD 저장소 자격 |
-| `CLOUDFLARE_API_TOKEN` | (SSM에 두지 않음) | 계정 Cloudflare Tunnel 편집 + `mangowhois.ai` DNS 편집 | 사람 | `terraform` 워크플로에서만 |
-| - | `tf/cloudflare-tunnel-token` | 터널 토큰 | Terraform | `edge`의 cloudflared |
+| `CLOUDFLARE_API_TOKEN` | (SSM에 두지 않음) | `mangowhois.ai` DNS 편집 + 영역 WAF 편집 | 사람 | `terraform`·`infra` 워크플로의 develop 실행에서만(PR 계획에는 주지 않음) |
 | - | - | DB 주소(사용자·비밀번호 포함) | CloudNativePG가 DB 네임스페이스에 생성 | 그 Secret 하나만 읽는 역할로 `gachita`에 복사(ADR-0013) |
 
 - 첫 부팅 스크립트가 읽던 `/gachita/dev/ghcr-token`, `/gachita/dev/argocd-deploy-key`는 `app/`·`bootstrap/` 아래로 옮긴다. 이미지 받기 토큰은 노드가 아니라 네임스페이스에서 쓴다.
