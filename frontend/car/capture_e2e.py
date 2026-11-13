@@ -123,6 +123,9 @@ class Injector:
 
     def play(self, name):
         """한 번 부르고 결과를 기다린다. 돌려주는 값은 넣기 시작 시각(Mac, ms)."""
+        # 녹음 입력이 닫힌 채 넣으면 에뮬레이터가 죽는다(research/evidence/20261113-family-30min/에뮬레이터_충돌원인.md). 넣을 때마다 본다
+        if not any("silenced:false" in l for l in mic_holders()):
+            raise SystemExit(f"우리 녹음이 열려 있지 않아 '{name}'을 넣지 않고 멈춥니다")
         w = wave.open(str(OUT / "inputs" / f"{name}.wav"), "rb")
         fmt = self.pb.AudioFormat(samplingRate=R, channels=self.pb.AudioFormat.Stereo, format=self.pb.AudioFormat.AUD_FMT_S16, mode=self.pb.AudioFormat.MODE_UNSPECIFIED)
         def packets():
