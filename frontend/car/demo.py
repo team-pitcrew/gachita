@@ -9,7 +9,8 @@
   (앱은 내비가 향하는 다음 곳이 할 일의 장소일 때 도착으로 본다).
 - 에뮬레이터 녹화(adb emu screenrecord)에는 스피커 소리(TTS)만 들어가고 가상 마이크에 넣은 소리는 들어가지 않는다.
   넣은 대사(합성 음성 WAV)를 넣은 시각에 맞춰 섞는다. 맞춤은 Mac 시계 기준이라 0.1~0.3초 어긋날 수 있다.
-- 대사는 macOS say(Yuna) 합성 음성이다. 영상에는 팀원이 녹음한 대사로 바꾸는 편이 낫다(docs/demo-video.md).
+- 대사는 macOS say(Yuna) 합성 음성이다. OUT/inputs/<이름>.wav(16 kHz 2채널)를 미리 두면 그 장면은 합성하지 않고 그 파일을 넣는다.
+  실제 차 안 녹음을 쓸 때다. 녹음은 저장소에 넣지 않는다.
 - 마트 도착은 차를 옮기지 않고 기어 P로 연출한다. 앱은 '내비 목적지가 할 일의 장소인가'로 도착을 본다.
 - 결과: OUT/scene-N.webm(원본), OUT/scene-N.mp4(대사를 섞고 '에뮬레이터 실행 화면'을 적은 것), OUT/draft.mp4(이어 붙인 가편집),
   OUT/short.mp4(숏폼용 세로 1080×1920, 60초 안: 위는 Driving view의 속도·기어, 아래는 우리 앱 왼쪽 칸. 장면 3~4), OUT/clips.json.
@@ -28,7 +29,8 @@ LINES = {  # 왼쪽 채널 = 앞줄(아빠·엄마), 오른쪽 = 뒷줄(아들·
     "ask": [("아들", "화장실 가고 싶어")],
     "yes": [("아빠", "응, 다음 휴게소 가자")],
 }
-LABEL = "에뮬레이터 실행 화면 · 합성 음성"
+LABEL = "에뮬레이터 실행 화면"
+given = set()  # 합성하지 않고 미리 둔 녹음을 쓴 장면 이름
 FONT = "/System/Library/Fonts/AppleSDGothicNeo.ttc"
 clips = []
 
@@ -60,13 +62,19 @@ def speed(kmh):
     note("speed", kmh=kmh)
 
 
+def label(mine):
+    """장면의 표시: 대사가 실제 녹음인지 합성 음성인지 나눠 적는다."""
+    kinds = ["실제 차 안 녹음" if c["clip"] in given else "합성 음성" for c in mine]
+    return " · ".join([LABEL] + list(dict.fromkeys(kinds)))
+
+
 def mix(n):
     """장면 녹화에 넣은 대사를 섞고(TTS는 작게 녹음돼 키움) 오른쪽 아래(앱 창 안)에 표시를 적는다."""
     src = OUT / f"scene-{n}.webm"; mine = [c for c in clips if c["scene"] == n]
     args = ["ffmpeg", "-y", "-loglevel", "error", "-i", str(src)] + sum((["-i", str(OUT / "inputs" / f"{c['clip']}.wav")] for c in mine), [])
     parts = ["[0:a]volume=3[a0]"] + [f"[{i + 1}:a]adelay={max(0, c['offset_ms'])}:all=1[a{i + 1}]" for i, c in enumerate(mine)]
     parts.append("".join(f"[a{i}]" for i in range(len(mine) + 1)) + f"amix=inputs={len(mine) + 1}:normalize=0:duration=first,alimiter=limit=0.9[a]")  # 잘리지 않게
-    parts.append(f"[0:v]drawtext=fontfile={FONT}:text='{LABEL}':fontsize=30:fontcolor=white:box=1:boxcolor=black@0.55:boxborderw=10:x=w-tw-40:y=1240[v]")
+    parts.append(f"[0:v]drawtext=fontfile={FONT}:text='{label(mine)}':fontsize=30:fontcolor=white:box=1:boxcolor=black@0.55:boxborderw=10:x=w-tw-40:y=1240[v]")
     subprocess.run(args + ["-filter_complex", ";".join(parts), "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "24",
                            "-c:a", "aac", "-b:a", "160k", str(OUT / f"scene-{n}.mp4")], check=True)
 
@@ -75,7 +83,9 @@ def main(apk):
     threading.Thread(target=e2e.heartbeat, daemon=True).start()
     threading.Thread(target=wp.logcat, daemon=True).start()
     inj = cap.Injector()
-    for name, lines in LINES.items(): cap.fixture(name, lines, lead=0.5, tail=2.5)
+    for name, lines in LINES.items():
+        if not (OUT / "inputs" / f"{name}.wav").exists(): cap.fixture(name, lines, lead=0.5, tail=2.5)
+        else: given.add(name); note("fixture.given", name=name)  # 미리 둔 녹음(실제 목소리)을 그대로
     note("apk", sha256=e2e.hashlib.sha256(open(apk, "rb").read()).hexdigest())
     install = lambda: (lambda r: r.stdout + r.stderr)(subprocess.run(ADB + ["install", "--user", "10", "-r", "-g", apk], capture_output=True, text=True))
     out = install()  # 실패 사유는 stderr로 온다
@@ -97,6 +107,7 @@ def main(apk):
     tap_switch(); time.sleep(1)
 
     (OUT / "clips.json").write_text(json.dumps(clips, ensure_ascii=False, indent=1))
+    (OUT / "given.json").write_text(json.dumps(sorted(given)))
     cut()
     (OUT / "results.json").write_text(json.dumps({"clips": clips, "log": e2e.log}, ensure_ascii=False, indent=1))
     (OUT / "app-log.json").write_text(json.dumps(app_log, ensure_ascii=False, indent=1))
@@ -134,7 +145,7 @@ def scenes(inj):
 def vertical(n):
     """숏폼용 세로 자르기: 위에 Driving view의 속도·기어(853×300), 아래에 우리 앱 창의 왼쪽 칸(847×1210)."""
     v = (f"[0:v]split[a][b];[a]crop=853:300:0:0,scale=1080:380[top];[b]crop=847:1210:853:90,scale=1080:1540[bot];[top][bot]vstack,"
-         f"drawtext=fontfile={FONT}:text='{LABEL}':fontsize=34:fontcolor=white:box=1:boxcolor=black@0.55:boxborderw=10:x=(w-tw)/2:y=h-70[v]")
+         f"drawtext=fontfile={FONT}:text='{label([c for c in clips if c['scene'] == n])}':fontsize=34:fontcolor=white:box=1:boxcolor=black@0.55:boxborderw=10:x=(w-tw)/2:y=h-70[v]")
     subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(OUT / f"scene-{n}.mp4"), "-filter_complex", v, "-map", "[v]", "-map", "0:a",
                     "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "24", "-c:a", "aac", "-b:a", "160k", str(OUT / f"short-{n}.mp4")], check=True)
 
@@ -155,6 +166,7 @@ def cut():
 def remix():
     """녹화는 두고 섞기만 다시(OUT/clips.json). 실행: python3 demo.py --remix <폴더>"""
     clips.extend(json.loads((OUT / "clips.json").read_text()))
+    given.update(json.loads((OUT / "given.json").read_text()) if (OUT / "given.json").exists() else [])
     cut()
 
 
