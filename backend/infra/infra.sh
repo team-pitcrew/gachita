@@ -35,6 +35,8 @@ tf() { # tf <묶음 폴더> <명령...>. 묶음마다 상태 키가 다르다(ma
 # 서버에서 명령 하나를 돌리고(SSM Run Command) 출력을 보인다. 실패하면 실패한다.
 on_server() { # on_server <인스턴스> <최대 초> <명령>
   local id=$1 max=$2 cmd=$3 cid status i
+  # SSM은 명령을 sh(dash)로 돌린다. bash로, 따옴표가 깨지지 않게 base64로 감싸 보낸다
+  cmd="echo $(printf '%s' "$cmd" | base64 | tr -d '\n') | base64 -d | bash"
   cid=$(aws ssm send-command --instance-ids "$id" --document-name AWS-RunShellScript \
     --parameters "$(jq -n --arg c "$cmd" --arg t "$max" '{commands: [$c], executionTimeout: [$t]}')" \
     --query Command.CommandId --output text)
