@@ -303,7 +303,7 @@ test("발화를 기록본으로 저장하고 프로필 피드로 읽는다(T39)"
   assert.deepEqual([u1, r1.lastSeq], [200, 3], "1~3을 다 받으면 마지막 순번은 3. 좌석 구역을 모르는 발화도 받는다");
   await call("POST", `${t}/utterances`, { device: "car", generation: 1, items: [items[1]] }, pa.token);
   // 순번 1이 빠진 기기는 빠짐없이 받은 마지막이 0이다
-  const [, r2] = await call("POST", `${t}/utterances`, { device: "phone", items: [{ seq: 5, at: at(5), text: "콜라 사줘", seatArea: "ROW_2_RIGHT", generation: 1 }] }, pg.token);
+  const [, r2] = await call("POST", `${t}/utterances`, { device: "car-2", items: [{ seq: 5, at: at(5), text: "콜라 사줘", seatArea: "ROW_2_RIGHT", generation: 1 }] }, pg.token);
   assert.equal(r2.lastSeq, 0);
   await speak([1, 2], meA.id);
   await speak([3], meB.id);
@@ -683,6 +683,18 @@ test("쓰기가 몰려도 서버가 멈추지 않는다", async () => {
     const done = await Promise.all(writes);
     assert.equal(done.filter(([s]) => s === 200).length, writes.length, `${round + 1}회차`);
   }
+});
+
+test("확장자 없는 주소는 웹 화면으로 연다(초대 /j/<코드>, 시연 /demo)", async () => {
+  for (const path of ["/", "/j/abcDEF123", "/demo"]) {
+    const res = await fetch(base + path);
+    assert.deepEqual([res.status, res.headers.get("content-type")], [200, "text/html; charset=utf-8"], path);
+  }
+  assert.equal((await fetch(`${base}/app.js`)).headers.get("content-type"), "text/javascript; charset=utf-8");
+  assert.equal((await fetch(`${base}/nothing.js`)).status, 404, "없는 파일은 그대로 404");
+  assert.equal((await fetch(`${base}/..%2F..%2Fbackend%2Fapi%2Fserver.js`)).status, 404, "웹 폴더 밖은 404");
+  const outside = await fetch(`${base}/..%2F..%2Fbackend%2Fapi`);
+  assert.ok((await outside.text()).includes("<title>같이타</title>"), "확장자 없는 주소로 웹 폴더 밖을 가리켜도 웹앱 첫 화면만 나옴");
 });
 
 test("명세(docs/api/openapi.yaml)와 서버의 경로가 같다", async () => {
