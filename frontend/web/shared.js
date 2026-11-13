@@ -1,5 +1,5 @@
 // 웹앱(/)과 웹 시연(/demo)이 함께 쓰는 것. 빌드 없이 <script type="module">이 그대로 읽는다.
-// API 부르기와 토큰 머리말은 여기 한 곳에만 둔다.
+// API 부르기와 토큰 머리말은 여기 한 곳에 둔다. JSON이 아닌 응답(프로필 사진 받기)만 app.js가 직접 부른다.
 
 export const SEATS = [
   ["ROW_1_LEFT", "운전석"],
