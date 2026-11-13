@@ -218,7 +218,7 @@ const saveProfile = () =>
 // 복귀 주소는 이 웹앱의 /oauth/google/callback(서버가 첫 화면을 준다). Client ID는 서버가 준다(GET /api/config, 웹에 박지 않음).
 // PKCE(S256, RFC 7636): verifier는 이 탭에만 두고 구글에는 그 해시(challenge)만 보낸다. 코드를 넘길 때 verifier를 같이 보낸다.
 const GOOGLE_BACK = `${location.origin}/oauth/google/callback`;
-const GOOGLE_KEY = "gachita:google"; // sessionStorage: { state, verifier, draft } — 돌아와서 확인하고, 실패하면 입력을 되돌린다
+const GOOGLE_KEY = "gachita:google"; // sessionStorage: { state, verifier, profileId, draft } — 돌아와서 확인하고, 실패하면 입력을 되돌린다
 let googleId = ""; // 공개 Google Client ID. 비었으면(서버 설정 없음) 구글 단추를 숨긴다
 const b64url = (bytes) => btoa(String.fromCharCode(...bytes)).replace(/[+/=]/g, (c) => ({ "+": "-", "/": "_", "=": "" })[c]);
 const random = () => b64url(crypto.getRandomValues(new Uint8Array(32))); // 43자: state, PKCE verifier(43~128자)
@@ -228,7 +228,8 @@ async function google() {
   const verifier = random();
   const challenge = b64url(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier))));
   const { name, character, consentDefault } = pdraft; // 사진은 옮기지 못한다(돌아오면 다시 고른다)
-  sessionStorage.setItem(GOOGLE_KEY, JSON.stringify({ state, verifier, draft: { name, character, consentDefault } }));
+  // 시작한 프로필(없으면 null = 새 로그인)을 묶어 둔다: 돌아왔을 때 이 폰의 프로필이 바뀌었으면 연결하지 않는다
+  sessionStorage.setItem(GOOGLE_KEY, JSON.stringify({ state, verifier, profileId: profile?.id ?? null, draft: { name, character, consentDefault } }));
   const q = { client_id: googleId, redirect_uri: GOOGLE_BACK, response_type: "code", scope: "openid profile", state, code_challenge: challenge, code_challenge_method: "S256", prompt: "select_account" };
   location.href = `https://accounts.google.com/o/oauth2/v2/auth?${new URLSearchParams(q)}`;
 }
@@ -243,14 +244,17 @@ async function googleBack() {
   const fail = (message) => (toast(message), saved?.draft ?? null);
   if (q.get("error")) return fail(q.get("error") === "access_denied" ? "구글 로그인을 취소했어요." : "구글 로그인을 마치지 못했어요. 다시 해 주세요.");
   if (!saved?.verifier || !q.get("code") || q.get("state") !== saved.state) return fail("로그인 요청을 확인하지 못했어요. 다시 해 주세요.");
+  // 다른 탭에서 프로필을 지우거나 새로 만들었으면 엉뚱한 프로필에 구글을 붙이지 않게 멈춘다
+  const nowId = store("profile") ? await mine("GET", "/profiles/me").then((p) => p.id, () => undefined) : null;
+  if (nowId !== saved.profileId) return fail("구글로 가는 사이 이 폰의 프로필이 바뀌어 멈췄어요. 다시 해 주세요.");
   try {
-    const res = await api("POST", "/profiles/me/links/google", { code: q.get("code"), redirectUri: GOOGLE_BACK, codeVerifier: saved.verifier, device: "폰" }, store("profile"));
+    const res = await api("POST", "/profiles/me/links/google", { code: q.get("code"), redirectUri: GOOGLE_BACK, codeVerifier: saved.verifier, device: "폰" }, saved.profileId && store("profile"));
     if (res.token) store("profile", res.token);
     toast(res.token ? "구글 계정으로 들어왔어요." : "이 프로필에 구글 계정을 연결했어요.");
     return null;
   } catch (e) {
     return fail(
-      e.status === 409 ? "이미 다른 프로필에 연결된 구글 계정이에요. 그 프로필로 들어가려면 이 폰의 프로필을 지우고 구글로 계속해 주세요."
+      e.status === 409 ? "이미 다른 프로필에 연결된 구글 계정이에요. 이 폰의 프로필은 그대로예요."
       : e.status === 401 || e.status === 400 ? "구글 로그인을 확인하지 못했어요. 다시 해 주세요."
       : e.status === 0 || e.status >= 500 ? "지금은 구글 계정을 확인할 수 없어요. 잠시 뒤 다시 해 주세요."
       : e.message,
