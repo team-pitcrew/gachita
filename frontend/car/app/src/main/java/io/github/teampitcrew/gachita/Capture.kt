@@ -318,8 +318,8 @@ val ENROLL_LINES = listOf("오늘도 안전하게 같이 타고 가요.", "바�
 const val ENROLL_MS = 10_000L
 const val ENROLL_BYTES = (ENROLL_MS * RATE / 1000 * 2).toInt() // 10초 16 kHz 모노
 
-/** 발화 한 건의 말한 사람: 참가자 id(모르면 null), 대조 확신도, 사람이 화면에서 고쳤는지. */
-data class Speaker(val who: String?, val confidence: Double, val byPerson: Boolean = false)
+/** 발화 한 건의 말한 사람: 참가자 id(모르면 null), 대조 확신도, 사람이 화면에서 고쳤는지, 고친 것을 서버에 남겼는지. */
+data class Speaker(val who: String?, val confidence: Double, val byPerson: Boolean = false, val sent: Boolean = true)
 
 /**
  * 발화 순번별 말한 사람. speakers-<여행>.jsonl에 한 줄씩 덧붙이고(암호화, 뒤의 줄이 앞을 덮음) 앱을 다시 켜면 이어 읽는다.
@@ -340,7 +340,7 @@ class Speakers(dir: File, val trip: String, private val seal: Seal) {
                 when {
                     o.has("through") -> through = o.getLong("through")
                     o.has("gen") -> gen = o.getInt("gen")
-                    else -> map[o.getLong("seq")] = Speaker(o.optString("who").ifEmpty { null }, o.getDouble("confidence"), o.optBoolean("byPerson"))
+                    else -> map[o.getLong("seq")] = Speaker(o.optString("who").ifEmpty { null }, o.getDouble("confidence"), o.optBoolean("byPerson"), o.optBoolean("sent", true))
                 }
             }
         }
@@ -351,8 +351,11 @@ class Speakers(dir: File, val trip: String, private val seal: Seal) {
     @Synchronized fun set(seq: Long, s: Speaker) {
         if (map[seq]?.byPerson == true && !s.byPerson) return // 사람이 고친 것은 대조가 덮지 않는다
         map[seq] = s
-        put(JSONObject().put("seq", seq).put("who", s.who ?: "").put("confidence", s.confidence).put("byPerson", s.byPerson))
+        put(JSONObject().put("seq", seq).put("who", s.who ?: "").put("confidence", s.confidence).put("byPerson", s.byPerson).put("sent", s.sent))
     }
+
+    /** 사람이 고쳤지만 아직 서버에 남기지 못한 것(끊김 등). 다음 차례에 다시 보낸다. */
+    @Synchronized fun unsent(): List<Pair<Long, Speaker>> = map.filter { it.value.byPerson && !it.value.sent }.map { it.key to it.value }
 
     @Synchronized fun done(seq: Long) { if (seq > through) { through = seq; put(JSONObject().put("through", seq)) } }
 

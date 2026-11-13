@@ -61,6 +61,16 @@ class CaptureTest {
         assertEquals(0, lv.zone(0, 199)) // 4e6 대 1e6 = 6 dB. 덮어쓰면 1e6 대 1e6이라 모름
     }
 
+    @Test fun 서버에_남기지_못한_고침은_다시_보낼_때까지_남음() {
+        val sp = Speakers(tmp.root, "ABC123", TEST_SEAL)
+        sp.set(5, Speaker(null, 0.4)) // 대조: 모름
+        sp.set(5, Speaker("p2", 1.0, byPerson = true, sent = false)) // 사람이 고침, 아직 못 보냄
+        assertEquals(listOf(5L), Speakers(tmp.root, "ABC123", TEST_SEAL).unsent().map { it.first }) // 다시 켜도 남음
+        sp.set(5, sp[5]!!.copy(sent = true))
+        assertTrue(Speakers(tmp.root, "ABC123", TEST_SEAL).unsent().isEmpty())
+        assertEquals("p2", Speakers(tmp.root, "ABC123", TEST_SEAL)[5]?.who)
+    }
+
     @Test fun 대조를_마친_순번과_세대가_오르면_말한_사람을_지움() {
         val sp = Speakers(tmp.root, "ABC123", TEST_SEAL)
         sp.see(1); sp.set(1, Speaker("p1", 0.95)); sp.done(1); sp.done(3)

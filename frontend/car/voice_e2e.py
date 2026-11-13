@@ -145,9 +145,10 @@ def main(apk, n):
         fixed = re.sub(r" · 누구\? · ", " · 엄마 · ", unknown[0], count=1)
         for _ in range(3):  # 경유지 카드가 사라지며 줄이 밀리면 누름이 빗나간다. 바뀔 때까지 다시
             tap_text("엄마", last=False); time.sleep(2); ui = texts(); note("ui", texts=ui)
-            if fixed in ui: break
-        check("모름인 말은 주차 중에 사람을 골라 고칠 수 있음", fixed in ui, line=fixed)
-        time.sleep(3)  # 고친 사람을 서버 기록에도 보낸다(#65 PATCH)
+            if fixed in ui or fixed + " (보내는 중)" in ui: break
+        check("모름인 말은 주차 중에 사람을 골라 고칠 수 있음", fixed in ui or fixed + " (보내는 중)" in ui, line=fixed)
+        ui = wait_texts(lambda u: fixed in u, 20)  # 서버에 남기면 '보내는 중'이 사라진다(#65 PATCH)
+        check("고친 것을 서버에 남기면 '보내는 중'이 사라짐", fixed in ui)
         text = fixed.split(" · ", 2)[2]
         srv = [u for u in wait_uploaded(code, phone, 1)["items"] if u["text"].startswith(text[:8])]
         check("고친 말한 사람이 서버 기록에도 남음", srv and srv[0].get("participantId") == ids["엄마"], got=[u.get("participantId") for u in srv], want=ids["엄마"])

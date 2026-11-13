@@ -113,6 +113,7 @@ class MainActivity : ComponentActivity() {
     private var clipping = false // 장면 클립을 올리는 중(T63)
     private var rawSeen = "" // 옛 세대 원음을 지운 여행·세대. 세대가 바뀔 때만 파일 목록을 본다
     private var speakers: Speakers? = null // 지금 여행의 발화별 말한 사람(T37)
+    private var matching = false // 대조·고침 보내기가 clipIo에 있음
     private var heardTick by mutableStateOf(0) // 말한 사람이 바뀌면 받아 적은 말 카드를 다시 그린다
     /** 이 차에서 목소리를 등록한 참가자. 그 사람의 동의가 꺼지면 서버가 등록값을 지우므로 여기서도 뺀다(#65). */
     private var voiced by mutableStateOf(emptySet<String>())
@@ -304,6 +305,7 @@ class MainActivity : ComponentActivity() {
                 if (s.trip?.code != t.code) return@onSuccess // 그사이 지운 여행(48시간·404)이나 새 여행: 늦게 온 응답으로 되살리지 않는다
                 s = if (got == null) s.copy(online = true) else s.withTrip(keep(got))
                 upload(t, resync, prune) // 받은 여행의 동의 세대를 보관함에 반영한(철회면 글을 지운) 뒤에만 올린다
+                speakers(t) // 올릴 새 발화가 없어도 밀린 대조와 고침을 잇는다
                 s.trip?.let(::clips)
             }
                 .onFailure { if (it is Gone) forget(t.code) else s = s.copy(online = it is ApiError, note = if (it is ApiError) reason(it) else s.note) } // 조회를 못 하면 이번에는 올리지 않는다
@@ -319,20 +321,46 @@ class MainActivity : ComponentActivity() {
         // 받아 적은 말은 동의와 따로 보낸다. 못 보내면(끊김, 동의 대기 403) 보관함에 두었다 다음 조회에 다시 보낸다.
         // 지운 글 맞추기는 같은 차례에 받은 lastSeq 안에서만 한다(빈 묶음이라도 먼저 보냄). 되살린 DB에서 잃은 순번을 지운 것으로 보지 않게
         val again = (resync || prune) && box != null && box.acked > 0
-        // 목소리 대조(T37): 이번에 서버가 받은 발화만. 등록값이 있을 만할 때만(이 차에서 등록했거나 프로필 참가자가 있음)
-        val sp = speakersOf(t.code).takeIf { voiced.isNotEmpty() || t.people.any { it.profile } }
         if (box == null || up == null || (box.pending == 0 && !again) || uploading || s.offPending) return
         uploading = true
         bg({
             val api = Server(url)
             box.flush({ d, items -> api.utterances(t.code, up, d, items) }, dev, always = again)
             if (prune && again && box.prune(api.keptSeqs(t.code, up, dev))) Log.i(TAG, "서버에서 지운 글을 차에서도 지움")
-            if (sp != null) match(api, t.code, up, dev, box.ackedAfter(sp.through).take(MATCH_MAX), sp)
         }) { r ->
             uploading = false
             r.exceptionOrNull()?.let { Log.w(TAG, "발화 올리기 못 함 ${if (it is ApiError) it.message else "연결"}") } // 서버 거절(400 등)의 글에는 받아 적은 말이 없다
             if (r.exceptionOrNull() is Gone) forget(t.code) else if (Live.box === box) Live.show(box) // 그사이 지운 여행은 다시 보이지 않게
-            heardTick++
+            if (s.trip?.code == t.code) speakers(t) // 이번에 서버가 받은 발화의 말한 사람
+        }
+    }
+
+    /**
+     * 말한 사람(T37): 서버가 받았지만 아직 대조하지 않은 발화(한 차례 20건)와, 사람이 고쳤지만 서버에 남기지 못한 것을 처리한다.
+     * 올릴 새 발화가 있든 없든 조회마다 본다(밀린 대조를 이어 하게). 대조는 원음을 보내므로 클립과 같은 따로 둔 실행기에서 돌고,
+     * 요청마다 '모두 동의, 끄기 대기 없음'을 다시 본다(동의를 끄면 남은 원음을 보내지 않고, 끄기 요청이 그 뒤에 서지 않게).
+     */
+    private fun speakers(t: Trip) {
+        val box = Live.box?.takeIf { it.trip == t.code } ?: return
+        val up = tokens.minByOrNull { it.key }?.value ?: return
+        if (matching || !clipsAllowed) return
+        val sp = speakersOf(t.code)
+        // 등록값이 있을 만할 때만 대조한다(이 차에서 등록했거나 프로필 참가자가 있음)
+        val todo = if (voiced.isNotEmpty() || t.people.any { it.profile }) box.ackedAfter(sp.through).take(MATCH_MAX) else emptyList()
+        val fixes = sp.unsent()
+        if (todo.isEmpty() && fixes.isEmpty()) return
+        matching = true
+        val url = server; val dev = device
+        if (!clipIo.isShutdown) clipIo.execute {
+            val r = runCatching {
+                val api = Server(url)
+                for ((seq, f) in fixes) { api.fixSpeaker(t.code, up, dev, seq, f.who); sp.set(seq, f.copy(sent = true)) }
+                match(api, t.code, up, dev, todo, sp)
+            }
+            main.post {
+                matching = false; heardTick++
+                r.exceptionOrNull()?.let { Log.i(TAG, "말한 사람 대조·고침 미룸 ${if (it is ApiError) it.status else "연결"}") }
+            }
         }
     }
 
@@ -405,12 +433,13 @@ class MainActivity : ComponentActivity() {
         for (u in items) {
             val to = u.endedAt - 500 // 최종 결과는 말 끝 0.6초 뒤에 온다(11/13): 끝의 무음을 덜어 목소리만
             val from = maxOf(u.startedAt + LEAD_MS / 2, to - 9_900) // 서버는 0.5~10초를 받는다. 0.1초 묶음 단위로 잘려도 그 안에 들게
+            if (!clipsAllowed) return // 그사이 동의를 껐으면(철회) 원음을 더 보내지 않는다
             val pcm = if (to - from < 600) null else clipFile(files, from..to)?.let { runCatching { it.cut(Live.seal(this), from, to) }.getOrNull() }
             if (pcm == null || pcm.size < RATE) { sp.done(u.seq); continue } // 원음이 없거나 짧음: 다시 하지 않음
             val r = try {
                 // 구역이 틀렸을 수 있어(앞뒤 사람이 이어 말함) 그 줄에서 못 찾으면 줄 없이 한 번 더
                 api.voiceMatch(code, token, u.seatZone?.plus(1), dev, u.seq, wav(pcm)).let { r ->
-                    if (r.who == null && u.seatZone != null) api.voiceMatch(code, token, null, dev, u.seq, wav(pcm)) else r
+                    if (r.who == null && u.seatZone != null && clipsAllowed) api.voiceMatch(code, token, null, dev, u.seq, wav(pcm)) else r
                 }
             } catch (e: ApiError) {
                 if (e.status in listOf(400, 404, 409, 413)) { sp.done(u.seq); continue } else throw e // 403·5xx·끊김: 다음 차례에 이 발화부터
@@ -454,12 +483,8 @@ class MainActivity : ComponentActivity() {
      * 고칠 수 있는 줄은 대조를 마친(곧 서버가 받은) 발화뿐이다. 보내지 못하면 차 안에만 남는다.
      */
     private fun fixSpeaker(u: Utterance, p: Person) {
-        speakersOf(u.trip).set(u.seq, Speaker(p.id, 1.0, byPerson = true)); heardTick++
-        val up = tokens.minByOrNull { it.key }?.value ?: return
-        val url = server; val dev = device
-        bg({ Server(url).fixSpeaker(u.trip, up, dev, u.seq, p.id) }) { r ->
-            r.exceptionOrNull()?.let { Log.w(TAG, "고친 말한 사람을 서버에 남기지 못함 ${if (it is ApiError) it.status else "연결"}") }
-        }
+        speakersOf(u.trip).set(u.seq, Speaker(p.id, 1.0, byPerson = true, sent = false)); heardTick++ // 서버에 남길 때까지 '보내는 중'
+        s.trip?.takeIf { it.code == u.trip }?.let(::speakers) // 바로 보내고, 못 보내면 다음 조회마다 다시
     }
 
     /** 서버가 모르는 여행(48시간이 지나 지워짐): 기록을 멈추고 이 차의 사본(보관함·할 일)을 지운 뒤 처음 화면으로. */
@@ -874,11 +899,13 @@ class MainActivity : ComponentActivity() {
             Live.recent.asReversed().forEach { u ->
                 val sp = speakers?.takeIf { it.trip == t.code }?.get(u.seq)
                 val name = sp?.who?.let { id -> t.people.firstOrNull { it.id == id }?.name }
-                Text("${hm.format(Date(u.startedAt))} · " + (name ?: if (sp != null) "누구?" else "").let { if (it.isEmpty()) "" else "$it · " } + u.text, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                // 대조가 '모름'이면 주차 중에 사람을 골라 고친다(T37). 그 구역의 사람을 앞에 두되 모두 보인다(구역이 틀렸을 수 있음). 주행 중에는 고치지 않는다
-                if (sp != null && sp.who == null && !carStatus.restricted) FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("${hm.format(Date(u.startedAt))} · " + (name ?: if (sp != null) "누구?" else "").let { if (it.isEmpty()) "" else "$it · " } + u.text +
+                    if (sp?.byPerson == true && !sp.sent) " (보내는 중)" else "", maxLines = 2, overflow = TextOverflow.Ellipsis)
+                // 대조를 마친 줄은 주차 중에 사람을 골라 고친다(T37): '모름'이든 이름이 틀렸든. 그 구역의 사람을 앞에 두되 모두 보인다(구역이 틀렸을 수 있음).
+                // 주행 중에는 고치지 않는다
+                if (sp != null && !carStatus.restricted) FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     val row = u.seatZone?.let { if (it == 0) "ROW_1" else "ROW_2" }
-                    t.people.sortedBy { if (row != null && it.seat.startsWith(row)) 0 else 1 }.forEach { p ->
+                    t.people.filter { it.id != sp.who }.sortedBy { if (row != null && it.seat.startsWith(row)) 0 else 1 }.forEach { p ->
                         OutlinedButton({ fixSpeaker(u, p) }, Modifier.heightIn(min = 56.dp)) { Text(p.name, fontSize = 20.sp) }
                     }
                 }
