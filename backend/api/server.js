@@ -86,10 +86,12 @@ export async function migrate() {
 
 async function readBody(req, limit = MAX_BODY) {
   let raw = "";
+  let size = 0;
   req.setEncoding("utf8"); // 조각 경계에 걸친 한글(3바이트)을 깨뜨리지 않는다
   for await (const chunk of req) {
     raw += chunk;
-    if (raw.length > limit) fail(413, "본문이 너무 큼");
+    size += Buffer.byteLength(chunk); // 한도는 글자 수가 아니라 바이트로 센다
+    if (size > limit) fail(413, "본문이 너무 큼");
   }
   let v;
   try {
@@ -580,7 +582,8 @@ async function trips(req, [code, sub, id], b, query) {
     };
     // 48시간 지난 여행과 그 발화·확인 순번을 한 문장으로 지운다. 지운 여행의 코드로만 찾으니(기본 키 앞부분)
     // 발화 표 전체를 훑지 않는다 — 질의 하나는 2초에서 끊긴다(T26).
-    await tripsDb().query(`WITH gone AS (DELETE FROM trips WHERE created_at < now() - interval '48 hours' RETURNING code),
+    // ponytail: 한 번에 여행 20개까지. 여행을 만들 때마다 도니 밀린 것도 곧 따라잡는다. 여행 하나의 발화가 수십만 줄이 되면 따로 지우는 작업으로.
+    await tripsDb().query(`WITH gone AS (DELETE FROM trips WHERE code IN (SELECT code FROM trips WHERE created_at < now() - interval '48 hours' LIMIT 20) RETURNING code),
       u AS (DELETE FROM utterances WHERE trip_code IN (SELECT code FROM gone))
       DELETE FROM utterance_acks WHERE trip_code IN (SELECT code FROM gone)`);
     for (;;) {
@@ -672,11 +675,11 @@ async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
       }
       if (b.prefs !== undefined) p.prefs = prefs({ ...p.prefs, ...obj(b.prefs, "prefs") });
       if (b.consent !== undefined) {
+        const was = p.consent;
         p.consent = bool(b.consent, "consent");
-        if (!p.consent) {
-          trip.recording = false;
-          await bumpGeneration(trip, client); // 동의를 끊으면 받아 둔 발화도 못 쓰게 한다(ADR-0007)
-        }
+        if (!p.consent) trip.recording = false;
+        // 켜져 있던 동의를 끊을 때만 세대를 올린다. 받아 둔 발화도 못 쓰게 한다(ADR-0007). 이미 꺼진 것을 다시 꺼도 그대로.
+        if (was && !p.consent) await bumpGeneration(trip, client);
       }
       return changed(200, asParticipant(p));
     }
@@ -718,7 +721,7 @@ async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
     const now = Date.now();
     const moment = {
       id: randomUUID().slice(0, 8),
-      at: b.at === undefined ? now : num(b.at, trip.createdAt, now + 60_000, "at"), // 통신이 끊겼다가 나중에 올리는 경우
+      at: b.at === undefined ? now : int(b.at, trip.createdAt, now + 60_000, "at"), // 통신이 끊겼다가 나중에 올리는 경우
       ...(hasLat ? { lat: num(b.lat, -90, 90, "lat"), lng: num(b.lng, -180, 180, "lng") } : {}),
       label: b.label === undefined ? "" : text(b.label, 60, "label"),
     };
@@ -728,7 +731,7 @@ async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
     if (picker?.profileId) {
       await profilesDb().query(
         `INSERT INTO profile_moments (id, profile_id, trip_code, at, lat, lng, label)
-         VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (id) DO NOTHING`,
+         VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (profile_id, id) DO NOTHING`,
         [moment.id, picker.profileId, trip.code, moment.at, moment.lat ?? null, moment.lng ?? null, moment.label]
       );
     }
@@ -745,6 +748,9 @@ async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
       // 그 앞에서 멈춰 차량이 같은 묶음을 끝없이 다시 보낸다(ADR-0007).
       const current = trip.generation ?? 1;
       const device = text(b.device, 40, "device");
+      // 기기 이름은 처음 올린 참가자의 것이다. 다른 참가자가 같은 이름으로 순번을 먼저 차지해 진짜 발화를 밀어내지 못하게.
+      const { rows: ack } = await client.query("SELECT last_seq, participant_id FROM utterance_acks WHERE trip_code = $1 AND device = $2", [trip.code, device]);
+      if (ack[0] && ack[0].participant_id !== caller.id) fail(403, "다른 참가자가 올리는 기기");
       const items = Array.isArray(b.items) ? b.items : fail(400, "items: 배열");
       if (items.length > 500) fail(400, "items: 한 번에 500개까지");
       // 화자(profileId)는 받지 않는다. 서버의 화자 대조(T38)만 붙인다 — 올리는 쪽이 남의 이름을 붙이지 못하게.
@@ -756,7 +762,7 @@ async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
           trip.code,
           device,
           int(u.seq, 1, 1_000_000_000, `items[${i}].seq`),
-          num(u.at, 0, Date.now() + 600_000, `items[${i}].at`),
+          int(u.at, 0, Date.now() + 600_000, `items[${i}].at`),
           text(u.text, 500, `items[${i}].text`),
           u.seatArea == null ? null : oneOf(u.seatArea, SEATS, `items[${i}].seatArea`), // 모르는 구역은 비워 둔다(T37)
           u.confidence === undefined ? null : num(u.confidence, 0, 1, `items[${i}].confidence`),
@@ -778,18 +784,19 @@ async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
       }
       // 빠짐없이 받은 마지막 순번을 돌려준다. 차량은 그 뒤만 다시 보낸다(ADR-0014).
       // 확인 순번은 발화 줄과 따로 둔다: 동의 철회나 글 지우기로 줄이 지워져도 뒤로 가지 않는다.
-      const { rows: ack } = await client.query("SELECT last_seq FROM utterance_acks WHERE trip_code = $1 AND device = $2", [trip.code, device]);
       let lastSeq = Number(ack[0]?.last_seq ?? 0);
       const { rows: seqs } = await client.query("SELECT seq FROM utterances WHERE trip_code = $1 AND device = $2 AND seq > $3", [trip.code, device, lastSeq]);
       const got = new Set([...rows.map((r) => r[2]), ...seqs.map((r) => Number(r.seq))]);
       while (got.has(lastSeq + 1)) lastSeq++;
       await client.query(
-        "INSERT INTO utterance_acks (trip_code, device, last_seq) VALUES ($1, $2, $3) ON CONFLICT (trip_code, device) DO UPDATE SET last_seq = EXCLUDED.last_seq",
-        [trip.code, device, lastSeq]
+        `INSERT INTO utterance_acks (trip_code, device, participant_id, last_seq) VALUES ($1, $2, $3, $4)
+         ON CONFLICT (trip_code, device) DO UPDATE SET last_seq = EXCLUDED.last_seq`,
+        [trip.code, device, caller.id, lastSeq]
       );
       return [200, { lastSeq, generation: current }];
     }
     if (m === "GET") {
+      if (!caller.consent) fail(403, "녹음에 동의한 참가자만 볼 수 있음");
       const device = query.get("device");
       const params = [trip.code];
       let where = "trip_code = $1";
@@ -856,7 +863,7 @@ async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
   if (sub === "transcript") {
     // 기록본: 발화를 시간순으로, 부탁과 도착 할 일과 함께(T39).
     if (m !== "GET") fail(405, "GET만 됨");
-    participantOf(req, trip); // 이 여행의 허용된 참가자만 본다
+    if (!participantOf(req, trip).consent) fail(403, "녹음에 동의한 참가자만 볼 수 있음"); // 이 여행의 허용된 참가자만 본다
     const { rows } = await client.query("SELECT device, seq, at, text, seat_area, profile_id, confidence, lat, lng FROM utterances WHERE trip_code = $1 ORDER BY at", [trip.code]);
     // 도착 할 일 뽑기(LLM)는 아직 구현 전이다. 기록본 모양을 미리 맞춰 둔다(ADR-0007).
     return [200, { generation: trip.generation ?? 1, utterances: rows.map(asUtterance), requests: trip.requests, todos: [] }];
