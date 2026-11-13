@@ -43,7 +43,7 @@ function browserDoubles(t) {
   class Stream { constructor(tracks) { this.tracks = tracks; } getTracks() { return this.tracks; } getAudioTracks() { return this.tracks.filter((t) => t.kind === "audio"); } getVideoTracks() { return this.tracks.filter((t) => t.kind === "video"); } }
   const ctx = new Proxy({ measureText: (s) => ({ width: s.length * 16 }) }, { get: (target, key) => target[key] ?? (() => {}) });
   class Canvas { setAttribute() {} getContext() { return ctx; } captureStream() { return new Stream([track("video")]); } }
-  globalThis.document = { hidden: false, createElement: () => new Canvas(), addEventListener() {}, removeEventListener() {} };
+  globalThis.document = Object.assign(new EventTarget(), { hidden: false, createElement: () => new Canvas() });
   globalThis.HTMLCanvasElement = Canvas;
   globalThis.Image = class { naturalWidth = 200; naturalHeight = 300; set src(_) { queueMicrotask(() => this.onload?.()); } };
   globalThis.MediaStream = Stream;
@@ -93,4 +93,32 @@ test("녹화 도중 권한이 사라지면 파일을 반환하지 않고 소리�
   const result = exportShortFilm({ title: "합성 검증", cast: [], scene: { seconds: .03, cues: [] }, signal: controller.signal, canRead: () => allowed, checkAccess: async () => {}, getAudio: async () => new ArrayBuffer(8), onProgress: () => { allowed = false; } });
   await assert.rejects(result, { name: "AbortError" });
   assert(state.tracks.every((t) => t.stopped)); assert(state.contexts[0].closed);
+});
+
+for (const stage of ["권한 조회", "클립 다운로드"]) {
+  test(`${stage} 대기 중 화면을 떠나면 즉시 취소하고 돌아와도 늦은 응답으로 녹화를 시작하지 않는다`, async (t) => {
+    const state = browserDoubles(t), controller = new AbortController();
+    let release, reached, requestSignal;
+    const ready = new Promise((resolve) => { reached = resolve; });
+    const waiting = (signal) => { requestSignal = signal; reached(); return new Promise((resolve) => { release = resolve; }); };
+    const result = exportShortFilm({ title: "합성 검증", cast: [], scene: { seconds: 1, cues: [] }, signal: controller.signal, canRead: () => true,
+      checkAccess: stage === "권한 조회" ? waiting : async () => {}, getAudio: stage === "클립 다운로드" ? waiting : async () => new ArrayBuffer(8) });
+    await ready;
+    document.hidden = true; document.dispatchEvent(new Event("visibilitychange"));
+    document.hidden = false; document.dispatchEvent(new Event("visibilitychange"));
+    await assert.rejects(result, /화면을 벗어나/);
+    assert(requestSignal.aborted); assert.equal(controller.signal.aborted, false);
+    assert.equal(state.contexts[0].closed, true); assert.equal(state.recorders.length, 0);
+    release(stage === "클립 다운로드" ? new ArrayBuffer(8) : undefined); await Promise.resolve();
+    assert.equal(state.decoded, 0); assert.equal(state.recorders.length, 0);
+  });
+}
+
+test("이미 숨겨진 화면에서는 권한 조회나 녹화를 시작하지 않는다", async (t) => {
+  const state = browserDoubles(t), controller = new AbortController();
+  document.hidden = true;
+  let called = false;
+  await assert.rejects(exportShortFilm({ title: "합성 검증", cast: [], scene: { seconds: 1, cues: [] }, signal: controller.signal, canRead: () => true,
+    checkAccess: async () => { called = true; }, getAudio: async () => new ArrayBuffer(8) }), /화면을 벗어나/);
+  assert.equal(called, false); assert.equal(state.recorders.length, 0); assert(state.contexts[0].closed);
 });

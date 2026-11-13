@@ -863,7 +863,7 @@ function shortView() {
     share.disabled = Boolean(s.file && !navigator.canShare?.({ files: [s.file] }));
     progress.hidden = !exporting; progress.value = s.exportProgress || 0;
     const format = s.file?.type.startsWith("video/mp4") ? "MP4" : "WebM";
-    exportNote.textContent = s.exportError || (exporting ? "소리와 함께 만드는 중이에요. 이 화면을 유지해 주세요." : s.file ? `${format} 영상이 준비됐어요.${share.disabled ? " 저장한 뒤 다른 앱에서 공유할 수 있어요." : ""}` : !supported ? "이 브라우저는 영상 만들기를 지원하지 않아요." : "현재 장면을 소리와 함께 만들어요.");
+    exportNote.textContent = s.exportError || (exporting ? "소리와 함께 만드는 중이에요. 이 화면을 유지해 주세요." : s.file ? `${format} 영상이 준비됐어요.${share.disabled ? " 저장한 뒤 다른 앱에서 공유할 수 있어요." : ""}` : !supported ? "이 브라우저는 영상 만들기를 지원하지 않아요." : "현재 장면을 소리와 함께 만들어요.") + " 저장한 영상은 동의를 꺼도 기기에 남아요.";
     const cue = scene.cues.find((c) => c.start <= t && t < c.end);
     const spoken = cue?.text || "";
     if (caption.textContent !== spoken) caption.textContent = spoken;
