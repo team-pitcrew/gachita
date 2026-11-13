@@ -524,8 +524,9 @@ class MainActivity : ComponentActivity() {
                     Text("${o.stop?.spoken}에 들를까요?", fontSize = 36.sp, fontWeight = FontWeight.Bold)
                     Text(listOf(distanceLabel(o.meters, o.seconds), "부탁 ${o.requests.size}건").filter { it.isNotEmpty() }.joinToString(" · "), color = c.onSurfaceVariant)
                     Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                        Button({ accept(o) }, Modifier.heightIn(min = 72.dp)) { Text("경유지로 추가", fontSize = 26.sp) }
-                        OutlinedButton({ later(o) }, Modifier.heightIn(min = 72.dp)) { Text("나중에", fontSize = 26.sp) }
+                        // 그린 뒤에 묶인 부탁이 빠지지 않게 누른 때의 제안으로 부른다
+                        Button({ offer?.let(::accept) }, Modifier.heightIn(min = 72.dp)) { Text("경유지로 추가", fontSize = 26.sp) }
+                        OutlinedButton({ offer?.let { later(it) } }, Modifier.heightIn(min = 72.dp)) { Text("나중에", fontSize = 26.sp) }
                     }
                 }
                 Offer.Stage.FINDING -> {}
