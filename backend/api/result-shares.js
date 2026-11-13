@@ -16,8 +16,9 @@ export async function createShare(client, trip, caller, b) {
   if (typeof b.caption !== "string" || !b.caption.isWellFormed() || b.caption.includes("\0") || b.caption.trim().length > 500) fail(400, "문구는 500자 이내로 확인해 주세요");
   if (typeof b.momentId !== "string" || b.momentId.length > 40) fail(400, "공유할 장면을 골라 주세요");
   const ids = [caller.profileId, ...recipients.map((p) => p.profileId)];
-  const people = await profilesDb().query("SELECT id FROM profiles WHERE id = ANY($1::uuid[])", [ids]);
+  const people = await profilesDb().query("SELECT id, managed_by FROM profiles WHERE id = ANY($1::uuid[])", [ids]);
   if (new Set(people.rows.map((p) => p.id)).size !== new Set(ids).size) fail(404, "삭제된 참가자 프로필이 있어요");
+  if (people.rows.some((p) => p.managed_by)) fail(403, "자기 프로필로 직접 참가한 사람끼리만 공유할 수 있어요");
   const { rows: albums } = await profilesDb().query("SELECT at, label, lat, lng FROM profile_moments WHERE profile_id = $1 AND id = $2 AND trip_code = $3", [caller.profileId, b.momentId, trip.code]);
   const album = albums[0] ?? fail(404, "내 앨범에 없는 장면");
   if (b.includeLocation && (album.lat === null || album.lng === null)) fail(400, "이 장면에는 위치 정보가 없어요");
@@ -54,7 +55,7 @@ export async function sharedResults(me, method, id) {
   );
   if (!rows.length) return [200, { items: [] }];
   const ids = [...new Set(rows.flatMap((r) => [r.sender_id, ...r.recipient_ids]))];
-  const { rows: people } = await profilesDb().query("SELECT id, name, character FROM profiles WHERE id = ANY($1::uuid[])", [ids]);
+  const { rows: people } = await profilesDb().query("SELECT id, name, character FROM profiles WHERE id = ANY($1::uuid[]) AND managed_by IS NULL", [ids]);
   const byId = new Map(people.map((p) => [p.id, p]));
   const { rows: albums } = await profilesDb().query("SELECT id, profile_id, trip_code FROM profile_moments WHERE profile_id = ANY($1::uuid[]) AND id = ANY($2::text[])", [rows.map((r) => r.sender_id), rows.map((r) => r.moment_id)]);
   const sources = new Set(albums.map((r) => `${r.profile_id}/${r.trip_code}/${r.id}`));

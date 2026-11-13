@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { before, after, test } from "node:test";
 import pg from "pg";
 import { migrate, server } from "./server.js";
-import { endStores, tripsDb } from "./db.js";
+import { endStores, profilesDb, tripsDb } from "./db.js";
 import { captureLog } from "./log.js";
 
 let base, adminUrl, names;
@@ -133,4 +133,13 @@ test("원본 앨범·프로필 삭제와 만료 후에는 공유가 사라지고
   assert.equal((await expired.share()).status, 404);
   await tripsDb().query("DELETE FROM trips WHERE code = $1", [expired.trip.code]);
   assert.equal((await tripsDb().query("SELECT count(*)::int AS n FROM result_shares WHERE trip_code = $1", [expired.trip.code])).rows[0].n, 0);
+});
+
+test("옛 그룹의 관리 대상 프로필은 수신·회수할 자기 프로필 토큰이 없어 공유 대상에서 제외한다", async () => {
+  const f = await fixture();
+  await profilesDb().query("UPDATE profiles SET managed_by = $1 WHERE id = $2", [f.people[0].id, f.people[1].id]);
+  assert.equal((await f.share()).status, 403);
+  await profilesDb().query("UPDATE profiles SET managed_by = NULL WHERE id = $1", [f.people[1].id]);
+  await profilesDb().query("UPDATE profiles SET managed_by = $1 WHERE id = $2", [f.people[2].id, f.people[0].id]);
+  assert.equal((await f.share()).status, 403);
 });
