@@ -65,7 +65,8 @@ push: e2e ## E2E를 통과한 뒤 이미지를 GHCR에 올린다(gh 로그인 �
 	@echo "올림: $(IMAGE):$(TAG)  다음: make deploy-tag TAG=$(TAG)"
 
 deploy-tag: ## dev 환경이 쓸 이미지 태그를 TAG로 바꾼다. 이 변경을 PR로 올리면 Argo CD가 내보낸다
-	perl -pi -e 's/^(\s*newTag:\s*)\S+/$${1}$(TAG)/' $(OVERLAY)
+	# 따옴표로 감싼다: 숫자로만 된 태그(예: 473634496576)를 YAML이 숫자로 읽어 kustomize가 깨지지 않게
+	perl -pi -e 's/^(\s*newTag:\s*)\S+/$${1}"$(TAG)"/' $(OVERLAY)
 	@grep -n "newTag" $(OVERLAY)
 
 # ---- 티켓: 브랜치와 PR을 규칙대로 만든다. 상태와 라벨은 GitHub에서 자동으로 옮겨진다 ----
