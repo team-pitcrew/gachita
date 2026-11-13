@@ -1,27 +1,20 @@
 # AWS·Cloudflare 자원 (Terraform)
 
-K3s 서버 한 대와 그 주변 자원, 그리고 가장자리(Cloudflare Tunnel과 `gachita.mangowhois.ai` 레코드)를 만듭니다. **2026-11-13 기준으로 아무것도 만들지 않았습니다.** `terraform apply`는 비용이 생기므로 지환님이 승인한 때에만 실행합니다. 클러스터를 세우는 단계는 [`backend/infra/cluster`](../cluster/README.md), 그 위에 올리는 것은 [`backend/infra/gitops`](../gitops/README.md)에 있습니다. 결정은 [ADR-0012](../../../docs/adr/0012-cluster-build-and-node-size.md).
+묶음이 셋입니다. 펴고 접는 순서와 확인은 [`../infra.sh`](../infra.sh)(`infra` 워크플로)가 맡습니다. 결정은 [ADR-0012](../../../docs/adr/0012-cluster-build-and-node-size.md)(구축·노드), [ADR-0016](../../../docs/adr/0016-slo-capacity-single-postgres.md)(기본 배치), [ADR-0017](../../../docs/adr/0017-alb-by-controller-and-fold-order.md)(ALB 컨트롤러·펴기 순서). 클러스터를 세우는 단계는 [`backend/infra/cluster`](../cluster/README.md), 그 위에 올리는 것은 [`backend/infra/gitops`](../gitops/README.md)에 있습니다.
 
-## 만드는 것 (AWS 28개 + Cloudflare 3개와 SSM 값 1개)
+| 묶음 | 폴더(상태 키) | 만드는 것 | 접을 때 |
+|---|---|---|---|
+| 계정 | `account/`(`account/`) | GitHub OIDC 역할 둘(계획·적용), 권한 경계 `gachita-workload-boundary` | 남김. 사람이 로컬 자격으로 한 번 |
+| 남는 묶음 | `persist/`(`persist/`) | 데이터 버킷(백업, 공개 차단·버전·암호화), 발급자 버킷과 발급자 문서, 서비스 주소의 ACM 인증서와 검증 레코드, Cloudflare 요청 수 제한 | 남김. 다시 펼 때 다시 만들지 않음 |
+| 접는 묶음 | 이 폴더(`dev/`) | VPC `10.10.0.0/16`, 공개 서브넷 둘(ALB용 태그), 인터넷 게이트웨이, S3 엔드포인트, 노드 보안 그룹, EC2 `t4g.large` 한 대, 서버 역할, 서비스 계정 OIDC 제공자와 파드 역할 셋(`ssm-reader`, `pg`, `alb-controller`), ALB가 있을 때만 Cloudflare `gachita` 레코드 | 지움 |
 
-| 자원 | 내용 |
-|---|---|
-| 네트워크 | VPC `10.10.0.0/16`(K3s 파드 `10.42.0.0/16`·서비스 `10.43.0.0/16`과 겹치지 않게), 공개 서브넷 하나, 인터넷 게이트웨이, S3 게이트웨이 엔드포인트(비용 없음) |
-| 보안 그룹 | **들어오는 규칙 없음.** 웹은 Cloudflare Tunnel(서버가 밖으로 연결), 관리는 SSM 세션과 포트 포워딩. `admin_cidrs`를 채우면 6443만 그 주소에 열림 |
-| 서버 | EC2 `t4g.large`(ARM, 8 GiB), 우분투 24.04, 암호화한 gp3 40 GB, IMDSv2만·홉 1(파드는 서버 역할에 못 닿음), 자동 복구, 공인 IPv4(나가는 길만. 고정 IP 없음) |
-| 서버 역할 | SSM 세션, 배포 키 읽기(`/gachita/dev/bootstrap/*`), 발급자 공개 키 올리기 |
-| 파드 역할 | 서비스 계정 OIDC 제공자 + `ssm-reader`(External Secrets), `pg-trips`, `pg-profiles`(자기 백업 접두사만). 모두 권한 경계 `gachita-workload-boundary`(ADR-0011) |
-| 버킷 | 데이터(백업·클립, 공개 차단, 버전 관리, 암호화, 지난 버전 30일 뒤 삭제), 발급자(공개 키 두 파일만 공개) |
-| Cloudflare | 원격 관리 터널 `gachita-dev`, 터널 경로(`gachita.mangowhois.ai` → `traefik.edge`), `gachita` CNAME(프록시). 영역의 다른 레코드는 가져오지 않음. 터널 토큰은 SSM `/gachita/dev/tf/cloudflare-tunnel-token` |
-| 첫 부팅 | 구축 도구만 깔고 `ansible-pull`로 [`backend/infra/cluster/site.yml`](../cluster/site.yml)의 7단계를 돌림 |
-
-- 관리형 쿠버네티스, 관리형 DB, CloudFront, ALB, NAT는 쓰지 않습니다. LB를 두지 않는 이유는 [ADR-0013](../../../docs/adr/0013-network-edge-and-isolation.md).
-- Cloudflare 계정·영역 번호(저장소 변수 `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_ZONE_ID`)가 비어 있으면 Cloudflare 쪽은 만들지 않습니다.
-- 한 대뿐이라 서버가 죽으면 서비스가 멈춥니다. 하드웨어 장애는 EC2 자동 복구가 같은 서버로 되살리고, 서버를 새로 만들면 클러스터는 Git에서, 데이터는 S3 백업에서 되살립니다.
+- **ALB는 Terraform이 만들지 않습니다.** 클러스터의 AWS Load Balancer Controller가 Gateway를 보고 만들고 지웁니다(이름 `gachita-dev`, 태그 `Project=gachita`, `elbv2.k8s.aws/cluster=gachita-dev`). 그래서 접을 때는 Terraform보다 먼저 클러스터에서 Gateway를 지웁니다(`infra.sh down`). 레코드는 이 태그로 ALB를 찾았을 때만 생기므로 펴기는 이 폴더를 두 번 적용합니다(두 번째에 레코드).
+- 노드 보안 그룹의 들어오는 규칙은 Terraform이 묶어 들지 않습니다. 컨트롤러가 더하는 'ALB → NodePort' 규칙을 다음 적용이 지우지 않게 하려는 것입니다. SSH·웹 포트는 열지 않고 관리는 SSM입니다.
+- 관리형 쿠버네티스, 관리형 DB, NAT, 사설 서브넷은 쓰지 않습니다(ADR-0016의 기본 배치).
 
 ## 비용 어림
 
-서울 리전, 한 달 내내 켜 둘 때(AWS 가격표 API로 2026-11-13 확인): t4g.large $60.7(시간당 $0.0832) + gp3 40 GB $3.6 + 공인 IPv4 $3.6 + S3·전송 $1 안팎 ≈ **월 $69, 하루 $2.3.** Cloudflare 무료 요금제 안에서 씁니다. t4g는 버스트형이라 CPU를 기준(0.6 vCPU)보다 오래 쓰면 vCPU·시간당 $0.04가 더 붙습니다. 쓰지 않을 때는 아래 '내리기'로 지웁니다.
+서울 리전, 한 달 내내 켜 둘 때(AWS 가격표 API, 2026-11-13): t4g.large $60.7 + gp3 40 GB $3.6 + 서버 공인 IPv4 $3.6 + ALB $16.4(시간당 $0.0225) + ALB 공인 IPv4 둘 $7.3 + LCU 몇 달러 + S3·전송 $1 안팎 ≈ **월 $95, 하루 $3.1.** Cloudflare 무료 요금제 안에서 씁니다. 쓰지 않을 때는 `infra.sh down`으로 접으면 남는 묶음(버킷, 인증서)만 남아 월 $1 안팎입니다.
 
 ## 처음 한 번 (사람이 로컬 자격으로)
 
@@ -29,10 +22,10 @@ AWS 열쇠는 저장소와 서버에 두지 않습니다. GitHub Actions는 OIDC
 
 | 순서 | 무엇 | 누가 | 상태 |
 |---|---|---|---|
-| 1 | 상태 버킷 `gachita-tfstate-<계정>` | 사람, AWS CLI | 상태를 둘 곳이 있어야 Terraform을 시작할 수 있음 |
-| 2 | `account/`: GitHub OIDC 제공자, 계획 역할(PR), 적용 역할(develop), 권한 경계 | 사람, 로컬 Terraform | CI 역할은 이 폴더를 고치지 못함 |
-| 3 | 저장소 변수 셋 | 사람, `gh variable set` | 이때부터 PR에서 계획이 돎 |
-| 4 | 본 설정(이 폴더) | GitHub Actions, 수동 실행 | 승인 뒤에만 |
+| 1 | 상태 버킷 `gachita-tfstate-<계정>` | 사람, AWS CLI | 2026-11-13 만듦(721622471953) |
+| 2 | `account/`: 계획 역할(PR), 적용 역할(develop), 권한 경계. GitHub OIDC 제공자는 이 계정에 이미 있어 읽기만 | 사람, 로컬 Terraform | 2026-11-13 적용(자원 6개). CI 역할은 이 폴더를 고치지 못함 |
+| 3 | 저장소 변수 셋 | 사람, `gh variable set` | 아직. 넣으면 PR에서 계획이 돎 |
+| 4 | 남는 묶음과 접는 묶음 | `infra` 워크플로(develop) 또는 로컬 `infra.sh` | 펴기·접기 |
 
 ```sh
 # 1. 상태 버킷(이름은 계정마다 달라야 함). 버전 관리를 켜 두면 상태를 잘못 써도 되돌릴 수 있다
@@ -40,6 +33,8 @@ ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
 aws s3api create-bucket --bucket gachita-tfstate-$ACCOUNT --region ap-northeast-2 \
   --create-bucket-configuration LocationConstraint=ap-northeast-2
 aws s3api put-bucket-versioning --bucket gachita-tfstate-$ACCOUNT --versioning-configuration Status=Enabled
+aws s3api put-public-access-block --bucket gachita-tfstate-$ACCOUNT --public-access-block-configuration \
+  BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
 aws s3api put-bucket-tagging --bucket gachita-tfstate-$ACCOUNT --tagging 'TagSet=[{Key=Project,Value=gachita},{Key=ManagedBy,Value=cli}]'   # 같이 쓰는 계정이라 우리 것임을 태그로
 sed "s/<계정 ID>/$ACCOUNT/" backend.hcl.example > backend.hcl     # 커밋하지 않는다(.gitignore)
 
@@ -69,59 +64,40 @@ GitHub Actions의 역할 둘:
 
 ```sh
 gh secret set GHCR_PULL_TOKEN      -R team-pitcrew/gachita    # 클래식 토큰, 권한 read:packages 하나
-gh secret set ARGOCD_DEPLOY_KEY    -R team-pitcrew/gachita < gachita-deploy   # 승인 뒤: ssh-keygen -t ed25519 -f gachita-deploy -N '' , 공개 키는 Deploy keys에 읽기 전용
+gh secret set ARGOCD_DEPLOY_KEY    -R team-pitcrew/gachita < gachita-deploy   # 저장소 읽기 자격(아래 주의)
 gh secret set GOOGLE_CLIENT_ID     -R team-pitcrew/gachita    # 없어도 서버는 뜸
 gh secret set GOOGLE_CLIENT_SECRET -R team-pitcrew/gachita
-gh secret set CLOUDFLARE_API_TOKEN -R team-pitcrew/gachita    # 계정 Cloudflare Tunnel 편집 + mangowhois.ai DNS 편집
-gh variable set CLOUDFLARE_ACCOUNT_ID -R team-pitcrew/gachita --body <계정 번호>
-gh variable set CLOUDFLARE_ZONE_ID    -R team-pitcrew/gachita --body <mangowhois.ai 영역 번호>
+gh secret set CLOUDFLARE_API_TOKEN -R team-pitcrew/gachita    # mangowhois.ai: DNS 편집, 영역 WAF(요청 수 제한 규칙) 편집
+gh variable set CLOUDFLARE_ZONE_ID -R team-pitcrew/gachita --body <mangowhois.ai 영역 번호>
 gh workflow run infra-secrets -R team-pitcrew/gachita --ref develop   # GitHub 비밀 값 → SSM
 ```
 
+- **저장소 읽기 자격:** 이 저장소는 조직 설정으로 배포 키가 막혀 있습니다(2026-11-13, GitHub가 `Deploy keys are disabled for this repository`로 거절). 조직에서 배포 키를 허용하거나, 다른 읽기 자격(GitHub App, 저장소 하나만 읽는 토큰)을 정해야 서버와 Argo CD가 저장소를 읽습니다. 지금 코드는 SSH 배포 키를 씁니다.
+- Cloudflare 영역의 SSL/TLS 모드는 Full(strict)이어야 합니다. ALB는 443만 엽니다(영역 전체 설정이라 Terraform이 바꾸지 않음).
+
 ## 만들기 전에 (develop에 병합해 둘 것)
 
-서버는 뜨자마자 develop의 `backend/infra/gitops`를 그대로 올립니다. 아래 둘이 맞지 않으면 물결 2(SSM 저장소)나 물결 4(이미지)에서 멈추므로, Terraform이 서버를 만들기 전에 확인하고 맞지 않으면 계획에서 멈춥니다(`compute.tf`의 precondition).
+서버는 뜨자마자 develop의 `backend/infra/gitops`를 그대로 올립니다. 계정 번호(역할 ARN, 버킷 이름)는 계정마다 한 번 채워 둡니다(T27에서 채움). API 이미지 태그가 `unreleased`면 Terraform이 서버를 만들기 전에 멈춥니다(`compute.tf`의 precondition).
+
+## 펴기와 접기
 
 ```sh
-# 1. 계정 번호 자리 표시(000000000000)를 이 계정 번호로. 역할 ARN과 버킷 이름에 쓰인다
-backend/infra/gitops/fill-account.sh                 # 지금 aws 자격의 계정. 번호를 직접 줄 수도 있음
-# 2. 클러스터가 받을 API 이미지 태그(GHCR에 올라가 있어야 함)
-make push && make deploy-tag TAG=<올린 태그>          # 지금 값은 c74a82915936(11/13, 병합 때 자동으로 올라감)
-# 3. 이 변경을 PR로 develop에 병합
+gh workflow run infra -R team-pitcrew/gachita --ref develop -f action=up     # 펴기. 실행하는 것이 비용 승인
+gh workflow run infra -R team-pitcrew/gachita --ref develop -f action=down   # 접기
+# 로컬에서(같은 스크립트): 상태 버킷과 AWS 자격, 고를 것은 Cloudflare 토큰·영역 번호, 병합 전 브랜치
+TF_STATE_BUCKET=gachita-tfstate-<계정> backend/infra/infra.sh up
 ```
 
-## 만들기와 그 뒤
+| 펴기(`up`) | 접기(`down`) |
+|---|---|
+| 1 남는 묶음 적용(보통 바뀔 것 없음) | 1 마지막 전체 백업(`Backup` 완료까지) |
+| 2 접는 묶음 적용 → 서버 첫 부팅이 구축 7단계 | 2 뿌리 앱 자동 동기화를 끄고 `edge` 앱 지움 → 컨트롤러가 ALB·대상 그룹·보안 그룹을 지움 |
+| 3 SSM으로 단계 기록 파일 `7-verify.done`을 기다림 | 3 ALB가 사라졌는지(남으면 클러스터 태그로 지움) |
+| 4 ALB `gachita-dev`가 active | 4 접는 묶음 destroy(레코드 포함). 컨트롤러의 보안 그룹이 VPC를 막으면 지우고 다시 |
+| 5 접는 묶음 한 번 더 → 레코드 | 5 `Project=gachita` EC2·ELB가 남지 않았는지 |
+| 6 ALB 대상 건강, `https://gachita.mangowhois.ai/healthz` | |
 
-```sh
-gh workflow run terraform -R team-pitcrew/gachita --ref develop -f apply=true   # 승인 뒤에만. 계획을 본 다음 적용
-# 서버가 뜨면 첫 부팅 스크립트가 7단계를 돈다(30분 안팎). 진행은:
-aws ssm start-session --region ap-northeast-2 --target <instance-id>          # terraform output ssm_session
-sudo tail -f /var/log/gachita/bootstrap.log; ls /var/lib/gachita/bootstrap      # 끝난 단계
-curl -fsS https://gachita.mangowhois.ai/healthz                                 # 밖에서 확인
-```
-
-올린 뒤 확인할 순서와 명령은 [`backend/infra/cluster/README.md`](../cluster/README.md#올린-뒤-확인).
-
-## 내리기
-
-```sh
-# 1. 백업을 남길지 정한다. 데이터 버킷은 비어 있지 않으면 terraform destroy가 지우지 못한다(일부러: 백업 보호)
-#    남김: 버킷만 Terraform 관리에서 뺀다
-terraform state list | grep 'aws_s3_bucket.*\.data' | xargs -n1 terraform state rm
-#    지움: AWS 콘솔 → S3 → gachita-dev-<계정> → '비우기'(지난 버전까지 지움) 뒤 다음 단계
-# 2. 나머지를 지운다(발급자 버킷은 공개 키뿐이라 비우고 지우게 해 둠).
-#    워크플로가 아니라 로컬에서 지울 때는 Cloudflare 값이 환경에 있어야 한다(없으면 터널·레코드를 읽지 못해 멈춤)
-export CLOUDFLARE_API_TOKEN=<토큰> TF_VAR_cloudflare_account_id=<계정 번호> TF_VAR_cloudflare_zone_id=<영역 번호>
-terraform init -backend-config=backend.hcl && terraform destroy
-# 3. 터널 경로 설정은 'Terraform이 지우지 못한다'고 경고하지만 터널을 지우면 함께 사라진다. Cloudflare 대시보드에서 터널과 gachita 레코드가 없는지, 메일 레코드가 그대로인지 본다
-# 4. 남은 것이 없는지 태그로 확인한다(같이 쓰는 계정이라 다른 프로젝트 것은 건드리지 않았는지도 함께 본다)
-aws resourcegroupstaggingapi get-resources --region ap-northeast-2 --tag-filters Key=Project,Values=gachita \
-  --query 'ResourceTagMappingList[].ResourceARN' --output text           # 데이터 버킷(남긴 경우)과 상태 버킷만 남아야 함
-aws iam list-roles --query "Roles[?starts_with(RoleName,'gachita-')].RoleName" --output text   # account/의 gachita-github-* 둘만
-# 5. account/(OIDC 역할)는 남겨도 비용이 없다. 지우려면 terraform -chdir=account destroy(GitHub 제공자는 읽기만 해서 지우지 않음), 상태 버킷은 마지막에
-```
-
-Terraform은 상태에 든 것만 지웁니다. 적용 역할도 `Project=gachita` 태그와 `gachita-*` 이름이 맞는 자원만 고치고 지울 수 있습니다(ADR-0011의 '같이 쓰는 계정에서 남는 길').
+다시 펼 때 데이터 버킷에 Postgres 전체 백업이 있으면 구축 6단계가 복구로 폅니다(T52). 적용 역할도 `Project=gachita` 태그와 `gachita-*` 이름이 맞는 자원만 고치고 지울 수 있습니다(ADR-0011).
 
 ## 확인한 것
 
