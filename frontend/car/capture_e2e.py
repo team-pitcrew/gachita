@@ -47,7 +47,6 @@ TALK = [
     ("아빠", "다음 주에는 할머니 댁에도 들르자."), ("엄마", "할머니 드릴 감귤 한 상자 사 가자."),
     ("딸", "나 깼어. 바다 보여?"), ("아빠", "저기 오른쪽 봐. 바다 보인다."),
 ]
-BLOCKED = ("엄마", "이 말은 막힌 동안 넣어서 적히면 안 돼요")
 AFTER = ("아빠", "마이크가 다시 열렸으니 이 말은 적혀야 해")
 AGAIN = ("딸", "앱을 다시 켜도 순번이 이어져야 해")
 
@@ -251,7 +250,7 @@ def main(apk, minutes):
     threading.Thread(target=logcat, daemon=True).start()
     inj = Injector()
     drive = fixture("drive", TALK, seconds=minutes * 60)
-    for name, line in (("blocked", BLOCKED), ("after", AFTER), ("again", AGAIN)): fixture(name, [line], tail=4.0)
+    for name, line in (("after", AFTER), ("again", AGAIN)): fixture(name, [line], tail=4.0)
     offset = clock_offset()
     note("apk", sha256=e2e.hashlib.sha256(open(apk, "rb").read()).hexdigest(), size=pathlib.Path(apk).stat().st_size)
     note("install", out=subprocess.run(ADB + ["install", "--user", "10", "-r", "-g", apk], capture_output=True, text=True).stdout.strip()[-200:])
@@ -299,18 +298,19 @@ def main(apk, minutes):
     shot("04-app-park-heard"); ui = texts(); note("ui", texts=ui)
     last = got[-1]["text"] if got else "?"
     check("P에서 기록 중과 방금 받아 적은 말이 보임", "● 기록 중" in ui and any(last in t for t in ui), last=last)
-    # 4. 마이크 막기: 녹음 중에 시스템이 우리 녹음을 막게 한다(앱 권한 ops). 화면 뒤 막힘을 대신하는 방법이다
+    # 4. 마이크 막기: 녹음 중에 시스템이 우리 녹음을 막게 한다(앱 권한 ops). 화면 뒤 막힘을 대신하는 방법이다.
+    #    막힌 동안에는 소리를 넣지 않는다. 에뮬레이터가 소리를 당겨 가지 않으면 넣기가 끝나지 않을 수 있다
     adb("shell", "appops", "set", "--user", "10", PKG, "RECORD_AUDIO", "ignore"); t_block = time.time()
     ui = wait_texts(lambda u: "기록 멈춤" in u, 8); shot("05-blocked"); note("ui", texts=ui)
     why = [c["line"] for c in capture_log if "BLOCKED" in c["line"]]
     check("마이크가 막히면 기록 멈춤", "기록 멈춤" in ui, after_s=round(time.time() - t_block, 1), log=why)
-    n0 = len(outbox(code)); inj.play("blocked"); time.sleep(3)
+    n0 = len(outbox(code)); time.sleep(3)
     adb("shell", "appops", "set", "--user", "10", PKG, "RECORD_AUDIO", "allow")
     ui = wait_texts(lambda u: "● 기록 중" in u, 10); shot("06-unblocked"); note("ui", texts=ui)
     check("막힘이 풀리면 기록 중", "● 기록 중" in ui)
     inj.play("after"); time.sleep(3)
     new = outbox(code)[n0:]
-    check("막힌 동안 넣은 말은 적히지 않고, 풀린 뒤의 말은 적힘", not any("막힌" in g["text"] for g in new) and any(edits(norm(AFTER[1]), norm(g["text"])) <= 4 for g in new), got=[g["text"] for g in new])
+    check("풀린 뒤에 넣은 말은 다시 적힘", any(edits(norm(AFTER[1]), norm(g["text"])) <= 4 for g in new), got=[g["text"] for g in new])
     # 5. 동의 끄기: 바로 멈추고 마이크를 놓는다
     t_off = time.time(); tap_switch()
     gone = None
