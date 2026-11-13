@@ -2,6 +2,8 @@
 
 [T19](https://github.com/team-pitcrew/gachita/issues/25) · [T42 문구정리본 반영](https://github.com/team-pitcrew/gachita/issues/60) · 폰 웹앱의 프로필, 동승 연결 QR과 기록 동의, 구글 OAuth와 현대 계정을 구분하는 화면 명세
 
+[개편 시안(11/14)](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=0-1)의 폰 P1~P8(390 × 844)이 이 문서의 화면입니다. P2 '그룹 초대'와 P3 '자리 고르기'는 11/14 결정 전 그림이라 이 문서의 4절이 앞섭니다.
+
 ## 목적
 
 가족과 동승자가 로그인 없이도 이름과 얼굴(캐릭터나 사진)을 정해 두고, 차에 탈 때는 폰의 동승 연결 QR을 차에 보여 여행에 들어와 각자 기록 동의를 고르게 합니다. 여행 코드나 초대 코드는 입력하지 않습니다. 가족을 따로 묶는 그룹도 두지 않고, 같은 차에 탄 기록으로만 이어집니다(11/14 결정, [ADR-0009](../../docs/adr/0009-family-group-and-qr-invite.md)의 그룹·QR 초대를 대신함). 첫 고객은 어린 자녀와 이동하는 부모입니다(기준 문서 11/13).

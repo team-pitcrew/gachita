@@ -81,6 +81,8 @@
 
 ### 피그마와 확인 수준
 
+[개편 시안(11/14)](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=0-1)의 [P7 기록본](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=6-581)과 [P8 9:16 숏폼](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=6-651)이 4절의 화면입니다.
+
 [T17 도착 후 Portrait](https://www.figma.com/design/Qc58INq2ECd1ODzzmM7Nja?node-id=2-78)·[Landscape](https://www.figma.com/design/Qc58INq2ECd1ODzzmM7Nja?node-id=2-79)와 [추가 상태](https://www.figma.com/design/Qc58INq2ECd1ODzzmM7Nja?node-id=22-248)는 12개 차량 앱 창의 도착 후 진입·결과 준비 중·결과 없음 상태를 인수하는 기준입니다. 해당 파일의 120개 프레임은 T17 차량 화면 범위입니다. T18의 폰 후보 편집·지도 상세·공유 화면과 4절의 피드·숏폼은 피그마에 없고, 이 문서의 흐름을 기준으로 연결합니다.
 
 이 문서는 저장소 코드·API 명세와 제출된 T12 설계를 대조한 화면 명세입니다. 후보 생성·자막 편집·클립 재생·공유를 실제 서비스, 폰, 차량 에뮬레이터 또는 실차에서 실행해 확인한 자료는 아닙니다.
