@@ -1,57 +1,132 @@
-# 시안과 화면 토큰
+# 디자인 시스템과 시안
 
-[T20](https://github.com/team-pitcrew/gachita/issues/29) · 피그마 시안이 어디까지인지, 색·글자 토큰의 기준이 어디인지, 한국형 UI 기준에 대 본 결과를 적습니다. 화면이 무엇을 하는지는 [화면 문서](../frontend/spec/README.md)가 기준입니다.
+[T20](https://github.com/team-pitcrew/gachita/issues/29) · 화면이 **어떻게 보이는지**의 기준입니다. 화면이 **무엇을 하는지**는 [화면 문서](../frontend/spec/README.md)가 기준이고, 둘이 다르면 동작은 화면 문서를 따릅니다.
 
-## 피그마 시안
+이 문서의 원칙·캐릭터·색은 11/14 03시 지환님이 정한 '디자인 1급 문서'(저장소 밖 작업 공간, 시안·웹·차가 따르는 기준)를 저장소에 옮긴 것입니다. 원본 캐릭터 그림은 저장소에 넣지 않고 앱이 쓰는 잘라 낸 조각만 넣습니다.
+
+## 1. 원칙
+
+- **먹선과 파스텔.** 테두리 없는 흰 카드 위에 먹색 글자, 강조는 파스텔 바탕. 캐릭터가 선 그림이라 카드에는 선을 두르지 않습니다.
+- **한 화면에 한 가지 일.** 주 단추만 상징색, 칩 선택은 먹색, 숫자·진행은 먹색. 이모지와 이름 글자 얼굴은 쓰지 않습니다([한국형 UI 기준](https://github.com/vmc-inner-circle/k-style-ui-ux/blob/68afa2e/plugins/k-style-ui-ux/core/references/principles.md)).
+- **차 주행 화면은 Pleos 가이드가 먼저.** 글자 24sp 이상(결정할 글자는 32sp), 움직이거나 깜박이는 표시 없음, 말하는 사람은 그 자리 캐릭터에 링 하나([Pleos 주행 안전 가이드](https://document.pleos.ai/docs/pleos-only/vehicle-app-planning-guide/driver-distraction-guideline)). 폰의 골격(하단 고정 단추 등)은 차에 대지 않습니다.
+- **말투는 해요체.** 문구는 화면 문서의 '문구' 표 그대로 씁니다.
+
+## 2. 캐릭터: 원본 '말랑' 10종
+
+사람의 얼굴(프로필, 피드), 차의 말하는 사람 강조, 숏폼의 말한 사람 표시에 같은 그림을 씁니다. 그림은 원본 시트에서 잘라 쓰고 **다시 그리지 않습니다**(선, 표정, 소품, 카드 바탕색을 바꾸지 않음).
+
+| 값(API `character`) | 이름 | 소품 | 카드 바탕 |
+|---|---|---|---|
+| `basic` | 기본 | 손 흔들기 | 라벤더 |
+| `cap` | 캡모자 | 뒤로 쓴 캡 | 꿀 |
+| `glasses` | 안경 | 동그란 안경, 책 | 장미 |
+| `travel` | 여행 | 버킷햇, 배낭 | 민트 |
+| `game` | 게임 | 헤드폰, 게임패드 | 하늘 |
+| `sport` | 운동 | 머리띠, 땀방울 | 민트 |
+| `pet` | 반려동물 | 고양이 | 하늘 |
+| `camping` | 캠핑 | 버킷햇, 랜턴 | 꿀 |
+| `office` | 직장인 | 넥타이, 노트북 | 라벤더 |
+| `healing` | 힐링 | 수면 모자 | 장미 |
+
+- **얼굴:** 사진, 없으면 캐릭터, 없으면 `basic`. 큰 캐릭터를 원 안에 잘라 쓰고, 원본처럼 작은 캐릭터가 오른쪽 아래에 조금 걸칩니다.
+- **옛 값:** `bunny` 등 동물 여섯은 `basic` 그림으로 보입니다. 서버는 20자 문자열만 받아 바꿀 것이 없습니다.
+- **차의 손님:** 캐릭터 값이 없어 자리 순서로 `basic`·`cap`·`glasses`·`travel`·`game`을 씁니다. 값이 오면 그 값.
+- **앱 마스코트**는 차 모양으로, 사람 캐릭터와 실루엣을 나눕니다(사람과 앱이 섞여 보이지 않게).
+- 캐릭터 조각은 원본 카드 바탕을 가지고 있어 어두운 화면에서도 밝은 스티커로 보입니다.
+
+## 3. 색
+
+**상징색은 민트 #60C090**입니다. 원본 시트의 '여행' 색이고, 차에서 초록은 '정상·듣는 중'으로 읽혀 기록 중 빨강과 확실히 갈립니다. 이전의 바이올렛 #5b47b0은 쓰지 않습니다. 바탕·글자는 [k-style-ui-ux](https://github.com/vmc-inner-circle/k-style-ui-ux)의 토큰 도구(`derive.py --brand "#60C090" --tone warm`)가 만든 따뜻한 미색·먹색입니다.
+
+| 토큰 | 밝은 | 어두운(밤·차) | 쓰는 곳 |
+|---|---|---|---|
+| `bg` | #F6F4F1 | #12110F | 화면 바탕 |
+| `surface` | #FFFFFF | #1C1A17 | 카드 |
+| `surface-2` | #F1EEE9 | #26231F | 묶음, 좌석 지도 |
+| `ink` | #28221B | #F4F1EC | 글자, 그림의 선 |
+| `ink-2` | #5A5044 | #B5ADA2 | 보조 글 |
+| `line` | #EDEAE6 | #34302A | 구분선 |
+| `accent-fill` | #60C090 | #6FD3A6 | 주 단추 바탕 |
+| `on-accent` | #28221B | #12110F | 민트 위 글자 |
+| `accent` | #2B7A53 | #7FDDB2 | 민트 글자·링·테두리 |
+| `accent-soft` | #E4F4EC | #1C3A2D | 고른 것·제안 바탕 |
+| `rec` | #B3261E | #FF8A80 | 기록 중 표시에만 |
+| `ok` | #2B7A53 | #7FDDB2 | 완료·반영(상징색과 같은 뜻: 잘 됐어요) |
+| `warn` | #8C6400 | #F5C766 | 기다림, 기록 잠시 멈춤 |
+| `tint-1`~`5` | #ECEAFB #FCF0D9 #FBE7EE #E4F4EC #E5F0FB | #2A2840 #3A3020 #3A2530 #1E3A2E #1F2F40 | 장면 카드 바탕(사람마다) |
+
+- **주 단추는 먹색 글자입니다.** 민트 바탕은 흰 글자와 대비가 2.2:1이라, 밝은 상징색의 예외로 글자를 먹색(`on-accent`, 7.1:1)으로 둡니다. 링·테두리·글자에는 짙은 민트(`accent`, 바탕 위 4.8:1)를 씁니다. 글자 대비는 모두 4.5:1 이상이고 웹은 `contrast.test.mjs`가 검사합니다.
+- **빨강은 기록 중에만.** 막힘·실패는 빨강 글자에 경고 아이콘을 더해 색만으로 전하지 않습니다.
+
+## 4. 글자와 모양
+
+| | 폰(웹) | 차(Compose) |
+|---|---|---|
+| 글꼴 | Pretendard(받지 못하면 기기 한글 글꼴) | 시스템 글꼴 |
+| 글자 크기 | 본문 17, 큰 제목 28, 작은 제목 20(px) | 20·24·28·32·36·44·56(sp) 일곱 단계. 주행 중 24 이상, 결정 글자 32 |
+| 모서리 | 카드 24, 단추·입력·칩 16, 배지·상태는 알약 | 카드 32, 단추 24 |
+| 누르는 곳 | 48px 이상 | 단추 64dp 이상, 스위치 48dp |
+
+한국어는 낱말 중간에서 줄을 바꾸지 않습니다(`word-break: keep-all`). 숫자·단계는 원본 시트의 번호처럼 동그란 배지로 씁니다.
+
+## 5. 화면별 구성(와이어프레임)
+
+시안은 [개편 · 차와 폰](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=0-1)에 있고, 들어오는 길과 문서 절은 [화면 지도](../frontend/spec/README.md)에 있습니다. 아래는 화면마다 첫눈에 가장 크게 둘 것과 주 조작입니다.
+
+| 화면 | 가장 크게 | 주 조작 | 주행 중 |
+|---|---|---|---|
+| C6 여행 만들기 | 같이 타는 가족 | 여행 만들기 | 안내 한 줄만 |
+| C5 출발 전 | 기록 동의와 동승자 | 동승자 추가, 기록 동의 켜기, 목소리 등록 | 숨김 |
+| C7 자리 고르기 | 읽은 사람의 얼굴과 이름, 빈자리 지도 | 빈자리 누르기(동의는 그 사람 폰에서) | 숨김 |
+| C1 기록 중 | 기록 상태, 좌석 지도와 말한 사람 링 | 기록 동의 끄기(한 번 누름) | 이 화면 |
+| C2 휴게소 제안 | '{휴게소}에 들를까요?'와 거리·시간 | 말로 답, 단추 둘 | 이 화면(답은 말로) |
+| C4 기록 잠시 멈춤 | '기록 잠시 멈춤 · 운전대 버튼을 누르세요'(기다림 색) | 없음(끝나면 저절로 돌아옴) | 이 화면 |
+| C3 도착 브리핑 | '{장소}에서 할 일' 목록 | 항목마다 완료 | 숨김(할 일 수만) |
+| P1 홈 | 내 얼굴과 이름 | 동승 연결 | |
+| P2 프로필 만들기 | 캐릭터 10종 | 저장(이름·캐릭터·사진) | |
+| P3 동승 연결 QR | QR과 남은 시간 | 새로 띄우기 | |
+| P4 탔어요·기록 동의 | '{자리}에 탔어요'와 동의 문구 | 동의해요 / 동의하지 않아요 | |
+| P5 여행 중 | 기록 상태와 챙길 부탁 | 부탁 남기기, 내 동의 끄기 | |
+| P6 부탁 남기기 | 자주 쓰는 부탁 | 남기기 | |
+| P7 기록본 | 장면과 대화(말한 사람 얼굴) | 장면 고르기, 숏폼 보기 | |
+| P8 숏폼 9:16 | 클립과 자막, 말한 사람 | 다시 보기, 닫기 | 차는 주차 중에만 |
+
+## 6. 구현 상태(11/14)
+
+| 무엇 | 웹 | 차 |
+|---|---|---|
+| 민트 토큰, 캐릭터 10종 조각 | 만드는 중([#175](https://github.com/team-pitcrew/gachita/pull/175): `style.css`, `chars/*.svg`) | 만드는 중(`Theme.kt`, `char_*.webp`, car-ui) |
+| 화면 구성(위 표) | 만드는 중(T46 동승 연결, T43 숏폼 [#185](https://github.com/team-pitcrew/gachita/pull/185)) | 말로 수락·도착 브리핑은 있음(에뮬레이터), 나머지는 만드는 중(T37·T41·T46) |
+
+develop에는 아직 이전 바이올렛 토큰과 동물 이모지가 남아 있습니다. 위 PR이 병합되면 이 표를 고칩니다.
+
+## 7. 피그마 시안
 
 | 파일 | 담은 것 | 기준 |
 |---|---|---|
-| [가치타 차량 화면](https://www.figma.com/design/Qc58INq2ECd1ODzzmM7Nja) | [기본 흐름](https://www.figma.com/design/Qc58INq2ECd1ODzzmM7Nja?node-id=2-73): 12개 앱 창 × 주행 중·정차·도착 후. [추가 상태 84개](https://www.figma.com/design/Qc58INq2ECd1ODzzmM7Nja?node-id=22-248): 기록 일시정지(운전자가 누름), 동의 대기, 내비 반영 대기·실패, 연결 끊김, 결과 준비 중·없음. 모두 120프레임 | 기획서 v4, T17([PR #54](https://github.com/team-pitcrew/gachita/pull/54)) |
-| [개편 · 차와 폰](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=0-1) | 차 9장: [C1 주행 중 기록과 말하는 사람 강조](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=2-2), [C2 휴게소 제안과 말로 수락](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=2-121), [C3 도착 브리핑](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=3-93), [C4 Gleo 쓰는 동안 기록 잠시 멈춤](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=3-537), [C5 출발 전](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=3-647), [C6 여행 만들기](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=3-1116), [C7 QR 읽은 뒤 자리 고르기](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=12-531)(1682 × 1210), [C1n](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=4-254)·[C2n](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=4-357)(841 × 1210). 폰 8장(390 × 844): P1 홈과 내 기록본 ~ [P8 9:16 숏폼](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=6-651). [근거 보드](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=8-512)(k-style-ui-ux, Android for Cars 등), [토큰 보드](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=8-598)(밝은·어두운) | 11/13 문구정리본, T20 개편(11/14, 지환 Pro 팀) |
+| [개편 · 차와 폰](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=0-1) | 차 9장: [C1 주행 중 기록과 말하는 사람 강조](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=2-2), [C2 휴게소 제안과 말로 수락](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=2-121), [C3 도착 브리핑](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=3-93), [C4 Gleo 쓰는 동안 기록 잠시 멈춤](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=3-537), [C5 출발 전](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=3-647), [C6 여행 만들기](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=3-1116), [C7 QR 읽은 뒤 자리 고르기](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=12-531)(1682 × 1210), [C1n](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=4-254)·[C2n](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=4-357)(841 × 1210). 폰 8장(390 × 844). [근거 보드](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=8-512), [토큰 보드](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=8-598) | 11/13 문구정리본, 11/14 디자인 1급 |
+| [가치타 차량 화면](https://www.figma.com/design/Qc58INq2ECd1ODzzmM7Nja) | 12개 앱 창 × 주행 중·정차·도착 후와 추가 상태, 120프레임(밝은 화면만) | 기획서 v4, T17([PR #54](https://github.com/team-pitcrew/gachita/pull/54)). 바이올렛 시절의 기록 |
 
-- v4 파일은 밝은 화면의 차 화면만 있습니다.
-- 11/13 뒤 흐름은 개편 파일에 있습니다. 말로 하는 수락과 도착 브리핑은 그보다 먼저 차 앱(Compose)에 만들어 에뮬레이터에서 확인했고, 목소리 등록·말하는 사람 강조·기록 잠시 멈춤은 구현 중입니다(T37, T41). 개편 시안을 따른 구현은 웹 [#175](https://github.com/team-pitcrew/gachita/pull/175)(열림)와 뒤이을 차 PR입니다.
-- 11/14 결정(폰의 동승 연결 QR을 차가 읽음, 그룹 없음, 자리는 차에서 고름)에 맞춰 같은 날 C5·C7과 폰 P1~P5를 고쳤습니다. 시안과 화면 문서([차량 화면](../frontend/spec/car.md), [프로필 화면](../frontend/spec/profile.md))가 다르면 화면 문서를 따릅니다.
+- 개편 파일은 11/14 결정(폰의 동승 연결 QR을 차가 읽음, 그룹 없음, 자리는 차에서 고름)에 맞춰 같은 날 C5·C7과 폰 P1~P5를 고쳤습니다.
 - 두 파일 모두 지환의 피그마 계정(개편 파일은 Pro 팀)에 있고, 팀원과 심사위원에게 보기 권한을 아직 주지 않았습니다.
 
-## 토큰의 기준
+## 8. 한국형 UI 기준에 대 본 결과
 
-**기준은 웹 토큰 [`frontend/web/style.css`](../frontend/web/style.css)의 `:root`입니다.** 차 앱에는 테마 파일이 없고, 같은 색 값을 `MainActivity.kt`의 `LightColors`·`DarkColors`에 직접 적었습니다. 웹 대비는 `frontend/web/contrast.test.mjs`가 검사합니다.
+[`vmc-inner-circle/k-style-ui-ux`](https://github.com/vmc-inner-circle/k-style-ui-ux)(커밋 `68afa2e`)의 원칙과 [비평 체크리스트](https://github.com/vmc-inner-circle/k-style-ui-ux/blob/68afa2e/plugins/k-style-ui-ux/core/references/checklist.md)에 develop(`67cef42`)의 웹·차 화면을 코드로 대 봤습니다(11/14, 화면 캡처 비평은 아님). 줄 번호는 그 커밋 기준입니다.
 
-| 토큰(웹) | 밝은 화면 | 어두운 화면 | 피그마 변수 | 차(Compose) |
-|---|---|---|---|---|
-| `--bg` | #f6f5f9 | #17161f | 같음 | `background` 같음 |
-| `--surface` | #ffffff | #22202d | 같음 | `surface` 같음 |
-| `--ink` / `--ink-2` | #1f1d2b / #5a5669 | #ece9f3 / #aaa5ba | 같음 | `onSurface` / `onSurfaceVariant` 같음 |
-| `--line` | #e4e1eb | #383549 | 같음 | `outline` 같음 |
-| `--accent` / `--accent-soft` | #5b47b0 / #efebfa | #b6a6ee / #2f2a47 | 같음 | `primary` / `primaryContainer` 같음 |
-| `--on-accent` | #ffffff | #17161f | 같음(밝은 화면만) | `onPrimary` 같음 |
-| `--rec` / `--ok` | #b3261e / #1b7350 | #ff9288 / #74d3a8 | 같음 | `error` / `tertiary` 같음 |
-| `--r-card` / `--r-ctl` | 20 / 14 | | 같음 | 카드 20dp |
+| 등급 | 어긋난 것 | 어디 | 처리 |
+|---|---|---|---|
+| P0 | 걷어낼 좌석·공조를 가리키는 홈 설명 | 웹 `app.js:334` | 고치는 중(T6 [#174](https://github.com/team-pitcrew/gachita/pull/174)) |
+| P1 | 뜻이 다른 배지가 같은 색('제안 중'·'수락됨', '경유 반영'·'완료'), 같은 상태를 웹과 시연이 다르게 부름 | 웹 `app.js:22-29`, `demo/demo.js:15` | 웹(#175 또는 다음 웹 PR). `accepted`·`reflected`는 계약대로 구분 |
+| P1 | '기록 중'과 '기록 멈춤'이 같은 빨강 | 차 `MainActivity.kt:547`, `:551` | 차(car-ui). 멈춤은 경고 아이콘, 빨강은 기록 중에만(3절) |
+| P1 | 칩 선택에 상징색 | 웹 `style.css:256-260`, `:303-306` | 웹 #175(칩 선택은 먹색) |
+| P1 | 어두운 화면의 주 단추에 짙은 글자 | 웹 `style.css:29`, 차 `MainActivity.kt:75` | 민트로 바꾸며 의도된 예외가 됨(3절: 밝은 상징색 위 먹색 글자). 채움과 글자 토큰을 나눔 |
+| P1 | 허브 화면의 하단 고정 단추 | 웹 `app.js:361`, `:531` | 웹(#175 또는 다음 웹 PR) |
+| P1 | 사람을 역할 이름으로 부름 | 웹 `app.js:15`, `:484` | 웹 |
+| P1 | 사진·캐릭터 없는 사람의 얼굴이 이름 한 글자 | 웹 `app.js:187` | 웹 #175(기본 캐릭터, 2절) |
+| P2 | 캐릭터가 유니코드 이모지 | 웹 `app.js:33-40` | 웹 #175(원본 조각 10종, 2절) |
+| P2 | 차 글자 크기가 화면마다 직접 적힘 | 차 `MainActivity.kt` | 차 `Theme.kt`(4절의 일곱 단계) |
 
-- 피그마 값은 11/14에 피그마 MCP로 [기본 흐름](https://www.figma.com/design/Qc58INq2ECd1ODzzmM7Nja?node-id=2-73) 노드(`2:73`)의 변수를 읽어 확인했습니다. 피그마 변수는 웹 토큰 이름을 그대로 씁니다.
-- **색은 셋이 같습니다**(v4 피그마는 밝은 화면만).
-- **개편 파일의 토큰 보드는 새 값입니다.** 밝은 화면에서 `--bg` #f2f1f6, `--ink` #1d1a28, `--ink-2` #514c66, `--line` #e7e5ed, `--accent-soft` #edebf6, `--ok` #177a41로 바뀌고 `--surface-2`, `--warn`(주의), 틴트 다섯이 더해집니다. `--accent` #5b47b0과 `--rec`는 그대로입니다(11/14 피그마 MCP로 [토큰 보드](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=8-598)의 변수를 읽음). 웹은 #175가 옮기는 중이고, 병합되면 위 표의 값도 바뀝니다. 차는 그 뒤 같은 값으로 맞춥니다.
-- **차 글자 크기는 피그마와 다릅니다.** 같은 노드의 글자 변수(`T17/caption` … `T17/display`)는 20·24·28·32·36·44·56이고, 차 앱은 18·20·24·26·30·36·40·48sp를 화면마다 직접 적었습니다. 단추와 입력란의 크기만 `CarType`(`MainActivity.kt:79`)에 있습니다.
-- 차의 여백(8~32dp)은 피그마 변수 `car-space`(12~48)와 다른 단계이고 이름으로 묶지 않았습니다.
+여행 초대 공유와 그룹 초대 수락 화면은 11/14 결정으로 없어지므로 대지 않았습니다. 새 동승 연결 화면(P3·P4, C7)도 같은 기준으로 봅니다. 특히 한 번뿐인 행동의 눌린 뒤 모습(폰의 '{자리}에 탔어요')이 있어야 합니다.
 
-## 한국형 UI 기준에 대 본 결과
-
-[`vmc-inner-circle/k-style-ui-ux`](https://github.com/vmc-inner-circle/k-style-ui-ux)(공개, 커밋 `68afa2e`)의 [원칙](https://github.com/vmc-inner-circle/k-style-ui-ux/blob/68afa2e/plugins/k-style-ui-ux/core/references/principles.md)과 [비평 체크리스트](https://github.com/vmc-inner-circle/k-style-ui-ux/blob/68afa2e/plugins/k-style-ui-ux/core/references/checklist.md)에 develop의 웹 화면(`frontend/web/app.js`, `style.css`)과 차 화면(`MainActivity.kt`)을 코드로 대 봤습니다(11/14). 화면을 캡처해 본 비평은 아닙니다. 이 기준은 폰 앱 초안용이라, 차 화면에서는 [Pleos 주행 안전 가이드](https://document.pleos.ai/docs/pleos-only/vehicle-app-planning-guide/driver-distraction-guideline)가 먼저입니다(하단 고정 단추 같은 폰 골격은 차에 대지 않음).
-
-| 등급 | 어긋난 것 | 어디 | 고칠 것 | 담당 |
-|---|---|---|---|---|
-| P0 | 걷어낼 좌석·공조를 가리키는 설명. 걷어내고 이 글만 남으면 없는 기능을 가리킴 | 웹 `app.js:334`('자리 설정을 한곳에서') | 좌석·공조를 걷어내는 같은 PR에서 고침(T68 서버, T6 웹) | web |
-| P1 | 뜻이 다른 배지가 같은 색: '제안 중'과 '수락됨'이 같은 보라, '경유 반영'과 '완료'가 같은 초록. 같은 상태를 웹과 시연이 다르게 부름('경유 반영' / '경유지 반영') | 웹 `app.js:22-29`, `demo/demo.js:15` | 배지 표를 하나로: 보관 회색, 제안 중 안내색, 수락됨 브랜드, 경유 반영 성공색, 완료·취소는 닫힌 행이라 회색. `accepted`와 `reflected`는 계약(`openapi.yaml`, [차량 화면](../frontend/spec/car.md) 흐름 3)대로 구분하고, 같은 상태의 이름만 웹과 시연에서 맞춤. 안내색 토큰(`--info`)은 지금 없어 웹과 차에 새로 둠 | web |
-| P1 | 같은 빨강이 '기록 중'(정상)과 '기록 멈춤'(막힘)에 같이 쓰임 | 차 `MainActivity.kt:547`, `:551` | '기록 멈춤'은 오류 색 + 경고 아이콘, '기록 중'은 기록 표시 점만 빨강 | car-ui |
-| P1 | 칩 선택에 브랜드 색 | 웹 `style.css:256-260`(캐릭터 칩 등), `:303-306`(내 자리) | 칩 선택은 먹색 채움. 같은 `.chip` 모양을 쓰는 체크(기록 동의 기본값, `app.js:232`)는 브랜드 색 그대로 | web |
-| P1 | 채운 단추에 짙은 글자(어두운 화면) | 웹 `style.css:29`, 차 `MainActivity.kt:75` | 채움용 토큰(`--accent-fill`)을 따로 둠. 어두운 화면에서 흰 글자가 4.5:1을 넘는 진한 보라로 하고, 글자용 `--accent`(#b6a6ee)는 그대로. 한 토큰으로는 둘 다 맞출 수 없음. 차는 `Button`의 채움 색을 같은 값으로, 대비 검사에 한 줄 더함 | web, car-ui |
-| P1 | 허브 화면의 하단 고정 단추 | 웹 홈 `app.js:361`('새 여행 만들기'), 여행 화면 `:531`('부탁 남기기') | 하단 고정은 입력·확인 화면(프로필 저장, 기록 동의 묻기)에만. 홈과 여행 화면은 해당 블록 안의 단추로. 그러면 조작법 설명 '부탁은 아래 단추로 언제든 남길 수 있어요'(`app.js:16`)도 함께 지움 | web |
-| P1 | 사람을 역할 이름으로 부름 | 웹 `app.js:15`('운전자가'), `:484`('떠난 사람') | 아는 경우 이름으로('{이름} 님이 출발을 눌러요') | web |
-| P1 | 캐릭터도 사진도 없는 사람의 얼굴이 이름 한 글자 | 웹 `app.js:187` | 사람마다 다른 기본 캐릭터(여섯 가운데 하나)를 줌. 차의 말하는 사람 강조(T37)도 같은 그림. 얼굴을 동물 캐릭터로 두는 것은 기준 문서의 결정이라 k-style의 '사람 아바타' 규칙과 다르게 감 | web, car-ui |
-| P2 | 캐릭터가 유니코드 이모지(기기마다 모양이 다름) | 웹 `app.js:33-40` | 같은 여섯 값(`bunny` … `penguin`)을 SVG 한 벌로(예: Fluent Emoji, MIT). 차도 같은 파일 | web, car-ui |
-| P2 | 차 글자 크기가 화면마다 직접 적힘 | 차 `MainActivity.kt`(18~48sp, 여덟 값) | 있는 `CarType`(`:79`)을 피그마 단계(20·24·28·32·36·44·56)로 넓혀 모음. 주행 중 24sp 이상은 그대로 | car-ui |
-
-여행 초대 공유(`/#코드`)와 그룹 초대 수락 화면은 11/14 결정으로 없어지므로 대지 않았습니다. 새로 생기는 동승 연결 QR(폰이 띄우고 주차 중 차가 읽음) 화면도 같은 기준으로 봅니다. 특히 '한 번뿐인 행동의 눌린 뒤 모습'(차가 읽은 뒤 폰의 '{자리}에 탔어요')이 있어야 합니다.
-
-맞는 것: 한국어 줄바꿈(`word-break: keep-all`), 터치 영역(웹 48px 이상, 차 단추 64dp 이상·기록 동의 스위치 48dp), 불러오는 중(웹 뼈대 화면), 빈 상태가 행동을 이끔('아직 부탁이 없어요. …'), 지우기는 확인을 거침.
+맞는 것: 한국어 줄바꿈, 터치 영역, 불러오는 중(웹 뼈대 화면), 빈 상태가 행동을 이끔, 지우기는 확인을 거침.
