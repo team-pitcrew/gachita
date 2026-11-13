@@ -8,7 +8,7 @@
       1. "글레오" → '기록 잠시 멈춤 · 운전대 버튼을 누르세요' → 운전대 버튼 대신 `cmd voiceinteraction show` → Gleo가 듣고 잠듦
          → 포커스가 돌아오면 다시 수음 → 이어 넣은 말이 받아 적힘
       2. "클레오"(STT가 흔히 적는 꼴) → 버튼을 누르지 않음 → 15초 뒤 저절로 다시 수음, 버튼 없이 시간 초과로 셈
-      3. 화면의 'Gleo 쓰기' → 같은 멈춤 → 시간 초과로 다시 수음
+      3. 화면에 'Gleo 쓰기' 단추가 없음(넘김은 호출어로만, T83)
       4. Gleo 함수(assets/schema.json)를 Gleo와 같은 인텐트로: 기록 멈추기 → 마이크를 놓고 '기록 멈춤'(동의는 그대로) → 다시 시작 → 기록 중
 - 운전대 버튼은 사람 손이라 `cmd voiceinteraction show`로 대신한다(11/13 실측과 같음). Gleo가 실제로 알아듣는지는 보지 않는다.
 - Gleo가 듣는 동안에는 소리를 넣지 않는다. 우리 앱이 수음한 적이 있는 부팅에서 그때 넣자 에뮬레이터가 멈췄다(docs/emulator/e2e-flow.md).
@@ -92,7 +92,7 @@ def main(apk):
     adb("shell", "am", "force-stop", "--user", "10", PKG); adb("shell", "pm", "clear", "--user", "10", PKG)
     for perm in ("RECORD_AUDIO", "POST_NOTIFICATIONS"): adb("shell", "pm", "grant", "--user", "10", PKG, f"android.permission.{perm}")
     adb("shell", "am", "start", "--user", "10", "-n", f"{PKG}/.MainActivity", "--es", "server", f"http://10.0.2.2:{PORT}")
-    time.sleep(4); tap_text("여행 만들기"); time.sleep(4)
+    time.sleep(4); e2e.tap_make(); time.sleep(4)
     ui = texts(); code = next((t.split()[-1] for t in ui if t.startswith("여행 코드")), None); note("trip", code=code)
     tap_switch()
     ui = cap.wait_texts(lambda u: "● 기록 중" in u, 10)
@@ -128,12 +128,9 @@ def main(apk):
     b = wait_log(r"^다시 수음\(시간 초과\)", k, 25)
     check("버튼이 없으면 15초 뒤 저절로 다시 수음", e and held and b and ours_recording() and done < e["device_ms"] - offset, line=b and b["line"])
 
-    # 3. 화면의 'Gleo 쓰기'
-    k = len(app_log); tap_text("Gleo 쓰기")
-    e = wait_log(r"^Gleo에게 넘김 단추", k, 5)
-    ui = texts(); shot("3-button-paused"); held = not ours_recording()
-    b = wait_log(r"^다시 수음\(시간 초과\)", k, 25)
-    check("'Gleo 쓰기'로도 같은 멈춤과 재개", e and held and "운전대 버튼을 누르세요" in ui and b and ours_recording(), line=b and b["line"])
+    # 3. 화면에는 'Gleo 쓰기' 단추가 없다. 넘김은 호출어를 알아챘을 때만(T83, 지환님 11/14)
+    ui = texts(); shot("3-no-button")
+    check("화면에 'Gleo 쓰기' 단추가 없고 기록 중", "Gleo 쓰기" not in ui and ours_recording())
     counts = [x["line"] for x in app_log if x["line"].startswith("다시 수음")]
     note("counts", lines=counts)
     check("잘못 알아챈 횟수를 셈(호출어 2회 중 Gleo 1회 · 버튼 없이 시간 초과 1회)", counts and "호출어 2회 중 Gleo 1회 · 버튼 없이 시간 초과 1회" in counts[-1])

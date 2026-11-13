@@ -39,7 +39,7 @@ import java.util.Locale
  */
 /**
  * seats: 차가 가진 좌석(Vehicle SDK의 SEAT_OCCUPANCY 영역, SeatValue 이름 ROW_1_LEFT 등). 못 읽었으면 비어 있다.
- * occupied: 그 가운데 지금 사람이 앉았다고 차가 알린 좌석(T83).
+ * occupied: 그 가운데 지금 사람이 앉았다고 차가 알린 좌석(SEAT_OCCUPANCY, T83).
  */
 data class CarStatus(
     val gear: String? = null, val navi: Boolean = false, val voice: Boolean = false, val naviEvent: String = "", val restricted: Boolean = true,
@@ -79,9 +79,12 @@ class Car(ctx: Context, private val onChange: (CarStatus) -> Unit) {
             update { it.copy(seats = names) }
             for (a in areas) {
                 val name = a.values.firstOrNull()?.name ?: continue
-                fun seen(on: Boolean?) = update { s -> s.copy(occupied = if (on == true) s.occupied + name else s.occupied - name) }
+                // SDK의 Boolean은 원값이 1인지다(Vehicle 2.3.2 SeatImpl: toIntOrNull() == 1). AAOS VehicleSeatOccupancyState는 0 모름·1 빔·2 앉음이라
+                // true는 '빔'이다. 에뮬레이터 Virtual Console에서 조수석을 앉음으로 바꾸면 false, 비움으로 바꾸면 true가 왔다(11/14).
+                // ponytail: 모름(0)도 false로 와 앉음과 구별되지 않는다. 실차에서 원값을 읽는 길이 생기면 그것으로 바꾼다
+                fun seen(vacant: Boolean?) = update { s -> s.copy(occupied = if (vacant == false) s.occupied + name else s.occupied - name) }
                 val l = object : SeatOccupancyListener {
-                    override fun onSeatOccupancyUpdated(on: Boolean?) = seen(on)
+                    override fun onSeatOccupancyUpdated(vacant: Boolean?) = seen(vacant)
                     override fun onFailed(e: Exception) { Log.w(TAG, "앉음 알림 실패 $name", e) }
                 }
                 runCatching { v.getSeat().getCurrentSeatOccupancy(a, ::seen) { Log.w(TAG, "앉음 읽기 실패 $name", it) } }

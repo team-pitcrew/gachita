@@ -95,12 +95,12 @@ fun GachitaTheme(content: @Composable () -> Unit) =
 /** 카드의 바탕. 기록 상태 머리만 색을 바꾸고 나머지는 Plain이다. */
 enum class Tone { Plain, Rec, Wait, Accent }
 
-/** 차 화면 카드. 모서리 32dp, 테두리 없이 바탕색으로 구분한다. Accent는 지금 답이 필요한 카드(제안·도착 브리핑)에만. */
+/** 차 화면 카드. 모서리 32dp, 테두리 없이 바탕색으로 구분한다. Accent는 지금 답이 필요한 카드(제안·도착 브리핑)에만. 높이를 고정할 칸은 modifier로 준다(T83). */
 @Composable
-fun CarCard(tone: Tone = Tone.Plain, content: @Composable ColumnScope.() -> Unit) {
+fun CarCard(tone: Tone = Tone.Plain, modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
     val c = MaterialTheme.colorScheme
     val bg = when (tone) { Tone.Plain, Tone.Accent -> c.surface; Tone.Rec -> c.errorContainer; Tone.Wait -> c.secondaryContainer }
-    Surface(Modifier.fillMaxWidth(), RoundedCornerShape(32.dp), color = bg, border = if (tone == Tone.Accent) BorderStroke(3.dp, c.onPrimaryContainer) else null) {
+    Surface(modifier.fillMaxWidth(), RoundedCornerShape(32.dp), color = bg, border = if (tone == Tone.Accent) BorderStroke(3.dp, c.onPrimaryContainer) else null) {
         Column(Modifier.padding(28.dp), verticalArrangement = Arrangement.spacedBy(10.dp), content = content)
     }
 }
@@ -194,7 +194,7 @@ fun SeatMap(
                         if (p == null) {
                             EmptySeat(size)
                             // 차가 앉았다고 알리는데 여행에 없는 사람(T83): 폰 동승 연결이나 새 여행으로 넣는다
-                            Text(if (seat.name in car.occupied) "누가 앉았어요" else "빈자리", color = c.onSurfaceVariant)
+                            Text(if (seat.name in car.occupied) "앉아 있어요" else "빈자리", color = c.onSurfaceVariant, maxLines = 1)
                         } else {
                             Character(seat.ordinal, size, ring = p.id == highlight)
                             Text(p.name, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)

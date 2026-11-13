@@ -126,7 +126,7 @@ def main(apk):
 
 def scenes(inj):
     with Scene(1, "기록 동의"):
-        time.sleep(2); tap_text("여행 만들기"); time.sleep(5)
+        time.sleep(2); e2e.tap_make(); time.sleep(5)
         tap_switch()
         check("기록 중", "● 기록 중" in cap.wait_texts(lambda u: "● 기록 중" in u, 10) and cap.mic_holders())
         time.sleep(4)

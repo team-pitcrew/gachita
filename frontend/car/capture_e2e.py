@@ -334,7 +334,7 @@ def main(apk, minutes):
     adb("shell", "pm", "clear", "--user", "10", PKG)
     for perm in ("RECORD_AUDIO", "POST_NOTIFICATIONS"): adb("shell", "pm", "grant", "--user", "10", PKG, f"android.permission.{perm}")
     adb("shell", "am", "start", "--user", "10", "-n", f"{PKG}/.MainActivity", "--es", "server", f"http://10.0.2.2:{PORT}")
-    wait_texts(lambda u: "서버 주소" in u, 30); tap_text("여행 만들기"); time.sleep(4)  # 설치 직후 첫 화면은 바쁜 기기에서 4초를 넘기기도 함
+    wait_texts(lambda u: e2e.SETUP in u, 30); e2e.tap_make(); time.sleep(4)  # 설치 직후 첫 화면은 바쁜 기기에서 4초를 넘기기도 함
     ui = texts(); code = next((t.split()[-1] for t in ui if t.startswith("여행 코드")), None); note("trip", code=code)
     # 1. 폰 참가자가 들어오고, 주차 중 동의: 차는 자기가 참가시킨 사람만 켜고, 폰이 자기 토큰으로 켜면 수음 시작(T68)
     phone = phone_join(code)
@@ -388,7 +388,7 @@ def main(apk, minutes):
     # 3. 주행 중 화면 트리(차단 화면에 가려 캡처로는 안 보임), 그다음 P에서 앱을 앞으로
     adb("shell", "am", "start", "--user", "10", "-n", f"{PKG}/.MainActivity"); time.sleep(3)
     shot("03-app-drive-blocked"); ui = texts(); note("ui", texts=ui)
-    check("기어 D에서 앱을 앞으로: 화면 트리에 받아 적은 말(캡처는 Pleos 차단 화면)", any(t.startswith("받아 적은 말 ") for t in ui))
+    check("기어 D에서 앱을 앞으로: 화면 트리에 받아 적은 말(캡처는 Pleos 차단 화면)", "방금 받아 적은 말" in ui)
     gear("Park"); time.sleep(3)
     shot("04-app-park-heard"); ui = texts(); note("ui", texts=ui)
     last = got[-1]["text"] if got else "?"
@@ -431,10 +431,10 @@ def main(apk, minutes):
     save(code, offset, t_inj, total, rows, minutes)
     for _ in range(15):  # 끄기를 서버에 알린 뒤 받은 여행의 동의 세대로 옛 발화의 글을 지운다(ADR-0014 2절). 다음 조회까지 걸릴 수 있다
         ui = texts()
-        if "기록 꺼짐" in ui and not any(t.startswith("받아 적은 말 ") for t in ui): break
+        if "기록 꺼짐" in ui and "아직 받아 적은 말이 없어요" in ui: break
         time.sleep(1)
     note("ui", texts=ui)
-    check("동의를 끄면 보관함의 글이 빔(기록 꺼짐 화면에 받아 적은 말 0건이라 카드가 사라짐, 순번 줄은 남음)", "기록 꺼짐" in ui and not any(t.startswith("받아 적은 말 ") for t in ui) and lines(code) >= n_local,
+    check("동의를 끄면 보관함의 글이 빔(대화록 칸이 '아직 받아 적은 말이 없어요', 순번 줄은 남음)", "기록 꺼짐" in ui and "아직 받아 적은 말이 없어요" in ui and lines(code) >= n_local,
           lines=lines(code))
     try:
         t = server(code)
@@ -460,15 +460,15 @@ def main(apk, minutes):
     had = trip_files(code)
     adb("shell", "am", "start", "--user", "10", "-S", "-n", f"{PKG}/.MainActivity", "--el", "keepMs", "60000"); time.sleep(5)
     ui = texts(); shot("09-expired"); note("ui", texts=ui)
-    check("만든 뒤 보관 기간이 지난 여행은 다시 켤 때 차 안 사본(보관함·할 일·저장한 여행)이 지워짐", had and not trip_files(code) and "서버 주소" in ui, had=had)
+    check("만든 뒤 보관 기간이 지난 여행은 다시 켤 때 차 안 사본(보관함·할 일·저장한 여행)이 지워짐", had and not trip_files(code) and e2e.making(ui), had=had)
     # 8. 서버가 여행을 모르면(48시간이 지나 지워짐 = 404) 차 안 사본도 지운다. 새 여행을 만들고 서버 DB에서 지운다
     adb("shell", "am", "start", "--user", "10", "-S", "-n", f"{PKG}/.MainActivity"); time.sleep(4)
-    tap_text("여행 만들기"); time.sleep(4)
+    e2e.tap_make(); time.sleep(4)
     ui = texts(); code2 = next((t.split()[-1] for t in ui if t.startswith("여행 코드")), None); had = trip_files(code2) if code2 else []
     pg = os.environ.get("GACHITA_PG", "gachita-pg")
     out = subprocess.run(["docker", "exec", pg, "psql", "-U", "gachita", "-tAc", f"DELETE FROM trips WHERE code = '{code2}'"], capture_output=True, text=True)
     note("server.delete", code=code2, out=(out.stdout + out.stderr).strip()[:100])
-    ui = wait_texts(lambda u: "서버 주소" in u, 20); shot("10-gone"); note("ui", texts=ui)
+    ui = wait_texts(lambda u: e2e.making(u), 20); shot("10-gone"); note("ui", texts=ui)
     check("서버가 여행을 모르면(404) 차 안 사본을 지우고 처음 화면에 알림", had and not trip_files(code2) and "서버에 없는 여행이라 이 차에 남은 기록도 지웠어요" in ui, code=code2, had=had)
     fails = [e["name"] for e in e2e.log if e["step"] == "check" and not e["ok"]]
     print("실패:", fails if fails else "없음")

@@ -92,7 +92,7 @@ def main(apk):
     adb("shell", "am", "force-stop", "--user", "10", PKG); adb("shell", "pm", "clear", "--user", "10", PKG)
     for perm in ("RECORD_AUDIO", "POST_NOTIFICATIONS"): adb("shell", "pm", "grant", "--user", "10", PKG, f"android.permission.{perm}")
     adb("shell", "am", "start", "--user", "10", "-n", f"{PKG}/.MainActivity", "--es", "server", f"http://10.0.2.2:{SHORT_PORT if FAKE else cap.PORT}")
-    time.sleep(4); tap_text("여행 만들기"); time.sleep(4)
+    time.sleep(4); e2e.tap_make(); time.sleep(4)
     tap_switch()
     ui = cap.wait_texts(lambda u: "● 기록 중" in u, 10)
     check("P에서 동의를 켜면 기록 중", "● 기록 중" in ui)
