@@ -12,7 +12,9 @@
 | 기본 계획 | 기존 관리 자원 30개 모두 `no-op`; 출력 `private_agents = {}`만 추가 | S3의 state 사본(serial 39), `-refresh=false`, 동일한 영역 변수. AWS data source는 읽고 Cloudflare 관리 자원은 refresh하지 않았습니다 |
 | agent 활성화 계획 | **54개 추가, 변경 0, 삭제 0**. 기존 관리 자원 30개 모두 `no-op` | 위와 같은 state 사본. `check_plan.py agents` 통과. 실제 적용 직전 fresh plan이 필요합니다 |
 
-계획 파일과 전체 state에는 운영 정보가 있어 커밋하지 않았습니다. 사본의 backend만 로컬 경로로 바꾸었고 운영 S3 state에는 쓰지 않았습니다. Cloudflare token은 로컬에 없어 `-refresh=false` 계획의 provider 초기화에 접근 권한이 없는 임시 문자열을 사용했습니다. 이 결과는 Cloudflare의 최신 상태 조회를 증명하지 않습니다. GitHub의 별도 Terraform PR 계획은 저장소의 읽기 토큰으로 기본 설정을 다시 검증합니다.
+계획 파일과 전체 state에는 운영 정보가 있어 커밋하지 않았습니다. 사본의 backend만 로컬 경로로 바꾸었고 운영 S3 state에는 쓰지 않았습니다. Cloudflare token은 로컬에 없어 `-refresh=false` 계획의 provider 초기화에 접근 권한이 없는 임시 문자열을 사용했습니다. 이 결과는 Cloudflare의 최신 상태 조회를 증명하지 않습니다.
+
+추가로 [GitHub Terraform 실행](https://github.com/team-pitcrew/gachita/actions/runs/43527170436)에서 기본 설정을 실제 운영 상태로 refresh하여 확인했습니다. main은 기존 자원 변경 없이 `private_agents = {}` 출력만 추가했고, persist는 `No changes`, account는 예상한 NAT/EIP 권한을 위한 `aws_iam_role_policy.apply` 1개 in-place update였습니다. 세 계획 모두 성공했으며 apply는 실행하지 않았습니다. agent 활성화 계획은 여전히 위 state 사본 기준입니다.
 
 08:23 KST 운영 조회에서는 기존 EC2의 유형·사설 주소와 노드 이름이 유지되었고, K3s `v1.36.6+k3s1` 노드 1대가 Ready였습니다. Argo CD 13개가 Healthy·Synced, API는 2/2 Ready, CNPG는 1/1 Ready, `db-1` local-path PVC는 기존 볼륨에 Bound, 공개 `/healthz`는 200이었습니다. 전환 ConfigMap은 없었습니다. SQLite `state.db` 파일이 존재하며 agent-token은 기존 server-token을 가리키는 심볼릭 링크 상태였습니다. 전용 가입 자격 준비와 제어 노드의 백업 방식 확인을 후속 실행 조건으로 유지합니다.
 
