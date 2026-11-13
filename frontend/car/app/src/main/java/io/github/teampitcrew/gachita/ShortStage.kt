@@ -3,6 +3,7 @@ package io.github.teampitcrew.gachita
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -36,7 +37,9 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
@@ -89,8 +92,8 @@ fun GeneratedShortStage(
     val progress = if (duration > 0.0) (elapsed / duration).coerceIn(0.0, 1.0).toFloat() else 0f
     val speakingCue = scene?.let { cueAt(it.cues, elapsed) }
     val cue = scene?.let { speakingCue ?: it.cues.lastOrNull { c -> elapsed >= c.start } ?: if (paused) it.cues.firstOrNull() else null }
-    val cast = shortSceneCast(scene, cue, people)
-    val activeSpeaker = speakingCue?.takeUnless { paused }?.let { sceneActor(it.who, people).key }
+    val cast = shortSceneCast(short, scene, cue, people)
+    val activeSpeaker = speakingCue?.takeUnless { paused }?.let { shortSceneActor(it, short.cast, people).key }
     val canPrevious = controlsEnabled && scene != null && index > 0
     val canNext = controlsEnabled && scene != null && index < short.scenes.lastIndex
     val previous by rememberUpdatedState(onPrevious)
@@ -196,25 +199,6 @@ fun GeneratedShortStage(
     }
 }
 
-private data class ShortSceneActor(val key: String, val label: String, val character: Int?)
-
-private fun sceneActor(who: String, people: List<Person>): ShortSceneActor {
-    // 같은 이름이 여러 명이거나 좌석만 알려진 큐에는 사람의 캐릭터를 임의로 붙이지 않습니다.
-    val person = people.singleOrNull { it.name == who && who.isNotBlank() }
-    val seat = person?.let { p -> Seat.entries.firstOrNull { it.name == p.seat } }
-    return ShortSceneActor(person?.id ?: "unknown:$who", who.ifBlank { "화자 미확인" }, seat?.ordinal)
-}
-
-private fun shortSceneCast(scene: Scene?, cue: Cue?, people: List<Person>): List<ShortSceneActor> {
-    // 뒤에 말할 사람도 실제 장면의 화자이므로 첫 화면부터 함께 둡니다. 참가자 명단으로 추측하지 않습니다.
-    val cast = scene?.cues.orEmpty().map { sceneActor(it.who, people) }.filter { it.character != null }
-        .distinctBy { it.key }.take(2).toMutableList()
-    while (cast.size < 2) cast += ShortSceneActor("unidentified:${cast.size}", "화자 미확인", null)
-    // 처음 등장한 두 사람의 좌우는 유지하고, 세 번째 화자가 말할 때만 오른쪽을 바꿉니다.
-    cue?.let { sceneActor(it.who, people) }?.let { current -> if (cast.none { it.key == current.key }) cast[1] = current }
-    return cast
-}
-
 /** 참조 영상의 이미지를 쓰지 않고 창·시트·대시보드를 직접 그린 대화 장면입니다. 좌우는 실제 좌석 배정이 아닙니다. */
 @Composable
 private fun ShortCarScene(cast: List<ShortSceneActor>, activeSpeaker: String?, elapsed: Double, modifier: Modifier) {
@@ -280,7 +264,8 @@ private fun ShortScenePerson(actor: ShortSceneActor, speaking: Boolean, elapsed:
             translationY = -bouncePx * beat
             scaleX = 1f + emphasis * 0.025f; scaleY = 1f + emphasis * 0.025f
         }) {
-            if (actor.character != null) Character(actor.character, portrait, ring = false)
+            if (actor.character != null) Image(painterResource(actor.character.drawable), contentDescription = null,
+                modifier = Modifier.size(portrait), contentScale = ContentScale.Fit)
             else Mascot(listening = speaking, size = portrait * 0.70f)
         }
     }

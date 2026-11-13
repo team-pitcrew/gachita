@@ -123,7 +123,7 @@ fun exportShortVideo(
         val video = temp("-video.mp4")
         val audio = temp("-audio.m4a")
         val result = temp(".mp4")
-        ExportScenePainter(app, people).use { painter ->
+        ExportScenePainter(app, short, people).use { painter ->
             encodeVideo(video, videoEncoder, videoFormat, timeline, painter, control) { onProgress(0.05f + it * 0.73f) }
         }
         encodeAudio(audio, audioEncoder, audioFormat, timeline, control) { onProgress(0.78f + it * 0.12f) }
@@ -462,18 +462,16 @@ private class ExportEglSurface(private val surface: Surface) : Closeable {
     private fun floats(vararg values: Float) = ByteBuffer.allocateDirect(values.size * 4).order(ByteOrder.nativeOrder()).asFloatBuffer().apply { put(values); position(0) }
 }
 
-private class ExportScenePainter(context: Context, private val people: List<Person>) : Closeable {
+private class ExportScenePainter(context: Context, private val short: Short, private val people: List<Person>) : Closeable {
     val bitmap: Bitmap = Bitmap.createBitmap(EXPORT_WIDTH, EXPORT_HEIGHT, Bitmap.Config.ARGB_8888)
     private val canvas = Canvas(bitmap)
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val text = TextPaint(Paint.ANTI_ALIAS_FLAG)
     private val mint = Color.rgb(111, 211, 166)
     private val ink = Color.rgb(244, 241, 236)
-    private val characters = listOf(R.drawable.char_basic, R.drawable.char_cap, R.drawable.char_glasses, R.drawable.char_travel, R.drawable.char_game).map { id ->
-        BitmapFactory.decodeResource(context.resources, id, BitmapFactory.Options().apply { inScaled = false; inSampleSize = 2 })
-            ?: error("캐릭터 전신 이미지를 열지 못했어요")
-    }
-    private val characterBounds = characters.map(::visibleCharacterBounds)
+    private val resources = context.resources
+    // 실제로 등장하는 설정만 열어 20개 전신 이미지를 한꺼번에 메모리에 올리지 않습니다.
+    private val characters = mutableMapOf<ShortCharacter, Pair<Bitmap, android.graphics.Rect>>()
 
     fun draw(part: ExportScene, seconds: Double) {
         canvas.drawColor(Color.rgb(9, 11, 10))
@@ -482,22 +480,15 @@ private class ExportScenePainter(context: Context, private val people: List<Pers
         val cue = active ?: cues.lastOrNull { seconds >= it.start }
         centered(part.scene.label.ifBlank { "함께 남긴 장면" }, RectF(32f, 24f, 508f, 174f), 42f, ink, 2)
         cabin()
-        // 장면 전체의 실제 화자 둘을 처음부터 보여 주고, 세 번째 현재 화자는 오른쪽에 둡니다.
-        val cast = cues.map { it.who }.distinct().filter { who ->
-            people.singleOrNull { it.name == who && who.isNotBlank() }?.let { p -> Seat.entries.any { it.name == p.seat } } == true
-        }.take(2).toMutableList()
-        while (cast.size < 2) cast += ""
-        cue?.who?.let { current -> if (current !in cast) cast[1] = current }
-        repeat(2) { slot ->
-            val who = cast.getOrNull(slot)
-            val person = who?.let { name -> people.singleOrNull { it.name == name && name.isNotBlank() } }
-            val seat = person?.let { p -> Seat.entries.firstOrNull { it.name == p.seat } }
-            val speaking = who != null && active?.who == who && (who.isNotBlank() || slot == 1)
+        val cast = shortSceneCast(short, part.scene, cue, people)
+        val activeSpeaker = active?.let { shortSceneActor(it, short.cast, people).key }
+        cast.forEachIndexed { slot, actor ->
+            val speaking = actor.key == activeSpeaker
             val bob = if (speaking) (sin(seconds * 16.0) * 4.0).toFloat() else 0f
             val bounds = RectF(32f + slot * 260, 264f - bob, 248f + slot * 260, 586f - bob)
             paint.color = if (speaking) Color.argb(100, 111, 211, 166) else Color.argb(35, 111, 211, 166)
             canvas.drawOval(RectF(bounds.left + 12, 566f, bounds.right - 12, 590f), paint)
-            if (seat != null) fit(seat.ordinal, bounds) else mascot(bounds, speaking)
+            if (actor.character != null) fit(actor.character, bounds) else mascot(bounds, speaking)
             if (speaking) {
                 paint.color = mint; paint.strokeWidth = 5f; paint.strokeCap = Paint.Cap.ROUND
                 repeat(3) { n -> canvas.drawLine(bounds.right - 38 + n * 12, 292f - n * 12, bounds.right - 32 + n * 12, 278f - n * 12 - bob, paint) }
@@ -539,9 +530,13 @@ private class ExportScenePainter(context: Context, private val people: List<Pers
             (right + 5).coerceAtMost(image.width), (bottom + 5).coerceAtMost(image.height))
     }
 
-    private fun fit(index: Int, bounds: RectF) {
-        val image = characters[index]
-        val source = characterBounds[index]
+    private fun fit(character: ShortCharacter, bounds: RectF) {
+        val (image, source) = characters.getOrPut(character) {
+            val decoded = BitmapFactory.decodeResource(resources, character.drawable,
+                BitmapFactory.Options().apply { inScaled = false; inSampleSize = 2 })
+                ?: error("캐릭터 전신 이미지를 열지 못했어요")
+            decoded to visibleCharacterBounds(decoded)
+        }
         val scale = minOf(bounds.width() / source.width(), bounds.height() / source.height())
         val w = source.width() * scale; val h = source.height() * scale
         val dst = RectF(bounds.centerX() - w / 2, bounds.centerY() - h / 2, bounds.centerX() + w / 2, bounds.centerY() + h / 2)
@@ -573,5 +568,5 @@ private class ExportScenePainter(context: Context, private val people: List<Pers
         block.draw(canvas); canvas.restore()
     }
 
-    override fun close() { characters.forEach { it.recycle() }; bitmap.recycle() }
+    override fun close() { characters.values.forEach { it.first.recycle() }; bitmap.recycle() }
 }
