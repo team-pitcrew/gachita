@@ -995,12 +995,12 @@ async function trips(req, [code, sub, id, leaf, ...rest], b, query) {
       if (rowCount) return [201, trip];
     }
   }
-  if (rest.length || (leaf !== undefined && !(sub === "participants" && leaf === "voice"))) fail(404, "없는 경로");
+  if (rest.length || (leaf !== undefined && !(sub === "participants" && leaf === "voice") && sub !== "utterances")) fail(404, "없는 경로");
   if (sub === "voice-match" && !id) return voiceMatch(code, req, query);
   if (sub === "recordings") return recordings(code, id, req, query);
   if (leaf === "voice") return participantVoice(code, id, req);
   const profile = sub === "participants" && m === "POST" && !id ? await profileOf(req) : null;
-  const result = await withTrip(code, m !== "GET", (trip, client) => handle(trip, { req, m, sub, id, b, query, profile }, client));
+  const result = await withTrip(code, m !== "GET", (trip, client) => handle(trip, { req, m, sub, id, leaf, b, query, profile }, client));
   if (sub === "participants" && m === "PATCH") void sweepClips(); // 동의 철회가 적은 클립을 커밋 뒤에 버킷에서 지운다
   // 커밋 뒤에: 클립보다 늦게 온 발화를 다시 받아 적는다(T75)
   if (sub === "utterances" && m === "POST") requeueRetranscribe(String(code).toUpperCase()).catch((e) => log("warn", "clip_retranscribe_failed", { err: errFields(e) }));
@@ -1023,7 +1023,7 @@ export async function sweep() {
   void sweepClips();
 }
 
-async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
+async function handle(trip, { req, m, sub, id, leaf, b, query, profile }, client) {
   const changed = (status, data) => {
     trip.version++;
     return [status, data];
@@ -1178,6 +1178,25 @@ async function handle(trip, { req, m, sub, id, b, query, profile }, client) {
     return changed(201, moment);
   }
 
+  if (sub === "utterances" && id) {
+    // 사람이 고친 화자(T37): 차 화면에서 '모름'이나 틀린 이름을 고친다. 그 기기 이름으로 발화를 올린 참가자만 —
+    // 올리기의 기기 주인 규칙과 같다. 사람이 고친 것이 대조보다 우선이라 이미 붙은 화자도 바꾼다.
+    if (m !== "PATCH" || leaf === undefined) fail(405, "PATCH /utterances/:device/:seq만 됨");
+    const caller = participantOf(req, trip);
+    const device = text(id, 40, "device");
+    const seq = int(Number(leaf), 1, 1_000_000_000, "seq");
+    if (b.participantId !== null && typeof b.participantId !== "string") fail(400, "participantId: 이 여행의 참가자 id 또는 null");
+    const who = b.participantId === null ? null : (trip.participants.find((p) => p.id === b.participantId) ?? fail(400, "participantId: 이 여행의 참가자 id 또는 null"));
+    if (who && !who.consent) fail(409, "녹음에 동의하지 않은 참가자의 이름은 붙이지 않음");
+    const { rows: ack } = await client.query("SELECT participant_id FROM utterance_acks WHERE trip_code = $1 AND device = $2", [trip.code, device]);
+    if (ack[0] && ack[0].participant_id !== caller.id) fail(403, "그 기기로 올린 참가자만 고침");
+    const { rows } = await client.query(
+      `UPDATE utterances SET participant_id = $4, profile_id = $5 WHERE trip_code = $1 AND device = $2 AND seq = $3 AND text <> ''
+       RETURNING device, seq, at, text, seat_area, participant_id, profile_id, confidence, lat, lng`,
+      [trip.code, device, seq, who?.id ?? null, who?.profileId ?? null]
+    );
+    return rows[0] ? [200, asUtterance(rows[0])] : fail(404, "없는 발화");
+  }
   if (sub === "utterances") {
     // 발화 묶음 올리기·기록본 동기화(ADR-0007·ADR-0014). 인증은 참가자 토큰이다.
     if (m !== "GET" && m !== "POST" && m !== "DELETE") fail(405, "GET, POST, DELETE만 됨");

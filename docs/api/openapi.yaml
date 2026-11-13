@@ -448,6 +448,36 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+  /api/trips/{code}/utterances/{device}/{seq}:
+    parameters:
+      - { $ref: "#/components/parameters/code" }
+      - { name: device, in: path, required: true, schema: { type: string }, description: 발화를 올린 기기 }
+      - { name: seq, in: path, required: true, schema: { type: integer }, description: 그 기기가 매긴 순번 }
+    patch:
+      tags: [기록본]
+      summary: 발화의 화자 고치기
+      description: |
+        차 화면에서 사람이 '모름'이나 틀린 이름을 고칩니다(T37). **그 기기 이름으로 발화를 올린 참가자의 토큰**으로만 합니다(올리기의 기기 주인 규칙과 같음).
+        사람이 고친 것이 화자 대조보다 우선이라 이미 붙은 화자도 바꿉니다. `participantId: null`이면 '모름'으로 되돌립니다.
+        그 참가자가 프로필 참가자이면 `profileId`도 함께 붙고(피드에 나옴), 아니면 비웁니다. 녹음에 동의하지 않은 참가자의 이름은 붙이지 않습니다(409).
+      security: [{ participantToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [participantId]
+              properties:
+                participantId: { type: [string, "null"], description: 이 여행의 참가자 id. null이면 모름 }
+      responses:
+        "200": { description: 고친 발화, content: { application/json: { schema: { $ref: "#/components/schemas/Utterance" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "405": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /api/trips/{code}/transcript:
     parameters: [{ $ref: "#/components/parameters/code" }]
     get:

@@ -1277,6 +1277,34 @@ test("손님 참가자도 여행에 목소리를 등록하면 화자가 붙는�
   assert.deepEqual([await prints(a.id), await prints(c.id)], [0, 0]);
 });
 
+test("차 화면에서 고친 화자를 발화 줄에 남긴다(T37)", async () => {
+  const [, trip] = await call("POST", "/api/trips", {});
+  const t = `/api/trips/${trip.code}`;
+  const [, a] = await join(trip.code, "아빠", "ROW_1_LEFT", true);
+  const [, b] = await join(trip.code, "누나", "ROW_2_LEFT", true);
+  await call("POST", `${t}/utterances`, { device: "car", generation: 1, items: [{ seq: 1, at: trip.createdAt + 1000, text: "배고파" }] }, a.token);
+  const fix = (seq, participantId, token) => call("PATCH", `${t}/utterances/car/${seq}`, { participantId }, token);
+
+  assert.equal((await fix(1, b.id))[0], 401, "토큰이 필요함");
+  assert.equal((await fix(1, b.id, b.token))[0], 403, "그 기기로 올린 참가자만");
+  const [s1, u1] = await fix(1, b.id, a.token);
+  assert.deepEqual([s1, u1.seq, u1.text, u1.participantId, u1.profileId], [200, 1, "배고파", b.id, undefined]);
+  assert.equal((await call("GET", `${t}/transcript`, null, a.token))[1].utterances[0].participantId, b.id, "기록본에 고친 화자");
+  assert.equal((await fix(1, a.id, a.token))[1].participantId, a.id, "이미 붙은 화자도 바꿈");
+  assert.equal((await fix(1, null, a.token))[1].participantId, undefined, "null이면 모름으로");
+  assert.equal((await fix(1, "nobody", a.token))[0], 400);
+  assert.equal((await fix(9, b.id, a.token))[0], 404, "없는 발화");
+  assert.equal((await call("PATCH", `${t}/utterances/phone/1`, { participantId: b.id }, a.token))[0], 404, "올린 적 없는 기기");
+  assert.equal((await call("PATCH", `${t}/utterances/car`, { participantId: b.id }, a.token))[0], 405);
+
+  // 프로필 참가자로 고치면 피드에도 나오도록 profile_id가 같이 붙고, 동의하지 않은 사람의 이름은 붙이지 않는다
+  const [, me] = await call("POST", "/api/profiles", { name: "엄마" });
+  const [, m] = await call("POST", `${t}/participants`, { seat: "ROW_1_RIGHT", consent: true }, me.token);
+  assert.deepEqual(Object.entries((await fix(1, m.id, a.token))[1]).filter(([k]) => k.endsWith("Id")), [["participantId", m.id], ["profileId", me.id]]);
+  await call("PATCH", `${t}/participants/${b.id}`, { consent: false });
+  assert.equal((await fix(1, b.id, a.token))[0], 409);
+});
+
 test("쓰기가 몰려도 서버가 멈추지 않는다", async () => {
   // 같은 여행에 쓰기 15개가 동시에 닥쳐도 모두 응답해야 한다(리뷰 재현).
   const [, me] = await call("POST", "/api/profiles", { name: "지우", consentDefault: true });
