@@ -12,8 +12,6 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -27,21 +25,16 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
-import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.ProvideTextStyle
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.Typography
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -49,8 +42,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -62,21 +53,6 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 import java.util.concurrent.Executors
-
-// 색은 frontend/web/style.css의 토큰과 같다. 꾸밈은 시안(T20) 뒤에 맞춘다.
-private val LightColors = lightColorScheme(
-    background = Color(0xFFF6F5F9), surface = Color(0xFFFFFFFF), onBackground = Color(0xFF1F1D2B), onSurface = Color(0xFF1F1D2B),
-    onSurfaceVariant = Color(0xFF5A5669), outline = Color(0xFFE4E1EB), primary = Color(0xFF5B47B0), primaryContainer = Color(0xFFEFEBFA),
-    onPrimary = Color(0xFFFFFFFF), error = Color(0xFFB3261E), tertiary = Color(0xFF1B7350),
-)
-private val DarkColors = darkColorScheme(
-    background = Color(0xFF17161F), surface = Color(0xFF22202D), onBackground = Color(0xFFECE9F3), onSurface = Color(0xFFECE9F3),
-    onSurfaceVariant = Color(0xFFAAA5BA), outline = Color(0xFF383549), primary = Color(0xFFB6A6EE), primaryContainer = Color(0xFF2F2A47),
-    onPrimary = Color(0xFF17161F), error = Color(0xFFFF9288), tertiary = Color(0xFF74D3A8),
-)
-
-// 칩·단추(labelLarge)와 입력란(bodyLarge)의 기본 14~16sp는 차 화면에서 작다
-private val CarType = Typography(labelLarge = TextStyle(fontSize = 24.sp), bodyLarge = TextStyle(fontSize = 24.sp))
 
 private const val DEFAULT_SERVER = "https://gachita.mangowhois.ai" // 실서비스(T27). 로컬 서버는 디버그 빌드에서 '서버 주소'나 --es server로
 private const val POLL_MS = 10_000L // 웹앱은 2초. 차에서는 주행 중 자원 기준(CPU 5% 미만)을 생각해 길게 둔다
@@ -205,17 +181,15 @@ class MainActivity : ComponentActivity() {
         routeFrom(intent)
         if (savedInstanceState == null) gleo(intent) // 다시 만들어진 화면이 지난 호출에 또 답하지 않게
         setContent {
-            MaterialTheme(colorScheme = if (isSystemInDarkTheme()) DarkColors else LightColors, typography = CarType) {
-                ProvideTextStyle(TextStyle(fontSize = 24.sp)) {
-                    // ponytail: 에뮬레이터는 창을 나누지 않아 반쪽 창을 --ei widthDp 841로 흉내 낸다. 실제 분할 창 확인은 실차에서
-                    val w = if (debug) intent.getIntExtra("widthDp", 0) else 0
-                    Surface(if (w > 0) Modifier.fillMaxHeight().width(w.dp) else Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-                        val t = s.trip
-                        when {
-                            t != null -> TripScreen(t)
-                            carStatus.restricted -> SetupLocked()
-                            else -> Setup()
-                        }
+            GachitaTheme {
+                // ponytail: 에뮬레이터는 창을 나누지 않아 반쪽 창을 --ei widthDp 841로 흉내 낸다. 실제 분할 창 확인은 실차에서
+                val w = if (debug) intent.getIntExtra("widthDp", 0) else 0
+                Surface(if (w > 0) Modifier.fillMaxHeight().width(w.dp) else Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                    val t = s.trip
+                    when {
+                        t != null -> TripScreen(t)
+                        carStatus.restricted -> SetupLocked()
+                        else -> Setup()
                     }
                 }
             }
@@ -610,6 +584,7 @@ class MainActivity : ComponentActivity() {
                         selected = on,
                         onClick = { if (on) picked.remove(m.name) else picked.add(m.name) },
                         label = { Text("${m.name} · ${m.seat.label}", Modifier.padding(vertical = 16.dp, horizontal = 8.dp)) },
+                        colors = FilterChipDefaults.filterChipColors(selectedContainerColor = c.onSurface, selectedLabelColor = c.surface), // 칩 선택은 먹색(k-style)
                     )
                 }
             }
@@ -636,13 +611,21 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun TripScreen(t: Trip) {
         BoxWithConstraints(Modifier.fillMaxSize().padding(32.dp)) {
-            if (maxWidth >= 1200.dp) {
-                Row(horizontalArrangement = Arrangement.spacedBy(32.dp)) {
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(24.dp)) { Summary(t) }
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(24.dp)) { Controls(t) }
+            val wide = maxWidth >= 1200.dp
+            Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
+                AppBar(t.title.ifEmpty { "가족 여행" }, listening = s.recording && Live.mic == Mic.ON && !muted && handoff.state == Handoff.State.OFF)
+                // 넓은 창: 왼쪽은 지금 일(기록 상태·제안·받아 적은 말·부탁 수), 오른쪽은 사람과 조작(일행·동의·연결).
+                // 한 칸이면 같은 순서로 쌓는다(frontend/spec/car.md 화면 요소). 칸이 넘치면 손으로 스크롤할 수 있다(자동 스크롤 없음).
+                if (wide) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(32.dp)) {
+                        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(24.dp)) { Summary(t); Counts(t) }
+                        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(24.dp)) { People(t); Consent(); Controls(t) }
+                    }
+                } else {
+                    // 한 칸에서는 주행 중에 누를 수 있는 유일한 조작(기록 동의 끄기)이 스크롤 밖으로 밀리지 않게 아래에 붙인다
+                    Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(24.dp)) { Summary(t); People(t, compact = carStatus.restricted); Counts(t); Controls(t) }
+                    Consent()
                 }
-            } else {
-                Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(24.dp)) { Summary(t); Controls(t) }
             }
         }
     }
@@ -650,7 +633,7 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun Summary(t: Trip) {
         val c = MaterialTheme.colorScheme
-        Card {
+        Card(statusTone()) {
             if (s.recording && muted) {
                 Text("기록 멈춤", fontSize = 48.sp, fontWeight = FontWeight.Bold)
                 Text("Gleo로 멈췄어요 · 동의는 그대로예요", color = c.onSurfaceVariant)
@@ -691,13 +674,31 @@ class MainActivity : ComponentActivity() {
         brief?.takeIf { !carStatus.restricted }?.let { BriefCard(it) } // 주행 중에는 목록을 띄우지 않는다(T40)
         offer?.takeIf { it.stage != Offer.Stage.FINDING }?.let { OfferCard(it) }
         if (s.recording || Live.count > 0) Heard()
+    }
+
+    /**
+     * 일행 자리 지도. 자리는 지도의 위치가 말해 주므로 이름 아래에는 동의만 적는다.
+     * compact(좁은 창 주행 중): 캐릭터를 줄이고 동의 줄을 빼서 부탁 수와 기록 동의가 한 화면에 들어오게 한다.
+     */
+    @Composable
+    private fun People(t: Trip, compact: Boolean = false) {
+        val c = MaterialTheme.colorScheme
         Card {
-            Text("일행 ${t.people.size}명", fontSize = 30.sp, fontWeight = FontWeight.Bold)
-            t.people.forEach { p ->
-                val seat = runCatching { Seat.valueOf(p.seat).label }.getOrDefault(p.seat)
-                Text("${p.name} · $seat" + if (p.consent) " · 동의" else if (s.waitsFor(p)) " · 동의 대기" else "")
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("일행 ${t.people.size}명", Modifier.weight(1f), fontSize = 30.sp, fontWeight = FontWeight.Bold)
+                Text("차 앞쪽 ▲", color = c.onSurfaceVariant)
             }
+            // 방금 받아 적은 말의 좌석 구역(T37이 채움)을 그 줄의 바탕으로 보인다. 모르면 강조하지 않는다.
+            SeatMap(
+                t.people, Live.recent.lastOrNull()?.seatZone?.takeIf { s.recording }, size = if (compact) 56.dp else 80.dp,
+                note = if (compact) null else { p -> if (p.consent) "동의" to c.tertiary else if (s.waitsFor(p)) "동의 대기" to c.secondary else "동의 전" to c.onSurfaceVariant },
+            )
         }
+    }
+
+    /** 보관한 부탁 수와 도착해서 할 일 수. */
+    @Composable
+    private fun Counts(t: Trip) {
         Card {
             Text(if (t.heldRequests == 0) "보관한 부탁이 없어요" else "보관한 부탁 ${t.heldRequests}건", fontSize = 30.sp, fontWeight = FontWeight.Bold)
             val open = todoList.count { !it.done }
@@ -727,7 +728,7 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun BriefCard(b: Brief) {
         val items = todoList.filter { !it.done && (b.place == null || it.place == b.place) }
-        Card {
+        Card(Tone.Accent) {
             Text(if (b.place != null) "${b.place}에서 할 일" else "도착해서 할 일", fontSize = 36.sp, fontWeight = FontWeight.Bold)
             items.forEach { item ->
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -743,7 +744,7 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun OfferCard(o: Offer) {
         val c = MaterialTheme.colorScheme
-        Card {
+        Card(Tone.Accent) {
             when (o.stage) {
                 Offer.Stage.ASKING -> {
                     Text("${o.stop?.spoken}에 들를까요?", fontSize = 36.sp, fontWeight = FontWeight.Bold)
@@ -769,7 +770,7 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun Controls(t: Trip) {
+    private fun Consent() {
         val c = MaterialTheme.colorScheme
         Card {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -784,6 +785,12 @@ class MainActivity : ComponentActivity() {
             if (s.recording && !muted && Live.mic == Mic.ON && handoff.state == Handoff.State.OFF)
                 OutlinedButton({ handoff.give(wake = false) }, Modifier.heightIn(min = 72.dp)) { Text("Gleo 쓰기", fontSize = 26.sp) }
         }
+    }
+
+    /** 연결 상태와(주차 중) 진단 줄·새 여행 만들기. */
+    @Composable
+    private fun Controls(t: Trip) {
+        val c = MaterialTheme.colorScheme
         Card {
             if (s.online) Text("서버에 연결됐어요", color = c.tertiary)
             else Text("연결이 끊겼어요 · 마지막으로 확인한 정보예요", color = c.error)
@@ -795,11 +802,14 @@ class MainActivity : ComponentActivity() {
         if (!carStatus.restricted) OutlinedButton(::newTrip, Modifier.heightIn(min = 64.dp), enabled = !s.agreed && !s.switchOn && !s.busy) { Text("새 여행 만들기") }
     }
 
-    @Composable
-    private fun Card(content: @Composable () -> Unit) {
-        val c: ColorScheme = MaterialTheme.colorScheme
-        Surface(Modifier.fillMaxWidth(), RoundedCornerShape(20.dp), color = c.surface, border = BorderStroke(1.dp, c.outline)) {
-            Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) { content() }
-        }
+    /** 기록 상태 머리의 바탕: 기록 중은 빨강 기운, Gleo로 멈춤·기다림·막힘은 노랑 기운, 꺼짐은 보통 카드. */
+    private fun statusTone() = when {
+        s.recording && (muted || handoff.state != Handoff.State.OFF) -> Tone.Wait // Gleo로 멈춤·잠시 멈춤(T41)
+        s.recording && Live.mic == Mic.ON -> Tone.Rec
+        s.recording && (Live.mic == Mic.BLOCKED || Live.mic == Mic.FAILED) || s.waiting -> Tone.Wait
+        else -> Tone.Plain
     }
+
+    @Composable
+    private fun Card(tone: Tone = Tone.Plain, content: @Composable () -> Unit) = CarCard(tone) { content() }
 }
