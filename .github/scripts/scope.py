@@ -5,7 +5,7 @@
     python3 .github/scripts/scope.py --full           # 전부 검사한다(push, 수동 실행)
     python3 .github/scripts/scope.py --files a b c    # 파일을 직접 준다(테스트와 확인용)
 
-결과는 JSON 한 줄이다. GITHUB_OUTPUT이 있으면 frontend_spec=true 같은 줄도 적는다.
+결과는 JSON 한 줄이다. GITHUB_OUTPUT이 있으면 frontend_spec=true, frontend_app_web=true 같은 줄도 적는다.
 """
 import argparse
 import json
@@ -33,10 +33,13 @@ def plan(files, config, full=False):
     spec = config["parts"]["frontend-spec"]["paths"]
     code = [f for f in files if not f.endswith(".md") or under(f, spec)]
     shared = full or any(under(f, config["shared"]) for f in code)
+    hit = lambda paths: shared or any(under(f, paths) for f in code)
     return {
         "full": full,
-        "parts": {name: shared or any(under(f, part["paths"]) for f in code) for name, part in config["parts"].items()},
-        "package": shared or any(under(f, config["package"]) for f in code),
+        "parts": {name: hit(part["paths"]) for name, part in config["parts"].items()},
+        # 한 파트 안에서 따로 도는 스텝(frontend-app의 웹과 차량). 이름은 '파트-스텝'
+        "steps": {f"{name}-{step}": hit(paths) for name, part in config["parts"].items() for step, paths in part.get("steps", {}).items()},
+        "package": hit(config["package"]),
         "files": len(files),
     }
 
@@ -71,7 +74,7 @@ def main(argv=None):
 
     print(json.dumps(result, ensure_ascii=False))
     if os.environ.get("GITHUB_OUTPUT"):
-        flags = {"full": result["full"], "package": result["package"], **result["parts"]}
+        flags = {"full": result["full"], "package": result["package"], **result["parts"], **result["steps"]}
         with open(os.environ["GITHUB_OUTPUT"], "a") as out:
             for name, on in flags.items():
                 out.write(f"{name.replace('-', '_')}={'true' if on else 'false'}\n")
