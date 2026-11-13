@@ -114,6 +114,21 @@ def main(apk):
     ui = cap.wait_texts(lambda u: "숏폼 보기" in u and "● 기록 중" in u, 40); shot("4-done"); note("ui", texts=ui)
     check("끝나면 카드가 닫히고 다시 기록 중(마이크도)", "● 기록 중" in ui and gl.ours_recording())
 
+    # Gleo로 기록을 멈춘 채 숏폼을 열고, 듣는 동안 '다시 기록'을 눌러도 수음을 열지 않는다. 닫으면 그때 다시 기록한다
+    gl.gleo_call("GACHITA_PAUSE_RECORDING"); time.sleep(3)
+    tap_text("숏폼 보기"); cap.wait_texts(lambda u: any(t.startswith("1 / 2") for t in u), 15)
+    tap_text("다시 기록"); time.sleep(3); ui = texts(); note("ui", texts=ui)
+    check("Gleo로 멈춘 채 듣는 중 '다시 기록': 수음을 열지 않고 '숏폼을 듣는 동안' 표시", not gl.ours_recording() and "숏폼을 듣는 동안은 기록하지 않아요" in ui)
+    tap_text("닫기"); time.sleep(3); ui = texts()
+    check("숏폼을 닫으면 그때 다시 기록", "● 기록 중" in ui and gl.ours_recording())
+
+    # 듣는 동안 동의를 끄면 숏폼을 닫고 받은 클립을 지운다(동의 철회는 그 여행의 클립을 지운다는 계약)
+    tap_text("숏폼 보기"); ui = cap.wait_texts(lambda u: any(t.startswith("1 / 2") for t in u), 15)
+    cached = [f for f in adb("exec-out", "run-as", PKG, "--user", "10", "ls", "cache").split() if f.startswith("short")]
+    tap_switch(); time.sleep(3); ui = texts(); shot("5-consent-off"); note("ui", texts=ui)
+    left = [f for f in adb("exec-out", "run-as", PKG, "--user", "10", "ls", "cache").split() if f.startswith("short")]
+    check("듣는 동안 동의를 끄면 숏폼을 닫고 받은 클립이 남지 않음", cached and not left and not any(t[:5] in ("1 / 2", "2 / 2") for t in ui) and "기록 꺼짐" in ui, cached=cached, left=left)
+
     (OUT / "results.json").write_text(json.dumps(e2e.log, ensure_ascii=False, indent=1))
     fails = [x for x in e2e.log if x["step"] == "check" and not x["ok"]]
     print(f"검사 {sum(1 for x in e2e.log if x['step'] == 'check')}개 중 실패 {len(fails)}")

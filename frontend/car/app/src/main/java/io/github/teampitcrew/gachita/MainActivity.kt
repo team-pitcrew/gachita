@@ -177,6 +177,7 @@ class MainActivity : ComponentActivity() {
     private var shortNote by mutableStateOf("")
     private var player: MediaPlayer? = null
     private var shortGen = 0 // 장면을 열 때마다 하나씩. 늦게 끝난 받기가 닫힌 숏폼이나 다른 장면을 건드리지 않게
+    private var shortOf: Pair<String, Int>? = null // 숏폼을 요청할 때의 여행 코드와 동의 세대. 바뀌면(철회·새 여행) 닫는다
     private var shortFile: File? = null // 지금 트는 장면의 클립(장면마다 다른 파일, 닫으면 지움)
     private val media = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build()
     /** 사용자 음악은 듣는 동안만 멈춘다. 전화·Gleo 등이 포커스를 가져가면 닫는다(내비 안내처럼 줄여 달라는 것은 시스템이 줄임). */
@@ -209,6 +210,7 @@ class MainActivity : ComponentActivity() {
      * 시작은 우리 화면이 앞일 때만. 화면 뒤에서 기록 중이 되면 앱을 열 때 시작한다.
      */
     private fun syncCapture() {
+        if (shortOf != null && !shortValid()) stopShort() // 동의 철회·세대·여행이 바뀌면 듣던 숏폼과 받은 클립을 거둔다
         val code = s.trip?.code
         if (!s.recording || code == null || muted) {
             if (!s.recording && muted) mute(false) // 기록이 끝나면 멈춤 표시도 푼다. 다시 켜면 새로 기록한다
@@ -217,6 +219,7 @@ class MainActivity : ComponentActivity() {
             return
         }
         if (CaptureService.running || !resumed || Live.mic == Mic.FAILED) return
+        if (short != null) return // 숏폼을 듣는 동안은 수음을 새로 열지 않는다(재생 소리가 기록에 들어가지 않게). 닫을 때 다시 맞춘다
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             if (!askedMic) { askedMic = true; askMic.launch(arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.POST_NOTIFICATIONS)) }
             else Live.set(Mic.FAILED, "마이크 권한이 없어 기록할 수 없어요")
@@ -229,6 +232,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         prefs = getSharedPreferences("car", MODE_PRIVATE)
         handoff = Handoff.of(this) // 화면이 다시 만들어져도 넘긴 상태를 이어받는다
+        cacheDir.listFiles { f -> f.name.startsWith("short") }?.forEach { it.delete() } // 앱이 듣던 중에 끝났으면 받은 클립이 남는다
         muted = prefs.getBoolean("muted", false)
         // 실행 인자(--es server, --ei widthDp, --es route)는 디버그 빌드에서만 받는다. 밖에서 연 화면이 서버 주소를 바꾸지 못하게
         debug = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
@@ -811,20 +815,25 @@ class MainActivity : ComponentActivity() {
     /** 녹음에 동의한, 이 차가 참가시킨 사람의 토큰. 숏폼은 기록본처럼 동의한 참가자만 본다. */
     private fun viewer(): String? = s.trip?.people?.firstOrNull { it.consent && it.id in tokens }?.let { tokens[it.id] }
 
+    /** 숏폼을 요청할 때와 같은 여행·동의 세대이고, 아직 동의한 시청자가 있다. */
+    private fun shortValid(): Boolean = shortOf?.let { (code, gen) -> s.trip?.code == code && s.trip?.generation == gen && viewer() != null } == true
+
     private fun showShort() {
         val t = s.trip ?: return
         val tok = viewer() ?: run { shortNote = "기록에 동의한 사람만 볼 수 있어요"; return }
         val url = server
         shortNote = "숏폼을 받고 있어요"
+        shortOf = t.code to t.generation
         bg({ parseShort(Server(url).shortform(t.code, tok)) }) { r ->
             if (isDestroyed) return@bg
+            if (!shortValid()) { shortOf = null; shortNote = ""; return@bg } // 받는 사이 동의 철회·새 여행
             r.onSuccess { sh ->
-                if (sh.scenes.isEmpty()) { shortNote = "아직 숏폼으로 만들 장면 클립이 없어요"; return@bg }
-                if (carStatus.restricted || handoff.state != Handoff.State.OFF) { shortNote = ""; return@bg }
-                if (getSystemService(AudioManager::class.java).requestAudioFocus(playFocus) != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) { shortNote = "지금은 소리를 낼 수 없어요"; return@bg }
+                if (sh.scenes.isEmpty()) { shortOf = null; shortNote = "아직 숏폼으로 만들 장면 클립이 없어요"; return@bg }
+                if (carStatus.restricted || handoff.state != Handoff.State.OFF) { shortOf = null; shortNote = ""; return@bg }
+                if (getSystemService(AudioManager::class.java).requestAudioFocus(playFocus) != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) { shortOf = null; shortNote = "지금은 소리를 낼 수 없어요"; return@bg }
                 short = sh; shortNote = ""
                 play(0)
-            }.onFailure { shortNote = "숏폼을 받지 못했어요 · ${reason(it)}" }
+            }.onFailure { shortOf = null; shortNote = "숏폼을 받지 못했어요 · ${reason(it)}" }
         }
     }
 
@@ -834,15 +843,16 @@ class MainActivity : ComponentActivity() {
         val tok = viewer()
         val url = server
         val clip = sh.scenes.getOrNull(i)?.let { clipUrl(url, it.clip) }
-        if (clip == null || tok == null || carStatus.restricted) return stopShort()
+        if (clip == null || tok == null || carStatus.restricted || !shortValid()) return stopShort()
         player?.release(); player = null // 다음 장면을 받는 동안 지난 플레이어를 '멈춤'이 다시 틀지 않게
         shortFile?.delete(); shortFile = null
         shortAt = i; shortPos = 0.0; shortPaused = false
         CaptureService.hold(true)
         val gen = ++shortGen
-        val f = File(cacheDir, "short-$gen.wav")
+        val f = File.createTempFile("short", ".wav", cacheDir) // 요청마다 다른 파일(화면이 다시 만들어져도 겹치지 않게). 이 요청이 만든 것만 지운다
         bg({ Server(url).download(clip, tok, f) }) { r ->
             if (isDestroyed || gen != shortGen || short !== sh) { f.delete(); return@bg } // 그사이 닫혔거나 다른 장면
+            if (!shortValid()) { f.delete(); return@bg stopShort() } // 받는 사이 동의 철회·새 여행
             r.exceptionOrNull()?.let { f.delete(); shortNote = "클립을 받지 못했어요 · ${reason(it)}"; return@bg stopShort() }
             shortFile = f
             val mp = MediaPlayer()
@@ -858,13 +868,15 @@ class MainActivity : ComponentActivity() {
         player?.release(); player = null
         shortGen++ // 받는 중인 클립은 끝나면 스스로 지운다
         main.removeCallbacks(shortTick)
-        if (short != null) { // 연 숏폼이 있으면(첫 장면을 열기 전에 실패해도) 포커스와 수음을 돌려준다. hold(false)는 멈추지 않았으면 아무것도 안 함
+        val open = short != null
+        short = null; shortAt = -1; shortOf = null
+        shortFile?.delete(); shortFile = null // 받은 클립은 남기지 않는다
+        if (open) { // 연 숏폼이 있으면(첫 장면을 열기 전에 실패해도) 포커스와 수음을 돌려준다. hold(false)는 멈추지 않았으면 아무것도 안 함
             getSystemService(AudioManager::class.java).abandonAudioFocusRequest(playFocus)
             if (handoff.state == Handoff.State.OFF) CaptureService.hold(false)
             Log.i(TAG, "숏폼 닫음")
+            syncCapture() // 듣는 사이 '다시 기록'을 눌렀거나 동의가 바뀌었으면 지금 상태에 맞춘다
         }
-        short = null; shortAt = -1
-        shortFile?.delete(); shortFile = null // 받은 클립은 남기지 않는다
     }
 
     private fun mute(on: Boolean) { prefs.edit().putBoolean("muted", on).commit(); muted = on; Log.i(TAG, "기록 멈추기 $on") }
