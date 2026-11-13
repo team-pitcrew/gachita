@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { classify, migrate, server, sweep, verifyGoogleLink } from "./server.js";
 import { captureLog } from "./log.js";
+import { cues, suggest } from "./scenes.js";
 import { endStores, profilesDb, tripsDb } from "./db.js";
 
 let base;
@@ -748,7 +749,7 @@ test("녹음 클립: 고른 장면의 원음을 받고, 재생하고, 바로 지
   const [, m1] = await call("POST", `${t}/moments`, { label: "웃음" });
   const [, m2] = await call("POST", `${t}/moments`, {});
   const auth = (token) => (token ? { authorization: `Bearer ${token}` } : {});
-  const from = Date.now() - 30_000; // 클립 첫 표본의 시각
+  const from = Date.now() - 5000; // 클립 첫 표본의 시각(구간 없는 장면은 at 앞 20초~뒤 10초 안이어야 함)
   const up = (moment, body, token, generation = 1) => fetch(`${base}${t}/recordings?moment=${moment}&generation=${generation}&from=${from}`, { method: "POST", headers: auth(token), body });
   const play = (id, token) => fetch(`${base}${t}/recordings/${id}`, { headers: auth(token) });
   const del = (id, token) => fetch(`${base}${t}/recordings/${id}`, { method: "DELETE", headers: auth(token) });
@@ -786,6 +787,10 @@ test("녹음 클립: 고른 장면의 원음을 받고, 재생하고, 바로 지
   assert.equal((await fetch(`${base}${t}/recordings?moment=${m2.id}&from=${from}`, { method: "POST", headers: auth(mom.token), body: clip })).status, 400, "세대가 필요");
   assert.equal((await fetch(`${base}${t}/recordings?moment=${m2.id}&generation=1`, { method: "POST", headers: auth(mom.token), body: clip })).status, 400, "클립 시작 시각이 필요");
   assert.equal((await up(m2.id, clip, mom.token, 2)).status, 400, "아직 없는 세대");
+  // 사람이 확정한 장면 구간의 소리만(구간 없는 장면은 at 앞 20초~뒤 10초, 앞뒤 1초 여유)
+  const outside = (start, body) => fetch(`${base}${t}/recordings?moment=${m2.id}&generation=1&from=${start}`, { method: "POST", headers: auth(mom.token), body });
+  assert.equal((await outside(m2.at - 25_000, clip)).status, 400, "구간 앞의 소리");
+  assert.equal((await outside(m2.at - 20_000, wav(200, 40))).status, 400, "구간보다 긴 소리");
   assert.equal(s3.objects.size, 1, "거절한 소리는 버킷에 남지 않음");
 
   // 지우기: 버킷에서 바로, 다시 올려도 되살아나지 않음. 장면은 그대로
@@ -896,6 +901,97 @@ test("사람이 지운 클립은 철회·다시 동의 뒤에도 받지 않고, 
   const heard = await fetch(`${base}${t}/recordings/${m2.id}`, { headers: { authorization: `Bearer ${mom.token}` } });
   assert.equal(heard.status, 200, "새 클립은 지운 표시 없이 들린다");
   assert.equal((await del(m2)).status, 204, "다시 지우면 됨");
+
+  // 지우는 사이(버킷을 기다리는 동안) 동의 철회가 줄을 먼저 지워도 지운 표시는 남는다 — 다시 동의해도 그 장면은 409
+  const [, m3] = await call("POST", `${t}/moments`, {});
+  assert.equal((await up(m3, 3)).status, 201);
+  s3.onDelete = () => consent(false);
+  assert.equal((await del(m3)).status, 204);
+  await consent(true);
+  assert.equal((await up(m3, 4)).status, 409, "철회와 겹친 지우기도 표시를 남김");
+});
+
+test("장면 후보는 말이 몰린 구간을 규칙으로 고르고, 숏폼은 클립과 자막 큐로 내준다(T43)", async () => {
+  const [, trip] = await call("POST", "/api/trips", { title: "속초" });
+  const t = `/api/trips/${trip.code}`;
+  const [, momProfile] = await call("POST", "/api/profiles", { name: "엄마", character: "토끼" });
+  const [, mom] = await call("POST", `${t}/participants`, { seat: "ROW_1_LEFT", consent: true }, momProfile.token);
+  const [, son] = await join(trip.code, "아들", "ROW_2_LEFT");
+  // 여행을 10분 전에 만든 셈으로 둔다(장면 시각은 여행을 만든 뒤 ~ 지금+1분만 받는다)
+  const t0 = Date.now() - 600_000; // 시험 대화의 0초
+  await tripsDb().query("UPDATE trips SET doc = jsonb_set(doc, '{createdAt}', to_jsonb($2::bigint)) WHERE code = $1", [trip.code, t0 - 1000]);
+  const said = [
+    // A: 20초에 6번, 두 사람이 번갈아
+    ...[0, 4, 8, 12, 16, 20].map((s, i) => [s, i % 2 ? "ROW_2_LEFT" : "ROW_1_LEFT", i % 2 ? "엄마 저기 바다 보여" : "그래 정말 예쁘다"]),
+    [60, "ROW_1_LEFT", "휴게소 들를까"], // 띄엄띄엄한 말은 후보가 아니다
+    [100, "ROW_2_LEFT", "응"],
+    // B: 25초에 5번, 한 사람
+    ...[200, 206, 212, 218, 224].map((s) => [s, "ROW_2_LEFT", "노래 틀어 주세요"]),
+    // C: 말은 몰렸지만 차에서 이미 장면으로 표시한 구간
+    ...[300, 303, 306, 309].map((s, i) => [s, i % 2 ? "ROW_2_LEFT" : "ROW_1_LEFT", "하하하"]),
+  ];
+  const items = said.map(([s, seatArea, text], i) => ({ seq: i + 1, at: t0 + s * 1000, text, seatArea, generation: 1 }));
+  assert.equal((await call("POST", `${t}/utterances`, { device: "car", items }, mom.token))[0], 200);
+  await tripsDb().query("UPDATE utterances SET profile_id = $2 WHERE trip_code = $1 AND seat_area = 'ROW_1_LEFT'", [trip.code, momProfile.id]); // 화자 대조(T38)가 붙인 셈
+  await call("POST", `${t}/moments`, { at: t0 + 305_000, label: "웃음" });
+
+  assert.equal((await call("GET", `${t}/scene-suggestions`))[0], 401);
+  const [status, { items: found }] = await call("GET", `${t}/scene-suggestions`, null, son.token);
+  assert.equal(status, 200);
+  assert.deepEqual(
+    found.map((c) => [c.from - t0, c.to - t0, c.why, c.lines.length]),
+    [
+      [-1000, 24_000, "30초에 말이 6번, 2명이 말함", 6],
+      [199_000, 228_000, "30초에 말이 5번", 5],
+    ],
+    "말이 몰린 구간만, 이미 남긴 장면과 겹치는 구간은 빼고, 시각 순"
+  );
+
+  // 사람이 후보를 고르면 구간째 장면으로 남는다. 구간은 at을 품고 60초 안
+  const [a] = found;
+  assert.equal((await call("POST", `${t}/moments`, { at: a.at, from: a.from }))[0], 400, "from, to는 함께");
+  assert.equal((await call("POST", `${t}/moments`, { at: a.at, from: a.at + 1, to: a.at + 2 }))[0], 400, "from ≤ at");
+  assert.equal((await call("POST", `${t}/moments`, { at: a.at, from: a.from, to: a.from + 60_001 }))[0], 400, "60초 안");
+  assert.equal((await call("POST", `${t}/moments`, { at: a.at, from: a.at, to: a.at }))[0], 400, "1초 이상");
+  const [made, moment] = await call("POST", `${t}/moments`, { at: a.at, from: a.from, to: a.to, label: "바다" });
+  assert.deepEqual([made, moment.from, moment.to], [201, a.from, a.to]);
+  assert.deepEqual((await call("GET", `${t}/scene-suggestions`, null, son.token))[1].items.map((c) => c.from - t0), [199_000], "남긴 장면은 다시 추천하지 않음");
+
+  // 숏폼: 클립이 올라온 장면만. 자막 큐는 클립 첫 표본에서 잰 초, 말한 사람은 화자 대조로 붙은 참가자만
+  const clip = wav(200, 25);
+  assert.equal((await fetch(`${base}${t}/recordings?moment=${moment.id}&generation=1&from=${a.from}`, { method: "POST", headers: { authorization: `Bearer ${son.token}` }, body: clip })).status, 201);
+  const [ok, form] = await call("GET", `${t}/shortform`, null, mom.token);
+  assert.equal(ok, 200);
+  assert.equal(form.title, "속초");
+  assert.deepEqual(form.cast.map((c) => [c.participantId, c.name, c.character]), [[mom.id, "엄마", "토끼"], [son.id, "아들", ""]]);
+  const [scene] = form.scenes;
+  assert.deepEqual([form.scenes.length, scene.momentId, scene.label, scene.clip, scene.startAt, scene.seconds], [1, moment.id, "바다", `${t}/recordings/${moment.id}`, a.from, 25]);
+  assert.deepEqual(scene.cues.map((c) => [c.start, c.participantId, c.seatArea]), [
+    [1, mom.id, "ROW_1_LEFT"], [5, null, "ROW_2_LEFT"], [9, mom.id, "ROW_1_LEFT"], [13, null, "ROW_2_LEFT"], [17, mom.id, "ROW_1_LEFT"], [21, null, "ROW_2_LEFT"],
+  ]);
+  assert.deepEqual(scene.cues.slice(0, 2).map((c) => c.end), [2.35, 6.65], "끝은 글자 수로 어림(글자당 0.15초, 1~6초): 9자·11자");
+  assert.ok(scene.cues.every((c, i) => c.end <= (scene.cues[i + 1]?.start ?? scene.seconds)), "다음 자막·클립 끝을 넘지 않음(4초 간격)");
+  assert.equal((await call("GET", `${t}/shortform`))[0], 401);
+});
+
+test("장면 규칙의 가장자리: 한 순간에 몰린 2만 줄, 같은 시각의 두 말, 일부만 붙은 화자(T43)", () => {
+  // 차 시계가 멈춰 2만 줄이 한 시각에 몰려도 창을 복사하지 않고 끝난다(여행 한도, 파드 메모리 256 MiB)
+  const t0 = 1_000_000;
+  const flood = Array.from({ length: 20_000 }, (_, i) => ({ at: t0, text: "아", seatArea: i % 2 ? "ROW_1_LEFT" : "ROW_2_LEFT" }));
+  const started = performance.now();
+  const [one, ...rest] = suggest(flood, []);
+  assert.ok(performance.now() - started < 1000, "1초 안");
+  assert.deepEqual([rest.length, one.lines.length, one.to - one.from, one.why], [0, 30, 15_000, "30초에 말이 20000번, 2명이 말함"], "보여 줄 발화는 30줄, 구간은 15초 이상");
+  // 한 사람의 말에 화자 대조가 일부만 붙어도 한 사람이다(좌석 구역으로 센다). 구역을 모르면 세지 않는다
+  const solo = [0, 3, 6, 9].map((s, i) => ({ at: t0 + s * 1000, text: "응", seatArea: "ROW_1_LEFT", ...(i % 2 ? { profileId: "p1" } : {}) }));
+  assert.equal(suggest([...solo, { at: t0 + 10_000, text: "?" }], [])[0].why, "30초에 말이 5번");
+  // 점수는 명세 그대로(발화 수 + 2 × (말한 사람 수 − 1)): 말한 사람을 모르는 5줄(3점)보다 한 사람의 4줄(4점)이 먼저
+  const unknown = [0, 1, 2, 3, 4].map((s) => ({ at: t0 + s * 1000, text: "?" }));
+  const known = [0, 1, 2, 3].map((s) => ({ at: t0 + 100_000 + s * 1000, text: "응", seatArea: "ROW_1_LEFT" }));
+  assert.deepEqual(suggest([...unknown, ...known], []).map((c) => c.score), [3, 4]);
+  // 두 자리에서 같은 시각에 말하면 자막이 겹쳐 보인다(0초짜리로 사라지지 않음)
+  const both = cues([{ at: t0, text: "와", seatArea: "ROW_1_LEFT" }, { at: t0, text: "우와", seatArea: "ROW_2_LEFT" }], t0 - 1000, 10);
+  assert.deepEqual(both.map((c) => [c.start, c.end]), [[1, 2], [1, 2]]);
 });
 
 test("쓰기가 몰려도 서버가 멈추지 않는다", async () => {
