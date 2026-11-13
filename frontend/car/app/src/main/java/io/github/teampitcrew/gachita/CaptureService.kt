@@ -46,6 +46,13 @@ object Live {
     /** '원음 지우기'를 누른 여행. 화면이 파일을 지우고(쓰던 것까지), 수음 스레드는 다음 묶음에서 새 파일로 넘어간다. */
     @Volatile var rollRaw: String? = null
 
+    /**
+     * 출발 전 목소리 등록(T37) 중이면 읽기 스레드가 모노 소리를 여기에 모은다(10초가 차면 스스로 놓음).
+     * quiet 동안 받아 적힌 말은 보관함에 넣지 않고, 소리는 원음에 무음으로 자리만 둔다.
+     */
+    @Volatile var enroll: java.io.ByteArrayOutputStream? = null
+    @Volatile var quiet: LongRange? = null
+
     /** 내비가 마지막으로 알려 준 위치. 기록 중에 화면이 10초마다 묻고, 서비스가 발화에 붙인다. */
     @Volatile var fix: Fix? = null
     /** 받아 적은 말 한 건이 보관함에 들어갈 때마다(메인 스레드). 부탁을 알아채는 화면(T9)이 건다. */
@@ -104,6 +111,7 @@ class CaptureService : Service() {
     private var stt: SpeechToText? = null
     private var sttReady = false
     private val asm = Assembler()
+    private val levels = Levels() // 발화의 좌석 구역(T37)
     private val block = Blockage(System.currentTimeMillis())
     private lateinit var box: Outbox
 
@@ -137,6 +145,7 @@ class CaptureService : Service() {
 
     override fun onDestroy() {
         halt()
+        Live.enroll = null; Live.quiet = null // 등록 중에 멈춰도 원음이 무음으로 남지 않게
         main.removeCallbacks(watch)
         stt?.let { s -> runCatching { s.removeListener(listener); s.release() } }
         if (current === this) current = null
@@ -169,9 +178,10 @@ class CaptureService : Service() {
                 val audio = frames * 1000 / RATE
                 if (!completed) asm.partial(now, audio)
                 else asm.final(text, now, audio)?.let { d ->
-                    val u = box.add(d, Live.fix)
+                    if (Live.quiet?.let { d.startedAt <= it.last && d.endedAt >= it.first } == true) return@post // 목소리 등록 문장
+                    val u = box.add(d, Live.fix, levels.zone(d.audioFromMs + LEAD_MS / 2, d.audioToMs)) // 대조에 보내는 구간과 같게(첫 결과 쪽 0.5초를 뺌)
                     Live.show(box)
-                    Log.i(TAG, "발화 ${u.seq} ${u.text.length}자 ${u.endedAt - u.startedAt}ms") // 글자는 보관함에만
+                    Log.i(TAG, "발화 ${u.seq} ${u.text.length}자 ${u.endedAt - u.startedAt}ms 구역 ${u.seatZone ?: "모름"}") // 글자는 보관함에만
                     if (u.text.isNotEmpty()) Live.onHeard?.invoke(u) // 동의 철회 사이의 말은 글 없이 남는다
                 }
             }
@@ -203,7 +213,7 @@ class CaptureService : Service() {
             r.startRecording()
             resyncMs = r.bufferSizeInFrames * 1000L / RATE + RESYNC_MS
             val d = r.routedDevice
-            Log.i(TAG, "녹음 시작 ${r.sampleRate} Hz ${r.channelCount}채널 ${d?.productName} 버퍼 ${r.bufferSizeInFrames * 1000 / RATE}ms")
+            Log.i(TAG, "녹음 시작 ${r.sampleRate} Hz ${r.channelCount}채널 ${d?.productName} 버퍼 ${r.bufferSizeInFrames * 1000 / RATE}ms") // 2채널이어야 좌석 구역을 가른다(T37)
             val buf = ShortArray(CHUNK_FRAMES * 2)
             var errors = 0
             while (!stopping) {
@@ -212,7 +222,11 @@ class CaptureService : Service() {
                 if (n < 0) { if (++errors > 50) break; SystemClock.sleep(20); continue }
                 if (n == 0) continue
                 val c = downmix(buf, n)
-                keep(c.mono, System.currentTimeMillis() - n / 2 * 1000L / RATE) // 이 조각 첫 표본의 기기 시각(읽기가 막 돌아옴)
+                levels.add(frames / CHUNK_FRAMES, c.left, c.right)
+                val at = System.currentTimeMillis() - n / 2 * 1000L / RATE // 이 조각 첫 표본의 기기 시각(읽기가 막 돌아옴)
+                Live.enroll?.let { b -> b.write(c.mono); if (b.size() >= ENROLL_BYTES) Live.enroll = null } // 10초가 차면 놓는다
+                val q = Live.quiet
+                keep(if (q != null && at in q) ByteArray(c.mono.size) else c.mono, at) // 등록 문장은 원음에 남기지 않는다(무음으로 자리만)
                 frames += n / 2
                 val now = System.currentTimeMillis()
                 main.post { chunk(c, now) }

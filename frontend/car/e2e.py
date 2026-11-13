@@ -170,7 +170,7 @@ def main(apk):
     # 폰으로 한 명이 더 들어온다(T68). 차는 이 사람의 토큰이 없어 동의를 켜지 못한다
     phone = phone_join(code); time.sleep(12)
     ui = texts(); note("ui", texts=ui)
-    check("폰 참가자는 일행에 '동의 대기'로 보임", "일행 5명" in ui and "이모 · 뒷자리 가운데 · 동의 대기" in ui)
+    check("폰 참가자는 일행(좌석 지도)에 '동의 대기'로 보임", "일행 5명" in ui and "이모" in ui and "동의 대기" in ui)  # 지도에서 이름과 동의는 따로(T20)
     # 기어 D: 주행 제한 중에는 켜는 쪽 조작을 막는다(T11). 눌러도 켜지지 않아야 한다
     gear("Drive"); on = switch_enabled(); tap_switch(); time.sleep(2)
     shot("03-drive-not-on"); ui = texts(); note("ui", texts=ui); t = server(code)
@@ -180,7 +180,7 @@ def main(apk):
     mine = [p for p in t["participants"] if p["id"] != phone[0]]
     check("기어 P에서 켜면 차가 참가시킨 4명만 켜지고 폰 참가자는 동의 대기(기록 안 함)",
           all(p["consent"] for p in mine) and not next(p for p in t["participants"] if p["id"] == phone[0])["consent"]
-          and "● 기록 중" not in ui and "이모 · 뒷자리 가운데 · 동의 대기" in ui)
+          and "● 기록 중" not in ui and "동의 대기" in ui)
     phone_consent(code, phone, True); time.sleep(12)
     shot("04-recording"); ui = texts(); note("ui", texts=ui); t = server(code)
     check("폰 참가자가 자기 토큰으로 켜면 기록 중, 서버 동의 모두 켜짐", "● 기록 중" in ui and all(p["consent"] for p in t["participants"]))

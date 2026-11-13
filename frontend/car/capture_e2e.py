@@ -347,7 +347,7 @@ def main(apk, minutes):
     ui = texts(); shot("01a-phone-waits"); note("ui", texts=ui)
     check("차의 기록 시작은 차가 참가시킨 4명만 켜고, 폰 참가자는 동의 대기(기록 안 함)",
           all(mine(t)) and len(mine(t)) == 4 and not next(p for p in t["participants"] if p["id"] == phone[0])["consent"]
-          and "이모 · 뒷자리 가운데 · 동의 대기" in ui and "● 기록 중" not in ui)
+          and "동의 대기" in ui and "● 기록 중" not in ui)  # 좌석 지도에서 이름과 동의는 따로(T20)
     phone_consent(code, phone, True)
     ui = wait_texts(lambda u: "● 기록 중" in u, 15); shot("01-recording-park"); note("ui", texts=ui)
     held = mic_holders(); note("mic", holders=held)

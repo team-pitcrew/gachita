@@ -18,7 +18,8 @@ val FAMILY = listOf(
     Member("서준", Seat.ROW_2_LEFT), Member("하은", Seat.ROW_2_RIGHT),
 )
 
-data class Person(val id: String, val name: String, val seat: String, val consent: Boolean)
+/** profile은 프로필로 참가한 사람(그 프로필의 목소리 등록값이 대조 후보가 됨, #65). */
+data class Person(val id: String, val name: String, val seat: String, val consent: Boolean, val profile: Boolean = false)
 
 /** generation은 동의 세대(동의 철회로 올라감), createdAt은 만든 시각(epoch ms, 보관 48시간의 기준). */
 data class Trip(
@@ -36,7 +37,7 @@ fun parseTrip(json: String): Trip {
         title = o.optString("title"),
         status = o.getString("status"),
         people = List(ps.length()) { i ->
-            ps.getJSONObject(i).let { Person(it.getString("id"), it.getString("name"), it.getString("seat"), it.getBoolean("consent")) }
+            ps.getJSONObject(i).let { Person(it.getString("id"), it.getString("name"), it.getString("seat"), it.getBoolean("consent"), !it.isNull("profileId")) }
         },
         heldRequests = (0 until rs.length()).count { rs.getJSONObject(it).getString("status") == "held" },
         version = o.getInt("version"),
