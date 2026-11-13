@@ -179,9 +179,17 @@ up() {
 
 down() {
   : "${TF_STATE_BUCKET:?상태 버킷 이름(TF_STATE_BUCKET)이 필요합니다}"
-  local id="" up=""
-  id=$(tf "$TF" output -raw instance_id 2>/dev/null || true)
-  [[ $id == i-* ]] && ssm_online "$id" && up=1
+  local id up="" i
+  # 서버가 있으면(멈춘 것도) 마지막 백업을 확인해야 접는다. destroy는 루트 디스크(DB와 아직 보관 못 한 WAL)를 같이 지운다.
+  # 서버는 상태 파일(terraform output)이 아니라 이름 태그로 찾는다: output이 실패하거나 낡아도 놓치지 않게. 묻지 못하면 여기서 멈춘다(set -e)
+  id=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=$CLUSTER-k3s" \
+    Name=instance-state-name,Values=pending,running,stopping,stopped --query 'Reservations[].Instances[].InstanceId' --output text)
+  [[ -z $id || $id =~ ^i-[0-9a-f]+$ ]] || fail "서버($CLUSTER-k3s)가 하나가 아닙니다: $id"
+  if [ -n "$id" ]; then
+    for ((i = 0; i < 30; i++)); do ssm_online "$id" && up=1 && break || sleep 10; done
+    [ -n "$up" ] || fail "서버 $id 가 있는데 5분 동안 SSM에 닿지 않아 마지막 백업을 확인할 수 없습니다. 데이터를 지키려고 접지 않습니다.
+  서버를 되살려 SSM이 붙은 뒤 다시 접습니다. S3의 마지막 WAL까지만 남겨도 된다고 정했으면 사람이 서버를 지운 뒤(aws ec2 terminate-instances) 다시 접습니다"
+  fi
   # 길을 먼저 닫고 백업한다. 백업 뒤에 길을 닫으면 그사이 들어온 쓰기는 다음 WAL 조각에만 있어(보관 주기 5분)
   # destroy가 서버를 끝낼 때 사라진다
   if [ -n "$up" ]; then
@@ -194,11 +202,10 @@ down() {
       kubectl -n argocd delete application edge --ignore-not-found --wait=true --timeout=600s' ||
       echo "  edge 앱을 지우지 못했습니다. 태그로 정리합니다"
   else
-    log 1/5 "서버가 없거나 SSM에 붙지 않아 edge 앱 지우기와 백업을 건너뜀(이미 접혔거나 서버가 망가짐)"
+    log 1/5 "서버가 없어 edge 앱 지우기와 백업을 건너뜀(이미 접힘)"
   fi
 
   log 2/5 "컨트롤러가 만든 ALB가 사라졌는지(최대 5분). 남았으면 태그로 지운다"
-  local i
   for ((i = 0; i < 30; i++)); do [ -z "$(alb_arn)" ] || [ "$(alb_arn)" = None ] && break || sleep 10; done
   for a in $(lbc_resources elasticloadbalancing:loadbalancer); do
     echo "  ALB를 직접 지움: $a"
@@ -295,10 +302,27 @@ kubectl -n gachita-db get cluster db -o json | jq -r '"\(.status.phase), 주 인
 for c in Ready ContinuousArchiving; do
   [ "$(kubectl -n gachita-db get cluster db -o jsonpath="{.status.conditions[?(@.type==\"$c\")].status}" 2>/dev/null)" = True ] || bad="$bad db:$c"
 done
+echo "== WAL 보관(보관 대기 조각 수, 마지막이 실패인지, 마지막 보관 뒤 초)"
+# 데이터와 WAL이 루트 디스크의 같은 PV에 있다(ADR-0018). 보관이 밀리면 WAL이 루트를 채운다. 조각 16 MB, 8개면 128 MB·약 40분 밀림
+p=$(kubectl -n gachita-db get cluster db -o jsonpath='{.status.currentPrimary}' 2>/dev/null)
+wal=$([ -z "$p" ] || kubectl -n gachita-db exec "$p" -c postgres -- psql -tA -F' ' -c "SELECT (SELECT count(*) FROM pg_ls_archive_statusdir() WHERE name LIKE '%.ready'), coalesce(last_failed_time > coalesce(last_archived_time, 'epoch'), false), coalesce(extract(epoch FROM now() - last_archived_time)::int, -1) FROM pg_stat_archiver" 2>/dev/null)
+echo "  ${wal:-묻지 못함}"
+read -r ready failing _ <<<"$wal"
+[[ ${ready:-x} =~ ^[0-9]+$ && $ready -le 8 && $failing == f ]] || bad="$bad WAL보관"
+echo "== 디스크(루트, 70% 이상이면 실패. kubelet 이미지 정리 85%·축출 90%보다 앞섬)"
+df -h / | tail -1; df -i / | tail -1
+use=$(df --output=pcent / | tail -1 | tr -dc 0-9); iuse=$(df --output=ipcent / | tail -1 | tr -dc 0-9)
+[ "${use:-100}" -lt 70 ] && [ "${iuse:-100}" -lt 70 ] || bad="$bad 디스크(${use}%,inode${iuse}%)"
+du -sh /var/lib/rancher/k3s/storage/* 2>/dev/null | sed 's/^/  /'
 echo "== 최근 백업"
 kubectl -n gachita-db get backups -o json | jq -r '.items | sort_by(.metadata.creationTimestamp) | .[-3:][] | "\(.metadata.name) \(.status.phase) \(.status.stoppedAt // "-")"'
-echo "== 되감을 수 있는 구간(ObjectStore backup)"
-kubectl -n gachita-db get objectstore backup -o json | jq -c '.status.serverRecoveryWindow // "없음"'
+echo "== 되감을 수 있는 구간(ObjectStore backup의 서버 db). 없거나 마지막 전체 백업이 26시간(매일 + 2시간)보다 오래면 실패"
+win=$(kubectl -n gachita-db get objectstore backup -o json 2>/dev/null | jq -c '.status.serverRecoveryWindow.db // empty')
+echo "  ${win:-없음}"
+first=$(jq -r '.firstRecoverabilityPoint // empty' <<<"$win"); last=$(jq -r '.lastSuccessfulBackupTime // empty' <<<"$win")
+[ -n "$first" ] || bad="$bad 복구구간"
+age=$([ -z "$last" ] || echo $(($(date +%s) - $(date -d "$last" +%s))))
+[[ -n $age && $age -le $((26 * 3600)) ]] || bad="$bad 전체백업(${last:-없음})"
 [ -z "$bad" ] || { echo "정상이 아닌 것:$bad"; exit 1; }
 EOF
 }
@@ -341,10 +365,20 @@ restore_script() { # restore_script <시각> <apply|"">
 set -euo pipefail
 export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 k() { kubectl -n gachita-db "$@"; }
+k delete cluster db-pitr --ignore-not-found --wait=true # 지난번에 남은 것. 그 공간까지 세지 않게 먼저 지운다
+for i in $(seq 60); do ls -d /var/lib/rancher/k3s/storage/*_gachita-db_db-pitr-* >/dev/null 2>&1 || break; sleep 2; done # PVC→PV→디렉터리 정리
+# db-pitr도 같은 루트 디스크(local-path)에 선다. 복구본, WAL 재생·임시 파일, apply의 덮어쓰기 WAL을 생각해
+# db 실제 크기(PV 디렉터리, PVC 요청 8Gi가 아님)의 3배와 2 GiB가 남아 있어야 시작한다
+# du는 재는 도중 사라진 파일(WAL 재활용)에도 0이 아닌 값으로 끝나므로 결과만 쓴다
+db_bytes=$({ du -sb /var/lib/rancher/k3s/storage/*_gachita-db_db-[0-9]* 2>/dev/null || true; } | awk '{s += $1} END {print s + 0}')
+avail=$(df -B1 --output=avail / | tail -1 | tr -dc 0-9)
+need=$((db_bytes * 3 + 2 * 1024 ** 3))
+echo "루트 남은 공간 $(numfmt --to=iec "$avail"), db 실제 크기 $(numfmt --to=iec "$db_bytes"), 필요 $(numfmt --to=iec "$need")"
+[ "$db_bytes" -gt 0 ] || { echo "db의 PV를 찾지 못해 크기를 재지 못했습니다(/var/lib/rancher/k3s/storage)"; exit 1; }
+[ "$avail" -ge "$need" ] || { echo "공간이 모자라 복구를 시작하지 않습니다(운영 db와 같은 디스크)"; exit 1; }
 acct=$(sed -n 's/^account_id: "*\([0-9]*\)"*$/\1/p' /etc/gachita/vars.yml)
 env=$(sed -n 's/^env: //p' /etc/gachita/vars.yml)
 image=$(k get cluster db -o jsonpath='{.spec.imageName}')
-k delete cluster db-pitr --ignore-not-found --wait=true
 trap 'k delete cluster db-pitr --ignore-not-found --wait=false >/dev/null' EXIT
 start=$(date +%s)
 k apply -f - <<YAML

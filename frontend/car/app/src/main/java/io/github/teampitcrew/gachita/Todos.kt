@@ -29,13 +29,14 @@ fun todoOf(text: String): Pair<String, String>? {
 fun arrivedAt(place: String, nextStop: String?) = nextStop != null && place in nextStop.replace(" ", "")
 
 /**
- * 여행 하나의 할 일. 앱 저장소의 todos-<여행 코드>.json에 통째로 다시 쓴다(몇십 건이라 충분). 메인 스레드에서만 만진다.
+ * 여행 하나의 할 일. 앱 저장소의 todos-<여행 코드>.json에 통째로 암호화해 다시 쓴다(몇십 건이라 충분, Vault.kt). 메인 스레드에서만 만진다.
+ * 받아 적은 말 그대로라 보관함과 같이 48시간이 지나면 지운다(sweep).
  * ponytail: 차 안에만 둔다. 서버 API에는 장소가 붙은 할 일이 없다(부탁에 장소 칸 없음). 서버 저장은 T39 쪽에서 정하면 옮긴다.
  */
-class Todos(dir: File, val trip: String) {
+class Todos(dir: File, val trip: String, private val seal: Seal) {
     private val file = File(dir, "todos-$trip.json")
     var items: List<Todo> = runCatching {
-        JSONArray(file.readText()).let { a ->
+        JSONArray(seal.unline(file.readText())).let { a ->
             List(a.length()) { i -> a.getJSONObject(i).let { Todo(it.getLong("id"), it.getString("place"), it.getString("text"), it.getBoolean("done")) } }
         }
     }.getOrDefault(emptyList())
@@ -59,7 +60,7 @@ class Todos(dir: File, val trip: String) {
         items = next
         val tmp = File(file.path + ".tmp")
         runCatching {
-            tmp.writeText(JSONArray(next.map { JSONObject().put("id", it.id).put("place", it.place).put("text", it.text).put("done", it.done) }).toString())
+            tmp.writeText(seal.line(JSONArray(next.map { JSONObject().put("id", it.id).put("place", it.place).put("text", it.text).put("done", it.done) }).toString()))
             tmp.renameTo(file)
         }
     }
