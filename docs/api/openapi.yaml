@@ -111,7 +111,7 @@ paths:
               required: [code, redirectUri]
               properties:
                 code: { type: string, minLength: 1, maxLength: 500, description: 구글이 redirect 주소로 돌려준 인증 코드 }
-                redirectUri: { type: string, minLength: 1, maxLength: 500, description: "코드를 받을 때 쓴 주소. 출처가 https://gachita.mangowhois.ai 또는 http://localhost·127.0.0.1이어야 하고, 구글에 등록된 값과 같아야 함" }
+                redirectUri: { type: string, minLength: 1, maxLength: 500, description: "코드를 받을 때 쓴 주소. https://gachita.mangowhois.ai 또는 http://localhost·127.0.0.1의 주소를 정규형으로(사용자 정보 없이). 구글에 등록된 값과 같아야 함" }
       responses:
         "200": { description: 연결했거나 찾아 들어간 프로필, content: { application/json: { schema: { $ref: "#/components/schemas/ProfileMaybeToken" } } } }
         "201": { description: 계정으로 새로 만든 프로필, content: { application/json: { schema: { $ref: "#/components/schemas/ProfileMaybeToken" } } } }

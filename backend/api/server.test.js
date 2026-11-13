@@ -13,6 +13,7 @@ import { endStores, profilesDb, tripsDb } from "./db.js";
 
 let base;
 let fakeProvider; // 가짜 구글(T21). code가 곧 사용자 번호다. 특수 code로 장애 상황도 낸다.
+let tokenCalls = 0; // 가짜 구글이 받은 토큰 교환 수
 captureLog(() => {}); // 서버의 구조화 로그는 시험 출력에 섞지 않는다(T71 시험은 따로 받아 본다)
 before(async () => {
   fakeProvider = createServer(async (req, res) => {
@@ -22,6 +23,7 @@ before(async () => {
     };
     const url = new URL(req.url, "http://localhost");
     if (url.pathname === "/token" && req.method === "POST") {
+      tokenCalls++;
       const raw = await new Promise((ok) => {
         let body = "";
         req.on("data", (c) => (body += c));
@@ -256,9 +258,15 @@ test("제공자 오류를 코드 거절과 장애으로 나눠 알린다(T21)", 
   assert.equal((await link("no-sub"))[0], 502, "사용자 번호가 없는 응답");
   // 코드를 돌려받는 주소는 우리 출처만: 구글을 부르기 전에 거절한다(T27). 정상 코드여도 400
   const via = (redirectUri) => call("POST", "/api/profiles/me/links/google", { code: "code-77", redirectUri }).then(([s]) => s);
-  for (const bad of ["https://evil.example/cb", "http://gachita.mangowhois.ai/cb", "https://gachita.mangowhois.ai.evil.example/cb", "https://gachita.mangowhois.ai@evil.example/cb", "http://localhost.evil.example/cb", "javascript:alert(1)", "x"]) {
+  const before = tokenCalls;
+  for (const bad of [
+    "https://evil.example/cb", "http://gachita.mangowhois.ai/cb", "https://gachita.mangowhois.ai.evil.example/cb", "https://gachita.mangowhois.ai@evil.example/cb",
+    "https://user:pw@gachita.mangowhois.ai/cb", "blob:https://gachita.mangowhois.ai/x", "https://GACHITA.mangowhois.ai/cb", "https://gachita.mangowhois.ai",
+    "http://localhost.evil.example/cb", "http://evil.example@localhost/", "http:localhost/cb", "https://localhost/cb", "http://[::1]/", "javascript:alert(1)", "x",
+  ]) {
     assert.equal(await via(bad), 400, bad);
   }
+  assert.equal(tokenCalls, before, "거절한 주소로는 구글을 부르지 않는다");
   assert.equal(await via("http://127.0.0.1:8787/"), 201, "로컬 개발 주소");
   // 시간 제한을 짧게 두고 제공자가 늦게 답하면 504, 아예 연결이 안 되면 503.
   process.env.GOOGLE_TIMEOUT_MS = "150";
