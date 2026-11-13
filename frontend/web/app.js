@@ -1,5 +1,5 @@
 // 가치타 모바일 화면(gachita.mangowhois.ai). 빌드 없이 브라우저가 그대로 읽는다.
-// 주소: /#코드는 여행, /#me는 내 프로필, /j/<초대>는 그룹 초대 수락(QR, ADR-0009).
+// 주소: /#코드는 이 폰이 들어간 여행, /#me는 내 프로필. 여행에는 차가 이 폰의 동승 연결 QR을 읽어 넣는다(#71, 11/14).
 // 이 폰이 누구인지(프로필 토큰, 여행마다 참가자 id와 토큰)는 localStorage에 둔다. 폰에서는 수음하지 않는다.
 // 사용자가 쓴 글은 textContent로만 넣는다(innerHTML 금지).
 
@@ -50,7 +50,6 @@ const QUICK = [
 const app = document.getElementById("app");
 const sheet = document.getElementById("sheet");
 const code = () => (location.hash === "#me" ? "" : location.hash.slice(1).toUpperCase());
-const inviteCode = () => /^\/j\/([\w-]+)$/.exec(location.pathname)?.[1];
 // 이 폰이 기억하는 것. store(키)는 읽기, store(키, 값)은 쓰기, store(키, null)은 지우기.
 const store = (key, value) =>
   value === undefined ? localStorage.getItem(`gachita:${key}`) : value === null ? localStorage.removeItem(`gachita:${key}`) : localStorage.setItem(`gachita:${key}`, value);
@@ -60,13 +59,10 @@ const myToken = () => store(`${code()}:token`); // 참가자 토큰: 동의 켜�
 let trip = null; // 서버에서 받은 여행
 let profile = null; // 이 폰의 프로필(GET /api/profiles/me). 토큰은 store("profile")
 let photo = ""; // 내 사진(object URL)
-let invited = null; // 초대 수락 결과
-let inviteError = ""; // 쓸 수 없는 초대(없음·취소·만료·횟수 소진)
 const pdraft = { name: "", character: "", photo: null, preview: "", consentDefault: false };
 let failed = ""; // 여행을 불러오지 못한 이유
 let offline = false;
 let stale = false; // 입력 중에 온 변경은 입력이 끝난 뒤 그린다
-const draft = { join: "", step: 0, name: "", seat: "" };
 
 // 여행 경로는 토큰 없이, 프로필 경로(mine)는 이 폰의 프로필 토큰으로.
 const call = (method, path, body) => api(method, `/trips${path}`, body);
@@ -165,12 +161,6 @@ const chipGroup = (legend, name, options, current, onpick) =>
 const car = (seat, className = "car") =>
   h("div", { className }, h("p", { className: "meta" }, "차 앞쪽"), h("div", { className: "front" }, SEATS.slice(0, 2).map(seat)), h("div", { className: "rear" }, SEATS.slice(2).map(seat)));
 
-function share() {
-  const url = `${location.origin}/#${trip.code}`;
-  if (navigator.share) navigator.share({ title: "가치타 여행 초대", url }).catch(() => {});
-  else navigator.clipboard.writeText(url).then(() => toast("초대 주소를 복사했어요."), () => toast(url));
-}
-
 // 얼굴: 사진, 없으면 캐릭터, 없으면 이름 첫 글자
 const avatar = (p, src) => h("span", { className: "avatar", "aria-hidden": "true" }, src ? h("img", { src, alt: "" }) : FACE[p?.character] ?? (p?.name || "?").slice(0, 1));
 
@@ -229,7 +219,7 @@ const saveProfile = () =>
 
 function profileView() {
   const remove = () =>
-    confirm("프로필과 남긴 장면 앨범, 내가 대표인 그룹과 내가 만든 아이 프로필까지 지워져요. 지울까요?") &&
+    confirm("프로필과 남긴 장면 앨범까지 지워져요. 지울까요?") &&
     act(async () => {
       await mine("DELETE", "/profiles/me");
       store("profile", null);
@@ -256,83 +246,28 @@ function profileView() {
   ];
 }
 
-// QR로 받은 그룹 초대(/j/<초대>). 프로필이 있으면 그 프로필로, 없으면 이름과 얼굴만 정해 새로 만든다.
-function inviteView() {
-  if (inviteError)
-    return [
-      header(h("span", { className: "brand" }, "가치타")),
-      h("h1", {}, "이 초대는 쓸 수 없어요"),
-      h("p", { className: "sub" }, `${inviteError}. 대표에게 새 초대를 부탁해 주세요.`),
-      bar(button("처음으로", () => (location.href = "/"), "primary")),
-    ];
-  if (invited) {
-    const kind = invited.group.kind === "family" ? "가족" : "동승자";
-    return [
-      header(h("span", { className: "brand" }, "가치타")),
-      h("h1", {}, `${invited.group.name || kind} 그룹에 들어왔어요`),
-      h("p", { className: "sub" }, invited.trip ? "지금 함께 가는 여행이 있어요. 앉은 자리만 고르면 돼요." : "대표가 여행을 만들면 자리만 고르면 돼요."),
-      bar(button(invited.trip ? "자리 고르기" : "처음으로", () => (location.href = invited.trip ? `/#${invited.trip.code}` : "/"), "primary")),
-    ];
-  }
-  const accept = () =>
-    act(async () => {
-      const body = profile ? {} : { name: pdraft.name.trim(), device: "폰", ...(pdraft.character && { character: pdraft.character }) };
-      const res = await api("POST", `/j/${inviteCode()}`, body, store("profile")).catch((e) => {
-        if (e.status === 404 || e.status === 409) (inviteError = e.message), render(); // act()는 실패하면 다시 그리지 않는다
-        throw e;
-      });
-      if (res.token) store("profile", res.token);
-      if (res.token && pdraft.photo) await mine("PUT", "/profiles/me/photo", pdraft.photo);
-      await loadProfile();
-      invited = res;
-    });
-  return [
-    header(h("span", { className: "brand" }, "가치타")),
-    h("h1", {}, "그룹 초대를 받았어요"),
-    profile
-      ? [
-          h("div", { className: "card face" }, avatar(profile, photo), h("p", { className: "what grow" }, `${profile.name} 님으로 들어가요`)),
-          bar(button("이 프로필로 들어가기", accept, "primary"), button("프로필 고치기", () => (location.href = "/#me"))),
-        ]
-      : [
-          h("p", { className: "sub" }, "들어가기 전에 이름과 얼굴만 정해요. 이 폰에 프로필이 만들어져요."),
-          form(accept, ...profileFields(false), bar(h("button", { className: "primary" }, "프로필 만들고 들어가기"))),
-        ],
-  ];
-}
-
 function home() {
+  const last = store("trip"); // 이 폰이 마지막으로 들어간 여행
   return [
     header(h("span", { className: "brand" }, "가치타")),
-    h("h1", {}, "여행을 시작할까요?"),
-    h("p", { className: "sub" }, "같이 탄 사람들의 부탁을 한곳에서 챙겨요."),
+    h("h1", {}, "같이 탈 준비를 할까요?"),
+    h("p", { className: "sub" }, "차가 이 폰의 동승 연결 QR을 읽으면 여행에 들어가요. 부탁과 기록은 그다음에 여기서 챙겨요."),
     profile
       ? h(
           "section",
           { className: "card face" },
           avatar(profile, photo),
-          h("div", { className: "grow" }, h("p", { className: "what" }, `${profile.name} 님`), h("p", { className: "meta" }, "여행에 참가할 때 자리만 고르면 돼요.")),
+          h("div", { className: "grow" }, h("p", { className: "what" }, `${profile.name} 님`), h("p", { className: "meta" }, "차에 탈 때 동승 연결 QR을 띄우면 돼요.")),
           button("프로필", () => (location.hash = "me"), "plain"),
         )
       : h(
           "section",
           { className: "card" },
           h("p", { className: "what" }, "프로필을 만들어 두세요"),
-          h("p", { className: "meta" }, "이름과 사진을 한 번 넣어 두면 초대를 받거나 여행에 참가할 때 자리만 고르면 돼요."),
+          h("p", { className: "meta" }, "이름과 캐릭터를 정하면 동승 연결 QR을 띄울 수 있어요."),
           button("프로필 만들기", () => (location.hash = "me")),
         ),
-    h(
-      "form",
-      { className: "card", onsubmit: (e) => (e.preventDefault(), (location.hash = draft.join.trim())) },
-      h(
-        "label",
-        { className: "field" },
-        h("span", {}, "초대 코드가 있나요?"),
-        h("input", { className: "code", value: draft.join, required: true, minLength: 6, maxLength: 6, autocapitalize: "characters", autocomplete: "off", placeholder: "K7M2QX", oninput: (e) => (draft.join = e.target.value) }),
-      ),
-      h("button", {}, "코드로 참가"),
-    ),
-    bar(button("새 여행 만들기", () => act(async () => (location.hash = (await call("POST", "", {})).code)), "primary")),
+    last && bar(button("지난 여행 열기", () => (location.hash = last), "primary")),
   ];
 }
 
@@ -341,66 +276,47 @@ const loading = () => [header(h("span", { className: "brand" }, "가치타")), h
 const missing = () => [
   header(h("span", { className: "brand" }, "가치타")),
   h("h1", {}, "여행을 찾지 못했어요"),
-  h("p", { className: "sub" }, `${failed}. 코드를 다시 확인해 주세요.`),
+  h("p", { className: "sub" }, "끝났거나 만든 지 48시간이 지나 지워졌어요."),
   bar(button("처음으로", () => (location.hash = ""), "primary")),
 ];
 
-// 참가: 한 화면에 한 가지씩 묻는다
-function join() {
-  const taken = Object.fromEntries(trip.participants.map((p) => [p.seat, p.name]));
-  const go = (n) => {
-    draft.step = n;
-    render();
-    app.querySelector("input:not([type=radio])")?.focus();
-  };
-  // 프로필이 있으면 이름은 프로필에서 오고 자리와 동의만 묻는다.
-  const order = profile ? [1, 2] : [0, 1, 2];
-  const submit = (consent) =>
-    act(async () => {
-      const body = profile ? { seat: draft.seat, consent } : { name: draft.name.trim(), seat: draft.seat, consent };
-      const p = await api("POST", `/trips/${trip.code}/participants`, body, profile && store("profile"));
-      store(trip.code, p.id);
-      store(`${trip.code}:token`, p.token); // 참가자 토큰: 기록본처럼 음성 경로를 읽을 때 쓴다(ADR-0007)
-      draft.step = 0;
-    });
-  const next = () => bar(h("button", { className: "primary" }, "다음"));
+// 이 폰이 들어가지 않은 여행. 여행 코드로는 들어갈 수 없고, 차가 동승 연결 QR을 읽어 넣는다(#71).
+const notHere = () => [
+  header(h("span", { className: "brand" }, "가치타")),
+  h("h1", {}, "이 폰은 이 여행에 없어요"),
+  h("p", { className: "sub" }, "차 화면의 '동승자 연결'에서 이 폰의 동승 연결 QR을 읽으면 들어갈 수 있어요."),
+  bar(button("처음으로", () => (location.hash = ""), "primary")),
+];
 
-  const steps = [
-    () => ({
-      title: "뭐라고 부를까요?",
-      sub: `초대 코드 ${trip.code} 여행에 참가해요.`,
-      body: form(
-        () => go(draft.step + 1),
-        h("label", { className: "field" }, h("span", {}, "이름"), h("input", { value: draft.name, required: true, maxLength: 20, autocomplete: "nickname", oninput: (e) => (draft.name = e.target.value) })),
-        next(),
-      ),
-    }),
-    () => ({
-      title: "어디에 앉으셨나요?",
-      sub: profile ? `${profile.name} 님, 초대 코드 ${trip.code} 여행이에요.` : "운전석에 앉은 사람이 출발과 들를 곳을 정해요.",
-      body: form(
-        () => go(draft.step + 1),
-        car(([id, label]) => chip("seat", id, label, { checked: draft.seat === id, disabled: !!taken[id], required: true, sub: taken[id], onpick: (v) => (draft.seat = v) })),
-        next(),
-      ),
-    }),
-    () => ({
-      title: "이동 중 대화를 기록해도 될까요?",
-      sub: "도착한 뒤 재미있던 장면을 클립으로 남기는 데 써요.",
-      body: [
-        h("ul", { className: "card" }, CONSENT.map((line) => h("li", {}, line))),
-        bar(button("동의하고 참가", () => submit(true), "primary"), button("동의하지 않고 참가", () => submit(false))),
-      ],
-    }),
-  ];
-  const s = steps[order[draft.step]]();
+// 차가 넣어 준 뒤 한 번 묻는 기록 동의. 켜기는 이 폰의 참가자 토큰으로만 된다(T68). 고른 뒤로는 여행 화면에서 바꾼다.
+const asking = (me) => !me.consent && !store(`${trip.code}:asked`);
+function consentView(me) {
+  const decide = (on) => () => (store(`${trip.code}:asked`, "1"), on ? consentOn(me) : render());
   return [
-    header(button("이전", () => (draft.step ? go(draft.step - 1) : (location.hash = "")), "plain"), h("span", { className: "meta" }, `${draft.step + 1} / ${order.length}`)),
-    h("h1", {}, s.title),
-    h("p", { className: "sub" }, s.sub),
-    s.body,
+    header(h("span", { className: "brand" }, "가치타"), h("span", { className: "meta" }, trip.title || "가치타 여행")),
+    h("h1", {}, "이동 중 대화를 기록해도 될까요?"),
+    h("p", { className: "sub" }, `${SEAT[me.seat] ?? "자리"}에 앉은 ${me.name} 님으로 들어왔어요. 도착한 뒤 재미있던 장면을 클립으로 남기는 데 써요.`),
+    h("ul", { className: "card" }, CONSENT.map((line) => h("li", {}, line))),
+    bar(myToken() ? button("동의하고 시작", decide(true), "primary") : h("p", { className: "meta" }, ONLY_HERE), button("동의하지 않고 시작", decide(false))),
   ];
 }
+
+// 켜기는 본인의 참가자 토큰으로만 된다(끄기는 누구나). 서버가 이 폰의 토큰을 잊었으면(다른 곳에서 다섯 번 넘게
+// 다시 참가) 프로필로 들어온 사람은 다시 참가해 새 토큰으로 한 번 더 켠다. 손님은 다시 받을 길이 없다.
+const consentOn = (me) =>
+  act(async () => {
+    const on = () => api("PATCH", `/trips/${trip.code}/participants/${me.id}`, { consent: true }, myToken());
+    await on()
+      .catch(async (e) => {
+        if (e.status !== 401 || !profile || me.profileId !== profile.id) throw e;
+        store(`${trip.code}:token`, null);
+        await claim();
+        await on();
+      })
+      .catch((e) => {
+        throw e.status === 401 || e.status === 403 ? new Error(ONLY_HERE) : e;
+      });
+  });
 
 function tripView(me) {
   const t = `/${trip.code}`;
@@ -409,22 +325,6 @@ function tripView(me) {
   const seated = Object.fromEntries(trip.participants.map((p) => [p.seat, p]));
   const waiting = trip.status === "driving" ? trip.participants.filter((p) => !p.consent).map((p) => p.name) : [];
   const patch = (path, body) => () => act(() => call("PATCH", t + path, body));
-  // 켜기는 본인의 참가자 토큰으로만 된다(끄기는 누구나). 서버가 이 폰의 토큰을 잊었으면(다른 곳에서 다섯 번 넘게
-  // 다시 참가) 프로필로 들어온 사람은 다시 참가해 새 토큰으로 한 번 더 켠다. 손님은 다시 받을 길이 없다.
-  const consentOn = () =>
-    act(async () => {
-      const on = () => api("PATCH", `/trips${t}/participants/${me.id}`, { consent: true }, myToken());
-      await on()
-        .catch(async (e) => {
-          if (e.status !== 401 || !profile || me.profileId !== profile.id) throw e;
-          store(`${trip.code}:token`, null);
-          await claim();
-          await on();
-        })
-        .catch((e) => {
-          throw e.status === 401 || e.status === 403 ? new Error(ONLY_HERE) : e;
-        });
-    });
   const open = trip.requests.filter((r) => !CLOSED.includes(r.status));
   const rec = trip.recording ? ["기록 중", "rec"] : trip.status !== "driving" ? ["기록 안 함", ""] : waiting.length ? ["동의 대기", ""] : ["기록 일시정지", ""];
   const next = NEXT_TRIP[trip.status];
@@ -454,7 +354,7 @@ function tripView(me) {
   };
 
   return [
-    header(h("span", { className: "brand" }, "가치타"), h("span", { className: "meta" }, trip.title || `코드 ${trip.code}`)),
+    header(h("span", { className: "brand" }, "가치타"), h("span", { className: "meta" }, trip.title || "가치타 여행")),
     h(
       "section",
       { className: "card" },
@@ -471,7 +371,7 @@ function tripView(me) {
     h(
       "section",
       { className: "stack" },
-      h("div", { className: "between" }, h("h2", {}, `일행 ${trip.participants.length}명`), button(`초대 코드 ${trip.code}`, share)),
+      h("h2", {}, `일행 ${trip.participants.length}명`),
       car(([id, label]) => {
         const p = seated[id];
         return h("div", { className: `chip${p ? "" : " empty"}${p?.id === me.id ? " me" : ""}` }, p ? p.name : "빈자리", h("small", {}, label));
@@ -485,7 +385,7 @@ function tripView(me) {
         "div",
         { className: "between" },
         h("div", {}, h("p", { className: "what" }, "대화 기록 동의"), h("p", { className: "meta" }, me.consent ? "동의했어요." : "동의하지 않았어요.")),
-        me.consent ? button("동의 끄기", () => confirm(OFF_WIPES) && patch(`/participants/${me.id}`, { consent: false })()) : myToken() ? button("동의 켜기", consentOn) : h("p", { className: "meta" }, ONLY_HERE),
+        me.consent ? button("동의 끄기", () => confirm(OFF_WIPES) && patch(`/participants/${me.id}`, { consent: false })()) : myToken() ? button("동의 켜기", () => consentOn(me)) : h("p", { className: "meta" }, ONLY_HERE),
       ),
     ),
     trip.moments.length > 0 &&
@@ -502,7 +402,9 @@ function tripView(me) {
 function render() {
   stale = false;
   const me = trip?.participants.find((p) => p.id === myId());
-  const view = inviteCode() ? inviteView() : location.hash === "#me" ? profileView() : !code() ? home() : failed ? missing() : !trip ? loading() : me ? tripView(me) : join();
+  if (me) store("trip", trip.code); // 처음 화면의 '지난 여행 열기'
+  else if (failed && store("trip") === code()) store("trip", null);
+  const view = location.hash === "#me" ? profileView() : !code() ? home() : failed ? missing() : !trip ? loading() : !me ? notHere() : asking(me) ? consentView(me) : tripView(me);
   app.replaceChildren(...view.flat().filter(Boolean));
 }
 
@@ -536,7 +438,7 @@ function render() {
   };
 }
 
-addEventListener("hashchange", () => (location.hash === "#me" && fillDraft(), (trip = null), (failed = ""), (draft.step = 0), refresh(true)));
+addEventListener("hashchange", () => (location.hash === "#me" && fillDraft(), (trip = null), (failed = ""), refresh(true)));
 app.addEventListener("focusout", () => setTimeout(() => stale && !typing() && render())); // 입력이 끝나면 밀린 변경을 그린다
 setInterval(refresh, 2000); // ponytail: 2초마다 묻는다(바뀐 게 없으면 304). 지연이 문제가 되면 SSE로 바꾼다.
 render();
