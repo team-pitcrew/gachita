@@ -1306,6 +1306,38 @@ test("차 화면에서 고친 화자를 발화 줄에 남긴다(T37)", async () 
   assert.equal((await fix(1, b.id, a.token))[0], 409);
 });
 
+test("한 여행의 내 앨범 장면을 발화와 섞거나 자르지 않고 준다(T81 공유 후보)", async () => {
+  const [, me] = await call("POST", "/api/profiles", { name: "엄마" });
+  const [, you] = await call("POST", "/api/profiles", { name: "아빠" });
+  const [, trip] = await call("POST", "/api/trips", {});
+  const [, other] = await call("POST", "/api/trips", {});
+  const t = `/api/trips/${trip.code}`;
+  const [, mine] = await call("POST", `${t}/participants`, { seat: "ROW_1_LEFT", consent: true }, me.token);
+  const [, yours] = await call("POST", `${t}/participants`, { seat: "ROW_1_RIGHT", consent: true }, you.token);
+  const [, elsewhere] = await call("POST", `/api/trips/${other.code}/participants`, { seat: "ROW_1_LEFT", consent: true }, me.token);
+  const now = Date.now();
+  const [, later] = await call("POST", `${t}/moments`, { at: now + 2000, label: "나중", lat: 37.5, lng: 127 }, mine.token);
+  const [, earlier] = await call("POST", `${t}/moments`, { at: now + 1000, label: "먼저" }, mine.token); // 늦게 남겨도 시각 순
+  await call("POST", `${t}/moments`, { label: "아빠 것" }, yours.token); // 남의 앨범
+  await call("POST", `/api/trips/${other.code}/moments`, { label: "다른 여행" }, elsewhere.token);
+  // 피드를 100개로 채우는 발화가 있어도 장면은 빠지지 않는다
+  const items = Array.from({ length: 120 }, (_, i) => ({ seq: i + 1, at: now - 5000 + i, text: `말 ${i}`, generation: 1 }));
+  assert.equal((await call("POST", `${t}/utterances`, { device: "car", items }, mine.token))[0], 200);
+  await tripsDb().query("UPDATE utterances SET profile_id = $2 WHERE trip_code = $1", [trip.code, me.id]);
+  const [, feed] = await call("GET", "/api/profiles/me/feed", null, me.token);
+  assert.equal(feed.items.length, 100);
+
+  const [status, album] = await call("GET", `/api/profiles/me/moments?trip=${trip.code.toLowerCase()}`, null, me.token);
+  assert.equal(status, 200);
+  assert.deepEqual(album.items, [
+    { id: earlier.id, tripCode: trip.code, at: now + 1000, label: "먼저" },
+    { id: later.id, tripCode: trip.code, at: now + 2000, label: "나중", lat: 37.5, lng: 127 },
+  ], "그 여행의 내 장면만, 시각 순, 대소문자 무관");
+  assert.equal((await call("GET", `/api/profiles/me/moments?trip=${trip.code}`))[0], 401);
+  for (const bad of ["", "ABC", "ABCDEFG", "ABC10O", "ABC%00D"]) assert.equal((await call("GET", `/api/profiles/me/moments?trip=${bad}`, null, me.token))[0], 400);
+  assert.equal((await call("GET", "/api/profiles/me/moments", null, me.token))[0], 400, "trip이 필요");
+});
+
 test("쓰기가 몰려도 서버가 멈추지 않는다", async () => {
   // 같은 여행에 쓰기 15개가 동시에 닥쳐도 모두 응답해야 한다(리뷰 재현).
   const [, me] = await call("POST", "/api/profiles", { name: "지우", consentDefault: true });
