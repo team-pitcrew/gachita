@@ -11,6 +11,7 @@ import { createServer } from "node:http";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { profilesDb, tripsDb } from "./db.js";
+import { errFields, log } from "./log.js";
 import { googleIdentity } from "./providers/google.js";
 import { embed, matchThreshold, similarity, wavMono } from "./providers/voice.js";
 
@@ -51,6 +52,29 @@ const MIME = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css
 
 const fail = (status, error) => {
   throw { status, error };
+};
+
+// 오류 종류(T71): 응답의 type과 로그의 err.type. 상태에서 정하는 닫힌 목록이라 클라이언트는 문장이 아니라 종류로 가른다.
+const ERROR_TYPE = { 400: "invalid", 401: "unauthenticated", 403: "forbidden", 404: "not_found", 405: "method_not_allowed", 409: "conflict", 413: "too_large", 502: "unavailable", 503: "unavailable", 504: "unavailable" };
+// DB에 닿지 않거나(연결 끊김·거절, 연결 수 초과) 질의 시간 제한(57014, T26)에 걸린 것: 다시 해도 되는 503.
+// Postgres 오류 번호 08xxx 연결, 53xxx 자원 부족, 57014 질의 취소, 57P0x 서버 종료·시작 중.
+const DB_DOWN = /^(08|53|57014|57P0)/;
+const DB_DOWN_MESSAGE = /Connection terminated|timeout exceeded when trying to connect|not queryable/;
+// 던진 것을 응답으로: fail()의 {status, error}는 그대로, DB 문제는 503 unavailable, 나머지는 500 internal.
+export function classify(e) {
+  if (e?.status) return { status: e.status, type: ERROR_TYPE[e.status] ?? "internal", message: e.error };
+  const down = DB_DOWN.test(e?.code ?? "") || ["ECONNREFUSED", "ECONNRESET", "ETIMEDOUT"].includes(e?.code) || DB_DOWN_MESSAGE.test(e?.message ?? "");
+  return down ? { status: 503, type: "unavailable", message: "서버가 잠시 바빠요. 잠시 뒤 다시 해 주세요" } : { status: 500, type: "internal", message: "서버 오류" };
+}
+
+// 로그의 경로 틀: 정한 낱말이 아닌 마디(여행 코드, id, 초대 코드)는 :p로 가린다. 웹 파일은 /(web) 하나로.
+const ROUTE_WORDS = new Set(["api", "trips", "participants", "requests", "moments", "utterances", "transcript", "voice-match", "profiles", "me", "links", "google", "feed", "tokens", "photo", "voice", "groups", "members", "invites", "j"]);
+const routeOf = (pathname) =>
+  pathname === "/healthz" ? pathname : pathname.startsWith("/api/") ? `/${pathname.split("/").filter(Boolean).map((s) => (ROUTE_WORDS.has(s) ? s : ":p")).join("/")}` : "/(web)";
+// ALB가 붙이는 추적 id(X-Amzn-Trace-Id)를 그대로 쓴다. 없거나 모양이 이상하면 새로.
+const requestIdOf = (req) => {
+  const v = req.headers["x-amzn-trace-id"];
+  return typeof v === "string" && /^[\w=;.-]{1,200}$/.test(v) ? v : randomUUID();
 };
 const text = (v, max, name) =>
   typeof v === "string" && v.trim() && v.trim().length <= max ? v.trim() : fail(400, `${name}: 글자 1~${max}자`);
@@ -689,7 +713,7 @@ async function trips(req, [code, sub, id], b, query) {
       .query(`WITH gone AS (DELETE FROM trips WHERE code IN (SELECT code FROM trips WHERE created_at < now() - interval '48 hours' LIMIT 5) RETURNING code),
         u AS (DELETE FROM utterances WHERE trip_code IN (SELECT code FROM gone))
         DELETE FROM utterance_acks WHERE trip_code IN (SELECT code FROM gone)`)
-      .catch((e) => console.error("묵은 여행 치우기 실패(다음에 다시):", e.message));
+      .catch((e) => log("warn", "trip_cleanup_failed", { err: errFields(e) })); // 다음 여행을 만들 때 다시 한다
     for (;;) {
       trip.code = newCode();
       const { rowCount } = await tripsDb().query("INSERT INTO trips (code, doc) VALUES ($1, $2) ON CONFLICT DO NOTHING", [trip.code, trip]);
@@ -959,6 +983,27 @@ async function serveFile(path, res) {
 }
 
 export const server = createServer(async (req, res) => {
+  // 요청마다 로그 한 줄(T71): 경로 틀, 상태, 걸린 시간, 요청 id, 오류 종류. 웹 파일과 건강 확인은 실패만 남긴다.
+  const started = performance.now();
+  const requestId = requestIdOf(req);
+  res.setHeader("x-request-id", requestId);
+  let failure = null;
+  let route = "/(bad-url)"; // 주소를 읽지 못한 요청. 아래 try에서 한 번만 읽는다(로그에서 다시 읽다 던지면 프로세스가 죽는다)
+  // 'close'는 응답을 다 보냈을 때도, 클라이언트가 먼저 끊었을 때도 한 번 온다. 끊긴 것은 499(nginx의 관례)와 aborted로.
+  res.on("close", () => {
+    const aborted = !res.writableFinished;
+    const status = aborted ? 499 : res.statusCode;
+    if (!route.startsWith("/api/") && status < 400) return;
+    log(status >= 500 && !aborted ? "error" : "info", "request", {
+      requestId,
+      method: req.method,
+      route,
+      status,
+      ms: Math.round(performance.now() - started),
+      ...(aborted && { aborted }),
+      ...(failure && { err: failure }),
+    });
+  });
   const send = (status, data) => {
     res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
     res.end(data === undefined ? undefined : JSON.stringify(data));
@@ -970,6 +1015,7 @@ export const server = createServer(async (req, res) => {
   };
   try {
     const url = new URL(req.url, "http://localhost");
+    route = routeOf(url.pathname);
     const seg = url.pathname.split("/").filter(Boolean);
     if (url.pathname === "/healthz") {
       if (req.method !== "GET") fail(405, "GET만 됨");
@@ -1004,13 +1050,18 @@ export const server = createServer(async (req, res) => {
     }
     await serveFile(path, res);
   } catch (e) {
-    if (!e.status) console.error(e);
-    send(e.status ?? 500, { error: e.error ?? "서버 오류" });
+    const { status, type, message } = classify(e);
+    failure = { type, ...(status >= 500 && errFields(e, status === 500)) }; // 서버 쪽 오류만 원인을, 예상 못 한 것(500)만 스택까지
+    send(status, { error: message, type });
   }
 });
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const port = Number(process.env.PORT ?? 8787);
   await migrate();
-  server.listen(port, () => console.log(`같이타 서버: http://localhost:${port}`));
+  // 잡지 못한 오류는 남기고 끝낸다(쿠버네티스가 다시 띄운다)
+  const crash = (what) => (e) => (log("error", what, { err: errFields(e, true) }), process.exit(1));
+  process.on("uncaughtException", crash("uncaught_exception"));
+  process.on("unhandledRejection", crash("unhandled_rejection"));
+  server.listen(port, () => log("info", "listening", { port }));
 }

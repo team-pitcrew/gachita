@@ -4,6 +4,7 @@
 // 프로필 조회가 같은 풀에서 연결을 더 빌리면, 쓰기가 몰릴 때 서로 연결과
 // 잠금을 기다리며 서버가 멈춘다. 풀이 모자라면 기다림 없이 5초 안에 오류로 끝낸다.
 import pg from "pg";
+import { errFields, log } from "./log.js";
 
 const pools = new Map();
 const poolOf = (store, url) => {
@@ -12,9 +13,9 @@ const poolOf = (store, url) => {
     // 연결이 끊기면(Postgres 재시작·장애 조치·통신 끊김) 'error'가 나는데, 처리기가 없으면 프로세스가 죽는다.
     // 쉬던 연결은 풀이, 빌려 간 연결(트랜잭션 중)은 그 연결이 낸다 — 둘 다 기록만 남긴다. 끊긴 연결은 풀이 버리고
     // 다음 요청에서 새로 맺는다(node-postgres의 Pool·Client 'error' 안내).
-    const log = (e) => console.error(`${store} DB 연결이 끊김(다음 요청에서 다시 맺음): ${e.message}`);
-    pool.on("error", log);
-    pool.on("connect", (client) => client.on("error", log));
+    // 연결마다 처리기를 달아 남긴다. 쉬던 연결이면 풀도 같은 오류를 내므로 풀의 처리기는 받기만 한다(두 번 남지 않게).
+    pool.on("connect", (client) => client.on("error", (e) => log("warn", "db_connection_lost", { store, err: errFields(e) })));
+    pool.on("error", () => {});
     pools.set(store, pool);
   }
   return pools.get(store);
