@@ -30,6 +30,7 @@ const val GLEO_MS = 60_000L // Gleo가 포커스를 돌려주지 않아도 다�
  * 넘김(호출어나 'Gleo 쓰기'): hold(true)로 AudioRecord만 멈추고(서비스와 STT는 둠) 오디오 포커스를 잠시 쥔다.
  * 운전대 버튼으로 Gleo가 들으면 우리가 포커스를 잃고(LOSS_TRANSIENT), Gleo가 잠들면 돌려받는다(GAIN) → hold(false).
  * Gleo가 다른 앱(음악)에 포커스를 넘기면 우리는 LOSS를 받고 돌려받지 못하므로 그때도 다시 수음한다.
+ * ponytail: 전화·알람의 LOSS_TRANSIENT도 Gleo로 센다(끝나면 GAIN으로 다시 수음). 포커스를 받지 못하면 시간 초과로만 돌아온다.
  *
  * 포커스는 이 신호를 받으려고만 쥔다. 시스템 소리 용도(ASSISTANCE_SONIFICATION)와 GAIN_TRANSIENT_MAY_DUCK이라
  * 사용자의 음악은 멈추지 않는다(Pleos 자동차 포커스 규칙에서 미디어와 함께 감, 에뮬레이터 실측은 ADR-0008).
@@ -76,6 +77,8 @@ class Handoff(ctx: Context, private val hold: (Boolean) -> Unit) {
                 Log.i(TAG, "Gleo 들음 · 넘긴 뒤 ${System.currentTimeMillis() - since}ms")
                 main.removeCallbacks(timeout); main.postDelayed(timeout, GLEO_MS)
             }
+            // 버튼을 기다리는 사이 다른 앱(음악)이 포커스를 가져가면 Gleo 신호를 받을 길이 없어진다. 한 번 더 쥔다
+            state == State.WAITING && change == AudioManager.AUDIOFOCUS_LOSS -> Log.i(TAG, "포커스 다시 요청 ${am.requestAudioFocus(focus)}")
             state == State.GLEO && change == AudioManager.AUDIOFOCUS_GAIN -> back("Gleo 끝")
             state == State.GLEO && change == AudioManager.AUDIOFOCUS_LOSS -> back("다른 앱이 포커스를 가져감")
         }

@@ -73,8 +73,8 @@ def play_now(inj, name):
 
 
 def gleo_call(fn):
-    """Gleo가 함수를 부를 때와 같은 인텐트(component activity, action은 '<패키지>.<함수 이름>')."""
-    adb("shell", "am", "start", "--user", "10", "-n", f"{PKG}/.MainActivity", "-a", f"{PKG}.{fn}")
+    """Gleo가 함수를 부를 때와 같은 인텐트(component activity, action은 '<패키지>.<함수 이름>'). 매니페스트의 intent-filter로 찾게 컴포넌트를 적지 않는다."""
+    adb("shell", "am", "start", "--user", "10", "-a", f"{PKG}.{fn}", "-p", PKG)
     note("gleo.call", fn=fn)
 
 
@@ -118,22 +118,22 @@ def main(apk):
     time.sleep(1); ui = texts(); shot("1-resumed")
     check("다시 '● 기록 중'이고 마이크를 쥠", "● 기록 중" in ui and ours_recording())
     if not ours_recording(): raise SystemExit("마이크가 열리지 않아 소리를 넣지 않고 멈춥니다")
-    n = len(cap.outbox(code)); inj.play("after")  # 다시 연 우리 녹음에 넣는다(기본 모드); time.sleep(3)
+    n = len(cap.outbox(code)); inj.play("after"); time.sleep(3)  # 다시 연 우리 녹음에 넣는다(기본 모드); time.sleep(3)
     got = [u["text"] for u in cap.outbox(code)[n:]]
     check("다시 수음한 뒤 이어 넣은 말이 받아 적힘", any("아이스크림" in cap.norm(x) or "휴게소" in cap.norm(x) for x in got), heard=got)
 
     # 2. 다른 꼴의 호출어 → 버튼을 누르지 않음 → 시간 초과로 다시 수음
     k = len(app_log); done = play_now(inj, "wake2")
-    e = wait_log(r"^Gleo에게 넘김 호출어", k, 10)
+    e = wait_log(r"^Gleo에게 넘김 호출어", k, 10); time.sleep(1); held = not ours_recording()
     b = wait_log(r"^다시 수음\(시간 초과\)", k, 25)
-    check("버튼이 없으면 15초 뒤 저절로 다시 수음", e and b and ours_recording() and done < e["device_ms"] - offset, line=b and b["line"])
+    check("버튼이 없으면 15초 뒤 저절로 다시 수음", e and held and b and ours_recording() and done < e["device_ms"] - offset, line=b and b["line"])
 
     # 3. 화면의 'Gleo 쓰기'
     k = len(app_log); tap_text("Gleo 쓰기")
     e = wait_log(r"^Gleo에게 넘김 단추", k, 5)
-    ui = texts(); shot("3-button-paused")
+    ui = texts(); shot("3-button-paused"); held = not ours_recording()
     b = wait_log(r"^다시 수음\(시간 초과\)", k, 25)
-    check("'Gleo 쓰기'로도 같은 멈춤과 재개", e and "운전대 버튼을 누르세요" in ui and b and ours_recording(), line=b and b["line"])
+    check("'Gleo 쓰기'로도 같은 멈춤과 재개", e and held and "운전대 버튼을 누르세요" in ui and b and ours_recording(), line=b and b["line"])
     counts = [x["line"] for x in app_log if x["line"].startswith("다시 수음")]
     note("counts", lines=counts)
     check("잘못 알아챈 횟수를 셈(호출어 2회 중 Gleo 1회 · 버튼 없이 시간 초과 1회)", counts and "호출어 2회 중 Gleo 1회 · 버튼 없이 시간 초과 1회" in counts[-1])
@@ -142,7 +142,7 @@ def main(apk):
     k = len(app_log); gleo_call("GACHITA_PAUSE_RECORDING"); time.sleep(3)
     ui = texts(); shot("4-gleo-paused")
     check("기록 멈추기: 마이크를 놓고 '기록 멈춤', 동의는 그대로", "기록 멈춤" in ui and "다시 기록" in ui and not ours_recording()
-          and wait_log(r"^Gleo 응답 GACHITA_PAUSE_RECORDING success", k, 3) and all(p["consent"] for p in cap.server(code)["participants"]))
+          and wait_log(r"^Gleo 응답 GACHITA_PAUSE_RECORDING success", k, 3) and [p["consent"] for p in cap.server(code)["participants"]] == [True] * 4)
     k = len(app_log); gleo_call("GACHITA_RESUME_RECORDING"); time.sleep(4)
     ui = texts(); shot("4-gleo-resumed")
     check("다시 시작: '● 기록 중'과 마이크", "● 기록 중" in ui and ours_recording() and wait_log(r"^Gleo 응답 GACHITA_RESUME_RECORDING success", k, 3))
