@@ -57,7 +57,7 @@ function repeats(chars) {
 // 믿지 않는 답: 초안과 글자의 절반 넘게 다르거나(옆 사람의 말, 지어낸 말), 초안에 없던 되풀이가 생겼다.
 const suspicious = (text, draft) => {
   const [t, d] = [plain(text), plain(draft)];
-  return distance(t, d) > Math.max(2, d.length / 2) || (repeats(t) && !repeats(d));
+  return distance(t, d) > d.length / 2 || (repeats(t) && !repeats(d));
 };
 
 let slot = 0; // 다음 요청을 보내도 되는 시각. 이 프로세스의 모든 재전사가 함께 지킨다

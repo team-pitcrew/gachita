@@ -90,6 +90,7 @@ before(async () => {
     if (draft.includes("고장")) return reply(500);
     if (draft.includes("붐빔") && asr.calls.filter((c) => c.draft === draft).length === 1) return reply(429);
     if (draft.includes("되풀이")) return reply(200, "되풀이 되풀이 되풀이 되풀이 되풀이 되풀이 되풀이 되풀이 ");
+    if (draft === "가자") return reply(200, "싫어"); // 짧은 말인데 글자가 다 다름
     reply(200, `<spk:0> ${draft.replace(/서와/g, "서아")}.`);
   });
   await new Promise((ok) => fakeAsr.listen(0, "127.0.0.1", ok));
@@ -1130,6 +1131,29 @@ test("재전사 도중 글이나 클립을 지우면 더 보내지 않고 붙이
   }
   const { rows } = await tripsDb().query("SELECT seq FROM utterances WHERE trip_code = $1 AND asr_text IS NOT NULL", [trip.code]);
   assert.deepEqual(rows.map((r) => Number(r.seq)), [2], "아들의 첫 말만 붙음");
+});
+
+test("짧은 말도 초안과 글자가 절반 넘게 다르면 원문으로 남는다(T75)", async () => {
+  const [, trip] = await call("POST", "/api/trips", {});
+  const t = `/api/trips/${trip.code}`;
+  const t0 = Date.now() - 600_000;
+  await tripsDb().query("UPDATE trips SET doc = jsonb_set(doc, '{createdAt}', to_jsonb($2::bigint)) WHERE code = $1", [trip.code, t0 - 1000]);
+  const [, mom] = await join(trip.code, "엄마", "ROW_1_LEFT");
+  assert.equal((await call("POST", `${t}/utterances`, { device: "car", items: [{ seq: 1, at: t0, text: "가자", seatArea: "ROW_1_LEFT", generation: 1 }] }, mom.token))[0], 200);
+  const [, m] = await call("POST", `${t}/moments`, { at: t0, from: t0 - 1000, to: t0 + 3000 });
+  Object.assign(process.env, { ASR_URL: `http://127.0.0.1:${fakeAsr.address().port}/asr/v1`, ASR_TOKEN: "test-asr-token", ASR_GAP_MS: "20" });
+  const events = [];
+  const restore = captureLog((line) => events.push(JSON.parse(line)));
+  try {
+    assert.equal((await fetch(`${base}${t}/recordings?moment=${m.id}&generation=1&from=${t0 - 1000}`, { method: "POST", headers: { authorization: `Bearer ${mom.token}` }, body: wav(200, 4) })).status, 201);
+    for (let i = 0; i < 300 && !events.some((e) => e.msg === "clip_retranscribed"); i++) await new Promise((ok) => setTimeout(ok, 20));
+  } finally {
+    restore();
+    delete process.env.ASR_URL;
+    delete process.env.ASR_TOKEN;
+    delete process.env.ASR_GAP_MS;
+  }
+  assert.deepEqual(events.find((e) => e.msg === "clip_retranscribed").reasons, { suspicious: 1 }, "'가자' → '싫어'는 받지 않음");
 });
 
 test("쓰기가 몰려도 서버가 멈추지 않는다", async () => {

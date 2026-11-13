@@ -606,7 +606,7 @@ async function recordings(code, id, req, query) {
 // 실패·늦음·믿지 못할 답이면 그 줄은 원문 자막으로 남는다. 사람이 고른 클립만 보낸다(동의 문구, docs/api/voice.md).
 // 보내기 직전마다 클립이 살아 있고(지우지 않음, 동의 철회 전 세대) 그 줄의 글이 그대로인지 본다 — 아니면 보내지 않고 붙이지 않는다.
 // 자르기: 발화의 at을 말 시작으로 보고 0.5초 앞부터 같은 자리의 다음 말까지(다른 자리의 말은 겹칠 수 있다).
-// 다음 말이 바로 붙어도 이 말의 어림 길이(글자당 0.15초, 1.5초 이상)는 남기고, 15초·클립 끝을 넘지 않는다. 0.8초보다 짧으면 보내지 않는다.
+// 다음 말이 바로 붙어도 이 말의 어림 길이(글자당 0.15초, 1.5초 이상)는 남기고, 앞 0.5초를 넣어 15초·클립 끝을 넘지 않는다. 0.8초보다 짧으면 보내지 않는다.
 // 한 프로세스에서 한 클립씩 차례로 돈다(요청 간격을 지키고 메모리를 묶으려고). 대기열이 차면(10개) 새 클립은 원문 자막으로 남는다.
 // ponytail: 올린 파드의 메모리에서 기다린다. 그 사이 파드가 죽으면 남은 클립은 원문 자막으로 남는다.
 const ASR_QUEUE_MAX = 10;
@@ -642,7 +642,7 @@ async function retranscribeClip({ code, momentId, generation, startAt, pcm, cont
     const at = Number(u.at) - startAt;
     const next = rows.slice(i + 1).find((r) => r.seat_area === u.seat_area);
     const from = Math.max(0, at - 500);
-    const to = Math.min(clipMs, at + 15_000, Math.max(next ? Number(next.at) - startAt : clipMs, at + Math.max(1500, [...u.text].length * 150)));
+    const to = Math.min(clipMs, from + 15_000, Math.max(next ? Number(next.at) - startAt : clipMs, at + Math.max(1500, [...u.text].length * 150)));
     const stillOk = async () =>
       (
         await tripsDb().query(
