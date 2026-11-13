@@ -23,11 +23,11 @@ TODOS = [("엄마", "마트에서 우유랑 간식 사자"), ("아빠", "마트�
 GLEO = f"{PKG}.GACHITA_ARRIVAL_TASKS"
 
 
-def saved(code):
-    """앱이 차 안에 둔 할 일(todos-<여행 코드>.json)."""
-    out = adb("exec-out", "run-as", PKG, "--user", "10", "cat", f"files/todos-{code}.json")
-    try: return json.loads(out)
-    except ValueError: return []
+def brief_items(ui):
+    """도착 브리핑 카드('마트에서 할 일' ~ '닫기')의 할 일 글. 차 안 할 일 파일은 암호화돼(T69) 기기 파일로 읽지 않는다."""
+    if "마트에서 할 일" not in ui or "닫기" not in ui: return []
+    a = ui.index("마트에서 할 일"); b = ui.index("닫기", a)
+    return [t for t in ui[a + 1:b] if t != "완료"]
 
 
 def main(apk):
@@ -60,7 +60,6 @@ def main(apk):
     for i in range(len(TODOS)):
         k = len(app_log); inj.play(f"todo{i}")
         check(f"할 일 {i + 1} 보관(마트)", wait_log(r"할 일 보관 마트", k, 15))
-    items = saved(code); note("todos", items=items)
     ui = texts(); shot("01-drive-two-todos"); note("ui", texts=ui)
     check("기어 D: 도착해서 할 일 2건", "도착해서 할 일 2건" in ui)
     # 2. 다음 곳이 마트가 아닌 데서 P: 알리지 않는다
@@ -76,7 +75,8 @@ def main(apk):
     k = len(app_log); gear("Park")
     b = wait_log(r"도착 브리핑 마트 \d건", k, 10); note("brief", line=b and b["line"], navi=[e["line"] for e in app_log[k:] if e["line"].startswith("주차")])
     time.sleep(2); ui = texts(); shot("02-park-brief-two"); note("ui", texts=ui)
-    check("P: 마트 할 일 두 건이 화면에", b and "2건" in b["line"] and "마트에서 할 일" in ui and all(t["text"] in ui for t in items))
+    items = brief_items(ui); note("todos", items=items)
+    check("P: 마트 할 일 두 건이 화면에", b and "2건" in b["line"] and len(items) == 2)
     check("P: 두 건을 말(TTS)로", b and wait_log(r"^말함 \d+자$", app_log.index(b), 3))
     # 4. 하나 완료 → D에서는 목록이 가려짐 → P에서 남은 하나만
     k = len(app_log); tap_text("완료", last=False)
@@ -86,19 +86,20 @@ def main(apk):
     k = len(app_log); gear("Park")
     b = wait_log(r"도착 브리핑 마트 \d건", k, 10)
     time.sleep(2); ui = texts(); shot("03b-park-brief-one"); note("ui", texts=ui)
-    check("다음 알림에는 완료한 것이 빠지고 한 건만", b and "1건" in b["line"] and items[0]["text"] not in ui and items[1]["text"] in ui)
+    check("다음 알림에는 완료한 것이 빠지고 한 건만", b and "1건" in b["line"] and brief_items(ui) == items[1:])
     subprocess.run(ADB + ["emu", "screenrecord", "stop"]); time.sleep(2)
 
     # 5. Gleo 함수: Gleo가 보내는 것과 같은 action으로 화면을 연다(Gleo에 소리는 넣지 않음)
     tap_text("닫기"); time.sleep(1)
     k = len(app_log); adb("shell", "am", "start", "--user", "10", "-a", GLEO)
-    g = wait_log(r"Gleo 도착 할 일 \d건 응답 GACHITA_ARRIVAL_TASKS$", k, 8)  # 응답의 functionName은 schema의 함수 이름 그대로
+    g = wait_log(r"^Gleo 도착 할 일 \d+건$", k, 8)
+    r = wait_log(r"^Gleo 응답 GACHITA_ARRIVAL_TASKS success$", k, 8)  # 응답의 functionName은 schema의 함수 이름 그대로(T41부터 응답 줄이 따로)
     time.sleep(1); ui = texts(); shot("04-gleo-action"); note("ui", texts=ui)
-    check("Gleo 함수: 남은 할 일을 띄우고 응답", g and "1건" in g["line"] and "도착해서 할 일" in ui and f"마트 · {items[1]['text']}" in ui)
+    check("Gleo 함수: 남은 할 일 1건을 띄우고 성공으로 응답", g and g["line"] == "Gleo 도착 할 일 1건" and r and "도착해서 할 일" in ui and f"마트 · {items[1]}" in ui)
 
     tap_switch(); time.sleep(1)
     (OUT / "app-log.json").write_text(json.dumps(app_log, ensure_ascii=False, indent=1))
-    (OUT / "results.json").write_text(json.dumps({"code": code, "todos": saved(code), "log": e2e.log}, ensure_ascii=False, indent=1))
+    (OUT / "results.json").write_text(json.dumps({"code": code, "todos": items, "log": e2e.log}, ensure_ascii=False, indent=1))
     fails = [x["name"] for x in e2e.log if x["step"] == "check" and not x["ok"]]
     print("실패:", fails if fails else "없음")
     sys.exit(1 if fails else 0)

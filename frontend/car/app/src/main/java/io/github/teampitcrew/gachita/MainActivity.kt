@@ -140,7 +140,7 @@ class MainActivity : ComponentActivity() {
     private var visible = false // onStart ~ onStop
     private var resumed = false // 우리 화면이 앞: 마이크 서비스는 이때만 시작할 수 있다(T10)
     private var askedMic = false
-    private lateinit var handoff: Handoff // Gleo와 마이크 주고받기(T41). ponytail: 화면이 다시 만들어지면(configChanges 밖, 글꼴·언어) 넘긴 상태는 옛 화면의 시간 초과로 풀린다
+    private lateinit var handoff: Handoff // Gleo와 마이크 주고받기(T41). 프로세스에 하나(Handoff.of)
     /** Gleo로 '기록 멈추기'를 부름(T41). 동의는 그대로 두고 수음만 멈춘다. 앱이 다시 켜져도 멋대로 다시 기록하지 않게 저장한다. */
     private var muted by mutableStateOf(false)
     // 동승 연결(T46): 주차 중 탑승자 폰의 QR을 읽고(scanning) 고른 자리에 넣는다(rideQr = 읽은 QR 글자)
@@ -212,7 +212,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = getSharedPreferences("car", MODE_PRIVATE)
-        handoff = Handoff(this, CaptureService::hold)
+        handoff = Handoff.of(this) // 화면이 다시 만들어져도 넘긴 상태를 이어받는다
         muted = prefs.getBoolean("muted", false)
         // 실행 인자(--es server, --ei widthDp, --es route)는 디버그 빌드에서만 받는다. 밖에서 연 화면이 서버 주소를 바꾸지 못하게
         debug = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0

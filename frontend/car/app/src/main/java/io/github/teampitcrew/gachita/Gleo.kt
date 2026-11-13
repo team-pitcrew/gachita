@@ -36,7 +36,7 @@ const val GLEO_MS = 60_000L // Gleo가 포커스를 돌려주지 않아도 다�
  * 사용자의 음악은 멈추지 않는다(Pleos 자동차 포커스 규칙에서 미디어와 함께 감, 에뮬레이터 실측은 ADR-0008).
  * 넘긴 동안에만 쥐고, 돌려받으면 바로 놓는다.
  */
-class Handoff(ctx: Context, private val hold: (Boolean) -> Unit) {
+class Handoff private constructor(ctx: Context, private val hold: (Boolean) -> Unit) {
     enum class State { OFF, WAITING, GLEO }
 
     var state by mutableStateOf(State.OFF)
@@ -100,5 +100,14 @@ class Handoff(ctx: Context, private val hold: (Boolean) -> Unit) {
         state = State.OFF
     }
 
-    companion object { private const val TAG = "GachitaGleo" }
+    companion object {
+        private const val TAG = "GachitaGleo"
+        @Volatile private var one: Handoff? = null
+
+        /**
+         * 프로세스에 하나. 넘긴 상태·포커스·시간 재기의 주인이 화면이 아니라서, 화면이 다시 만들어져도(글꼴·언어 바꿈)
+         * 새 화면이 그 상태를 이어받는다. 멈추고 다시 여는 수음(CaptureService)도 프로세스에 하나라 짝이 맞는다.
+         */
+        fun of(ctx: Context): Handoff = one ?: synchronized(this) { one ?: Handoff(ctx.applicationContext, CaptureService::hold).also { one = it } }
+    }
 }
