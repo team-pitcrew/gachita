@@ -246,9 +246,9 @@ async function googleBack() {
     return null;
   } catch (e) {
     return fail(
-      e.status === 409 ? "이미 다른 프로필에 연결된 구글 계정이에요. 그 프로필로 들어가려면 이 폰의 프로필을 지우고 구글로 로그인해 주세요."
+      e.status === 409 ? "이미 다른 프로필에 연결된 구글 계정이에요. 그 프로필로 들어가려면 이 폰의 프로필을 지우고 구글로 계속해 주세요."
       : e.status === 401 ? "구글 로그인을 확인하지 못했어요. 다시 해 주세요."
-      : e.status === 0 || e.status >= 500 ? "구글이나 서버가 잠시 답하지 않아요. 잠시 뒤 다시 해 주세요."
+      : e.status === 0 || e.status >= 500 ? "지금은 구글 계정을 확인할 수 없어요. 잠시 뒤 다시 해 주세요."
       : e.message,
     );
   }
@@ -272,10 +272,17 @@ function profileView() {
         "section",
         { className: "card" },
         h("p", { className: "what" }, profile ? "다른 기기에서도 쓰기" : "구글 계정이 있나요?"),
-        h("p", { className: "meta" }, profile ? "구글 계정을 연결하면 다른 폰에서 구글로 로그인해 이 프로필로 들어와요." : "구글로 로그인하면 다른 폰에서도 같은 프로필로 들어와요. 전에 만든 프로필이 있으면 그대로 이어져요."),
-        button(profile ? "구글 계정 연결" : "구글로 로그인", () => google().catch((e) => toast(e.status === 0 ? "연결이 끊겨서 열지 못했어요." : e.message))),
+        h("p", { className: "meta" }, profile ? "구글 계정을 연결하면 다른 폰에서 구글로 계속해 이 프로필로 들어와요." : "구글로 계속하면 다른 폰에서도 같은 프로필로 들어와요. 전에 만든 프로필이 있으면 그대로 이어져요."),
+        button(profile ? "구글 계정 연결" : "구글로 계속", () => google().catch((e) => toast(e.status === 0 ? "연결이 끊겨서 열지 못했어요." : e.message))),
       ),
-    profile?.links?.includes("google") && h("p", { className: "meta" }, "구글 계정을 연결했어요. 다른 폰에서 구글로 로그인하면 이 프로필로 들어와요."),
+    profile?.links?.includes("google") &&
+      h(
+        "section",
+        { className: "card" },
+        h("p", { className: "what" }, "구글 계정을 연결했어요"),
+        h("p", { className: "meta" }, "다른 폰에서 구글로 계속하면 이 프로필로 들어와요."),
+        button("구글 연결 끊기", () => act(async () => (await mine("DELETE", "/profiles/me/links/google"), await loadProfile(), toast("구글 연결을 끊었어요."))), "plain"),
+      ),
     form(saveProfile, ...profileFields(true), bar(h("button", { className: "primary" }, "저장"))),
     profile &&
       h(
