@@ -677,3 +677,8 @@ input::placeholder {
   font-weight: 600;
   z-index: 10;
 }
+
+/* 좁은 화면: 차량 화면은 0.3배 아래로 줄이지 않고 이 칸 안에서 가로로 민다 */
+.car-col {
+  overflow-x: auto;
+}

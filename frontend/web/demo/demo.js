@@ -49,6 +49,7 @@ let online = true;
 let busy = false;
 let said = ""; // 마지막 음성 안내(시연)
 let navi = null; // { id, stage: "adding" | "added" | "failed" } 경유지 반영 흉내
+let loadErr = ""; // 여행을 처음 불러오지 못한 이유(불러오는 화면에서 빠져나갈 길을 보이게)
 
 function load() {
   try {
@@ -174,6 +175,7 @@ function newTrip() {
   lineSig = "";
   navi = null;
   said = "";
+  loadErr = "";
   save();
   render();
 }
@@ -217,6 +219,9 @@ async function say(text, seat) {
   if (trip.status !== "driving") return void (els.sttErr.textContent = "출발한 뒤에 받아 적어요. 차량은 주행 중 기록할 때만 들어요.");
   if (!trip.recording && everyone()) return void (els.sttErr.textContent = "기록을 일시정지했어요. ‘기록 다시 시작’을 누르면 받아 적어요.");
   await act(async () => {
+    // 같은 브라우저의 다른 탭도 이 차량으로 올린다. 저장소의 순번을 먼저 맞춰 같은 순번이 멱등 키에 걸려 버려지지 않게.
+    const stored = load();
+    if (stored?.code === car.code) car.seq = Math.max(car.seq, stored.seq ?? 0);
     const seq = car.seq + 1;
     const generation = trip.generation ?? 1;
     let r;
@@ -283,6 +288,7 @@ async function refresh(force = false) {
         els.setupErr.textContent = `지난 여행을 이어 가지 못했어요 · ${why}`;
         return;
       }
+      if (!trip) loadErr = plain(e); // 처음부터 못 불러왔으면 이유와 새 여행 단추를 보인다
       changed = true; // 연결 표시만 바꾼다
     }
     if (await loadLines()) changed = true;
@@ -530,7 +536,14 @@ function render() {
   els.setup.hidden = Boolean(car);
   els.tripwin.hidden = !car;
   $("setup-go").disabled = busy;
-  if (car && !trip) els.left.replaceChildren(card(h("p", { className: "big" }, "여행을 불러오고 있어요")));
+  if (car && !trip)
+    els.left.replaceChildren(
+      card(
+        h("p", { className: "big" }, loadErr ? "여행을 불러오지 못했어요" : "여행을 불러오고 있어요"),
+        loadErr && h("p", { className: "err" }, loadErr),
+        h("div", { className: "row" }, button("새 여행 만들기", newTrip, "plain")),
+      ),
+    );
   if (ready) {
     els.left.replaceChildren(
       ...[trip.status === "boarding" && joinCard(), recordCard(), offerCard(), transcriptCard(), peopleCard(), trip.status !== "boarding" && joinCard()].filter(Boolean),
@@ -554,7 +567,8 @@ function fit() {
   const top = col.getBoundingClientRect().top + scrollY;
   const w = col.clientWidth - 12; // 테두리 그림자 자리
   const h = innerHeight - top - 24;
-  const s = Math.max(0.1, Math.min(w / 2560, wide ? Math.max(h, 280) / 1440 : Infinity));
+  // 좁은 화면에서도 누를 수 있게 0.3배 아래로는 줄이지 않고 가로로 밀어 본다(.car-col이 가로 스크롤)
+  const s = Math.max(0.3, Math.min(w / 2560, wide ? Math.max(h, 280) / 1440 : Infinity));
   els.screen.style.setProperty("--s", String(s));
   els.fit.style.width = `${Math.floor(2560 * s)}px`;
   els.fit.style.height = `${Math.floor(1440 * s)}px`;
