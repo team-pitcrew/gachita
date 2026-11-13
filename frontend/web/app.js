@@ -485,17 +485,99 @@ function tripView(me) {
       h(
         "section",
         { className: "card" },
-        h("h2", {}, `남긴 장면 ${trip.moments.length}개`),
+        h("div", { className: "between" }, h("h2", {}, `남긴 장면 ${trip.moments.length}개`), me.consent && myToken() && button("숏폼 보기", () => openShort().catch((e) => toast(e.status === 0 ? "연결이 끊겨서 열지 못했어요." : e.message)))),
+        !(me.consent && myToken()) && h("p", { className: "meta" }, "기록에 동의한 사람만 숏폼을 볼 수 있어요."),
         h("ul", {}, trip.moments.map((m) => h("li", {}, h("span", { className: "what" }, m.label || "이름 없는 장면"), h("span", { className: "meta" }, new Date(m.at).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" }))))),
       ),
     trip.status !== "ended" && bar(button("부탁 남기기", () => (sheet.showModal(), sheet.querySelector("#sheet-text").focus()), "primary")),
   ];
 }
 
+// 숏폼(T43): 서버가 구성한 장면 클립 소리와 자막 큐를 9:16 화면에 차례로 들려준다. 영상 파일은 만들지 않는다.
+// 클립은 머리말 인증으로 받아 object URL로 튼다(토큰을 URL에 넣지 않음). 첫 재생은 사람이 누른다(자동 재생 막기).
+let short = null; // 보고 있는 구성 { title, cast, scenes, at(지금 장면), clips(장면별 object URL 약속), started }
+const audio = new Audio(); // DOM 밖에 두어 화면을 다시 그려도 끊기지 않는다
+
+async function openShort() {
+  const data = await api("GET", `/trips/${code()}/shortform`, null, myToken()).catch((e) => {
+    throw e.status === 401 || e.status === 403 ? new Error("기록에 동의한 사람만 숏폼을 볼 수 있어요.") : e;
+  });
+  if (!data.scenes.length) return toast("아직 숏폼으로 만들 장면 클립이 없어요.");
+  short = { ...data, at: 0, clips: [], started: false };
+  render();
+}
+const clip = (i) =>
+  (short.clips[i] ??= fetch(short.scenes[i].clip, { headers: { authorization: `Bearer ${myToken()}` } })
+    .then((r) => (r.ok ? r.blob() : Promise.reject(new Error(`장면 소리를 받지 못했어요(${r.status}).`))))
+    .then((b) => URL.createObjectURL(b)));
+async function playScene(i) {
+  const s = short;
+  const first = !s.started;
+  Object.assign(s, { at: i, started: true });
+  if (first) render(); // '재생' 단추가 '다시 보기'로 바뀐다
+  else s.paint?.();
+  audio.src = await clip(i);
+  if (short !== s) return; // 받는 사이 닫음
+  await audio.play();
+  if (i + 1 < s.scenes.length) clip(i + 1).catch(() => {}); // 다음 장면을 미리 받는다
+}
+const playing = (i) => playScene(i).catch((e) => toast(e.status === 0 ? "연결이 끊겨서 소리를 받지 못했어요." : e.message));
+function closeShort() {
+  audio.pause();
+  audio.removeAttribute("src");
+  for (const u of short?.clips ?? []) u.then(URL.revokeObjectURL, () => {});
+  short = null;
+  render();
+}
+audio.ontimeupdate = () => short?.paint?.();
+audio.onended = () => short && (short.at + 1 < short.scenes.length ? playing(short.at + 1) : short.paint?.());
+// 말한 사람을 못 붙인 큐는 이름을 짓지 않고 자리만 적는다(after-trip.md)
+const spot = (seat) => (SEAT[seat] ? `${SEAT[seat]} 자리` : seat?.startsWith("ROW_1") ? "앞줄" : seat?.startsWith("ROW_2") ? "뒷줄" : "누군가");
+
+function shortView() {
+  const s = short;
+  const segs = s.scenes.map(() => h("i"));
+  const count = h("span", { className: "meta" });
+  const face = h("div", { className: "speaker" });
+  const line = h("p", { className: "cue", "aria-live": "polite" });
+  // 소리 시각에 맞춰 바뀌는 곳만 고친다(단추를 다시 만들지 않게)
+  s.paint = () => {
+    const scene = s.scenes[s.at];
+    const t = s.started ? audio.currentTime : 0;
+    segs.forEach((el, i) => el.style.setProperty("--p", i < s.at ? 1 : i > s.at ? 0 : Math.min(1, t / scene.seconds)));
+    count.textContent = `${s.at + 1} / ${s.scenes.length}`;
+    const cue = s.started && scene.cues.find((c) => c.start <= t && t < c.end);
+    const who = cue && s.cast.find((c) => c.participantId === cue.participantId);
+    const key = cue ? (who?.participantId ?? cue.seatArea ?? "?") : "";
+    if (face.dataset.key !== key || !face.firstChild) {
+      face.dataset.key = key;
+      face.className = `speaker${cue ? " on" : ""}`;
+      face.replaceChildren(avatar(who ?? { name: "?" }), h("p", { className: "what" }, cue ? (who?.name ?? spot(cue.seatArea)) : scene.label || "장면"));
+    }
+    line.textContent = cue ? `“${cue.text}”` : "";
+  };
+  s.paint();
+  return [
+    h(
+      "section",
+      { className: "short", "aria-label": "숏폼 재생" },
+      h(
+        "div",
+        { onclick: (e) => s.started && !e.target.closest("button") && (audio.paused ? audio.play() : audio.pause()) },
+        h("div", { className: "segs", "aria-hidden": "true" }, segs),
+        h("div", { className: "between" }, h("span", { className: "what" }, s.title || trip?.title || "가치타 여행"), count),
+        face,
+        line,
+        h("div", { className: "row" }, s.started ? button("다시 보기", () => playing(0)) : button("▶ 재생", () => playing(0), "primary"), button("닫기", closeShort, s.started ? "primary" : "")),
+      ),
+    ),
+  ];
+}
+
 function render() {
   stale = false;
   const me = trip?.participants.find((p) => p.id === myId());
-  const view = inviteCode() ? inviteView() : location.hash === "#me" ? profileView() : !code() ? home() : failed ? missing() : !trip ? loading() : me ? tripView(me) : join();
+  const view = short ? shortView() : inviteCode() ? inviteView() : location.hash === "#me" ? profileView() : !code() ? home() : failed ? missing() : !trip ? loading() : me ? tripView(me) : join();
   app.replaceChildren(...view.flat().filter(Boolean));
 }
 
@@ -529,7 +611,7 @@ function render() {
   };
 }
 
-addEventListener("hashchange", () => (location.hash === "#me" && fillDraft(), (trip = null), (failed = ""), (draft.step = 0), refresh(true)));
+addEventListener("hashchange", () => (short && closeShort(), location.hash === "#me" && fillDraft(), (trip = null), (failed = ""), (draft.step = 0), refresh(true)));
 app.addEventListener("focusout", () => setTimeout(() => stale && !typing() && render())); // 입력이 끝나면 밀린 변경을 그린다
 setInterval(refresh, 2000); // ponytail: 2초마다 묻는다(바뀐 게 없으면 304). 지연이 문제가 되면 SSE로 바꾼다.
 render();
