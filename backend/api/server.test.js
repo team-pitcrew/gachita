@@ -779,6 +779,21 @@ test("오류 종류와 요청 로그(T71)", async () => {
   assert.ok(!all.includes(trip.code) && !all.includes(p.token) && !all.includes("민준"), "여행 코드·토큰·이름은 로그에 없다");
 });
 
+test("웹 파일은 쓸 때마다 다시 확인하게 하고, 바뀌지 않았으면 304(배포 뒤 옛 파일이 남지 않게)", async () => {
+  for (const path of ["/", "/app.js", "/style.css", "/demo"]) {
+    const res = await fetch(base + path);
+    const etag = res.headers.get("etag");
+    assert.deepEqual([res.status, res.headers.get("cache-control"), Boolean(etag)], [200, "no-cache", true], path);
+    const again = await fetch(base + path, { headers: { "if-none-match": etag } });
+    assert.deepEqual([again.status, await again.text()], [304, ""], `${path} 바뀌지 않음`);
+  }
+  assert.equal((await fetch(`${base}/app.js`, { headers: { "if-none-match": '"old"' } })).status, 200, "다르면 새 파일");
+  // Cloudflare가 압축하면서 약한 ETag(W/)로 바꿔 돌려보내도, 목록으로 와도 304
+  const etag = (await fetch(`${base}/app.js`)).headers.get("etag");
+  for (const inm of [`W/${etag}`, `"old", ${etag}`, "*"])
+    assert.equal((await fetch(`${base}/app.js`, { headers: { "if-none-match": inm } })).status, 304, inm);
+});
+
 test("명세(docs/api/openapi.yaml)와 서버의 경로가 같다", async () => {
   // 표준 라이브러리에 YAML 읽기가 없어 ruby로 JSON으로 바꾼다(macOS와 CI 실행기에 기본으로 있음)
   const file = fileURLToPath(new URL("../../docs/api/openapi.yaml", import.meta.url));
