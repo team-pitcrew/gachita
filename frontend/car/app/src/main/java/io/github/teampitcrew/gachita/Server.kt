@@ -72,6 +72,12 @@ class Server(base: String) {
         JSONObject(call("POST", "/api/trips/$code/voice-match?" + (row?.let { "row=$it&" } ?: "") + "device=" + java.net.URLEncoder.encode(device, "UTF-8") + "&seq=$seq", wav, token)!!)
             .let { Speaker(if (it.isNull("participantId")) null else it.getString("participantId"), it.optDouble("confidence", 0.0)) }
 
+    /** 사람이 고친 말한 사람을 서버 기록에도(#65, PATCH /utterances/:device/:seq). 그 기기로 올린 참가자의 토큰. null이면 모름. */
+    fun fixSpeaker(code: String, token: String, device: String, seq: Long, participantId: String?) {
+        call("PATCH", "/api/trips/$code/utterances/" + java.net.URLEncoder.encode(device, "UTF-8") + "/$seq",
+            JSONObject().put("participantId", participantId ?: JSONObject.NULL), token)
+    }
+
     private fun call(method: String, path: String, body: Any?, token: String? = null): String? {
         val c = URL(base + path).openConnection() as HttpURLConnection
         try {

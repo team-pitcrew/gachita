@@ -449,9 +449,17 @@ class MainActivity : ComponentActivity() {
         }, ENROLL_MS + 300)
     }
 
-    /** 화면에서 말한 사람을 고침(T37). 차 안에 남기고(부탁·화면), 대조가 덮지 않는다. */
+    /**
+     * 화면에서 말한 사람을 고침(T37). 차 안에 남기고(부탁·화면, 대조가 덮지 않음) 서버 기록에도 보낸다(#65 PATCH, 올린 참가자의 토큰).
+     * 고칠 수 있는 줄은 대조를 마친(곧 서버가 받은) 발화뿐이다. 보내지 못하면 차 안에만 남는다.
+     */
     private fun fixSpeaker(u: Utterance, p: Person) {
         speakersOf(u.trip).set(u.seq, Speaker(p.id, 1.0, byPerson = true)); heardTick++
+        val up = tokens.minByOrNull { it.key }?.value ?: return
+        val url = server; val dev = device
+        bg({ Server(url).fixSpeaker(u.trip, up, dev, u.seq, p.id) }) { r ->
+            r.exceptionOrNull()?.let { Log.w(TAG, "고친 말한 사람을 서버에 남기지 못함 ${if (it is ApiError) it.status else "연결"}") }
+        }
     }
 
     /** 서버가 모르는 여행(48시간이 지나 지워짐): 기록을 멈추고 이 차의 사본(보관함·할 일)을 지운 뒤 처음 화면으로. */
