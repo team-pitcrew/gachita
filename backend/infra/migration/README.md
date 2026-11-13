@@ -47,6 +47,8 @@ backend/infra/infra.sh migration resume
 
 새 agent의 `gachita-agent-converge`는 `agent.yml`만 실행합니다. 기존 server 디렉터리나 서비스가 발견되면 설치 전에 중단합니다. server와 동일한 K3s 버전, AWS providerID, zone/region·instance-type·pool 라벨을 설정합니다. 모든 새 노드에는 `gachita.io/bootstrap=pending:NoSchedule`, data에는 추가로 `gachita.io/pool=data:NoSchedule` taint를 둡니다. P04가 Cilium·스토리지·배치 검증을 마친 뒤 bootstrap taint를 명시적으로 제거해야 합니다. taint는 처음 등록할 때 적용되므로 이미 등록된 Node의 taint 제거는 kubectl로 수행합니다. 설정에 남은 라벨은 agent 재시작 때 다시 반영됩니다. [K3s agent 문서](https://docs.k3s.io/cli/agent)
 
+새 노드에는 `node.kubernetes.io/exclude-from-external-load-balancers=true`도 설정합니다. 현재 ALB가 instance 대상을 사용하므로 NoSchedule taint만으로는 자동 대상 등록을 막을 수 없습니다. P05에서 준비된 앱 노드만 설정 파일과 Node 객체 양쪽에서 이 라벨을 제거하고 ALB health를 확인합니다. data 노드는 계속 제외합니다. [AWS Load Balancer Controller의 기본 NodeSelector](https://kubernetes-sigs.github.io/aws-load-balancer-controller/latest/guide/targetgroupbinding/targetgroupbinding/)
+
 ## 검증 명령과 적용 전 통과 조건
 
 ```bash

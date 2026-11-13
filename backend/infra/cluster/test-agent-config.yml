@@ -23,6 +23,7 @@
           - "('gachita.io/pool=data:NoSchedule' in config['node-taint']) == (item == 'data')"
           - "'provider-id=aws:///ap-northeast-2a/i-0123456789abcdef0' in config['kubelet-arg']"
           - "'node.kubernetes.io/instance-type=t4g.small' in config['node-label']"
+          - "'node.kubernetes.io/exclude-from-external-load-balancers=true' in config['node-label']"
       vars:
         node_pool: "{{ item }}"
         config: "{{ lookup('ansible.builtin.template', 'templates/k3s-agent-config.yaml.j2') | from_yaml }}"
