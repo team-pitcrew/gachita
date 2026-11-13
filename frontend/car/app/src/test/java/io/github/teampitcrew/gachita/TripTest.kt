@@ -34,13 +34,34 @@ class TripTest {
     }
 
     @Test fun `주차 중이고 서버에 닿을 때만 켤 수 있다`() {
-        val s = Session().withTrip(trip(false, false))
+        val s = Session(ours = setOf("p0")).withTrip(trip(false, false))
         assertNotNull(s.copy(gear = null).blockOn())
         assertNotNull(s.copy(gear = "D").blockOn())
         assertNotNull(s.copy(gear = "P", online = false).blockOn())
         assertNotNull(s.copy(gear = "P", busy = true).blockOn())
         assertNotNull(Session(gear = "P").blockOn()) // 여행 없음
         assertNull(s.copy(gear = "P").blockOn())
+        assertNotNull(s.copy(gear = "P", ours = emptySet()).blockOn()) // 이 차가 참가시킨 사람이 없으면 켤 것이 없다
+    }
+
+    @Test fun `여행의 동의 세대와 만든 시각을 읽는다`() {
+        val t = parseTrip(json(true).replace("\"version\":3", "\"version\":3,\"generation\":4"))
+        assertEquals(4, t.generation); assertEquals(1L, t.createdAt)
+        assertEquals(1, trip(true).generation) // 세대가 없는 옛 응답은 1
+    }
+
+    @Test fun `폰으로 들어온 사람은 동의 대기이고, 스위치는 차가 참가시킨 사람의 동의를 보인다`() {
+        val s = Session(gear = "P", ours = setOf("p0")).turnedOn(trip(true, false)) // p0은 차, p1은 폰
+        assertFalse(s.recording)
+        assertTrue(s.switchOn) // 폰을 기다리는 동안에도 켜짐으로 보여 끌 수 있다
+        assertFalse(s.waitsFor(s.trip!!.people[0]))
+        assertTrue(s.waitsFor(s.trip!!.people[1]))
+        val all = s.withTrip(trip(true, true)) // 폰에서 켬
+        assertTrue(all.recording)
+        assertFalse(all.waitsFor(all.trip!!.people[1]))
+        assertFalse(all.turnOff().switchOn)
+        assertFalse(Session(ours = setOf("p0")).withTrip(trip(false, true)).switchOn) // 폰만 켰고 차는 아직
+        assertTrue(Session(gear = "P").turnedOn(trip(true, true)).switchOn) // 토큰이 없어도(앞 빌드) 기록 중이면 끌 수 있게 켜짐
     }
 
     @Test fun `서버가 모두의 동의를 저장하면 기록 중`() {

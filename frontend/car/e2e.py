@@ -3,13 +3,17 @@
 준비: 저장소 루트에서 make run, Cold boot한 Pleos 에뮬레이터, adb forward tcp:8088 tcp:8088(Virtual Console),
       frontend/car에서 ./gradlew assembleDebug
 실행: python3 frontend/car/e2e.py frontend/car/app/build/outputs/apk/debug/app-debug.apk <캡처를 둘 폴더>
+- GACHITA_PORT=8797처럼 주면 그 포트의 서버를 쓰고, 다시 띄울 때도 그 포트와 DATABASE_URL로 띄운다(공용 DB는 다른 시험이 비울 수 있음).
+- 폰 참가자 한 명(이모, 뒷자리 가운데)을 API로 참가시켜 자기 토큰으로만 동의를 켠다(T68). 차는 그 사람의 동의를 켜지 못한다.
 - 에뮬레이터를 켜거나 끄지 않는다. 다른 앱은 건드리지 않는다. 기어는 끝나면 P로 둔다.
 - 캡처와 results.json은 저장소 밖 폴더에 둔다.
 """
-import hashlib, json, pathlib, re, subprocess, sys, threading, time, urllib.request
+import hashlib, json, os, pathlib, re, subprocess, sys, threading, time, urllib.request
 
 ADB = [str(pathlib.Path.home() / "Library/Android/sdk/platform-tools/adb"), "-s", "emulator-5554"]
 PKG = "io.github.teampitcrew.gachita"
+PORT = int(os.environ.get("GACHITA_PORT", "8787"))
+API = f"http://localhost:{PORT}"
 OUT = pathlib.Path(sys.argv[2] if len(sys.argv) > 2 else ".")
 log = []
 
@@ -77,7 +81,7 @@ def gear(v):
 
 
 def server(code):
-    t = json.load(urllib.request.urlopen(f"http://localhost:8787/api/trips/{code}", timeout=5))
+    t = json.load(urllib.request.urlopen(f"{API}/api/trips/{code}", timeout=5))
     note("server", code=code, status=t["status"], recording=t["recording"], consent=[(p["name"], p["consent"]) for p in t["participants"]], version=t["version"])
     return t
 
@@ -91,28 +95,38 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
 def server_up():
-    try: return json.load(urllib.request.urlopen("http://localhost:8787/healthz", timeout=2)).get("ok")
+    try: return json.load(urllib.request.urlopen(f"{API}/healthz", timeout=2)).get("ok")
     except Exception: return False
 
 
 def stop_server():
-    pids = subprocess.run(["lsof", "-t", "-iTCP:8787", "-sTCP:LISTEN"], capture_output=True, text=True).stdout.split()
+    pids = subprocess.run(["lsof", "-t", f"-iTCP:{PORT}", "-sTCP:LISTEN"], capture_output=True, text=True).stdout.split()
     for pid in pids: subprocess.run(["kill", pid])
     time.sleep(1); note("server.stop", pids=pids, up=server_up())
 
 
 def start_server():
-    subprocess.Popen(["make", "run"], cwd=ROOT, stdout=open(OUT / "server-restart.log", "w"), stderr=subprocess.STDOUT, start_new_session=True)
+    cmd, cwd = (["make", "run"], ROOT) if PORT == 8787 else (["node", "server.js"], ROOT / "backend/api")  # 따로 띄운 서버는 같은 포트·DATABASE_URL로
+    subprocess.Popen(cmd, cwd=cwd, env={**os.environ, "PORT": str(PORT)}, stdout=open(OUT / "server-restart.log", "w"), stderr=subprocess.STDOUT, start_new_session=True)
     for _ in range(60):
         if server_up(): break
         time.sleep(1)
     note("server.start", up=server_up())
 
 
-def phone_consent(code, pid, on):
-    """폰 참가자가 웹앱에서 자기 동의를 바꾸는 것과 같은 요청."""
-    req = urllib.request.Request(f"http://localhost:8787/api/trips/{code}/participants/{pid}", data=json.dumps({"consent": on}).encode(),
-                                 headers={"Content-Type": "application/json"}, method="PATCH")
+def phone_join(code):
+    """폰(웹앱)에서 손님으로 참가하는 것과 같은 요청. 참가자 id와 그 사람의 토큰(웹앱이 폰에 두는 값)."""
+    req = urllib.request.Request(f"{API}/api/trips/{code}/participants", data=json.dumps({"seat": "ROW_2_CENTER", "name": "이모", "consent": False}).encode(),
+                                 headers={"Content-Type": "application/json"}, method="POST")
+    p = json.load(urllib.request.urlopen(req, timeout=5)); note("phone.join", id=p["id"])
+    return p["id"], p["token"]
+
+
+def phone_consent(code, phone, on):
+    """폰 참가자가 웹앱에서 자기 동의를 바꾸는 것과 같은 요청. 켜기는 자기 참가자 토큰으로만 된다(T68)."""
+    pid, token = phone
+    req = urllib.request.Request(f"{API}/api/trips/{code}/participants/{pid}", data=json.dumps({"consent": on}).encode(),
+                                 headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"}, method="PATCH")
     urllib.request.urlopen(req, timeout=5).read(); note("phone.consent", id=pid, on=on)
 
 
@@ -138,7 +152,7 @@ def main(apk):
     adb("shell", "pm", "clear", "--user", "10", PKG)  # 지난 여행 없이 시작
     for perm in ("RECORD_AUDIO", "POST_NOTIFICATIONS"):  # pm clear는 허용한 권한도 지운다. 기록을 켜면 수음하므로(T36) 다시 준다
         adb("shell", "pm", "grant", "--user", "10", PKG, f"android.permission.{perm}")
-    adb("shell", "am", "start", "--user", "10", "-n", f"{PKG}/.MainActivity", "--es", "server", "http://10.0.2.2:8787")
+    adb("shell", "am", "start", "--user", "10", "-n", f"{PKG}/.MainActivity", "--es", "server", f"http://10.0.2.2:{PORT}")
     time.sleep(4); shot("01-setup"); ui = texts(); note("ui", texts=ui)
     check("첫 화면", "여행 만들기" in ui and "서버 주소" in ui)
     # 주행 제한 중에는 여행 만들기(가족 고르기·서버 주소 입력)를 가린다(T11)
@@ -153,19 +167,28 @@ def main(apk):
     t = server(code)
     check("서버에 여행과 가족 4명, 동의는 모두 꺼짐", len(t["participants"]) == 4 and not any(p["consent"] for p in t["participants"]))
     check("기록 꺼짐 화면과 기어 P", "기록 꺼짐" in ui and any(u.startswith("기어 P") for u in ui))
+    # 폰으로 한 명이 더 들어온다(T68). 차는 이 사람의 토큰이 없어 동의를 켜지 못한다
+    phone = phone_join(code); time.sleep(12)
+    ui = texts(); note("ui", texts=ui)
+    check("폰 참가자는 일행에 '동의 대기'로 보임", "일행 5명" in ui and "이모 · 뒷자리 가운데 · 동의 대기" in ui)
     # 기어 D: 주행 제한 중에는 켜는 쪽 조작을 막는다(T11). 눌러도 켜지지 않아야 한다
     gear("Drive"); on = switch_enabled(); tap_switch(); time.sleep(2)
     shot("03-drive-not-on"); ui = texts(); note("ui", texts=ui); t = server(code)
     check("기어 D에서는 동의 스위치가 꺼진 채 눌리지 않음(서버 동의 그대로 꺼짐)", not on and "● 기록 중" not in ui and not any(p["consent"] for p in t["participants"]))
     gear("Park"); tap_switch(); time.sleep(3)
+    shot("04a-car-on-phone-waits"); ui = texts(); note("ui", texts=ui); t = server(code)
+    mine = [p for p in t["participants"] if p["id"] != phone[0]]
+    check("기어 P에서 켜면 차가 참가시킨 4명만 켜지고 폰 참가자는 동의 대기(기록 안 함)",
+          all(p["consent"] for p in mine) and not next(p for p in t["participants"] if p["id"] == phone[0])["consent"]
+          and "● 기록 중" not in ui and "이모 · 뒷자리 가운데 · 동의 대기" in ui)
+    phone_consent(code, phone, True); time.sleep(12)
     shot("04-recording"); ui = texts(); note("ui", texts=ui); t = server(code)
-    check("기어 P에서 켜면 기록 중, 서버 동의 모두 켜짐", "● 기록 중" in ui and all(p["consent"] for p in t["participants"]))
+    check("폰 참가자가 자기 토큰으로 켜면 기록 중, 서버 동의 모두 켜짐", "● 기록 중" in ui and all(p["consent"] for p in t["participants"]))
     # 주행 중 재동의: 폰 참가자가 동의를 껐다 다시 켠다. 주차할 때까지 '기록 대기'
     gear("Drive"); activity_state()
     shot("05-recording-drive"); ui = texts(); note("ui", texts=ui)
-    check("기어 D: 차단 화면 없이 기록 중 화면 유지", app_on_top() and "● 기록 중" in ui and "일행 4명" in ui)
+    check("기어 D: 차단 화면 없이 기록 중 화면 유지", app_on_top() and "● 기록 중" in ui and "일행 5명" in ui)
     check("기어 D: 새 여행 만들기·진단 줄은 가려짐", "새 여행 만들기" not in ui and not any(u.startswith(("여행 코드", "기어 ")) for u in ui))
-    phone = t["participants"][1]["id"]
     phone_consent(code, phone, False); time.sleep(12)
     ui = texts(); note("ui", texts=ui); activity_state()
     check("주행 중 폰에서 동의를 끄면 멈춤", "● 기록 중" not in ui and "기록 꺼짐" in ui)
@@ -178,7 +201,7 @@ def main(apk):
     # 통신 끊김: 서버를 내리고 다음 조회(10초)를 기다린다
     stop_server(); time.sleep(12)
     shot("08-offline-last-state"); ui = texts(); note("ui", texts=ui)
-    check("끊겨도 마지막 여행과 기록 중을 보여 줌", "연결이 끊겼어요 · 마지막으로 확인한 정보예요" in ui and "● 기록 중" in ui and "일행 4명" in ui)
+    check("끊겨도 마지막 여행과 기록 중을 보여 줌", "연결이 끊겼어요 · 마지막으로 확인한 정보예요" in ui and "● 기록 중" in ui and "일행 5명" in ui)
     tap_switch(); time.sleep(0.5)
     shot("09-off-while-offline"); ui = texts(); note("ui", texts=ui)
     check("끊긴 채로 끄면 바로 멈춤", "기록 꺼짐" in ui and "● 기록 중" not in ui)
@@ -195,7 +218,7 @@ def main(apk):
     # 반쪽 창(약 841): 에뮬레이터가 창을 나누지 않아 앱 안에서 폭을 줄여 그린다(디버그 빌드)
     adb("shell", "am", "start", "--user", "10", "-S", "-n", f"{PKG}/.MainActivity", "--ei", "widthDp", "841")
     time.sleep(4); shot("12-half-width-841"); ui = texts(); note("ui", texts=ui)
-    check("반쪽 폭에서도 기록 상태·일행·부탁·동의가 보임", all(any(x in u for u in ui) for x in ("기록 꺼짐", "일행 4명", "보관한 부탁", "대화 기록 동의")))
+    check("반쪽 폭에서도 기록 상태·일행·부탁·동의가 보임", all(any(x in u for u in ui) for x in ("기록 꺼짐", "일행 5명", "보관한 부탁", "대화 기록 동의")))
     (OUT / "results.json").write_text(json.dumps({"code": code, "log": log}, ensure_ascii=False, indent=1))
     fails = [e["name"] for e in log if e["step"] == "check" and not e["ok"]]
     print("실패:", fails if fails else "없음")
