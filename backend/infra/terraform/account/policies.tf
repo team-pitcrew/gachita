@@ -106,6 +106,22 @@ data "aws_iam_policy_document" "plan_deny" {
     actions   = ["secretsmanager:GetSecretValue"]
     resources = ["*"]
   }
+  # ec2:Get*·Describe* 가운데 설정이 아니라 값(남의 서버 user data, 콘솔 출력·화면, 시작 템플릿의 user data)을 주는 것
+  statement {
+    effect    = "Deny"
+    actions   = ["ec2:GetConsoleOutput", "ec2:GetConsoleScreenshot", "ec2:GetLaunchTemplateData", "ec2:GetPasswordData"]
+    resources = ["*"]
+  }
+  statement { # 우리 서버의 속성은 refresh가 읽는다(user data 포함)
+    effect    = "Deny"
+    actions   = ["ec2:DescribeInstanceAttribute"]
+    resources = ["*"]
+    condition {
+      test     = "StringNotEquals"
+      variable = "aws:ResourceTag/Project"
+      values   = [local.project]
+    }
+  }
 }
 
 resource "aws_iam_role_policy" "plan_deny" {
@@ -187,7 +203,9 @@ data "aws_iam_policy_document" "apply" {
   }
   # ---- 인증서(남는 묶음): 우리 태그를 달아 만들고, 우리 태그가 있는 것만 고치고 지운다 ----
   statement {
-    actions   = ["acm:RequestCertificate", "acm:AddTagsToCertificate"]
+    # AddTagsToCertificate는 넣지 않는다: 요청 태그만 보면 남의(태그 없는) 인증서에 우리 태그를 달고 지울 수 있다.
+    # 태그를 단 요청에 그 권한이 따로 필요하면 첫 적용이 AccessDenied로 멈춘다. 그때 인증서는 사람이 로컬 자격으로 만든다
+    actions   = ["acm:RequestCertificate"]
     resources = ["*"]
     condition {
       test     = "StringEquals"
@@ -413,13 +431,41 @@ data "aws_iam_policy_document" "boundary" {
     resources = ["*"]
   }
   statement { # 만들 때 우리 태그를 단다(차트 값 defaultTags)
-    actions = ["elasticloadbalancing:CreateLoadBalancer", "elasticloadbalancing:CreateTargetGroup",
-    "elasticloadbalancing:AddTags", "ec2:CreateSecurityGroup", "ec2:CreateTags"]
+    actions   = ["elasticloadbalancing:CreateLoadBalancer", "elasticloadbalancing:CreateTargetGroup", "ec2:CreateSecurityGroup"]
     resources = ["*"]
     condition {
       test     = "StringEquals"
       variable = "aws:RequestTag/Project"
       values   = [local.project]
+    }
+  }
+  # 태그 달기는 만드는 호출 안에서만. 요청 태그만 보면 남의 자원에 우리 태그를 달아 위의 '우리 태그' 권한을 얻는다
+  statement {
+    actions   = ["elasticloadbalancing:AddTags"]
+    resources = ["*"]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestTag/Project"
+      values   = [local.project]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "elasticloadbalancing:CreateAction"
+      values   = ["CreateLoadBalancer", "CreateTargetGroup"]
+    }
+  }
+  statement {
+    actions   = ["ec2:CreateTags"]
+    resources = ["*"]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestTag/Project"
+      values   = [local.project]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "ec2:CreateAction"
+      values   = ["CreateSecurityGroup"]
     }
   }
   statement { # 우리 태그가 있는 것만 고치고 지운다(ALB·대상 그룹·보안 그룹, 노드 보안 그룹, 보안 그룹을 만들 VPC)
