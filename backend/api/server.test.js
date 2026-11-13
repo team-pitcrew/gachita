@@ -726,6 +726,9 @@ test("글자 칸의 NUL 문자는 400으로 거른다(저장할 때 500이 되�
   assert.equal((await call("POST", "/api/profiles", { name: "x\u0000" }))[0], 400);
   const [, trip] = await call("POST", "/api/trips", {});
   assert.equal((await join(trip.code, "민\u0000준", "ROW_1_LEFT"))[0], 400);
+  assert.equal((await call("POST", "/api/trips", { title: "a\ud800b" }))[0], 400, "짝 없는 서로게이트도");
+  const [, p] = await join(trip.code, "민준", "ROW_1_LEFT");
+  assert.equal((await call("GET", `/api/trips/${trip.code}/utterances?device=%00`, null, p.token))[0], 400, "질의 문자열의 기기 이름도");
 });
 
 test("오류 종류와 요청 로그(T71)", async () => {
