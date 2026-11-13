@@ -33,7 +33,7 @@ export function suggest(lines, moments) {
     while (j < lines.length && lines[j].at < lines[i].at + WINDOW) count(lines[j++], 1);
     if (j - i < MIN_LINES) continue;
     const from = lines[i].at - 1000;
-    windows.push({ i, j, from, to: Math.max(lines[j - 1].at + 4000, from + MIN_SPAN), speakers: said.size, score: j - i + 2 * Math.max(0, said.size - 1) });
+    windows.push({ i, j, from, to: Math.max(lines[j - 1].at + 4000, from + MIN_SPAN), speakers: said.size, score: j - i + 2 * (said.size - 1) }); // 명세 그대로: 말한 사람을 모르면(0명) 2점 깎인다
   }
   const picked = [];
   for (const c of windows.sort((a, b) => b.score - a.score || a.from - b.from)) {

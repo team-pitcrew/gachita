@@ -973,6 +973,10 @@ test("장면 규칙의 가장자리: 한 순간에 몰린 2만 줄, 같은 시�
   // 한 사람의 말에 화자 대조가 일부만 붙어도 한 사람이다(좌석 구역으로 센다). 구역을 모르면 세지 않는다
   const solo = [0, 3, 6, 9].map((s, i) => ({ at: t0 + s * 1000, text: "응", seatArea: "ROW_1_LEFT", ...(i % 2 ? { profileId: "p1" } : {}) }));
   assert.equal(suggest([...solo, { at: t0 + 10_000, text: "?" }], [])[0].why, "30초에 말이 5번");
+  // 점수는 명세 그대로(발화 수 + 2 × (말한 사람 수 − 1)): 말한 사람을 모르는 5줄(3점)보다 한 사람의 4줄(4점)이 먼저
+  const unknown = [0, 1, 2, 3, 4].map((s) => ({ at: t0 + s * 1000, text: "?" }));
+  const known = [0, 1, 2, 3].map((s) => ({ at: t0 + 100_000 + s * 1000, text: "응", seatArea: "ROW_1_LEFT" }));
+  assert.deepEqual(suggest([...unknown, ...known], []).map((c) => c.score), [3, 4]);
   // 두 자리에서 같은 시각에 말하면 자막이 겹쳐 보인다(0초짜리로 사라지지 않음)
   const both = cues([{ at: t0, text: "와", seatArea: "ROW_1_LEFT" }, { at: t0, text: "우와", seatArea: "ROW_2_LEFT" }], t0 - 1000, 10);
   assert.deepEqual(both.map((c) => [c.start, c.end]), [[1, 2], [1, 2]]);
