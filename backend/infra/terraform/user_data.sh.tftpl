@@ -48,4 +48,12 @@ ansible-pull -U "$repo" -C "$rev" -d /opt/gachita --private-key /root/.ssh/gachi
   -i localhost, -e @/etc/gachita/vars.yml "$@" backend/infra/cluster/site.yml
 RUN
 chmod 755 /usr/local/sbin/gachita-converge
+
+# 저장소에 닿을 때까지 기다린다(최대 10분). 서버가 막 떠 네트워크나 저장소가 잠깐 안 될 때 첫 구축이 바로 실패하지 않게
+export GIT_SSH_COMMAND="ssh -i /root/.ssh/gachita-deploy -o IdentitiesOnly=yes"
+for i in $(seq 1 40); do
+  git ls-remote '${gitops_repo}' HEAD > /dev/null && break
+  echo "[0/7 first-boot] 저장소를 기다림($i/40)"
+  sleep 15
+done
 /usr/local/sbin/gachita-converge
