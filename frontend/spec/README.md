@@ -36,8 +36,8 @@
 | 시안 | 기기 | 들어오는 길 | 화면 문서 |
 |---|---|---|---|
 | [C6 여행 만들기](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=3-1116) | 차, 주차 | 여행이 없을 때 첫 화면 | [차량 화면](car.md) 흐름 1의 1 |
-| [C5 출발 전](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=3-647) | 차, 주차 | 여행을 만든 뒤 | 흐름 1의 2~4(동승자 추가, 기록 동의, 목소리 등록) |
-| [C7 QR 읽은 뒤 자리 고르기](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=12-531) | 차, 주차 | C5의 '동승자 추가' | 흐름 1의 2 |
+| [C5 출발 전](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=3-647) | 차, 주차 | 여행을 만든 뒤 | 흐름 1의 2~4(동승자 연결, 기록 동의, 목소리 등록) |
+| [C7 QR 읽은 뒤 자리 고르기](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=12-531) | 차, 주차 | C5의 '동승자 연결' | 흐름 1의 2 |
 | [C1](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=2-2)·[C1n](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=4-254) 기록 중과 말하는 사람 강조 | 차, 주행 | 기어 D | 흐름 2 |
 | [C2](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=2-121)·[C2n](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=4-357) 휴게소 제안과 말로 수락 | 차, 주행 | 쉬어 가자는 말 | 흐름 3 |
 | [C4 기록 잠시 멈춤](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=3-537) | 차, 주행 | 호출어나 'Gleo 쓰기' | 흐름 5 |

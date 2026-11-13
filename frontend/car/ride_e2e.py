@@ -121,10 +121,11 @@ def main(apk):
     check("이미 쓴 QR은 거절되고 안내", any("이미 연결한 QR" in t for t in ui))
     tap_text("취소")
 
-    tap_text("폰 QR 읽기"); time.sleep(3)
+    def last_camera(): return next((l for l in adb("shell", "dumpsys", "media.camera").splitlines() if "client for package " + PKG in l), "").strip()  # 가장 최근 줄이 위
+    aim(inj, on=False)  # QR에서 돌려 둔다. 다시 읽으면 읽어서 카메라를 닫으므로 기어 D가 닫는지 가릴 수 없다
+    tap_text("폰 QR 읽기"); time.sleep(3); opened = last_camera()
     gear("Drive"); time.sleep(3); ui = texts(); shot("4-drive"); note("ui", texts=ui)
-    last = next((l for l in adb("shell", "dumpsys", "media.camera").splitlines() if "client for package " + PKG in l), "")  # 가장 최근 줄이 위
-    check("기어 D: 동승자 연결 카드가 가려지고 카메라를 놓음", "동승자 연결" not in ui and "DISCONNECT" in last, camera=last.strip())
+    check("기어 D: 동승자 연결 카드가 가려지고 열려 있던 카메라를 놓음", "동승자 연결" not in ui and " CONNECT " in opened and "DISCONNECT" in last_camera(), opened=opened, after=last_camera())
     gear("Park"); aim(inj, on=False)
 
     (OUT / "results.json").write_text(json.dumps(e2e.log, ensure_ascii=False, indent=1))

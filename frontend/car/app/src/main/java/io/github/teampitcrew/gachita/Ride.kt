@@ -41,8 +41,8 @@ class QrCamera(ctx: Context, private val onCode: (String) -> Unit, private val o
     private val thread = HandlerThread("qr").apply { start() }
     private val bg = Handler(thread.looper)
     private val qr = QRCodeReader()
-    private var device: CameraDevice? = null
-    private var session: CameraCaptureSession? = null
+    @Volatile private var device: CameraDevice? = null
+    @Volatile private var session: CameraCaptureSession? = null
     private var reader: ImageReader? = null
     @Volatile private var done = false
 
@@ -65,19 +65,21 @@ class QrCamera(ctx: Context, private val onCode: (String) -> Unit, private val o
         runCatching {
             cm.openCamera(id, object : CameraDevice.StateCallback() {
                 override fun onOpened(d: CameraDevice) {
+                    if (done) { d.close(); return } // 열리기 전에 닫힘(주행 제한·닫기)
                     device = d
                     @Suppress("DEPRECATION") // 목록으로 만드는 것이 API 29부터 다 되는 가장 짧은 길
-                    d.createCaptureSession(listOf(preview, r.surface), object : CameraCaptureSession.StateCallback() {
+                    runCatching { d.createCaptureSession(listOf(preview, r.surface), object : CameraCaptureSession.StateCallback() {
                         override fun onConfigured(s: CameraCaptureSession) {
+                            if (done) { s.close(); return }
                             session = s
                             runCatching {
                                 s.setRepeatingRequest(d.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply { addTarget(preview); addTarget(r.surface) }.build(), null, bg)
                             }.onFailure { fail("카메라를 열지 못했어요", it) }
                         }
-                        override fun onConfigureFailed(s: CameraCaptureSession) = fail("카메라를 열지 못했어요", null)
-                    }, bg)
+                        override fun onConfigureFailed(s: CameraCaptureSession) { if (!done) fail("카메라를 열지 못했어요", null) }
+                    }, bg) }.onFailure { if (!done) fail("카메라를 열지 못했어요", it) }
                 }
-                override fun onDisconnected(d: CameraDevice) { d.close() }
+                override fun onDisconnected(d: CameraDevice) { d.close(); if (!done) fail("카메라 연결이 끊겼어요", null) }
                 override fun onError(d: CameraDevice, error: Int) { d.close(); fail("카메라를 쓸 수 없어요($error)", null) }
             }, bg)
         }.onFailure { fail("카메라를 열지 못했어요", it) }

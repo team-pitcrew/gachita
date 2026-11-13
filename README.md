@@ -24,7 +24,7 @@
 | 폴더 | 내용 | 상태 |
 |---|---|---|
 | `frontend/web/` | 폰 웹앱. 프로필(이름·캐릭터 10종·사진, 구글 계정 연결), 동승 연결 QR, 기록 동의, 부탁 남기기와 상태 보기, 여행 뒤 기록본·장면 고르기·자막 고치기·공유·9:16 숏폼. 홈 화면 설치. 웹 시연(`/demo`) | 동작. 서버가 같이 내보냅니다. 데스크톱·헤드리스 브라우저에서 확인, 실제 휴대폰은 아직 |
-| `frontend/car/` | Pleos 차량 앱(Android · Kotlin · Compose). 여행과 기록 동의, 수음과 받아쓰기, 받아 적은 말 올리기, 주행 중 화면, 부탁을 경유지로, 도착 브리핑, Gleo와 마이크 주고받기, 차 안 보관함 암호화([차량 앱 README](frontend/car/README.md)) | 동작(에뮬레이터). 캐릭터·민트·좌석 지도의 개편 화면(T20 #217)과 고른 장면의 원음 클립 올리기(T63 #222) 포함. 좌석 구역·목소리 등록·말한 사람 붙이기(T37 #225) 포함. 동승 연결 QR 읽기는 계획(T46) |
+| `frontend/car/` | Pleos 차량 앱(Android · Kotlin · Compose). 여행과 기록 동의, 수음과 받아쓰기, 받아 적은 말 올리기, 주행 중 화면, 부탁을 경유지로, 도착 브리핑, Gleo와 마이크 주고받기, 차 안 보관함 암호화([차량 앱 README](frontend/car/README.md)) | 동작(에뮬레이터). 캐릭터·민트·좌석 지도의 개편 화면(T20 #217)과 고른 장면의 원음 클립 올리기(T63 #222) 포함. 좌석 구역·목소리 등록·말한 사람 붙이기(T37 #225) 포함. 동승 연결 QR 읽기(T46 #232)와 주차 중 숏폼 재생(T43 #233)도 포함 |
 | `backend/api/` | API 서버. 기기 프로필과 구글 계정 연결(OAuth, PKCE), 동승 연결, 참가자와 자리, 본인 토큰으로만 켜는 기록 동의, 부탁의 상태, 장면, 발화·기록본·피드, 목소리 등록과 대조, 장면 후보와 숏폼 구성, 고른 장면의 클립과 다시 받아 적기, 자막 고치기, 공유와 회수 | 동작. Postgres에 저장, 클립은 S3. 그룹과 초대 코드 경로는 닫음(11/14) |
 | `backend/infra/` | AWS 자원([Terraform](backend/infra/terraform/README.md))과 클러스터 선언([Argo CD](backend/infra/gitops/README.md)) | 실서비스 동작(11/13부터). Cloudflare → ALB → K3s 한 노드(t4g.large) → API, CloudNativePG Postgres 하나에 `trips`·`profiles` 두 DB. 실제 주소 E2E 통과, Route 53이 밖에서 30초마다 점검 |
 | `docs/` | [개발 규칙](docs/development.md), [구조와 스택](docs/architecture.md), [디자인 시스템](docs/design.md), [전사록 데이터](docs/transcript-data.md), [작업 목록](docs/tasks.md), [프로젝트 보드](docs/project-board.md), [결정 기록](docs/adr), [실측 보고](docs/research) | |
