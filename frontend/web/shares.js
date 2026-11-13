@@ -53,10 +53,16 @@ export function createShares({ getProfile, getProfileToken, getTrip, getParticip
       listView(state);
     }
   };
+  // 보내기·회수의 결과와 오류는 모달 안에 둔다(모달이 최상위 레이어라 #toast는 그 뒤에 가려진다).
+  // 결과가 불명확하면(응답 유실) 다시 보내 중복 공유를 만들지 않게 '보낸 공유 확인'을 함께 준다.
   const shell = (s, title, ...content) => {
     if (!valid(s)) return sync();
-    dialog.replaceChildren(h("div", { className: "between" }, h("h1", { id: "shares-title" }, title), button("닫기", close, "plain")), ...content);
+    dialog.replaceChildren(
+      h("div", { className: "between" }, h("h1", { id: "shares-title" }, title), button("닫기", close, "plain")),
+      ...[s.note && h("div", { role: s.note.alert ? "alert" : "status", className: s.note.alert ? "shares-note alert" : "shares-note" }, h("p", {}, s.note.text), s.note.checkSent && button("보낸 공유 확인", () => openList("sent"))), ...content].filter(Boolean),
+    );
   };
+  const note = (s, text, { alert = false, checkSent = false } = {}) => (s.note = { text, alert, checkSent });
   const show = (s) => {
     stop();
     state = s;
@@ -66,10 +72,10 @@ export function createShares({ getProfile, getProfileToken, getTrip, getParticip
   };
   const profileState = () => ({ profileId: getProfile()?.id, profileToken: getProfileToken() });
 
-  async function openList(direction = "received") {
+  async function openList(direction = "received", message = "") {
     const identity = profileState();
     if (!identity.profileId || !identity.profileToken) return onProfile();
-    const s = { ...identity, mode: "list", direction, items: [], removed: new Set(), pending: new Set() };
+    const s = { ...identity, mode: "list", direction, items: [], removed: new Set(), pending: new Set(), note: message ? { text: message } : null };
     show(s);
     await load(s);
   }
@@ -164,6 +170,7 @@ export function createShares({ getProfile, getProfileToken, getTrip, getParticip
   async function revoke(s, item) {
     if (!valid(s) || s.pending.has(item.id) || !confirm("이 공유를 회수할까요? 받는 사람에게 더 이상 보이지 않아요.")) return;
     s.pending.add(item.id);
+    s.note = null;
     listView(s);
     const controller = s.write = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10000);
@@ -173,10 +180,10 @@ export function createShares({ getProfile, getProfileToken, getTrip, getParticip
       s.removed.add(item.id);
       s.items = s.items.filter((entry) => entry.id !== item.id);
       s.snapshot = JSON.stringify(s.items);
+      note(s, "공유를 회수했어요.");
       listView(s);
-      toast("공유를 회수했어요.");
-    } catch (e) { if (valid(s)) toast(e.status === 0 ? "회수 결과를 확인하지 못했어요. 보낸 공유를 새로 고쳐 확인해 주세요." : errorText(e)); }
-    finally { clearTimeout(timeout); s.pending.delete(item.id); if (valid(s) && s.items.length) listView(s); }
+    } catch (e) { if (valid(s)) note(s, e.status === 0 ? "회수 결과를 확인하지 못했어요. 보낸 공유를 새로 고쳐 확인해 주세요." : errorText(e), { alert: true }); }
+    finally { clearTimeout(timeout); s.pending.delete(item.id); if (valid(s)) listView(s); }
   }
   function composeView(s) {
     if (!s.options) return;
@@ -220,13 +227,13 @@ export function createShares({ getProfile, getProfileToken, getTrip, getParticip
     try {
       await api("POST", `/trips/${encodeURIComponent(s.code)}/shares`, { momentId: s.momentId, recipientIds: recipients.map((p) => p.id), caption: s.caption.trim(), includeLocation: s.includeLocation, generation: s.generation }, s.participantToken, controller.signal);
       if (!valid(s)) return;
-      toast("선택한 동승자에게 공유했어요.");
-      await openList("sent");
+      await openList("sent", "선택한 동승자에게 공유했어요.");
     } catch (e) {
       if (valid(s)) {
         s.sending = false;
         s.stage = "edit";
-        toast(e.status === 0 ? "공유 결과를 확인하지 못했어요. 보낸 공유에서 먼저 확인해 주세요." : errorText(e));
+        const unclear = e.status === 0;
+        note(s, unclear ? "공유 결과를 확인하지 못했어요. 다시 보내기 전에 보낸 공유에서 먼저 확인해 주세요." : errorText(e), { alert: true, checkSent: unclear });
         await load(s);
         if (valid(s) && s.options) composeView(s);
       }

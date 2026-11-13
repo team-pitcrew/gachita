@@ -581,3 +581,20 @@ input[type="file"] {
 .records-heading h1 { font-size: 24px; margin: 0; }
 .records-list { list-style: none; padding: 0; display: grid; gap: 16px; }
 .records-list .what { overflow-wrap: anywhere; }
+
+/* 기록·공유 모달 안의 결과·오류 줄(#toast는 모달 뒤에 가려진다) */
+.records-note,
+.shares-note {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: var(--r-ctl);
+  background: var(--accent-soft);
+}
+.records-note.alert,
+.shares-note.alert {
+  color: var(--rec);
+}
+.shares-note p {
+  margin: 0 0 8px;
+}
+
