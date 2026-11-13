@@ -44,7 +44,7 @@ def main(apk, n):
     adb("shell", "am", "force-stop", "--user", "10", PKG); adb("shell", "pm", "clear", "--user", "10", PKG)
     for perm in ("RECORD_AUDIO", "POST_NOTIFICATIONS"): adb("shell", "pm", "grant", "--user", "10", PKG, f"android.permission.{perm}")
     adb("shell", "am", "start", "--user", "10", "-n", f"{PKG}/.MainActivity", "--es", "server", f"http://10.0.2.2:{PORT}")
-    time.sleep(4); tap_text("여행 만들기"); time.sleep(4)
+    wait_texts(lambda u: "서버 주소" in u, 30); tap_text("여행 만들기"); time.sleep(4)  # 설치 직후 첫 화면은 바쁜 기기에서 4초를 넘기기도 함
     code = next((t.split()[-1] for t in texts() if t.startswith("여행 코드")), None); note("trip", code=code)
     phone = phone_join(code)  # 서버 기록을 읽을 참가자(뒷자리 가운데, 목소리 등록 없음)
     wait_texts(lambda u: "일행 5명" in u, 15); tap_switch(); wait_texts(lambda u: "동의 대기" in " ".join(u), 10)
