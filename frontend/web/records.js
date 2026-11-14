@@ -17,7 +17,7 @@ export function chosenMoment(candidate, label) {
   };
 }
 
-export function createRecords({ getProfile, getProfileToken, getTrip, getParticipant, getParticipantToken, participantRequest, onSaved, onProfile }) {
+export function createRecords({ getProfile, getProfileToken, getTrip, getParticipant, getParticipantToken, participantRequest, onSaved, onProfile, onMoment, onConversation }) {
   const dialog = h("dialog", { className: "records-dialog", "aria-labelledby": "records-title" });
   document.body.append(dialog);
   let state = null;
@@ -136,6 +136,8 @@ export function createRecords({ getProfile, getProfileToken, getTrip, getPartici
         return h("li", { className: "card" },
           h("div", { className: "between" }, h("span", { className: "pill" }, item.kind === "moment" ? "남긴 장면" : "내가 한 말"), h("time", { className: "meta", dateTime: new Date(item.at).toISOString() }, when(item.at))),
           h("p", { className: "what" }, item.kind === "moment" ? item.label || "이름 없는 장면" : item.text),
+          h("p", { className: "meta" }, item.tripCode === getTrip()?.code ? getTrip().title || "현재 여행" : `여행 ${item.tripCode}`),
+          item.tripCode === getTrip()?.code && getParticipant()?.consent && h("div", { className: "row" }, item.kind === "moment" && onMoment ? button("원음·자막 확인", () => { close(); onMoment(item.id); }, "plain") : onConversation && button("대화 이어보기", () => { close(); onConversation(); }, "plain")),
           item.kind === "moment" && h("p", { className: "meta" }, "이 장면은 내 앨범에 남아요. 소리를 지우거나 기록 동의를 거두면 원음은 들을 수 없어요."),
           item.kind === "moment" && remove,
         );
@@ -181,13 +183,14 @@ export function createRecords({ getProfile, getProfileToken, getTrip, getPartici
     s.note = null;
     control.disabled = true;
     try {
-      await participantRequest("POST", "/moments", chosenMoment(item, label));
+      const moment = await participantRequest("POST", "/moments", chosenMoment(item, label));
       if (!valid(s)) return;
       s.items = s.items.filter((entry) => entry !== item);
       s.labels.delete(item);
       note(s, "장면을 남겼어요. 차가 연결되면 그 구간의 소리를 준비해요.");
       scenesView(s);
       await onSaved();
+      if (valid(s) && onMoment && moment?.id) { close(); onMoment(moment.id); }
     } catch (e) {
       if (!valid(s)) return;
       // 서버가 저장하고 응답만 잃었을 수 있다(끊김·5xx). 후보를 다시 읽으면 이미 남은 구간은 서버가 빼 주므로,
@@ -211,7 +214,8 @@ export function createRecords({ getProfile, getProfileToken, getTrip, getPartici
         return h("form", { className: "card", onsubmit: (e) => (e.preventDefault(), choose(s, item, label.value, pick)) },
           h("h2", {}, when(item.at)),
           h("p", { className: "meta" }, item.why),
-          h("ul", {}, item.lines.slice(0, 3).map((line) => h("li", {}, line.text))),
+          h("p", { className: "meta" }, `${when(item.from)} — ${when(item.to)} · ${Math.round((item.to - item.from) / 1000)}초`),
+          h("details", {}, h("summary", {}, item.lines[0]?.displayText || item.lines[0]?.text || "대화 확인"), h("ol", { className: "candidate-lines" }, item.lines.map((line) => h("li", {}, line.displayText ?? line.editedText ?? line.asrText ?? line.text)))),
           h("label", { className: "field" }, h("span", {}, "장면 이름"), label),
           !Number.isFinite(item.lat) && h("p", { className: "meta" }, "위치 정보가 없어요. 장면 목록에는 남길 수 있어요."),
           pick,

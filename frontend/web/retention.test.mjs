@@ -94,3 +94,26 @@ for (const expiry of [null, undefined]) {
     assert.match(ui.downloads[0], /\.png$/);
   });
 }
+
+test("선택한 내 장면에서 공유를 시작하고 받는 사람·위치 선택 뒤에도 직접 쓴 문구를 보존한다", async (t) => {
+  const ui = screen(t), me = { id: "rider", profileId: "self", consent: true }, calls = [];
+  const moment = { id: "mine", tripCode: "OLD123", label: "내가 고른 장면", at: oldTrip().createdAt, lat: 37, lng: 127 };
+  const trip = { ...oldTrip(), moments: [{ id: moment.id }, { id: "others" }], participants: [me, { id: "other", profileId: "friend", consent: true, name: "동승자" }] };
+  t.mock.method(globalThis, "fetch", async (path, options) => { calls.push({ path, options }); return Response.json(path.includes("/profiles/me/moments") ? { items: [moment] } : trip); });
+  const shares = createShares({ getProfile: () => ({ id: "self" }), getProfileToken: () => "profile-token", getTrip: () => trip, getParticipant: () => me, getParticipantToken: () => "participant-token" });
+  t.after(() => shares.close());
+  await shares.openCompose({ momentId: "mine" });
+  assert.ok(content(ui.body).includes("장면 공유 내용 고르기"));
+  elements(ui.body).find((el) => el.tag === "textarea").oninput({ target: { value: "우리 같이 다시 가자" } });
+  elements(ui.body).find((el) => el.attrs["aria-pressed"] === "false").onclick();
+  elements(ui.body).find((el) => el.attrs["aria-label"] === "장면 위치 함께 보내기").onclick();
+  assert.equal(elements(ui.body).find((el) => el.tag === "textarea").value, "우리 같이 다시 가자");
+  elements(ui.body).find((el) => el.tag === "form").onsubmit({ preventDefault() {} });
+  assert.ok(content(ui.body).includes("받는 사람: 동승자"));
+  assert.ok(content(ui.body).includes("우리 같이 다시 가자"));
+  assert.ok(content(ui.body).includes("위치 포함"));
+  assert.ok(calls.every((call) => call.options.method === "GET"), "최종 보내기 전에는 외부 공유 요청 없음");
+  await shares.openCompose({ momentId: "others" });
+  assert.ok(content(ui.body).includes("선택한 장면은 내 앨범에 없어요"));
+  assert.equal(elements(ui.body).find((el) => el.tag === "textarea"), undefined, "다른 사람의 장면을 공유 편집기로 넘기지 않음");
+});

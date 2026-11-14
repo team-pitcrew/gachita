@@ -55,3 +55,34 @@ test("요청 키를 저장하지 못하면 비용이 드는 요청을 보내지 
   const { model } = fixture(async () => { calls++; }, { savePending: () => { throw new Error("storage denied"); } });
   await assert.rejects(model.submit(true)); assert.equal(calls, 0); assert.equal(model.pending, undefined);
 });
+
+test("스타일과 원음 설정을 바꾸어도 사용자가 고른 장면을 계획에 보낸다", async () => {
+  const requests = [];
+  const { model } = fixture(async (_method, _path, body) => { requests.push(body); return { ...plan, ...body }; });
+  await model.preview("car-sitcom-v1", false, "selected-scene");
+  await model.preview("travel-postcard-v1", true, "selected-scene");
+  assert.deepEqual(requests, [
+    { templateId: "car-sitcom-v1", audioReference: false, momentId: "selected-scene" },
+    { templateId: "travel-postcard-v1", audioReference: true, momentId: "selected-scene" },
+  ]);
+  assert.equal(model.plan.momentId, "selected-scene");
+});
+
+test("서버가 다른 장면을 돌려주면 그 계획으로 생성할 수 없다", async () => {
+  let calls = 0;
+  const { model } = fixture(async () => { calls++; return plan; });
+  await assert.rejects(model.preview("car-sitcom-v1", false, "different-scene"), /선택한 장면/);
+  assert.equal(model.plan, null);
+  await assert.rejects(model.submit(true), /장면 구성을 먼저/);
+  assert.equal(calls, 1);
+});
+
+test("응답을 잃은 요청은 새 장면 선택으로 바꾸지 않고 원래 동의 본문으로 재전송한다", async () => {
+  const pending = { momentId: "original", templateId: "car-sitcom-v1", audioReference: true, generation: 1, planHash: "original-hash", externalGenerationConsent: true, idempotencyKey: "same-key" };
+  const requests = [];
+  const { model } = fixture(async (_method, _path, body) => { requests.push(body); return { id: "original-job", state: "queued" }; }, { pending });
+  await assert.rejects(model.preview("travel-postcard-v1", false, "new-scene"));
+  assert.equal(model.pending, pending);
+  await model.submit(true);
+  assert.deepEqual(requests, [pending]);
+});

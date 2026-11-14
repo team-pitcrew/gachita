@@ -94,13 +94,13 @@ export function createShares({ getProfile, getProfileToken, getTrip, getParticip
     show(s);
     await load(s);
   }
-  async function openCompose() {
+  async function openCompose({ momentId } = {}) {
     const trip = getTrip();
     const me = getParticipant();
     const identity = profileState();
     if (!identity.profileId || !identity.profileToken) return onProfile();
     if (!trip || me?.profileId !== identity.profileId || !me.consent || !getParticipantToken()) return toast("이 폰의 프로필로 참가하고 기록에 동의해야 공유할 수 있어요.");
-    const s = { ...identity, mode: "compose", code: trip.code, generation: trip.generation, participantId: me.id, participantToken: getParticipantToken(), stage: "pick", selected: new Set(), caption: "", includeLocation: false };
+    const s = { ...identity, mode: "compose", code: trip.code, generation: trip.generation, participantId: me.id, participantToken: getParticipantToken(), requestedMomentId: momentId, stage: "pick", selected: new Set(), caption: "", includeLocation: false };
     show(s);
     await load(s);
   }
@@ -133,6 +133,11 @@ export function createShares({ getProfile, getProfileToken, getTrip, getParticip
         if (snapshot !== s.snapshot) {
           s.snapshot = snapshot;
           s.options = options;
+          if (s.requestedMomentId) {
+            if (options.moments.some((m) => m.id === s.requestedMomentId)) { s.momentId = s.requestedMomentId; s.stage = "edit"; }
+            else note(s, "선택한 장면은 내 앨범에 없어요. 내가 남긴 장면을 골라 주세요.", { alert: true });
+            s.requestedMomentId = null;
+          }
           s.selected = new Set([...s.selected].filter((id) => options.recipients.some((p) => p.id === id)));
           if (!options.moments.some((m) => m.id === s.momentId)) s.stage = "pick";
           else if (s.stage === "preview") s.stage = "edit"; // 대상·원본이 바뀌면 다시 확인한다.
@@ -288,8 +293,8 @@ export function createShares({ getProfile, getProfileToken, getTrip, getParticip
       h("h2", {}, moment.label || "이름 없는 장면"),
       h("form", { onsubmit: (e) => { e.preventDefault(); if (s.selected.size) { s.stage = "preview"; composeView(s); } } },
         h("label", { className: "field" }, h("span", {}, "함께 보낼 문구 · 500자 이내"), h("textarea", { value: s.caption, maxLength: 500, rows: 4, placeholder: "전하고 싶은 말을 직접 확인해 주세요.", oninput: (e) => { s.caption = e.target.value; } })),
-        h("fieldset", {}, h("legend", {}, "받는 동승자"), s.options.recipients.length ? s.options.recipients.map((p) => h("label", { className: "shares-target" }, h("input", { type: "checkbox", checked: s.selected.has(p.id), onchange: (e) => { e.target.checked ? s.selected.add(p.id) : s.selected.delete(p.id); preview.disabled = !s.selected.size; } }), `${p.name} 님`)) : h("p", { className: "empty" }, "지금 받을 수 있는 동승자가 없어요. 같은 여행에서 프로필로 참가하고 기록에 동의해야 해요.")),
-        h("label", { className: "shares-target" }, h("input", { type: "checkbox", checked: s.includeLocation, disabled: !hasLocation(moment), onchange: (e) => { s.includeLocation = e.target.checked; } }), hasLocation(moment) ? "이 장면의 위치도 함께 보내기" : "이 장면에는 위치 정보가 없어요."),
+        h("fieldset", {}, h("legend", {}, "받는 동승자"), s.options.recipients.length ? s.options.recipients.map((p) => h("button", { type: "button", className: `recipient-row${s.selected.has(p.id) ? " is-selected" : ""}`, "aria-pressed": String(s.selected.has(p.id)), onclick: () => { s.selected.has(p.id) ? s.selected.delete(p.id) : s.selected.add(p.id); composeView(s); } }, h("span", {}, `${p.name} 님`), h("span", { className: "meta" }, s.selected.has(p.id) ? "선택됨" : "선택"))) : h("p", { className: "empty" }, "지금 받을 수 있는 동승자가 없어요. 같은 여행에서 프로필로 참가하고 기록에 동의해야 해요.")),
+        h("div", { className: "preference-row" }, h("span", {}, hasLocation(moment) ? "장면 위치 함께 보내기" : "위치 정보가 없는 장면이에요"), h("button", { type: "button", role: "switch", "aria-label": "장면 위치 함께 보내기", "aria-checked": String(s.includeLocation), disabled: !hasLocation(moment), className: `mobile-switch${s.includeLocation ? " is-on" : ""}`, onclick: () => { s.includeLocation = !s.includeLocation; composeView(s); } }, h("span"))),
         preview,
       ),
       button("다른 장면 고르기", () => { s.stage = "pick"; composeView(s); }, "plain"),

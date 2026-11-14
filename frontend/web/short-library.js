@@ -1,4 +1,21 @@
 const DATABASE = "gachita-short-library";
+export function shortMetadata(source = {}) {
+  const result = { title: source.title || "우리 여행의 쇼츠", seconds: source.seconds || 0 };
+  for (const key of ["tripCode", "tripTitle", "momentId"]) if (typeof source[key] === "string" && source[key]) result[key] = source[key];
+  if (Number.isFinite(source.tripCreatedAt)) result.tripCreatedAt = source.tripCreatedAt;
+  return result;
+}
+export const tripDate = (item) => Number.isFinite(item.tripCreatedAt) ? new Date(item.tripCreatedAt).toLocaleDateString("ko-KR", { year: "numeric", month: "long", day: "numeric" }) : "";
+export function libraryGroups(items, query = "") {
+  const needle = query.trim().toLocaleLowerCase(), groups = new Map();
+  for (const item of items) {
+    if (needle && ![item.title, item.tripTitle, tripDate(item)].filter(Boolean).join(" ").toLocaleLowerCase().includes(needle)) continue;
+    const key = item.tripCode ? `${item.tripCode}:${item.tripCreatedAt ?? ""}` : "device";
+    if (!groups.has(key)) groups.set(key, { key, title: item.tripTitle || "이 기기에 보관한 영상", date: tripDate(item), items: [] });
+    groups.get(key).items.push(item);
+  }
+  return [...groups.values()];
+}
 const open = () => new Promise((resolve, reject) => {
   const request = indexedDB.open(DATABASE, 1);
   request.onupgradeneeded = () => request.result.createObjectStore("videos", { keyPath: "key" });
