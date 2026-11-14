@@ -79,6 +79,15 @@ fun GachitaTheme(content: @Composable () -> Unit) =
         ProvideTextStyle(TextStyle(fontSize = 24.sp), content)
     }
 
+/**
+ * 여행 화면의 두 껍데기(최종 시안). RIDE: 함께 타는 중·대화 기록(C17·C44, 여백 좌우 32·위아래 28, 머리 줄 64·간격 12, 칸 간격 16).
+ * PARKED: 도착 브리핑·콘텐츠 기록(C20·D19·C22–C38, 여백 40, 머리 줄 80·간격 18, 칸 간격 24).
+ */
+enum class Shell(val padH: Dp, val padV: Dp, val head: Dp, val headGap: Dp, val gap: Dp) {
+    RIDE(32.dp, 28.dp, 64.dp, 12.dp, 16.dp),
+    PARKED(40.dp, 40.dp, 80.dp, 18.dp, 24.dp),
+}
+
 /** 카드의 바탕. 기록 상태 머리만 색을 바꾸고 나머지는 Plain이다. */
 enum class Tone { Plain, Rec, Wait, Accent }
 

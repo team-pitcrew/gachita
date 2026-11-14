@@ -108,7 +108,7 @@ internal fun ArrivalBrief(
     val c = MaterialTheme.colorScheme
     val rows = briefRows(items, people).withDetails(details)
     Column(modifier, verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("$place 도착", fontSize = 40.sp, lineHeight = 50.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(if (final) "내리기 전, 이 세 가지만 기억하세요" else "먼저 할 일과 살 것을 모았어요", color = c.onSurfaceVariant, fontSize = 24.sp, lineHeight = 32.sp)
         }
@@ -126,7 +126,8 @@ internal fun ArrivalBrief(
                     if (rows.remember.isNotEmpty()) BriefCard("잊지 말기", rows.remember)
                     if (rows.bring.isNotEmpty()) BriefCard("챙길 것", rows.bring)
                 }
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                // 시안에는 없는 줄: 동기화·도착 확인이 어긋났을 때만 이유와 다시 해 보기 단추를 보인다
+                if (note.isNotEmpty()) Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(note, Modifier.weight(1f), color = c.onSurfaceVariant, fontSize = 20.sp, lineHeight = 28.sp)
                     TextButton(onRefresh, Modifier.heightIn(min = 56.dp)) { Text("새로고침", fontSize = 20.sp) }
                     if (onArrive != null) TextButton(onArrive, Modifier.heightIn(min = 56.dp)) { Text("도착 확인", fontSize = 20.sp) }
@@ -141,8 +142,8 @@ internal fun ArrivalBrief(
 @Composable
 private fun BriefLine(r: BriefRow, modifier: Modifier = Modifier) {
     val c = MaterialTheme.colorScheme
-    Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-        Text(r.emoji, Modifier.width(48.dp), fontSize = 36.sp, lineHeight = 44.sp, textAlign = TextAlign.Center)
+    Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.dp)) { // 시안 행동 줄: 이모지 44, 간격 20
+        Text(r.emoji, Modifier.width(44.dp), fontSize = 34.sp, lineHeight = 44.sp, textAlign = TextAlign.Center)
         Column(Modifier.weight(1f)) {
             Text(r.name, color = c.onSurface, fontSize = 32.sp, lineHeight = 42.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
             if (r.who.isNotEmpty()) Text(r.who, color = c.onSurfaceVariant, fontSize = 24.sp, lineHeight = 32.sp, maxLines = 1)
@@ -151,12 +152,15 @@ private fun BriefLine(r: BriefRow, modifier: Modifier = Modifier) {
     }
 }
 
+/** Brief cards are 28 rounded in the design (C20 2005:3369, finalBrief 2043:1890), a little less than the other car cards (32). */
+private val BRIEF_RADIUS = 28.dp
+
 /** '먼저 할 일'(accent) / '잊지 말기' / '챙길 것' card: label, then one line per ask. */
 @Composable
 private fun BriefCard(label: String, rows: List<BriefRow>, accent: Boolean = false) {
     val c = MaterialTheme.colorScheme
-    Surface(Modifier.fillMaxWidth(), RoundedCornerShape(32.dp), color = if (accent) c.primaryContainer else c.surface) {
-        Column(Modifier.padding(horizontal = 24.dp, vertical = 20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Surface(Modifier.fillMaxWidth(), RoundedCornerShape(BRIEF_RADIUS), color = if (accent) c.primaryContainer else c.surface) {
+        Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
             Text(label, color = if (accent) c.primary else c.onSurfaceVariant, fontSize = 24.sp, lineHeight = 32.sp)
             rows.forEach { BriefLine(it) }
         }
@@ -167,17 +171,17 @@ private fun BriefCard(label: String, rows: List<BriefRow>, accent: Boolean = fal
 @Composable
 private fun BuyCard(rows: List<BriefRow>, wide: Boolean) {
     val c = MaterialTheme.colorScheme
-    Surface(Modifier.fillMaxWidth(), RoundedCornerShape(32.dp), color = c.surface) {
-        Column(Modifier.padding(horizontal = 24.dp, vertical = 20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("🛒", fontSize = 32.sp, lineHeight = 40.sp)
+    Surface(Modifier.fillMaxWidth(), RoundedCornerShape(BRIEF_RADIUS), color = c.surface) {
+        Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                Text("🛒", Modifier.width(36.dp), fontSize = 28.sp, lineHeight = 36.sp, textAlign = TextAlign.Center)
                 Text("잊지 말고 살 것", Modifier.weight(1f), fontSize = 32.sp, lineHeight = 42.sp, fontWeight = FontWeight.Bold)
                 Text("${rows.size}개", color = c.onSurfaceVariant, fontSize = 24.sp)
             }
             // 넓은 창은 시안처럼 왼쪽 열을 먼저 채운다(삼겹살·귤 | 젤리·탄산수)
             if (wide) Row(horizontalArrangement = Arrangement.spacedBy(40.dp)) {
                 rows.chunked((rows.size + 1) / 2).forEach { col ->
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(16.dp)) { col.forEach { BriefLine(it) } }
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(24.dp)) { col.forEach { BriefLine(it) } }
                 }
                 if (rows.size == 1) Column(Modifier.weight(1f)) {}
             } else rows.forEach { BriefLine(it) }

@@ -1823,8 +1823,10 @@ class MainActivity : ComponentActivity() {
         LaunchedEffect(destination, scope, afterStart) {
             if (destination == Destination.CONVERSATION || (destination == Destination.SHORTS && afterStart != null)) loadTranscript()
         }
-        Column(Modifier.fillMaxSize().padding(horizontal = 32.dp, vertical = 28.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            TripHeader(parked, carStatus.gear, s.online, listening = s.recording && Live.mic == Mic.ON && !muted && handoff.state == Handoff.State.OFF) { WindowSize() }
+        val b = mockBrief() ?: brief?.takeIf { vehicleParked() && offer?.stage.let { it == null || it == Offer.Stage.FINDING } } // 실제 P이고 제한이 풀린 동안만, 휴게소 제안이 먼저
+        val shell = tripShell(parked, destination == Destination.RIDE && b?.place != null && !managing && boarding.page == BoardingPage.HIDDEN, destination == Destination.SHORTS)
+        Column(Modifier.fillMaxSize().padding(horizontal = shell.padH, vertical = shell.padV), verticalArrangement = Arrangement.spacedBy(shell.gap)) {
+            TripHeader(shell, carStatus.gear, s.online, listening = s.recording && Live.mic == Mic.ON && !muted && handoff.state == Handoff.State.OFF) { WindowSize() }
             TripTabs(Destination.entries.map { it.label }, destination.ordinal, { parked || it != Destination.SHORTS.ordinal }) { i ->
                 val tab = Destination.entries[i]
                 if (destination != tab) {
@@ -1835,7 +1837,6 @@ class MainActivity : ComponentActivity() {
                 }
             }
             Box(Modifier.weight(1f).fillMaxWidth()) {
-                val b = mockBrief() ?: brief?.takeIf { vehicleParked() && offer?.stage.let { it == null || it == Offer.Stage.FINDING } } // 실제 P이고 제한이 풀린 동안만, 휴게소 제안이 먼저
                 when {
                     takeover() -> Takeover(t, Modifier.fillMaxSize())
                     boarding.page != BoardingPage.HIDDEN && parked -> BoardingPanel(boarding, s, carStatus.seats, Modifier.fillMaxSize(), ::boardingAction)
@@ -1950,7 +1951,7 @@ class MainActivity : ComponentActivity() {
         Card(modifier = modifier) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("여행 관리", Modifier.weight(1f), fontSize = 32.sp, fontWeight = FontWeight.Bold)
-                if (LocalConfiguration.current.screenWidthDp < 1000) WindowSize() // 좁은 창 머리 줄은 시안대로 '연결됨'만, 창 크기 안내(T112)는 여기
+                WindowSize() // 함께 타는 중·대화 기록의 머리 줄은 시안대로 '연결됨'만이라 창 크기 안내(T112)는 여기(주차 화면은 머리 줄에도 있음)
                 OutlinedButton({ managing = false }, Modifier.heightIn(min = 56.dp), shape = RoundedCornerShape(10.dp)) { Text("닫기") }
             }
             Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
