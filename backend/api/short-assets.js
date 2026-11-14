@@ -145,7 +145,7 @@ export function shortAssets(ctx, overrides = {}) {
         }
         const id = old?.id ?? randomUUID(), attempt = randomUUID(), objectKey = `short-assets/${trip.code}/${id}/${attempt}.${mimeType === "video/mp4" ? "mp4" : "webm"}`;
         const saved = await client.query(`INSERT INTO short_assets(id,trip_code,participant_id,generation,moment_id,source_hash,idempotency_key,request_hash,sha256,media,object_key,state,attempt,lease_until)
-          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'uploading',$12,now()+interval '2 minutes')
+          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'uploading',$12,now()+interval '3 minutes')
           ON CONFLICT(trip_code,participant_id,idempotency_key) DO UPDATE SET object_key=EXCLUDED.object_key,state='uploading',attempt=EXCLUDED.attempt,lease_until=EXCLUDED.lease_until,next_check_at=now(),updated_at=now()
           RETURNING *`, [id,trip.code,caller.id,generation,momentId,sourceHash,key,requestHash,sha256,metadata,objectKey,attempt]);
         return { row: saved.rows[0], existed: false };

@@ -2,8 +2,10 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { createConnection } from "node:net";
+import { basename, join as joinPath } from "node:path";
 import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { Readable } from "node:stream";
@@ -1388,6 +1390,32 @@ test("옛 초대 주소는 안내하고 Google 콜백·시연·일반 화면은 
   assert.equal((await fetch(`${base}/..%2F..%2Fbackend%2Fapi%2Fserver.js`)).status, 404, "웹 폴더 밖은 404");
   const outside = await fetch(`${base}/..%2F..%2Fbackend%2Fapi`);
   assert.ok((await outside.text()).includes("<title>가치타</title>"), "확장자 없는 주소로 웹 폴더 밖을 가리켜도 웹앱 첫 화면만 나옴");
+});
+
+test("정적 PNG·JPEG·ICO는 이진 형식과 원본 바이트·ETag를 유지합니다(T109)", async () => {
+  const dir = await mkdtemp(fileURLToPath(new URL("../../frontend/web/mime-test-", import.meta.url)));
+  try {
+    for (const [extension, type, bytes] of [
+      ["png", "image/png", [0x89, 0x50, 0x4e, 0x47, 13, 10, 26, 10]],
+      ["jpg", "image/jpeg", [0xff, 0xd8, 0xff, 0xe0, 0, 16]],
+      ["jpeg", "image/jpeg", [0xff, 0xd8, 0xff, 0xe1, 0, 16]],
+      ["ico", "image/vnd.microsoft.icon", [0, 0, 1, 0, 1, 0]],
+      ["PNG", "image/png", [0x89, 0x50, 0x4e, 0x47, 13, 10, 26, 10]],
+      ["bin", "application/octet-stream", [0, 0xff, 0x80]],
+    ]) {
+      const data = Buffer.from(bytes), name = `sample.${extension}`;
+      await writeFile(joinPath(dir, name), data);
+      const url = `${base}/${basename(dir)}/${name}`;
+      const response = await fetch(url);
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get("content-type"), type, extension);
+      assert.deepEqual(Buffer.from(await response.arrayBuffer()), data, "이미지를 문자열로 변환하지 않습니다");
+      assert.equal(response.headers.get("cache-control"), "no-cache");
+      const unchanged = await fetch(url, { headers: { "if-none-match": response.headers.get("etag") } });
+      assert.equal(unchanged.status, 304);
+      assert.equal((await unchanged.arrayBuffer()).byteLength, 0);
+    }
+  } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
 test("DB가 연결을 끊어도 서버가 살아 있고 다음 요청에서 다시 맺는다(Postgres 재시작·장애 조치)", async () => {

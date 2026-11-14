@@ -27,7 +27,7 @@ dependencies {
  implementation 'ai.pleos.playground:NaviHelper:3.0.5'
  implementation 'ai.pleos.playground:TextToSpeech:3.3.1'
  implementation 'ai.pleos.playground:SpeechToText:3.3.1'
- implementation 'com.google.zxing:core:3.5.3' // 동승 QR 읽기(T46). QR만 쓰고 카메라는 Camera2
+ implementation 'com.google.zxing:core:3.5.3' // 차량 참석 QR 생성. 휴대폰 기본 카메라로 읽는다(T106)
  testImplementation 'junit:junit:4.13.2'
  testImplementation 'org.json:json:20240303' // 단위 테스트에서 android.jar의 org.json은 빈 껍데기라 진짜를 넣는다
 }

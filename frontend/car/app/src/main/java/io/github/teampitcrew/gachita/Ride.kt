@@ -1,129 +1,43 @@
 package io.github.teampitcrew.gachita
 
-import android.content.Context
-import android.graphics.ImageFormat
-import android.hardware.camera2.CameraCaptureSession
-import android.hardware.camera2.CameraCharacteristics
-import android.hardware.camera2.CameraDevice
-import android.hardware.camera2.CameraManager
-import android.media.ImageReader
-import android.os.Handler
-import android.os.HandlerThread
-import android.os.Looper
-import android.util.Log
-import android.view.Surface
-import com.google.zxing.BinaryBitmap
-import com.google.zxing.DecodeHintType
-import com.google.zxing.PlanarYUVLuminanceSource
-import com.google.zxing.common.HybridBinarizer
-import com.google.zxing.qrcode.QRCodeReader
-import org.json.JSONObject
-import kotlin.math.abs
-
-// 동승 연결(T46): 탑승자 폰이 띄운 1회용 QR을 주차 중인 차가 카메라로 읽고, 운전자가 고른 자리에 그 사람을 넣는다(#71, #195 계약).
-// QR 해석과 빈자리는 화면·SDK와 무관한 규칙(단위 테스트 RideTest.kt). 카메라는 QrCamera.
-
-/** 폰 QR의 글자 `{"type":"gachita-ride","version":1,"code":"…"}`에서 code. 우리 QR이 아니면 null(다른 QR, 주소, 옛 초대). */
-fun rideCode(text: String): String? = runCatching {
-    JSONObject(text).takeIf { it.optString("type") == "gachita-ride" && it.optInt("version") == 1 }?.optString("code")?.takeIf { it.isNotBlank() }
-}.getOrNull()
+import java.net.URI
 
 /** 아무도 앉지 않은 자리(앞줄부터). */
 fun freeSeats(t: Trip, carSeats: List<String> = emptyList()): List<Seat> =
     seatRows(carSeats).flatten().filter { s -> t.people.none { it.seat == s.name } }
 
-/**
- * 뒤를 보는 카메라(없으면 첫 카메라)로 미리보기와 QR 읽기를 한다. 처음 읽은 우리 QR 하나만 onCode로 넘기고(메인 스레드) 더 읽지 않는다.
- * ponytail: Camera2 + zxing(QR만). 차 실내 카메라를 일반 앱이 열 수 있는지는 실차에서 확인한다(에뮬레이터는 가상 장면 카메라).
- */
-class QrCamera(ctx: Context, private val onCode: (String) -> Unit, private val onFail: (String) -> Unit) {
-    private val cm = ctx.getSystemService(CameraManager::class.java)
-    private val main = Handler(Looper.getMainLooper())
-    private val thread = HandlerThread("qr").apply { start() }
-    private val bg = Handler(thread.looper)
-    private val qr = QRCodeReader()
-    @Volatile private var device: CameraDevice? = null
-    @Volatile private var session: CameraCaptureSession? = null
-    private var reader: ImageReader? = null
-    @Volatile private var done = false // 우리 QR을 읽었거나 닫음: 더 읽지 않는다
-    @Volatile private var closed = false // stop()이 불림(메인 스레드). 메인으로 넘기는 결과는 이 값을 보고 버린다
-    @Volatile private var opening = false // openCamera 뒤 onOpened·onError를 기다리는 중. 그동안은 스레드를 끝내지 않는다(늦게 열린 장치를 닫아야 함)
+internal data class BoardingInvite(val id: String, val url: String, val expiresAt: Long) {
+    fun secondsLeft(now: Long): Long = ((expiresAt - now + 999) / 1000).coerceAtLeast(0)
+}
 
-    /** 카메라가 내는 크기 가운데 가로 1280에 가까운 것. 미리보기 표면도 이 크기로 맞춘다. 카메라가 없으면 null. */
-    fun size(): android.util.Size? = runCatching {
-        val id = cameraId() ?: return null
-        cm.getCameraCharacteristics(id).get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)!!
-            .getOutputSizes(ImageFormat.YUV_420_888).minByOrNull { abs(it.width - 1280) }
-    }.getOrNull()
+/** 참가자 토큰 대신 서버가 만든 짧은 초대 URL만 QR로 표시합니다. 다른 출처와 추가 매개변수는 거절합니다. */
+internal fun boardingInviteUrl(apiBase: String, path: String): String {
+    val base = URI(apiBase.trim().trimEnd('/') + "/")
+    val url = base.resolve(path)
+    require(base.scheme in setOf("https", "http") && base.host != null)
+    require(url.scheme == base.scheme && url.host == base.host && url.port == base.port && url.rawUserInfo == null)
+    require(url.path == "/" && url.fragment == null && Regex("join=[A-Za-z0-9_-]{20,256}").matches(url.rawQuery.orEmpty()))
+    return url.toASCIIString()
+}
 
-    private fun cameraId(): String? = cm.cameraIdList.firstOrNull { cm.getCameraCharacteristics(it).get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK }
-        ?: cm.cameraIdList.firstOrNull()
+/** 발급 중 화면·여행·서버·운전자·주차가 바뀐 결과는 표시하지 않고 폐기합니다. */
+internal data class BoardingInviteAttempt(val request: Int, val trip: String, val server: String, val driver: String) {
+    fun accepts(currentRequest: Int, currentTrip: Trip?, currentServer: String, ours: Set<String>, parked: Boolean, visible: Boolean): Boolean =
+        request == currentRequest && currentTrip?.code == trip && server == currentServer && visible && parked &&
+            currentTrip.status in setOf("boarding", "parked") && currentTrip.people.any { it.id == driver && it.seat == Seat.ROW_1_LEFT.name && it.id in ours }
+}
 
-    @Suppress("MissingPermission") // 부르는 쪽이 CAMERA 권한을 받은 뒤에만 연다
-    fun start(preview: Surface) {
-        val id = cameraId() ?: return onFail("카메라가 없어요")
-        val sz = size() ?: return onFail("카메라를 열지 못했어요")
-        val r = ImageReader.newInstance(sz.width, sz.height, ImageFormat.YUV_420_888, 2).also { reader = it }
-        r.setOnImageAvailableListener({ it.acquireLatestImage()?.use(::decode) }, bg)
-        opening = true
-        runCatching {
-            cm.openCamera(id, object : CameraDevice.StateCallback() {
-                override fun onOpened(d: CameraDevice) {
-                    opening = false
-                    device = d
-                    if (closed) return release() // 열리기 전에 닫힘(주행 제한·닫기)
-                    @Suppress("DEPRECATION") // 목록으로 만드는 것이 API 29부터 다 되는 가장 짧은 길
-                    runCatching { d.createCaptureSession(listOf(preview, r.surface), object : CameraCaptureSession.StateCallback() {
-                        override fun onConfigured(s: CameraCaptureSession) {
-                            if (done) { s.close(); return }
-                            session = s
-                            runCatching {
-                                s.setRepeatingRequest(d.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply { addTarget(preview); addTarget(r.surface) }.build(), null, bg)
-                            }.onFailure { fail("카메라를 열지 못했어요", it) }
-                        }
-                        override fun onConfigureFailed(s: CameraCaptureSession) { if (!done) fail("카메라를 열지 못했어요", null) }
-                    }, bg) }.onFailure { if (!done) fail("카메라를 열지 못했어요", it) }
-                }
-                override fun onDisconnected(d: CameraDevice) { opening = false; d.close(); if (closed) release() else fail("카메라 연결이 끊겼어요", null) }
-                override fun onError(d: CameraDevice, error: Int) { opening = false; d.close(); if (closed) release() else fail("카메라를 쓸 수 없어요($error)", null) }
-            }, bg)
-        }.onFailure { opening = false; fail("카메라를 열지 못했어요", it) }
-        Log.i(TAG, "카메라 $id ${sz.width}×${sz.height}")
+/** 닫기가 발급보다 먼저 끝나도 원격 초대를 남기지 않도록 소유권을 한 번만 넘깁니다. */
+internal class BoardingInviteCall {
+    private var cancelled = false
+    private var value: BoardingInvite? = null
+    @Synchronized fun issued(invite: BoardingInvite): Boolean {
+        if (cancelled) return false
+        value = invite
+        return true
     }
-
-    private fun fail(why: String, t: Throwable?) { Log.w(TAG, why, t); main.post { if (!closed) onFail(why) } }
-
-    /**
-     * Y 평면만으로 읽는다(QR은 밝기만 본다). 우리 QR이 아니면 계속 찾는다. bg 스레드에서만 돈다.
-     * ImageReader를 닫는 것도 같은 스레드에서 하므로(stop) 읽는 중인 이미지가 무효가 되지 않는다.
-     */
-    private fun decode(img: android.media.Image) {
-        if (done) return
-        val y = img.planes[0]
-        val buf = ByteArray(y.buffer.remaining()).also { y.buffer.get(it) }
-        val src = PlanarYUVLuminanceSource(buf, y.rowStride, img.height, 0, 0, img.width, img.height, false)
-        val text = runCatching { qr.decode(BinaryBitmap(HybridBinarizer(src)), mapOf(DecodeHintType.TRY_HARDER to true)).text }.getOrNull() ?: return
-        if (rideCode(text) == null) { Log.i(TAG, "우리 QR이 아님"); return }
-        done = true
-        Log.i(TAG, "동승 QR 읽음")
-        main.post { if (!closed) onCode(text) } // 해석하는 사이 닫혔으면(닫기·주행 제한·새 스캔) 버린다
+    @Synchronized fun cancel(): BoardingInvite? {
+        cancelled = true
+        return value.also { value = null }
     }
-
-    /** 메인 스레드에서 부른다. 닫기는 이미지 읽기와 같은 bg 스레드 차례로 넘기고, 열리는 중이면 onOpened·onError가 release로 마저 닫는다. */
-    fun stop() {
-        if (closed) return
-        closed = true; done = true
-        if (!bg.post(::release)) runCatching { reader?.close() } // 늦은 콜백이 먼저 정리하고 스레드를 끝냈으면 reader만 확인(이미 닫혔어도 됨)
-    }
-
-    /**
-     * bg 스레드에서만 부른다. 세션·장치·reader를 다 닫은 뒤에야 스레드를 끝낸다(먼저 끝내면 뒤이은 정리가 스레드에 못 들어가 reader가 남았다).
-     * 열리는 중이면 스레드를 남겨 둔다(늦게 열린 장치를 onOpened·onError가 여기로 와서 닫는다). 여러 번 불려도 된다.
-     */
-    private fun release() {
-        runCatching { session?.close() }; runCatching { device?.close() }; runCatching { reader?.close() }
-        if (!opening) thread.quitSafely()
-    }
-
-    companion object { private const val TAG = "GachitaRide" }
 }

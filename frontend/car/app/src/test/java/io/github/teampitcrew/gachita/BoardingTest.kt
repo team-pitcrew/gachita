@@ -21,9 +21,10 @@ class BoardingTest {
         assertFalse(selectableSeat(refreshed, emptyList(), Seat.ROW_1_RIGHT))
     }
 
-    @Test fun `QR 만료 재사용 자리충돌과 연결실패의 다음 행동을 구분한다`() {
+    @Test fun `초대 만료 권한 자리충돌과 연결실패의 다음 행동을 구분한다`() {
         assertTrue(boardingFailure(ApiError(404, "없는 연결")).contains("새 참석 QR"))
-        assertTrue(boardingFailure(ApiError(409, "이미 사용한 동승 연결")).contains("이미 연결한 QR"))
+        assertTrue(boardingFailure(ApiError(410, "만료")).contains("차에서 새 참석 QR"))
+        assertTrue(boardingFailure(ApiError(403, "운전석만 발급")).contains("운전석"))
         assertTrue(boardingFailure(ApiError(409, "이미 찬 자리")).contains("빈자리"))
         assertTrue(boardingFailure(java.io.IOException()).contains("연결 완료를 확인하지 못했어요"))
     }

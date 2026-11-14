@@ -7,6 +7,7 @@
 !backend/api/log.js
 !backend/api/scenes.js
 !backend/api/ride-links.js
+!backend/api/boarding-invites.js
 !backend/api/profile-lifecycle.js
 !backend/api/result-shares.js
 !backend/api/short-generations.js
