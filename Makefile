@@ -12,8 +12,9 @@ hooks: ## 커밋 훅과 커밋 양식을 이 저장소에 건다(복제한 뒤 �
 	@echo "커밋 훅(.githooks)과 커밋 양식(.gitmessage)을 걸었습니다"
 
 check-fast: ## 올리기 전에 도는 빠른 검사(1초 안팎)
-	node --check frontend/web/app.js
-	node --check frontend/web/demo/demo.js
+	# 모듈로 읽는다: 그냥 --check는 CommonJS로 읽어 같은 이름을 두 번 들여와도(브라우저는 거절) 통과시킨다
+	node --input-type=module --check < frontend/web/app.js
+	node --input-type=module --check < frontend/web/demo/demo.js
 	node --test "frontend/web/*.test.mjs"
 
 check: check-fast db api ## CI와 같은 검사(로컬 Postgres 컨테이너를 띄운다)
