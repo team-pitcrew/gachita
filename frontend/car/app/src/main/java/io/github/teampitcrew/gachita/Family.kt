@@ -878,7 +878,7 @@ private fun InviteQr(url: String) {
 }
 
 /**
- * 초대 본문(C10·C16·C16I, 가족 카드 없음): 왼쪽 650 QR 카드(여백 32/24·간격 18: 초대 코드 Body · 코드 Title · '코드 복사' 80 · QR 320 · 안내 Body),
+ * 초대 본문(C10·C16·C16I, 가족 카드 없음): 왼쪽 650 QR 카드(여백 32/24·간격 43: 초대 코드 Body · 코드 줄 56(코드 Title + 복사 아이콘 단추 56, 간격 12) · QR 320 · 안내 Body),
  * 오른쪽 남은 폭(위 여백 24·간격 20: '초대 링크' Title · 링크 카드 accent-soft 16 · '초대 링크 공유' 80 · 링크 복사/열기 80 · 안내 Body). 두 칸 간격 36.
  */
 @Composable
@@ -887,10 +887,14 @@ private fun InviteBody(g: CarGroup?, invite: GroupInvite?, copy: (String) -> Uni
     val c = MaterialTheme.colorScheme
     Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(36.dp)) {
         Surface(Modifier.width(650.dp).fillMaxHeight(), CarShape.Card, color = c.surface) {
-            Column(Modifier.padding(horizontal = 32.dp, vertical = 24.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(18.dp)) {
+            Column(Modifier.padding(horizontal = 32.dp, vertical = 24.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(43.dp)) {
                 Text("초대 코드", style = CarText.Body)
-                Text(invite.code, style = CarText.Title)
-                CarButton("코드 복사", kind = CarButtonKind.Secondary, height = 80.dp) { copy(invite.code) }
+                Row(Modifier.fillMaxWidth().height(56.dp), horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally), verticalAlignment = Alignment.CenterVertically) {
+                    Text(invite.code, style = CarText.Title)
+                    Box(Modifier.size(56.dp).clip(RoundedCornerShape(10.dp)).clickable { copy(invite.code) }.semantics { contentDescription = "초대 코드 복사" }, contentAlignment = Alignment.Center) {
+                        Image(painterResource(R.drawable.ic_copy), null, Modifier.size(28.dp))
+                    }
+                }
                 InviteQr(link())
                 Text("QR로도 바로 참여할 수 있어요", style = CarText.Body)
             }

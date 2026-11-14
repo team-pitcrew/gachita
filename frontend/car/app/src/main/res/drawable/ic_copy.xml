@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- C16 '초대 코드 복사' 아이콘(원본 Figma Y7zFqGUEAFDWTumG30MsOs 2263:5773 '복사 아이콘', 28×28, 선 2.1, get_design_context 에셋 그대로) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="28dp" android:height="28dp" android:viewportWidth="28" android:viewportHeight="28">
+    <path android:strokeColor="#FFF4F1EC" android:strokeWidth="2.1" android:strokeLineCap="round" android:strokeLineJoin="round"
+        android:pathData="M11.6667 9.33333H21C22.2887 9.33333 23.3333 10.378 23.3333 11.6667V21C23.3333 22.2887 22.2887 23.3333 21 23.3333H11.6667C10.378 23.3333 9.33333 22.2887 9.33333 21V11.6667C9.33333 10.378 10.378 9.33333 11.6667 9.33333Z" />
+    <path android:strokeColor="#FFF4F1EC" android:strokeWidth="2.1" android:strokeLineCap="round" android:strokeLineJoin="round"
+        android:pathData="M18.6667 9.33333V7C18.6667 6.38116 18.4208 5.78767 17.9832 5.35008C17.5457 4.9125 16.9522 4.66667 16.3333 4.66667H7C6.38116 4.66667 5.78767 4.9125 5.35008 5.35008C4.9125 5.78767 4.66667 6.38116 4.66667 7V16.3333C4.66667 16.9522 4.9125 17.5457 5.35008 17.9832C5.78767 18.4208 6.38116 18.6667 7 18.6667H9.33333" />
+</vector>

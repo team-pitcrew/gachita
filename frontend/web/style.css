@@ -1088,6 +1088,10 @@ button.ob-other { justify-self: start; min-height: 40px; font-size: 13px; font-w
 .group-content .group-short, .group-content button.primary.group-short { min-height: 48px; } /* 시안 초대 화면: 코드 복사·공유·링크 단추 48 */
 .group-code { font-size: 22px; line-height: 30px; letter-spacing: -0.01em; }
 .group-qr { width: 158px; height: 158px; background: #fff; }
+.group-card.group-qr-card { gap: 24px; } /* 시안 C16 QR 카드 간격(차 43 → 폰 24) */
+.group-code-row { display: flex; align-items: center; justify-content: center; gap: 8px; height: 44px; }
+.group-copy { display: grid; place-items: center; width: 44px; height: 44px; min-height: 0; padding: 0; border: 0; border-radius: 8px; background: none; color: var(--ink); cursor: pointer; }
+.group-copy svg { width: 20px; height: 20px; }
 .group-qr path { fill: #111; }
 .group-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .group-invite { display: grid; gap: 16px; }

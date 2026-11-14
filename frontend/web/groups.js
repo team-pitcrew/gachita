@@ -232,6 +232,15 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
     svg.append(path);
     return svg;
   }
+  // 시안 '복사 아이콘'(2263:5773): 28 격자의 두 겹 사각형, 선 2.1
+  function copyIcon() {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    for (const [k, v] of Object.entries({ viewBox: "0 0 28 28", fill: "none", stroke: "currentColor", "stroke-width": "2.1", "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" })) svg.setAttribute(k, v);
+    const path = document.createElementNS(svg.namespaceURI, "path");
+    path.setAttribute("d", "M11.67 9.33H21a2.33 2.33 0 0 1 2.33 2.34V21A2.33 2.33 0 0 1 21 23.33h-9.33A2.33 2.33 0 0 1 9.33 21v-9.33a2.33 2.33 0 0 1 2.34-2.34ZM18.67 9.33V7a2.33 2.33 0 0 0-2.34-2.33H7A2.33 2.33 0 0 0 4.67 7v9.33A2.33 2.33 0 0 0 7 18.67h2.33");
+    svg.append(path);
+    return svg;
+  }
   // 공유 시트(2047:2316·2333): 카카오톡·메시지는 기기의 공유 화면으로 연다.
   function share() {
     const g = current();
@@ -260,10 +269,11 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
     const adding = s.inviteFrom === "member"; // 시안 P10: 가족 추가 중의 초대는 등록 수와 2x2 배지
     return page(guest ? "동승자 초대하기" : "가족 초대하기", adding ? `${g.members.length}명 등록 / 1명 초대 중` : "코드와 링크를 만들었어요. 편하게 공유하세요.", [
       h("div", { className: `group-invite${adding ? " adding" : ""}` },
-        h("div", { className: "group-card center" },
+        h("div", { className: "group-card center group-qr-card" }, // 시안 C16 QR 카드: 코드 줄(코드 + 복사 아이콘)·QR·안내
           h("small", {}, "초대 코드"),
-          h("strong", { className: "group-code" }, s.invite.code),
-          button("코드 복사", () => copy(s.invite.code), "group-ghost group-short"),
+          h("div", { className: "group-code-row" },
+            h("strong", { className: "group-code" }, s.invite.code),
+            h("button", { type: "button", className: "group-copy", "aria-label": "초대 코드 복사", onclick: () => copy(s.invite.code) }, copyIcon())),
           qr(link()),
           h("p", {}, "QR로도 바로 참여할 수 있어요")),
         h("div", { className: "group-join" },
