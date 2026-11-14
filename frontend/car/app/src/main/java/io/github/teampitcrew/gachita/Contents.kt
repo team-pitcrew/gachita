@@ -226,7 +226,7 @@ private enum class ContentsPage { GALLERY, TIMELINE, MAP, DETAIL, PLAYER, EXPORT
 // 최종 시안 v3(피그마 6I2bH121Z5pzWz2yciJUD8 '최종 디자인 비교 / 콘텐츠 기록' AFTER 2075:3789, D26·D30–D32)의 글자 단계와 모양.
 // AFTER 프레임은 0.6배로 그려져 있어 차 화면(1682×1210) 값으로 되돌려 쓴다. 색은 MaterialTheme.colorScheme에서만(Theme.kt):
 // surface-2 = surfaceVariant, accent-soft = primaryContainer, line = outlineVariant, 표지 tint-2·tint-3 = inverseSurface·surfaceBright, 표지 글자 = inverseOnSurface,
-// 실제 지도 위 초록 길 = inversePrimary.
+// 실제 지도 위 초록 길 = inversePrimary(accent-text 밝은 값).
 private val Title40 = TextStyle(fontSize = 40.sp, lineHeight = 50.sp, fontWeight = FontWeight.Bold, letterSpacing = (-0.8).sp)
 private val Headline32 = TextStyle(fontSize = 32.sp, lineHeight = 42.sp, fontWeight = FontWeight.Bold, letterSpacing = (-0.32).sp)
 private val Body28 = TextStyle(fontSize = 28.sp, lineHeight = 40.sp, fontWeight = FontWeight.Medium)
@@ -269,6 +269,7 @@ internal fun coverOf(item: ContentItem, trip: ContentTrip): CoverData {
 /**
  * 숏폼 표지('Archive / galleryCar' 400×550이 기준, listCar·pin·playerCar는 같은 그림의 축소·변형). width가 400dp일 때의 값으로 그리고
  * 폭에 맞춰 통째로 줄인다(글자까지). height를 주면 가운데 여백만 늘거나 준다(playerCar 360×640).
+ * 표지 안 글자(18.75·16.25 등)는 영상 표지 그림의 일부라 차 글자 단계(24 이상)가 아니다 — 콘텐츠 기록은 주차 중에만 열리는 화면이다(docs/design.md §4).
  */
 @Composable
 internal fun ContentCover(cover: CoverData, tone: Color, width: Dp, height: Dp = width * 550f / 400f) {
@@ -616,6 +617,7 @@ private fun MapBox(trip: ContentTrip, items: List<ContentItem>, tones: List<Colo
                 Box(Modifier.padding(4.dp).clip(RoundedCornerShape(4.5.dp))) { ContentCover(coverOf(x, trip), tones[i % 2], 80.dp) }
             }
         } }
+        // 지도 출처(OpenStreetMap 이용 조건). 시안 크기 그대로, 주차 중에만 보이는 지도 안의 표기다(docs/design.md §4).
         if (real) Text("© OpenStreetMap contributors", fontSize = 13.sp, lineHeight = 18.sp, color = c.background, modifier = Modifier.align(Alignment.BottomStart).padding(start = 10.dp, bottom = 4.dp))
     }
 }

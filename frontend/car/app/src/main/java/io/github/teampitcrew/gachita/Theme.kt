@@ -64,11 +64,11 @@ private val Dark = darkColorScheme(
     error = Color(0xFFFF8A80), errorContainer = Color(0xFF3A1F1E), onErrorContainer = Color(0xFFF4F1EC),
     tertiary = Color(0xFF7FDDB2), tertiaryContainer = Color(0xFF1C3A2D),
     secondary = Color(0xFFF5C766), secondaryContainer = Color(0xFF3A2F17), onSecondaryContainer = Color(0xFFF4F1EC),
-    // 숏폼 표지(최종 시안 v3 'Archive / galleryCar·playerCar·listCar·pin'): 어두운 화면 위의 밝은 표지라 inverse 칸을 쓴다.
-    // inverseSurface = tint-2(노랑), surfaceBright = tint-3(분홍), inverseOnSurface = 표지 글자(ink, 보조 글자는 투명도로).
+    // 어두운 차 화면 위의 '밝은 면'(콘텐츠 기록 v3의 숏폼 표지 'Archive / galleryCar·playerCar·listCar·pin'과 실제 지도). docs/design.md §3 토큰의 밝은 값을 inverse 칸에 둔다:
+    // inverseSurface = tint-2(밝은 #FCF0D9), surfaceBright = tint-3(밝은 #FBE7EE), inverseOnSurface = ink(밝은 #28221B, 보조 글자는 투명도로),
+    // inversePrimary = accent-text(밝은 #2B7A53, 밝은 지도 위 초록 길). 다른 차 화면은 이 칸을 쓰지 않는다(스낵바·툴팁 없음).
     inverseSurface = Color(0xFFFCF0D9), surfaceBright = Color(0xFFFBE7EE), inverseOnSurface = Color(0xFF28221B),
-    // 밝은 바탕(실제 지도) 위의 초록 길(v3 D29 지도 경로 #20775B): 밝은 면 위의 primary라 inversePrimary.
-    inversePrimary = Color(0xFF20775B),
+    inversePrimary = Color(0xFF2B7A53),
 )
 
 /**
