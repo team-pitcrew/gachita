@@ -4,6 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import androidx.compose.ui.unit.dp
 
 class DriveTest {
     private fun status(recording: Boolean = true, muted: Boolean = false, handoff: Handoff.State = Handoff.State.OFF, mic: Mic = Mic.ON,
@@ -23,8 +24,8 @@ class DriveTest {
     }
 
     @Test fun bigButtonHasNoStartButton() {
-        assertEquals(DriveButton("일시정지", Press.STOP, true), driveButton(recording = true, muted = false, agreed = true, restricted = true)) // A control/live 2107:5585
-        assertEquals(DriveButton("계속 기록", Press.GO, true), driveButton(recording = true, muted = true, agreed = true, restricted = true)) // A control/paused 2107:5589
+        assertEquals(DriveButton("일시정지", Press.STOP, true), driveButton(recording = true, muted = false, agreed = true, restricted = true)) // C17 ⏸ 2137:5845
+        assertEquals(DriveButton("녹화 재개", Press.GO, true), driveButton(recording = true, muted = true, agreed = true, restricted = true)) // C17p ● 2137:5853
         assertEquals(DriveButton("출발하면 자동으로 기록해요", Press.OFF, false), driveButton(recording = false, muted = false, agreed = true, restricted = false)) // C03·C13
         assertFalse(driveButton(recording = false, muted = false, agreed = true, restricted = true).enabled)
         assertEquals("동승자 설정", driveButton(recording = false, muted = false, agreed = false, restricted = false).label)
@@ -61,8 +62,11 @@ class DriveTest {
     }
 
     @Test fun shellFollowsTheScreenNotTheWidth() {
-        assertEquals(Shell.RIDE, tripShell(parked = true, showsBrief = false, contentTab = false)) // C44·D33·ended: 주차 중에도 '연결됨'
+        assertEquals(Shell.RIDE, tripShell(parked = true, showsBrief = false, contentTab = false)) // ended: 주차 중에도 함께 타는 중 틀
         assertEquals(Shell.RIDE, tripShell(parked = false, showsBrief = false, contentTab = false)) // C17·C21
+        assertEquals(Shell.TALK, tripShell(parked = false, showsBrief = false, contentTab = false, talk = true)) // C44·liveTranscript
+        assertEquals(28.dp, Shell.RIDE.padV); assertEquals(16.dp, Shell.RIDE.gap) // C17 2005:3267 py28·간격 16
+        assertEquals(32.dp, Shell.TALK.padV); assertEquals(24.dp, Shell.TALK.gap) // C44 2019:1966 p32·간격 24
         assertEquals(Shell.PARKED, tripShell(parked = true, showsBrief = true, contentTab = false)) // C20·D19·finalBrief: '주차 중  P'
         assertEquals(Shell.PARKED, tripShell(parked = true, showsBrief = false, contentTab = true)) // C22–C38
         assertEquals(Shell.RIDE, tripShell(parked = false, showsBrief = true, contentTab = false)) // 주행 중에는 브리핑이 없다
@@ -74,12 +78,12 @@ class DriveTest {
         assertEquals(0, seatCharacter(Person("c", "손님", "ROW_3_LEFT", true)))
     }
 
-    @Test fun recordClockShowsHoursMinutesSeconds() {
-        assertEquals("00:00:00", recordClock(999))
-        assertEquals("00:12:48", recordClock(768_000)) // A D17·D18
-        assertEquals("00:38:14", recordClock(2_294_000)) // A D20
-        assertEquals("01:02:03", recordClock(3_723_000))
-        assertEquals("00:00:00", recordClock(-5))
+    @Test fun recordClockShowsMinutesSeconds() {
+        assertEquals("00:00", recordClock(999))
+        assertEquals("19:11", recordClock(1_151_000)) // C17 녹음 막대
+        assertEquals("59:59", recordClock(3_599_000))
+        assertEquals("1:02:03", recordClock(3_723_000)) // 한 시간부터 시:분:초
+        assertEquals("00:00", recordClock(-5))
     }
 
     @Test fun waveBarsScrollNewestRight() {
@@ -93,24 +97,18 @@ class DriveTest {
 
     @Test fun briefFoldsAsksIntoShortActions() {
         val trash = SharedTodo("n4", "마트", "쓰레기 정리하기", "pending", 0, emptyList(), "remember", listOf(TodoItem("쓰레기", null)), listOf("dad"), "쓰레기 정리하기")
-        // A D20 '화장실 가기 / 장보기 / 쓰레기 정리하기'
+        // C19 '화장실 가기 / 장보기 / 쓰레기 정리하기'
         assertEquals(listOf(NearRow(BriefIcon.RESTROOM, "화장실 가기"), NearRow(BriefIcon.CART, "장보기"), NearRow(BriefIcon.TRASH, "쓰레기 정리하기")),
             nearRows(F4Mock.martNear.take(2) + trash))
         // every thing to buy is one '장보기' row; at most three rows; anything else keeps its title with a mark by its words
         assertEquals(listOf(NearRow(BriefIcon.CART, "장보기")), nearRows(F4Mock.mart.drop(1)))
         assertEquals(listOf(NearRow(BriefIcon.RESTROOM, "화장실 가기"), NearRow(BriefIcon.COLD, "고기는 바로 냉장 보관"), NearRow(BriefIcon.LUGGAGE, "체크인하고 가방 내리기")),
             nearRows(F4Mock.lodge))
+        val bags = SharedTodo("f3", "숙소", "짐과 쓰레기 챙기기", "pending", 0, emptyList(), "bring", listOf(TodoItem("짐", null), TodoItem("쓰레기", null)), listOf("dad"), "짐과 쓰레기 챙기기")
+        assertEquals(listOf(NearRow(BriefIcon.TRASH, "짐과 쓰레기 챙기기")), nearRows(listOf(bags))) // finalNear 🗑
         val old = SharedTodo("o", "마트", "우유 꼭 사기", "pending", 0, emptyList()) // 이전 서버: 분류·제목 없음
         assertEquals(listOf(NearRow(BriefIcon.DRINK, "우유 꼭 사기")), nearRows(listOf(old))) // 도착 브리핑과 같은 그림(Twemoji 🥤)
         assertTrue(nearRows(F4Mock.mart + F4Mock.lodge).size <= 3)
-    }
-
-    @Test fun gridHidesOnlyAnEmptyMiddleSeat() {
-        val rows = seatRows(emptyList())
-        val four = gridSeats(rows, F4Mock.people)
-        assertEquals(listOf(listOf(Seat.ROW_1_LEFT, Seat.ROW_1_RIGHT), listOf(Seat.ROW_2_LEFT, Seat.ROW_2_RIGHT)), four) // A 2×2
-        val middle = F4Mock.people.take(3) + Person("g", "할머니", "ROW_2_CENTER", true)
-        assertEquals(listOf(Seat.ROW_2_LEFT, Seat.ROW_2_CENTER, Seat.ROW_2_RIGHT), gridSeats(rows, middle)[1])
     }
 
     @Test fun meIsTheDriverWithAProfile() {
@@ -120,7 +118,7 @@ class DriveTest {
     }
 
     @Test fun seatFacesFollowTheGroupProfile() {
-        assertEquals(R.drawable.char_glasses, faceRes(Person("a", "아빠", "ROW_1_LEFT", true, profile = true, character = "glasses"))) // 시안 A 아빠
+        assertEquals(R.drawable.char_glasses, faceRes(Person("a", "아빠", "ROW_1_LEFT", true, profile = true, character = "glasses"))) // 시안 C17 아빠
         assertEquals(R.drawable.char_cap, faceRes(Person("s", "서준", "ROW_2_LEFT", true, profile = true, character = "cap-small")))
         assertEquals(R.drawable.char_basic, faceRes(Person("g", "손님", "ROW_1_LEFT", true))) // 손님은 자리 순서
         assertEquals(R.drawable.char_cap, faceRes(Person("g", "손님", "ROW_1_RIGHT", true)))

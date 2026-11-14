@@ -90,6 +90,19 @@ object CarPaper {
 }
 
 /**
+ * 시안 C17 계열 아래 녹음 막대('기록 컨트롤 / 상태와 동작' 2014:943)와 좌석 지도의 말하는 사람 고리('화자 링 / 민트' 2209:5864)에만 있는 색.
+ * 시안이 변수 없이 적은 값이라 Material 역할에 없다.
+ */
+object CarRecord {
+    val Timer = Color(0xFFF23424) // 기록 중 경과 시간 '19:11'
+    val Edge = Color.Black // 막대 테두리 1
+    val StopRing = Color.White // ■ 정지 단추 테두리 2
+    val Ring = listOf(0f to Color(0xFFE8FFF5), 0.33f to Color(0xFF7DFFC9), 0.72f to Color(0xFF30E094), 1f to Color(0xFF1A8563)) // 고리 4.5 그러데이션
+    val RingGlow = Color(0xFF38E0A1).copy(alpha = 0.38f) // 고리 둘레 빛(그림자 흐림 4)
+    val RingInner = Color(0xFFD9FFED).copy(alpha = 0.64f) // 안쪽 하이라이트 1.2
+}
+
+/**
  * 시안의 '내 얼굴' 프로필 메뉴(2200:5854)와 로그아웃 확인(2220:5866)에만 있는 색. 시안이 변수 없이 적은 값이라 Material 역할에 없다.
  * 바깥 어둡게는 검정 56%(드롭다운)·62%(확인).
  */
@@ -137,16 +150,16 @@ fun TitleBlock(title: String, sub: String, modifier: Modifier = Modifier) = Colu
 
 /**
  * 주차 화면 틀(시안 C01–C16·C20·C22–C38): 여백 40, 머리 줄 80('가치타' · '주차 중  P'), 위 탭(있으면, 76), 칸 간격 24, 본문, 아래 단추 줄(간격 24).
- * [tab]이 null이면 탭을 그리지 않는다.
+ * [tab]이 null이면 탭을 그리지 않는다. [me]는 머리 줄 오른쪽 위 '내 얼굴' 단추('주차 중  P' 다음).
  */
 @Composable
 fun ParkedFrame(
     tab: Int? = null, onTab: (Int) -> Unit = {}, tabEnabled: (Int) -> Boolean = { true }, gear: String? = "P", online: Boolean = true,
-    bottom: (@Composable RowScope.() -> Unit)? = null, overlay: @Composable BoxScope.() -> Unit = {},
+    me: (@Composable () -> Unit)? = null, bottom: (@Composable RowScope.() -> Unit)? = null, overlay: @Composable BoxScope.() -> Unit = {},
     body: @Composable ColumnScope.() -> Unit,
 ) = Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
     Column(Modifier.fillMaxSize().padding(Shell.PARKED.padH), verticalArrangement = Arrangement.spacedBy(Shell.PARKED.gap)) {
-        TripHeader(Shell.PARKED, gear, online, listening = false)
+        TripHeader(Shell.PARKED, gear, online, listening = false, me = me)
         if (tab != null) TripTabs(TRIP_TABS, tab, tabEnabled, onTab)
         Column(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Shell.PARKED.gap), content = body)
         if (bottom != null) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(24.dp), content = bottom)

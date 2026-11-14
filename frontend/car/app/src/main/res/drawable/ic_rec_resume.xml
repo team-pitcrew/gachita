@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 시안 C17p '녹화 재개' 2137:5853 안의 'image 1' 2114:5971(61×77, Figma 에셋 0e02a.png): 검은 칸 위 빨간 기록 점과 흰 테. 그림을 같은 자리·크기로 다시 그림 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="61dp" android:height="77dp" android:viewportWidth="61" android:viewportHeight="77">
+    <path android:fillColor="#000000" android:pathData="M0,0H61V77H0Z" />
+    <path android:strokeColor="#FFFFFF" android:strokeWidth="1.5" android:pathData="M31,15.75A18.25,18.25 0,1 1,30.99,15.75Z" />
+    <path android:fillColor="#F70000" android:pathData="M31,18A16,16 0,1 1,30.99,18Z" />
+</vector>
