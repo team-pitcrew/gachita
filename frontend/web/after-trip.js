@@ -362,12 +362,20 @@ export function createAfterTrip({ getTrip, getParticipant, getToken, request, re
     const body = h("div", { className: "after-body" },
       h("div", { className: "ride-title" }, h("h1", { id: "after-title" }, page.title), page.sub && h("p", { className: "sub" }, page.sub)),
       ...page.body);
-    dialog.replaceChildren(
+    // 진행률은 1초마다 다시 그린다. 머리·탭과 아래 단추가 같으면 그 요소를 그대로 두고 속성만 바꾼다 —
+    // 누르는 사이 단추가 갈아 끼워져 탭이 사라지지 않게.
+    const actions = page.actions.filter(Boolean), footer = dialog.querySelector(".after-bottom");
+    const same = footer && dialog.dataset.step === s.step && footer.children.length === actions.length && actions.every((b, i) => footer.children[i].textContent === b.textContent);
+    if (same && dialog.querySelector(".app-bar .link-state")?.classList.contains("is-offline") === !isOnline()) {
+      actions.forEach((b, i) => Object.assign(footer.children[i], { disabled: b.disabled, className: b.className, onclick: b.onclick }));
+      dialog.querySelector(".after-body").replaceWith(body);
+    } else dialog.replaceChildren(
       appBar({ online: isOnline(), onHome: () => { close(); onHome?.(); } }),
       journeyTabs("contents", { ride: close, talk: () => { close(); onTalk(); } }),
       body,
-      h("footer", { className: "after-bottom" }, page.actions),
+      h("footer", { className: "after-bottom" }, actions),
     );
+    dialog.dataset.step = s.step;
     body.scrollTop = old;
     if (focusKey) dialog.querySelector(`[data-key="${focusKey}"]`)?.focus();
   }
