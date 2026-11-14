@@ -6,3 +6,5 @@ dependencyResolutionManagement {
 }
 rootProject.name = 'GachitaCar'
 include ':app'
+
+include ':map'
