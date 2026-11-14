@@ -768,7 +768,7 @@ async function requeueRetranscribe(code) {
   const { rows } = await tripsDb().query(
     `SELECT r.moment_id FROM recordings r WHERE r.trip_code = $1 AND r.deleted_at IS NULL AND EXISTS (
        SELECT 1 FROM utterances u WHERE u.trip_code = r.trip_code AND u.generation = r.generation AND u.text <> '' AND u.asr_text IS NULL
-         AND u.at >= r.start_at AND u.at < r.start_at + r.seconds * 1000 AND (r.asr_done_at IS NULL OR u.created_at > r.asr_done_at))`,
+         AND (u.at >= r.start_at OR u.end_at > r.start_at) AND u.at < r.start_at + r.seconds * 1000 AND (r.asr_done_at IS NULL OR u.created_at > r.asr_done_at))`,
     [code]
   );
   for (const r of rows) queueRetranscribe(code, r.moment_id);
@@ -793,8 +793,8 @@ async function retranscribeClip({ code, momentId }) {
   const clipMs = pcm.length / 16; // 16 kHz: 1 ms = 16 표본
   const live = "SELECT 1 FROM recordings WHERE trip_code = $1 AND moment_id = $2 AND generation = $3 AND deleted_at IS NULL";
   const { rows } = await tripsDb().query(
-    `SELECT device, seq, at, text, seat_area, (asr_text IS NULL AND ($5::timestamptz IS NULL OR created_at > $5)) AS todo
-     FROM utterances WHERE trip_code = $1 AND generation = $2 AND text <> '' AND at >= $3 AND at < $4 ORDER BY at`,
+    `SELECT device, seq, at, end_at, text, seat_area, (asr_text IS NULL AND ($5::timestamptz IS NULL OR created_at > $5)) AS todo
+     FROM utterances WHERE trip_code = $1 AND generation = $2 AND text <> '' AND (at >= $3 OR end_at > $3) AND at < $4 ORDER BY at`,
     [code, generation, startAt, startAt + Math.ceil(clipMs), rec.since]
   );
   const todo = rows.filter((r) => r.todo).length;
@@ -812,8 +812,11 @@ async function retranscribeClip({ code, momentId }) {
     seen++;
     const at = Number(u.at) - startAt;
     const next = rows.slice(i + 1).find((r) => r.seat_area === u.seat_area);
-    const from = Math.max(0, at - 500);
-    const to = Math.min(clipMs, from + 15_000, Math.max(next ? Number(next.at) - startAt : clipMs, at + Math.max(1500, [...u.text].length * 150)));
+    // 실제 끝 시각이 있으면 그 발화와 클립이 겹치는 소리만 보낸다. 구간을 늘리거나 겹친 화자의 다음 말에서 자르지 않는다.
+    // 기존 APK처럼 끝 시각이 없는 발화만 앞 0.5초·같은 자리의 다음 말·글자 수로 어림한다.
+    const from = Math.max(0, u.end_at != null ? at : at - 500);
+    const to = u.end_at != null ? Math.min(clipMs, Number(u.end_at) - startAt)
+      : Math.min(clipMs, from + 15_000, Math.max(next ? Number(next.at) - startAt : clipMs, at + Math.max(1500, [...u.text].length * 150)));
     const stillOk = async () =>
       (
         await tripsDb().query(

@@ -2196,3 +2196,66 @@ test("선택적인 실제 구간·익명 화자는 저장·수정·숏폼에 남
   await call("PATCH", `${t}/participants/${person.id}`, { consent: false });
   assert.equal((await tripsDb().query("SELECT count(*)::int AS n FROM utterances WHERE trip_code=$1", [trip.code])).rows[0].n, 0);
 });
+
+test("장면 재전사는 실제 발화 구간을 우선하고 클립에 남은 짧은 말은 원문으로 둡니다(T110)", async () => {
+  const [, trip] = await call("POST", "/api/trips", {});
+  const t = `/api/trips/${trip.code}`;
+  const at = Date.now() - 60_000;
+  await tripsDb().query("UPDATE trips SET doc=jsonb_set(doc,'{createdAt}',to_jsonb($2::bigint)) WHERE code=$1", [trip.code, at - 1000]);
+  const [, person] = await join(trip.code, "검증 화자", "ROW_1_LEFT");
+  const scope = randomUUID();
+  const makeLine = (seq, start, end, text) => ({ seq, at: at + start, endAt: at + end, text, speakerLabel: `spk:${seq % 2}`, speakerScope: scope });
+  const items = [
+    makeLine(1, -400, 1000, "클립 앞에서 시작한 말"),
+    makeLine(2, 2000, 3200, "실제 끝이 있는 말"),
+    makeLine(3, 2100, 3700, "겹쳐서 이어지는 말"),
+    makeLine(4, 4000, 4500, "짧은 실제 말"),
+    { seq: 5, at: at + 5000, text: "기존 차량 발화", seatArea: "ROW_1_LEFT" },
+    makeLine(6, 6000, 9000, "클립 뒤로 이어지는 말"),
+    makeLine(7, 7500, 9000, "클립에서 짧게 남은 말"),
+  ];
+  assert.equal((await call("POST", `${t}/utterances`, { device: "segments", generation: 1, items }, person.token))[0], 200);
+  await call("PATCH", `${t}/captions/segments/2`, { text: "직접 다듬은 자막", expectedVersion: 0, generation: 1 }, person.token);
+  const [, moment] = await call("POST", `${t}/moments`, { at, from: at, to: at + 8000 }, person.token);
+  const source = wav(213, 8);
+  const before = asr.calls.length;
+  const events = [];
+  const restore = captureLog((line) => events.push(JSON.parse(line)));
+  const done = async (n) => {
+    for (let i = 0; i < 300 && events.filter((e) => e.msg === "clip_retranscribed").length < n; i++) await new Promise((ok) => setTimeout(ok, 20));
+    return events.filter((e) => e.msg === "clip_retranscribed")[n - 1];
+  };
+  Object.assign(process.env, { ASR_URL: `http://127.0.0.1:${fakeAsr.address().port}/asr/v1`, ASR_TOKEN: "test-asr-token", ASR_GAP_MS: "20" });
+  try {
+    assert.equal((await postRaw(`${t}/recordings?moment=${moment.id}&generation=1&from=${at}`, source, person.token)).status, 201);
+    const first = await done(1);
+    assert.deepEqual([first.lines, first.fixed, first.fellBack, first.reasons], [7, 5, 2, { short: 2 }]);
+    const sent = asr.calls.slice(before);
+    assert.deepEqual(sent.map((c) => c.draft), [items[0].text, items[1].text, items[2].text, items[4].text, items[5].text]);
+    const bounds = [[0, 1000], [2000, 3200], [2100, 3700], [4500, 8000], [6000, 8000]];
+    for (let i = 0; i < sent.length; i++) {
+      const audio = Buffer.from(sent[i].body.messages[0].content[1].audio_url.url.split(",")[1], "base64");
+      assert.deepEqual(audio.subarray(44), source.subarray(44 + bounds[i][0] * 32, 44 + bounds[i][1] * 32), "실제로 보낸 표본의 시작과 끝이 해당 구간과 같아야 합니다");
+    }
+    const lines = (await call("GET", `${t}/transcript`, null, person.token))[1].utterances;
+    assert.deepEqual(lines.map((u) => u.text), items.map((u) => u.text), "원문은 덮지 않습니다");
+    assert.equal(lines[1].displayText, "직접 다듬은 자막");
+    assert.equal(lines[1].asrText, items[1].text + ".");
+    assert.equal(lines[1].endAt, items[1].endAt);
+    assert.equal(lines[3].asrText, undefined);
+    assert.equal(lines[6].asrText, undefined);
+    // 클립 전에 시작했지만 0.8초가 겹치는 발화가 뒤늦게 도착해도 재예약합니다.
+    const late = makeLine(8, -200, 800, "늦게 받은 겹치는 말");
+    assert.equal((await call("POST", `${t}/utterances`, { device: "segments", generation: 1, items: [late] }, person.token))[0], 200);
+    const second = await done(2);
+    assert.deepEqual([second.lines, second.fixed], [1, 1]);
+    assert.equal(asr.calls.length, before + 6, "이미 본 짧은 말과 오류를 다시 보내지 않습니다");
+    const last = Buffer.from(asr.calls.at(-1).body.messages[0].content[1].audio_url.url.split(",")[1], "base64");
+    assert.deepEqual(last.subarray(44), source.subarray(44, 44 + 800 * 32));
+  } finally {
+    restore();
+    delete process.env.ASR_URL;
+    delete process.env.ASR_TOKEN;
+    delete process.env.ASR_GAP_MS;
+  }
+});
