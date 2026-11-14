@@ -28,6 +28,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
@@ -73,10 +74,20 @@ object CarShape {
 /** 시안 tint-1–5(어두운 값): 사람마다 다른 장면 카드 바탕. Material 역할에 없는 색이라 여기서만 정의한다(design.md 3절). */
 val CarTints = listOf(Color(0xFF2A2840), Color(0xFF3A3020), Color(0xFF3A2530), Color(0xFF1E3A2E), Color(0xFF1F2F40))
 
+/**
+ * 시안의 밝은 '종이' 표지(Archive / galleryCar·완성 표지·온보딩 보관함 예시): design.md 3절의 밝은 tint-1–5와 밝은 ink·ink-2.
+ * 어두운 차 화면 위에 올리는 표지 그림에만 쓴다(화면 바탕·글자는 Material 역할).
+ */
+object CarPaper {
+    val Tints = listOf(Color(0xFFECEAFB), Color(0xFFFCF0D9), Color(0xFFFBE7EE), Color(0xFFE4F4EC), Color(0xFFE5F0FB))
+    val Ink = Color(0xFF28221B)
+    val Ink2 = Color(0xFF5A5044)
+}
+
 /** 단추 종류: 큰 단추(accent 바탕·on-accent 글), 보조(surface-2·ink), 멈춤(rec-soft·rec, 기록 중지). */
 enum class CarButtonKind { Primary, Secondary, Stop }
 
-/** 시안 단추(Button/car/primary 등): 높이 96(초대·시트 안 80, 주행 큰 단추 132), 모서리 24, Car/Headline 32. 꺼지면 surface-2·ink-2. */
+/** 시안 단추(Button/car/primary 등): 높이 96(초대·시트 안 80, 주행 큰 단추 132), 모서리 24, Car/Headline 32. 꺼진 큰 단추는 시안(C23)대로 같은 색 45%, 꺼진 보조 단추는 surface-2·ink-2. */
 @Composable
 fun CarButton(
     label: String, modifier: Modifier = Modifier.fillMaxWidth(), kind: CarButtonKind = CarButtonKind.Primary, enabled: Boolean = true,
@@ -84,12 +95,13 @@ fun CarButton(
 ) {
     val c = MaterialTheme.colorScheme
     val (bg, fg) = when {
-        !enabled -> c.surfaceVariant to c.onSurfaceVariant
         kind == CarButtonKind.Primary -> c.primary to c.onPrimary
+        !enabled -> c.surfaceVariant to c.onSurfaceVariant
         kind == CarButtonKind.Stop -> c.errorContainer to c.error
         else -> c.surfaceVariant to c.onSurface
     }
-    Surface(onClick = onClick, enabled = enabled, modifier = modifier.height(height), shape = CarShape.Ctl, color = bg) {
+    Surface(onClick = onClick, enabled = enabled, modifier = modifier.height(height).alpha(if (!enabled && kind == CarButtonKind.Primary) 0.45f else 1f),
+        shape = CarShape.Ctl, color = bg) {
         Box(contentAlignment = Alignment.Center) { Text(label, color = fg, style = CarText.Headline, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center) }
     }
 }
