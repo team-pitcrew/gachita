@@ -4,9 +4,11 @@ metadata:
   name: gachita-api
 spec:
   replicas: 2
-  # T93: 구버전의 48시간 삭제가 새 보관 정책과 함께 실행되지 않도록 모두 종료한 뒤 교체합니다.
+  # T121: 새 파드가 준비된 뒤에 옛 파드를 하나씩 내린다. T93의 Recreate는 배포마다 둘을 모두 내려 ALB가 502를 냈다(11/14).
+  # 48시간 삭제가 남은 T90 이전 이미지로는 되돌리지 않는다(gitops/README.md).
   strategy:
-    type: Recreate
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
   selector:
     matchLabels: { app: gachita-api }
   template:
@@ -53,6 +55,8 @@ spec:
             # 주소의 호스트는 network.yaml의 나가는 길과 같아야 한다. 요청 간격(ASR_GAP_MS, 기본 파드마다 1.1초)은 파드 둘이
             # 상대 서버 한도(IP당 초당 2건) 아래에 들게 정한 값이라 replicas를 바꾸면 같이 맞춘다
             - { name: ASR_URL, value: "https://llm.kikum.xyz/asr/v1" }
+            # T121: 롤링 교체 중에는 내려가는 파드까지 넷이 한 IP로 나갈 수 있다(옛 둘 + 새 둘). 넷이 합쳐 초당 1.9건이 되게 2.1초로 둔다
+            - { name: ASR_GAP_MS, value: "2100" }
             # 키 연결과 유료 생성 활성화를 분리합니다. 크레딧·실제 생성 검증 전에는 새 작업을 받지 않습니다(T86).
             - { name: SHORTS_ENABLED, value: "false" }
             - { name: SHORTS_DAILY_SECONDS, value: "120" }
@@ -64,6 +68,10 @@ spec:
             - secretRef: { name: higgsfield, optional: true }
           volumeMounts:
             - { name: short-tmp, mountPath: /tmp }
+          # 내려갈 때 서비스 대상에서 먼저 빠지도록 종료 신호 전에 기다린다(T121). 그 사이 들어온 요청은 끝까지 처리한다
+          lifecycle:
+            preStop:
+              sleep: { seconds: 10 }
           # 준비: 두 DB에 닿아야 요청을 받는다. 살아 있음: 프로세스만 본다(DB가 잠깐 멈췄다고 API를 다시 띄우지 않음)
           readinessProbe:
             httpGet: { path: /healthz, port: http }
