@@ -147,4 +147,16 @@ class ServerTest {
         assertTrue(e is ApiError && e.transient)
         assertEquals(listOf("PATCH"), calls)
     }
+
+    @Test fun `장면 주소는 같은 출처와 현재 여행 경로만 허용한다`() {
+        val path = "/api/trips/ABC123/recordings/clip-1"
+        assertEquals("https://gachita.test$path", shortClipAddress("https://gachita.test/", "ABC123", path))
+        assertEquals("http://127.0.0.1:8894$path", shortClipAddress("http://127.0.0.1:8894", "ABC123", "http://127.0.0.1:8894$path"))
+        listOf(
+            "https://other.test$path", "https://media.gachita.test$path", "http://gachita.test$path",
+            "https://gachita.test:444$path", "https://user@gachita.test$path", "//other.test$path",
+            "/api/trips/OTHER1/recordings/clip-1", "$path?token=x", "$path#x", "/api/trips/ABC123/recordings/%2e%2e",
+            "/api/trips/ABC123/recordings/../clip-1", "file:///api/trips/ABC123/recordings/clip-1"
+        ).forEach { clip -> assertTrue(clip, runCatching { shortClipAddress("https://gachita.test", "ABC123", clip) }.isFailure) }
+    }
 }

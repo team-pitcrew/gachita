@@ -90,15 +90,14 @@ internal data class DriveStatus(val title: String, val sub: String, val hero: He
 /**
  * Status text for the current recording state. Mirrors the old StatusHero order, with the design's '기록' wording.
  * ended: the trip's server status is 'ended' (2026:2410). resumed: recording came back from a pause and nothing new was heard yet (2026:1969).
- * Option A shows only the timer for REC and the user's pause; the sub line appears there for the other holds (Gleo, shorts, microphone).
+ * Option A shows only the timer for REC and the user's pause; the sub line appears there for the other holds (Gleo, microphone).
  */
 internal fun driveStatus(
-    recording: Boolean, muted: Boolean, playingShort: Boolean, handoff: Handoff.State, mic: Mic, why: String,
+    recording: Boolean, muted: Boolean, handoff: Handoff.State, mic: Mic, why: String,
     offPending: Boolean, waiting: Boolean, inPark: Boolean, waitingFor: List<String>, ended: Boolean = false, resumed: Boolean = false,
 ): DriveStatus = when {
     ended && !offPending -> DriveStatus("여행 기록 완료", "오늘의 대화를 오래 간직해 보세요", Hero.PAUSED)
     recording && muted -> DriveStatus("기록 멈춤", "같은 버튼을 누르면 다시 기록해요", Hero.PAUSED)
-    recording && playingShort -> DriveStatus("기록 잠시 멈춤", "쇼츠를 듣는 동안은 기록하지 않아요", Hero.PAUSED)
     recording && handoff != Handoff.State.OFF ->
         DriveStatus("기록 잠시 멈춤", if (handoff == Handoff.State.WAITING) "운전대 버튼을 누르세요" else "Gleo가 끝나면 기록을 이어 가요", Hero.PAUSED)
     recording -> when (mic) {
@@ -120,7 +119,7 @@ internal data class DriveButton(val label: String, val press: Press, val enabled
 /**
  * The one big control (C17 bar ⏸ '일시정지' and ● '녹화 재개' — the recording bar uses these labels as button names — ended '새 여행 시작'). Recording starts by itself once the trip
  * turns to driving with everyone's consent (Session.autoStart, C03·C13), so there is no start button: before that the button only says so.
- * Pause and resume keep consent; without consent it opens passenger setup while parked. An ended trip never records again; a new trip is
+ * Pause and resume keep consent; without consent it is a disabled note (consent is given on each phone). An ended trip never records again; a new trip is
  * started while parked.
  */
 internal fun driveButton(recording: Boolean, muted: Boolean, agreed: Boolean, restricted: Boolean, ended: Boolean = false): DriveButton = when {
@@ -129,8 +128,8 @@ internal fun driveButton(recording: Boolean, muted: Boolean, agreed: Boolean, re
     recording && !muted -> DriveButton("일시정지", Press.STOP, true)
     recording -> DriveButton("녹화 재개", Press.GO, true)
     agreed -> DriveButton("출발하면 자동으로 기록해요", Press.OFF, false)
-    restricted -> DriveButton("주차한 뒤 동의할 수 있어요", Press.OFF, false)
-    else -> DriveButton("동승자 설정", Press.GO, true)
+    // 동의 전: 다른 화면으로 들어가지 않는 꺼진 안내(시안에 이 상태 글이 없어 짧게 쓴다). 동의는 각자 휴대폰에서 QR로.
+    else -> DriveButton("각자 휴대폰에서 동의하면 기록해요", Press.OFF, false)
 }
 
 /** Seat word for the heard line ('서준 / 뒷좌석'). Only the server seat names are known; anything else is null. */

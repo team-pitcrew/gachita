@@ -623,21 +623,16 @@ def open_family():
 
 
 def start_trip(from_family):
-    """여행 시작. 가족 화면의 '이 가족과 출발'(그룹 여행) 뒤 기록 시작. 없으면 develop의 옛 '여행 만들기'(가족 넷 손님)로 대체."""
+    """여행 시작. 가족 화면의 '이 가족과 출발'(그룹 여행) 뒤 기록 시작. 그룹 여행이 없으면 16을 '없음'으로 적고 None(옛 '여행 만들기' 화면은 T156에서 지움)."""
     code = None
     if from_family:
         time.sleep(4); trips = api("GET", "/profiles/me/trips", token=st["dad"]["token"])["items"]
         code = trips[0]["code"] if trips and trips[0].get("status") != "ended" else None
     if not code:
-        launch("--ez", "onboarding", "false", restart=True); tap("함께 타는 중", timeout=3)
-        if seen("새 여행 시작"): tap("새 여행 시작")  # 앱 데이터를 지우지 않으므로 지난 여행이 끝난 채 남아 있을 수 있다
-        e2e.tap_make(); time.sleep(5)  # 옛 여행의 동승자 동의는 차에서 켜지 않는다(11/15: 동의는 휴대폰 QR로) — 기록 없이 시드 화면으로 간다
-        try: code = e2e.trip_code()
-        except RuntimeError: code = None
-        mark(16, "대체", "옛 여행 만들기(가족 넷 손님, 프로필 없음 → 화자 식별 없음)로 여행을 만듦")
-    if code:
-        st["trip"] = {"code": code}; save()
-        if from_family: trip_tokens(code)
+        mark(16, "없음", "가족 화면의 '이 가족과 출발'로 여행을 만들지 못함(대체할 옛 여행 만들기 화면 없음) — " + flow_state("F2"))
+        return None
+    st["trip"] = {"code": code}; save()
+    trip_tokens(code)
     tap("함께 타는 중", timeout=3); tap("기록 시작", timeout=6)  # 모두 동의면 주차 중 '기록 시작'(자동 기록이 들어오면 저절로)
     note("trip", code=code, recording=wait(["아래 버튼으로 언제든 멈출 수 있어요"], 20))
     return code
@@ -910,9 +905,9 @@ def main(apk):
         else: launch("--ez", "onboarding", "false", restart=True); ready_profile("dad", "아빠")
         if only(8): from_family = family_steps()
         else: seed(); open_family(); from_family = tap("이 가족과 출발", timeout=10)
-        code = start_trip(from_family)
-        if only(17): (drive_steps if VOICE else drive_steps_seed)(code)
-        if only(25): after_steps(code)
+        code = start_trip(from_family)  # 여행이 없으면 17–35는 '실행 안 함'으로 남는다
+        if code and only(17): (drive_steps if VOICE else drive_steps_seed)(code)
+        if code and only(25): after_steps(code)
     finally:  # 중간에 멈춰도 주차·정지, 앱은 이 서버를 가리킨 채로
         subprocess.run(ADB + ["emu", "screenrecord", "stop"], capture_output=True); speed(0); gear("Park")
         launch()

@@ -286,11 +286,10 @@ private fun LinkText(label: String, onClick: () -> Unit) =
 
 /**
  * 콘텐츠 기록 탭 본문. token은 지금 여행에서 녹음에 동의한 이 차의 참가자 토큰(없으면 빈 상태).
- * [onStudio]는 시안에 없는 '쇼츠 만들기·보관함' 길이라 이 화면에서 부르지 않는다(MainActivity의 호출·스튜디오 정리는 F3 몫).
  */
 @Composable
 internal fun ContentsRecord(base: String, code: String, token: String?, canRead: () -> Boolean, canPlay: () -> Boolean,
-    onRide: () -> Unit, @Suppress("UNUSED_PARAMETER") onStudio: () -> Unit, onActiveChange: (Boolean) -> Unit, members: Int, modifier: Modifier = Modifier) {
+    onRide: () -> Unit, onActiveChange: (Boolean) -> Unit, members: Int, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val c = MaterialTheme.colorScheme
     val read by rememberUpdatedState(canRead)

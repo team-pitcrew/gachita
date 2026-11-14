@@ -18,17 +18,6 @@ fun seatRows(carSeats: List<String>): List<List<Seat>> {
     return known.groupBy { it.name.substringBeforeLast('_') }.toSortedMap().values.map { row -> row.sortedBy { side.indexOf(it.name.substringAfterLast('_')) } }
 }
 
-data class Member(val name: String, val seat: Seat)
-
-/**
- * 가족 프로필. 서버에 가족 목록 API가 없어 앱 안에 두고 손님으로 참가시킨다.
- * ponytail: 고정 목록. 가족 그룹 API(T45, ADR-0009)가 생기면 그 응답으로 바꾼다.
- */
-val FAMILY = listOf(
-    Member("아빠", Seat.ROW_1_LEFT), Member("엄마", Seat.ROW_1_RIGHT),
-    Member("서준", Seat.ROW_2_LEFT), Member("하은", Seat.ROW_2_RIGHT),
-)
-
 /**
  * profile은 프로필로 참가한 사람(그 프로필의 목소리 등록값이 대조 후보가 됨, #65). character는 그 프로필의 캐릭터 값('glasses' 등):
  * 여행 문서에는 없어 차가 콘텐츠 기록(GET /trips/{code}/contents의 members)에서 이어 붙인다. 손님·모름은 빈 글(자리 순서 캐릭터).

@@ -1,29 +1,25 @@
 package io.github.teampitcrew.gachita
 
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
-import com.google.zxing.BarcodeFormat
-import com.google.zxing.EncodeHintType
-import com.google.zxing.qrcode.QRCodeWriter
 import kotlinx.coroutines.delay
-import kotlin.math.floor
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.em
+import androidx.compose.ui.text.font.FontFamily
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 
 // 동승자의 녹음 동의는 각자 휴대폰에서 QR로 받는다(11/15 오너). 차에는 남의 동의를 켜는 화면이 없다.
 internal enum class BoardingPage { HIDDEN, PEOPLE, QR, SEAT }
@@ -43,7 +39,6 @@ internal sealed interface BoardingAction {
     data object ExpireInvite : BoardingAction
     data class PickSeat(val seat: Seat) : BoardingAction
     data class Move(val person: Person) : BoardingAction
-    data object Connect : BoardingAction
 }
 
 /** API 거절을 성공으로 표시하지 않는다. 자리 충돌은 QR을 유지하므로 빈자리를 다시 고를 수 있다. */
@@ -57,6 +52,10 @@ internal fun boardingFailure(error: Throwable): String = when {
 internal fun selectableSeat(trip: Trip, seats: List<String>, seat: Seat?, moving: String? = null): Boolean =
     seat != null && seat in seatRows(seats).flatten() && trip.people.none { it.seat == seat.name && it.id != moving }
 
+/**
+ * 동승자 설정(여행 중, 주차): 원본 C16B 좌석 배정 → C16C '누가 앉나요?' → 자리 옮기기, 그리고 C16 guestInvite 모양의 참석 QR(휴대폰으로 참여·녹음 동의).
+ * 여행 중 자리는 서버가 한 사람씩 옮겨 빈자리로만 옮긴다(맞바꾸기 없음). 머리 줄·탭은 여행 화면이 그린다.
+ */
 @Composable
 internal fun BoardingPanel(
     state: BoardingState, session: Session, seats: List<String>,
@@ -64,108 +63,59 @@ internal fun BoardingPanel(
 ) {
     val trip = session.trip ?: return
     val c = MaterialTheme.colorScheme
-    Surface(modifier, shape = RoundedCornerShape(12.dp), color = c.surface) {
-        Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(when (state.page) {
-                    BoardingPage.QR -> "참석 QR"
-                    BoardingPage.SEAT -> "자리 선택"
-                    else -> "동승자 설정"
-                }, Modifier.weight(1f), fontSize = 30.sp, fontWeight = FontWeight.Bold)
-                OutlinedButton({ onAction(BoardingAction.Close) }, shape = RoundedCornerShape(10.dp), modifier = Modifier.heightIn(min = 56.dp)) { Text("닫기") }
+    val members = trip.people.map { GroupMember(it.id, it.name, it.character, false, it.consent, "", it.seat.takeIf { s -> s.isNotBlank() }) }
+    val canMove = !session.busy && session.online && session.gear == "P"
+    val canInvite = canMove && freeSeats(trip, seats).isNotEmpty() && trip.status in setOf("boarding", "parked") &&
+        trip.people.any { it.seat == Seat.ROW_1_LEFT.name && it.id in session.ours }
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(Shell.PARKED.gap)) {
+        when (state.page) {
+            BoardingPage.QR -> BoardingQr(state, session, onAction, Modifier.weight(1f))
+            BoardingPage.SEAT -> { // C16C
+                TitleBlock("누가 앉나요?", "선택한 좌석에 앉을 사람을 골라 주세요.")
+                Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(24.dp)) {
+                    state.seat?.let { seat -> MemberPicker(members, seat.name) { m -> trip.people.firstOrNull { it.id == m.profileId }?.let { onAction(BoardingAction.Move(it)) } } }
+                }
             }
+            else -> { // C16B
+                TitleBlock("좌석 배정", "좌석을 누르고 앉을 사람을 선택해 주세요.")
+                Row(Modifier.weight(1f).fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                    Column(Modifier.widthIn(max = 1100.dp).fillMaxHeight().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(24.dp)) {
+                        SeatAssign(members, swaps = false) { name -> Seat.entries.firstOrNull { it.name == name }?.let { onAction(BoardingAction.PickSeat(it)) } }
+                    }
+                }
+            }
+        }
+        val note = state.note.ifBlank { if (state.page == BoardingPage.PEOPLE && !canMove) "주차 중에만 자리를 바꾸거나 새로 연결할 수 있어요." else "" }
+        if (state.page != BoardingPage.QR && note.isNotBlank()) Text(note, style = CarText.Label, color = if (state.note.isNotBlank()) c.error else c.onSurfaceVariant)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(24.dp)) {
             when (state.page) {
-                BoardingPage.PEOPLE -> PassengerList(trip, session, seats, onAction, Modifier.weight(1f))
-                BoardingPage.SEAT -> BoardingSeatForm(state, session, seats, onAction, Modifier.weight(1f))
-                else -> Unit
-            }
-        }
-    }
-}
-
-@Composable
-private fun PassengerList(trip: Trip, session: Session, seats: List<String>, action: (BoardingAction) -> Unit, modifier: Modifier) {
-    val c = MaterialTheme.colorScheme
-    Column(modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        Text("누가 함께 타나요?", fontSize = 36.sp, fontWeight = FontWeight.Bold)
-        Text("이 여행의 자리와 개인별 녹음 동의를 확인해요.", color = c.onSurfaceVariant)
-        trip.people.forEach { person ->
-            Surface(color = if (person.consent) c.primaryContainer else c.surfaceVariant, shape = RoundedCornerShape(10.dp)) {
-                Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                        Character(Seat.entries.indexOfFirst { it.name == person.seat }, 56.dp)
-                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text(person.name, fontWeight = FontWeight.Bold, fontSize = 27.sp)
-                            Text("${Seat.entries.firstOrNull { it.name == person.seat }?.label ?: person.seat} · ${if (person.consent) "녹음 동의 완료" else "동의 대기"}", color = c.onSurfaceVariant, fontSize = 22.sp)
-                        }
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        OutlinedButton({ action(BoardingAction.Move(person)) }, enabled = !session.busy && session.online && session.gear == "P",
-                            shape = RoundedCornerShape(10.dp), modifier = Modifier.heightIn(min = 56.dp)) { Text("자리 변경", fontSize = 22.sp) }
-                    }
+                // C16 guestInvite '그룹으로 돌아가기'(primary) · C16C '좌석 배정으로'(secondary) 자리. 여행에서는 둘 다 C16B로 돌아간다.
+                BoardingPage.QR -> CarButton("좌석 배정으로", Modifier.weight(1f), enabled = !session.busy) { onAction(BoardingAction.Back) }
+                BoardingPage.SEAT -> CarButton("좌석 배정으로", Modifier.weight(1f), CarButtonKind.Secondary, enabled = !session.busy) { onAction(BoardingAction.Back) }
+                else -> {
+                    CarButton("닫기", Modifier.weight(1f), CarButtonKind.Secondary) { onAction(BoardingAction.Close) }
+                    // 새 동승자는 휴대폰으로 QR을 읽어 참여하고 그 휴대폰에서 녹음에 동의한다(차에는 남의 동의를 켜는 화면이 없다).
+                    CarButton("참석 QR 띄우기", Modifier.weight(1f), enabled = canInvite) { onAction(BoardingAction.Invite) }
                 }
             }
         }
-        HorizontalDivider()
-        Text("새로 탄 사람", fontSize = 28.sp, fontWeight = FontWeight.Bold)
-        Text("차에서 QR을 열고, 휴대폰 카메라로 읽어 참여해요. 자리는 휴대폰에서 고를 수 있어요.", color = c.onSurfaceVariant)
-        val canAdd = !session.busy && session.online && session.gear == "P" && freeSeats(trip, seats).isNotEmpty()
-        val canInvite = canAdd && trip.status in setOf("boarding", "parked") && trip.people.any { it.seat == Seat.ROW_1_LEFT.name && it.id in session.ours }
-        BoardingButton("참석 QR 띄우기", canInvite) { action(BoardingAction.Invite) }
-        if (!canInvite && canAdd) Text("운전석이 이 차에 연결된 주차 여행에서 QR을 열 수 있어요.", color = c.onSurfaceVariant)
-        if (freeSeats(trip, seats).isEmpty()) Text("지금은 빈자리가 없어요.", color = c.onSurfaceVariant)
-        if (!session.online) Text("연결이 끊겼어요. 연결되면 다시 추가할 수 있어요.", color = c.error)
-        Text(session.note.ifBlank { "주차 중에만 자리를 바꾸거나 새로 연결할 수 있어요." }, color = c.onSurfaceVariant, fontSize = 22.sp)
     }
 }
 
+/**
+ * 참석 QR(원본 C16 guestInvite 2005:3229 · C16I 모양): 왼쪽 카드 650(남은 시간 · QR 320 · 안내), 오른쪽 '초대 링크' 카드 · 공유 시트(2047:2296) ·
+ * 링크 복사·열기. 여행 초대는 사람이 입력하는 코드가 없어 코드 자리에 남은 시간을 둔다. QR은 만료 즉시 사라지고, 참여 결과는 실제 여행 조회로만 적는다.
+ */
+/** 원본 C16 guestInvite의 40 Bold 자간 −0.8px(−2%): '초대 링크'·링크 카드 제목·코드 자리. */
+private val Title2 = CarText.Title.copy(letterSpacing = (-0.02).em)
+
 @Composable
-private fun BoardingSeatForm(state: BoardingState, session: Session, seats: List<String>, action: (BoardingAction) -> Unit, modifier: Modifier) {
-    val trip = session.trip ?: return
-    val person = trip.people.firstOrNull { it.id == state.personId }
+private fun BoardingQr(state: BoardingState, session: Session, onAction: (BoardingAction) -> Unit, modifier: Modifier) {
     val c = MaterialTheme.colorScheme
-    Column(modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(20.dp)) {
-        Text(person?.let { "${it.name}님의 자리를 바꿔요" } ?: "자리를 골라 주세요", fontSize = 32.sp, fontWeight = FontWeight.Bold)
-        Text("어느 자리에 앉았나요?", fontSize = 28.sp, fontWeight = FontWeight.Bold)
-        Text("차 앞쪽", color = c.onSurfaceVariant, fontSize = 22.sp)
-        seatRows(seats).forEach { row ->
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                row.forEach { seat ->
-                    val occupant = trip.people.firstOrNull { it.seat == seat.name }
-                    val selected = state.seat == seat
-                    Surface(onClick = { action(BoardingAction.PickSeat(seat)) },
-                        enabled = !session.busy && selectableSeat(trip, seats, seat, state.personId),
-                        shape = RoundedCornerShape(10.dp), color = if (selected) c.primaryContainer else c.surface,
-                        border = BorderStroke(if (selected) 2.dp else 1.dp, if (selected) c.primary else c.outlineVariant),
-                        modifier = Modifier.weight(1f).heightIn(min = 92.dp)) {
-                        Column(Modifier.padding(12.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text(seat.label.removePrefix("뒷자리 "), fontSize = 22.sp)
-                            Text(if (selected) "선택" else occupant?.name ?: "빈자리", fontWeight = FontWeight.Bold, fontSize = 22.sp)
-                        }
-                    }
-                }
-            }
-        }
-        Text(state.seat?.let { "선택한 자리 · ${it.label}" } ?: "빈자리를 골라 주세요", fontWeight = FontWeight.Bold)
-        if (state.note.isNotBlank()) Text(state.note, color = c.error)
-        BoardingButton(if (session.busy) "바꾸고 있어요" else "이 자리로 변경",
-            !session.busy && session.online && session.gear == "P" && person != null && selectableSeat(trip, seats, state.seat, state.personId)) { action(BoardingAction.Connect) }
-        BoardingButton("동승자 설정으로", !session.busy, secondary = true) { action(BoardingAction.Back) }
-    }
-}
-
-@Composable
-private fun BoardingButton(label: String, enabled: Boolean = true, secondary: Boolean = false, click: () -> Unit) {
-    if (secondary) OutlinedButton(click, Modifier.fillMaxWidth().heightIn(min = 64.dp), enabled = enabled, shape = RoundedCornerShape(10.dp)) { Text(label) }
-    else Button(click, Modifier.fillMaxWidth().heightIn(min = 64.dp), enabled = enabled, shape = RoundedCornerShape(10.dp)) { Text(label) }
-}
-
-
-/** 앱 창 전체를 사용합니다. QR은 만료 즉시 사라지고, 참여 결과는 실제 여행 조회로만 표시합니다. */
-@Composable
-internal fun BoardingQrScreen(state: BoardingState, session: Session, onAction: (BoardingAction) -> Unit) {
-    val c = MaterialTheme.colorScheme
+    val ctx = LocalContext.current
     var now by remember { mutableStateOf(System.currentTimeMillis()) }
+    var sharing by remember { mutableStateOf(false) }
+    var toast by remember { mutableStateOf("") }
     LaunchedEffect(state.invite?.id) {
         while (true) {
             now = System.currentTimeMillis()
@@ -174,37 +124,61 @@ internal fun BoardingQrScreen(state: BoardingState, session: Session, onAction: 
             delay(500)
         }
     }
+    LaunchedEffect(toast) { if (toast.isNotEmpty()) { delay(2500); toast = "" } }
     val invite = state.invite?.takeIf { it.secondsLeft(now) > 0 }
     val joined = session.trip?.people.orEmpty().filter { it.id !in state.joinedBefore }
-    Surface(Modifier.fillMaxSize(), color = c.surface) {
-        Column(Modifier.fillMaxSize().padding(28.dp), verticalArrangement = Arrangement.spacedBy(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            TripHeader(Shell.PARKED, "P", session.online, listening = false) // 전체 화면이어도 머리 줄(오른쪽 위 '내 얼굴')은 같다
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text("참석 QR", Modifier.weight(1f), fontSize = 30.sp, fontWeight = FontWeight.Bold)
-                OutlinedButton({ onAction(BoardingAction.Back) }, shape = RoundedCornerShape(10.dp), modifier = Modifier.heightIn(min = 56.dp)) { Text("닫기") }
-            }
-            Text("휴대폰 카메라로 읽어 주세요", fontSize = 32.sp, fontWeight = FontWeight.Bold)
-            Text("${session.trip?.title?.ifBlank { "함께하는 여행" } ?: "함께하는 여행"} · 빈자리 선택 후 참여", color = c.onSurfaceVariant)
-            BoxWithConstraints(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                val side = minOf(maxWidth, maxHeight, 560.dp)
-                if (invite != null) {
-                    val matrix = remember(invite.url) { QRCodeWriter().encode(invite.url, BarcodeFormat.QR_CODE, 0, 0, mapOf(EncodeHintType.MARGIN to 4)) }
-                    Canvas(Modifier.size(side).semantics { contentDescription = "휴대폰 카메라로 읽는 참석 QR" }) {
-                        drawRect(Color.White)
-                        val unit = floor(size.minDimension / matrix.width).coerceAtLeast(1f)
-                        val inset = (size.minDimension - matrix.width * unit) / 2
-                        for (y in 0 until matrix.height) for (x in 0 until matrix.width) if (matrix[x, y])
-                            drawRect(Color.Black, Offset(inset + x * unit, inset + y * unit), Size(unit, unit))
-                    }
-                } else Text(if (state.issuing) "참석 QR을 만들고 있어요" else state.note.ifBlank { "새 QR을 만들어 주세요" },
-                    color = if (state.issuing) c.onSurfaceVariant else c.error, fontSize = 26.sp)
-            }
-            Text(if (invite != null) "남은 시간 ${invite.secondsLeft(now) / 60}:${(invite.secondsLeft(now) % 60).toString().padStart(2, '0')}" else "QR은 5분 동안 사용할 수 있어요", fontSize = 24.sp, color = c.onSurfaceVariant)
-            if (joined.isNotEmpty()) Text(joined.joinToString(" · ") { "${it.name} ${Seat.entries.firstOrNull { seat -> seat.name == it.seat }?.label.orEmpty()}" } + " 참여 완료", fontWeight = FontWeight.Bold, fontSize = 24.sp)
-            else Text("참여하면 이 차의 좌석 목록에 표시돼요", color = c.onSurfaceVariant)
-            if (!session.online) Text("연결을 확인하고 있어요. 참여 결과는 연결 후 갱신돼요.", color = c.error)
-            Text("녹음 동의는 각자 휴대폰에서 선택해요", color = c.onSurfaceVariant)
-            BoardingButton(if (state.issuing) "QR 준비 중" else "새 QR 만들기", !state.issuing && session.online, secondary = true) { onAction(BoardingAction.Invite) }
-        }
+    val title = session.trip?.title?.ifBlank { "함께하는 여행" } ?: "함께하는 여행"
+    fun copy(text: String) {
+        (ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("가치타 참석 링크", text))
+        toast = "복사했어요"
     }
+    Box(modifier.fillMaxWidth()) {
+        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(Shell.PARKED.gap)) {
+            TitleBlock("동승자 초대하기", "초대 코드와 링크를 만들었어요. 편한 방식으로 전달해 주세요.")
+            Row(Modifier.weight(1f).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(36.dp)) {
+                Surface(Modifier.width(650.dp).fillMaxHeight(), CarShape.Card, color = c.surface) {
+                    Column(Modifier.padding(horizontal = 32.dp, vertical = 24.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(43.dp)) {
+                        Text("참석 QR", style = CarText.Body)
+                        Text(invite?.secondsLeft(now)?.let { "남은 시간 ${it / 60}:${(it % 60).toString().padStart(2, '0')}" } ?: "QR은 5분 동안 쓸 수 있어요",
+                            Modifier.height(56.dp).wrapContentHeight(), style = Title2) // 2047:2372 자리
+                        if (invite != null) InviteQr(invite.url)
+                        else Box(Modifier.size(320.dp), contentAlignment = Alignment.Center) {
+                            Text(if (state.issuing) "참석 QR을 만들고 있어요" else state.note.ifBlank { "새 QR을 만들어 주세요" }, style = CarText.Body,
+                                color = if (state.issuing) c.onSurfaceVariant else c.error, textAlign = TextAlign.Center)
+                        }
+                        Text("QR로도 바로 참여할 수 있어요", style = CarText.Body)
+                    }
+                }
+                Column(Modifier.weight(1f).fillMaxHeight().padding(top = 24.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
+                    Text("초대 링크", style = Title2)
+                    Spacer(Modifier.height(15.dp)) // 2263:5777
+                    Surface(Modifier.fillMaxWidth().height(181.dp), RoundedCornerShape(16.dp), color = c.primaryContainer, contentColor = c.onSurface) { // 2047:2378
+                        Column(Modifier.padding(horizontal = 24.dp, vertical = 20.dp), verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterVertically)) {
+                            Text("$title 초대 링크", style = Title2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text("열면 휴대폰에서 이 여행 참여와 녹음 동의로 연결", style = CarText.Body)
+                        }
+                    }
+                    Spacer(Modifier.height(18.dp)) // 2189:6267
+                    if (invite != null) {
+                        CarButton("초대 링크 공유", height = 80.dp) { sharing = true }
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                            CarButton("링크 복사", Modifier.weight(1f), CarButtonKind.Secondary, height = 80.dp) { copy(invite.url) }
+                            CarButton("링크 열기", Modifier.weight(1f), CarButtonKind.Secondary, height = 80.dp) {
+                                runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(invite.url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                            }
+                        }
+                    } else CarButton(if (state.issuing) "QR 준비 중" else "새 QR 만들기", kind = CarButtonKind.Secondary, height = 80.dp,
+                        enabled = !state.issuing && session.online) { onAction(BoardingAction.Invite) }
+                    Text(when {
+                        joined.isNotEmpty() -> joined.joinToString(" · ") { "${it.name} ${Seat.entries.firstOrNull { seat -> seat.name == it.seat }?.label.orEmpty()}" } + " 참여 완료"
+                        !session.online -> "연결을 확인하고 있어요. 참여 결과는 연결 후 갱신돼요."
+                        else -> "QR 스캔, 초대 링크 모두 같은 여행으로 참여해요."
+                    }, Modifier.fillMaxWidth(), style = CarText.Body.copy(fontFamily = FontFamily.Default), textAlign = TextAlign.Center, // 2263:5770 Noto Sans KR = 시스템 한글 글꼴
+                        color = if (!session.online && joined.isEmpty()) c.error else c.onSurface)
+                }
+            }
+        }
+        CarToast(toast)
+    }
+    if (sharing && invite != null) ShareSheet(title, "참석 QR", invite.url, ctx, { copy(invite.url) }) { sharing = false }
 }
