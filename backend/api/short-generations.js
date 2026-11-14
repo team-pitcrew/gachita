@@ -316,7 +316,8 @@ export function shortGenerations(ctx, overrides = {}) {
       }
       throw e;
     }
-    if (terminal.has(row.state)) {
+    // Off: keep re-checking consent and sources so withdrawals still clean up, but send nothing to the provider.
+    if (terminal.has(row.state) || !ready()) {
       await db().query(
         "UPDATE short_generations SET next_attempt_at=now()+interval '60 seconds' WHERE id=$1",
         [row.id],
@@ -464,8 +465,7 @@ export function shortGenerations(ctx, overrides = {}) {
         "DELETE FROM short_generations WHERE state='canceled' AND NOT cleanup_pending AND expires_at<now()-interval '1 day'",
       );
       const r = await client.query(
-        "SELECT * FROM short_generations WHERE ($1 OR cleanup_pending OR expires_at<=now()) AND next_attempt_at<=now() AND (state<>'canceled' OR cleanup_pending) ORDER BY cleanup_pending DESC,(state NOT IN ('completed','failed','submission_unknown')) DESC,next_attempt_at LIMIT 1",
-        [ready()],
+        "SELECT * FROM short_generations WHERE next_attempt_at<=now() AND (state<>'canceled' OR cleanup_pending) ORDER BY cleanup_pending DESC,(state NOT IN ('completed','failed','submission_unknown')) DESC,next_attempt_at LIMIT 1",
       );
       if (!r.rows[0]) return;
       const row = r.rows[0];
@@ -484,7 +484,8 @@ export function shortGenerations(ctx, overrides = {}) {
           );
           return;
         }
-        if (row.cleanup_pending) {
+        // Off: only valid() ran, so an unexpected error there must not fail a paid job for good.
+        if (row.cleanup_pending || !ready()) {
           await db().query(
             "UPDATE short_generations SET next_attempt_at=now()+interval '30 seconds' WHERE id=$1",
             [row.id],
