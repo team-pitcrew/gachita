@@ -19,7 +19,7 @@ import { clipStore } from "./providers/clips.js";
 import { googleIdentity, googlePublicConfig } from "./providers/google.js";
 import { cues, momentSpan, suggest } from "./scenes.js";
 import { checkVector, DIMS, embed, EMBEDDER, matchThreshold, similarity, wavMono } from "./providers/voice.js";
-import { accounts, CONSENT_VERSION } from "./accounts.js";
+import { accountConsents, accounts, CONSENT_VERSION } from "./accounts.js";
 import { rideLinks, redeemRideLink } from "./ride-links.js";
 import { boardingInvites, tripBoardingInvites } from "./boarding-invites.js";
 import { restStops, SOURCE as REST_STOPS_SOURCE } from "./rest-stops.js";
@@ -1121,7 +1121,8 @@ async function handle(trip, { req, m, sub, id, leaf, b, query, profile }, client
       }
       const seat = oneOf(b.seat, SEATS, "seat");
       const p = profile
-        ? { name: profile.name, consent: b.consent === undefined ? profile.consentDefault : bool(b.consent, "consent"), profileId: profile.id }
+        // 동의를 보내지 않으면: 본인의 계정 동의(지금 문구 판)가 켜져 있으면 켠 채로, 아니면 지금처럼 프로필의 기본값(T128).
+        ? { name: profile.name, consent: b.consent === undefined ? accountConsents(profile) || profile.consentDefault : bool(b.consent, "consent"), profileId: profile.id }
         : { name: text(b.name, 20, "name"), consent: bool(b.consent, "consent") };
       if (!seatFree(seat)) fail(409, "이미 다른 사람이 앉은 자리");
       // 참가자 토큰(프로필·손님 모두)은 이때 한 번씩 준다. 음성 경로의 인증에 쓴다(ADR-0007).

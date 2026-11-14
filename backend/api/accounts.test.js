@@ -148,6 +148,58 @@ test("계정 동의는 시각과 문구 판을 남기고, 끄면 비운다. 목�
   assert.equal((await call("GET", "/profiles/me", undefined, me.token)).data.hasVoice, false);
 });
 
+test("선택 칸(device, character, 붙일 때의 name)의 빈 글은 보내지 않은 것과 같다", async () => {
+  const made = await signup("empty@example.com", { character: "", device: "" });
+  assert.equal(made.status, 201);
+  assert.equal(made.data.character, "");
+  const login = await call("POST", "/sessions", { email: "empty@example.com", password: "바다보러가자1234", device: "" });
+  assert.equal(login.status, 200);
+  const { rows } = await profilesDb().query("SELECT device FROM tokens WHERE profile_id = $1", [made.data.id]);
+  assert.deepEqual(rows.map((r) => r.device), ["", ""]);
+  const device = (await call("POST", "/profiles", { name: "고양이 기기", character: "cat" })).data;
+  const attached = await call("POST", "/accounts", { email: "empty2@example.com", password: "12345678", name: "", character: "", device: "" }, device.token);
+  assert.equal(attached.status, 200);
+  assert.deepEqual([attached.data.name, attached.data.character], ["고양이 기기", "cat"], "붙일 때 빈 글은 있던 값을 그대로 둠");
+  assert.equal((await signup("empty3@example.com", { name: "" })).status, 400, "새 계정의 이름은 빈 글이면 안 됨");
+  assert.equal((await signup("empty4@example.com", { character: " " })).status, 400, "공백만은 빈 글이 아님");
+});
+
+test("계정 동의(지금 판)는 본인이 자기 토큰으로 들어가는 여행에 이어지고, 여행별 철회는 그대로다", async () => {
+  const consented = async (email, version) => {
+    const { data } = await signup(email);
+    await call("PATCH", "/profiles/me", { consent: true, ...(version ? { consentVersion: version } : {}) }, data.token);
+    return data;
+  };
+  const yes = await consented("join-yes@example.com");
+  const old = await consented("join-old@example.com", "2026-01-01");
+  const no = (await signup("join-no@example.com")).data;
+  const trip = (await call("POST", "/trips", {})).data;
+  const t = `/trips/${trip.code}`;
+  // (가) 프로필 토큰으로 참가: 동의를 보내지 않으면 계정 동의, 다른 판이거나 꺼져 있으면 지금처럼 기본값(false)
+  const a = (await call("POST", `${t}/participants`, { seat: "ROW_1_LEFT" }, yes.token)).data;
+  const b = (await call("POST", `${t}/participants`, { seat: "ROW_1_RIGHT" }, old.token)).data;
+  const c = (await call("POST", `${t}/participants`, { seat: "ROW_2_LEFT" }, no.token)).data;
+  assert.deepEqual([a.consent, b.consent, c.consent], [true, false, false]);
+  const other = (await call("POST", "/trips", {})).data;
+  assert.equal((await call("POST", `/trips/${other.code}/participants`, { seat: "ROW_1_LEFT", consent: false }, yes.token)).data.consent, false, "참가하며 보낸 값이 먼저");
+  // (다) 여행에서 끄면 그 여행만 꺼지고 동의 세대가 오른다. 계정 동의는 그대로
+  await call("PATCH", `${t}/participants/${a.id}`, { consent: false });
+  const after = (await call("GET", t)).data;
+  assert.deepEqual([after.participants.find((p) => p.id === a.id).consent, after.generation], [false, 2]);
+  assert.equal((await call("GET", "/profiles/me", undefined, yes.token)).data.consent, true);
+  assert.equal((await call("POST", `${t}/participants`, { seat: "ROW_2_RIGHT" }, yes.token)).data.consent, false, "다시 참가해도 여행에서 끈 동의를 되살리지 않음");
+
+  // (나) 차량 QR 초대: 계정 동의(지금 판)가 켜진 사람만 켠 채로
+  const ride = (await call("POST", "/trips", { title: "QR" })).data;
+  const driver = (await call("POST", `/trips/${ride.code}/participants`, { name: "운전자", seat: "ROW_1_LEFT", consent: true })).data;
+  const invite = (await call("POST", `/trips/${ride.code}/boarding-invites`, {}, driver.token)).data;
+  const code = new URL(invite.url, base).searchParams.get("join");
+  const board = (who, seat) => call("POST", `/boarding-invites/${code}/participants`, { seat }, who.token);
+  const joined = await Promise.all([board(yes, "ROW_1_RIGHT"), board(old, "ROW_2_LEFT"), board(no, "ROW_2_RIGHT")]);
+  assert.deepEqual(joined.map((r) => [r.status, r.data.participant.consent]), [[201, true], [201, false], [201, false]]);
+  assert.equal((await call("POST", `/boarding-invites/${code}/participants`, { seat: "ROW_2_CENTER", consent: true }, no.token)).status, 400, "입력으로 대신 켜지 못함");
+});
+
 test("다른 프로필의 사진 주소는 지금 본인만 받는다(그룹은 A2)", async () => {
   const { data: a } = await signup("photo-a@example.com");
   const { data: b } = await signup("photo-b@example.com");
