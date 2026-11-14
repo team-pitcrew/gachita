@@ -1778,9 +1778,10 @@ class MainActivity : ComponentActivity() {
         val myFace = me?.takeIf { it.character.isNotBlank() }?.let(::faceRes) ?: charDrawable(onboarding.character)
         Box(Modifier.fillMaxSize()) {
             Column(Modifier.fillMaxSize().padding(horizontal = shell.padH, vertical = shell.padV), verticalArrangement = Arrangement.spacedBy(shell.gap)) {
-                // '내 얼굴'은 시안 C17(2200:5920)처럼 주행 창에만. 주차 화면(C20·C22–C38) 머리 줄에는 없다
+                // '내 얼굴'은 여행 화면 머리 줄 오른쪽 위에 늘 있다(11/15 오너 "우상단에 프로필 UI는 고정"; 원본 C17·C20·C22–C38·C44 모두 '프로필 메뉴 열기').
+                // 주차 화면은 '주차 중  P' 다음(간격 18), 주행 창은 끝에.
                 TripHeader(shell, carStatus.gear, s.online || mockDriving, listening = s.recording && Live.mic == Mic.ON && !muted && handoff.state == Handoff.State.OFF,
-                    me = if (ride) ({ MeButton(myFace) { profileMenu = true } }) else null)
+                    me = { MeButton(myFace) { profileMenu = true } })
                 TripTabs(Destination.entries.map { it.label }, destination.ordinal, { parked || it != Destination.SHORTS.ordinal },
                     height = if (ride) 80.dp else 76.dp, style = if (ride) RideTabText else CarText.Label, onSelect = { i ->
                         val tab = Destination.entries[i]
