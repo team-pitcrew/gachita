@@ -114,7 +114,6 @@ object CarMenu {
     val InkWide = Color(0xFFF5F2ED) // 주차 1682 메뉴(2257:5902) '갤러리 바로가기'
     val Ink = Color(0xFFF5F2ED) // 확인 제목·취소, '갤러리 바로가기' 글
     val Ink2 = Color(0xFFB8BAB0) // 확인 설명
-    val Count = Color(0xFFADC2B8) // 동승 그룹 인원
     val Cancel = Color(0xFF383833) // 확인의 취소
     val Confirm = Color.White.copy(alpha = 0.12f) // 확인의 로그아웃 바탕
     val ConfirmInk = Color.White.copy(alpha = 0.92f) // 메뉴·확인의 '로그아웃' 글
@@ -162,7 +161,7 @@ fun ParkedFrame(
     body: @Composable ColumnScope.() -> Unit,
 ) = Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
     Column(Modifier.fillMaxSize().padding(Shell.PARKED.padH), verticalArrangement = Arrangement.spacedBy(Shell.PARKED.gap)) {
-        TripHeader(Shell.PARKED, gear, online, listening = false)
+        TripHeader(Shell.PARKED, listening = false)
         if (tab != null) TripTabs(TRIP_TABS, tab, tabEnabled, onTab)
         Column(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Shell.PARKED.gap), content = body)
         if (bottom != null) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(24.dp), content = bottom)

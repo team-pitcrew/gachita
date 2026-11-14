@@ -3,15 +3,10 @@ package io.github.teampitcrew.gachita
 import androidx.annotation.DrawableRes
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -24,16 +19,16 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
 /*
- * Arrival brief (flow F4, T141 → T156; Figma Y7zFqGUEAFDWTumG30MsOs page 2004:57, read live). Three frames, each drawn as it is:
- * C20 2005:3369 (wide waypoint: picture in front, goods with pictures in two columns), D19 2032:6496 = its revision 2131:6137 (narrow
- * waypoint: picture at the right end, goods as name and amount), finalBrief 2043:1890 (final destination: picture in front,
- * '먼저 할 일 / 잊지 말기 / 챙길 것', cards 24/20). Every arrival ends with the design's fixed '쓰레기 정리하기' card. Rows are the server's
- * action items (place-rules-v2): category, items, requestedBy, title. Names come only from confirmed speakers (ArrivalBriefTest).
+ * Arrival brief (flow F4, T141 → T156; Figma Y7zFqGUEAFDWTumG30MsOs page 2004:57, read live). Drawn as C20 2005:3369 (1682 parked
+ * screen); the 841 window is D19 2032:6496, the same screen narrower. '{place} 도착' · '먼저 할 일과 살 것을 모았어요', then the cards
+ * '먼저 할 일', '잊지 말고 살 것' (one column of name and amount), one card per other ask and the design's fixed '쓰레기 정리하기' card
+ * last; every picture sits at the right end of its row, and the button is '계속'. The final destination has no C frame and C wins over
+ * D補 finalBrief 2043:1890, so it is drawn the same way. Rows are the server's action items (place-rules-v2): category, items,
+ * requestedBy, title. Names come only from confirmed speakers (ArrivalBriefTest).
  */
 
 /**
@@ -112,144 +107,125 @@ internal fun BriefRows.withDetails(details: Map<String, String>): BriefRows {
     return BriefRows(first.d(), buy.d(), remember.d(), bring.d())
 }
 
-/** The main button: waypoint '계속' (C20·D19), final destination '여행 마치고 기록 보기' (finalBrief). */
-internal fun arrivalButton(final: Boolean) = if (final) "여행 마치고 기록 보기" else "계속"
+/** C20's subtitle and main button, for a waypoint and the final destination alike (what '계속' does is the caller's). */
+internal const val ARRIVAL_SUB = "먼저 할 일과 살 것을 모았어요"
+internal const val ARRIVAL_BUTTON = "계속"
 
-/** The subtitle: waypoint (C20·D19) and final destination (finalBrief 2043:1890). */
-internal fun arrivalSub(final: Boolean) = if (final) "내리기 전, 할 일과 챙길 것" else "먼저 할 일과 살 것을 모았어요"
+/** A card of the brief (C20 '본문' 2005:3384), in the order [cards] gives. */
+internal sealed interface BriefCard {
+    /** '먼저 할 일' 2056:2252: its asks one under another. */
+    data class First(val rows: List<BriefRow>) : BriefCard
 
-/**
- * Where each frame puts things. [pictureFirst]: the picture 44 before the text (C20, finalBrief) or at the right end (D19).
- * [pad]: card padding. D19's goods are name and amount only, C20's have their picture in front.
- */
-private enum class BriefLayout(val pictureFirst: Boolean, val pad: PaddingValues) {
-    WIDE(true, PaddingValues(24.dp)), // C20 2005:3369 (1682 parked screen)
-    NARROW(false, PaddingValues(24.dp)), // D19 2032:6496 = D19 수정본 2131:6137 (841 window)
-    FINAL(true, PaddingValues(horizontal = 24.dp, vertical = 20.dp)), // finalBrief 2043:1890
+    /** '잊지 말고 살 것' 2056:2260: the goods with their amounts. */
+    data class Buy(val rows: List<BriefRow>) : BriefCard
+
+    /** Any other ask, one card each, drawn like '쓰레기 정리 / 내리기 전' 2063:3119. */
+    data class Task(val row: BriefRow) : BriefCard
+}
+
+/** C20's cards, the same at a waypoint and the final destination: first asks, goods, each 'remember' and 'bring' ask, tidy-up last. */
+internal fun BriefRows.cards(): List<BriefCard> = buildList {
+    if (first.isNotEmpty()) add(BriefCard.First(first))
+    if (buy.isNotEmpty()) add(BriefCard.Buy(buy))
+    (remember + bring).forEach { add(BriefCard.Task(it)) }
+    add(BriefCard.Task(TIDY_UP))
 }
 
 /**
- * C20 / D19 / finalBrief. [onMain] runs the main button ('계속' closes the brief, '여행 마치고 기록 보기' ends the trip and opens the
- * conversation record).
+ * C20 2005:3369 (D19 2032:6496 in the 841 window): title, the [cards] 16 apart (scrolling when they do not fit), '계속' 96 at the bottom.
+ * [final] does not change the screen; the caller's [onMain] closes a waypoint's brief or ends the trip at the final destination.
  */
 @Composable
 internal fun ArrivalBrief(
     place: String, final: Boolean, items: List<SharedTodo>, people: List<Person>, onMain: () -> Unit, modifier: Modifier = Modifier,
     details: Map<String, String> = emptyMap(), // mock: 시안의 부가 설명 줄(할 일 id → 글). 실제 화면은 '{누구} 요청'
 ) {
-    val rows = briefRows(items, people).withDetails(details)
+    val cards = briefRows(items, people).withDetails(details).cards()
     Column(modifier, verticalArrangement = Arrangement.spacedBy(24.dp)) {
-        TitleBlock("$place 도착", arrivalSub(final))
-        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
-            val wide = maxWidth >= 1000.dp
-            val l = when { final -> BriefLayout.FINAL; wide -> BriefLayout.WIDE; else -> BriefLayout.NARROW }
-            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                if (rows.first.isNotEmpty()) BriefCard("먼저 할 일", rows.first, l, accent = true)
-                if (final) {
-                    if (rows.remember.isNotEmpty()) BriefCard("잊지 말기", rows.remember, l)
-                    if (rows.bring.isNotEmpty()) BriefCard("챙길 것", rows.bring, l)
-                    if (rows.buy.isNotEmpty()) BuyCard(rows.buy, l, wide)
-                } else {
-                    if (rows.buy.isNotEmpty()) BuyCard(rows.buy, l, wide)
-                    if (rows.remember.isNotEmpty()) BriefCard("잊지 말기", rows.remember, l)
-                    if (rows.bring.isNotEmpty()) BriefCard("챙길 것", rows.bring, l)
+        TitleBlock("$place 도착", ARRIVAL_SUB)
+        Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            cards.forEach { card ->
+                when (card) {
+                    is BriefCard.First -> FirstCard(card.rows)
+                    is BriefCard.Buy -> BuyCard(card.rows)
+                    is BriefCard.Task -> TaskCard(card.row)
                 }
-                BriefCard(null, listOf(TIDY_UP), l, pad = PaddingValues(horizontal = 24.dp, vertical = 20.dp))
             }
         }
-        CarButton(arrivalButton(final), onClick = onMain)
+        CarButton(ARRIVAL_BUTTON, onClick = onMain)
     }
 }
 
-/** The fixed last card of every arrival (시안 '쓰레기 정리 / 내리기 전' 2063:3119·2131:6166·2063:3173): not a family ask, so no requester. */
+/** The fixed last card of every arrival (C20 '쓰레기 정리 / 내리기 전' 2063:3119, D19 2032:6520): not a family ask, so no requester. */
 private val TIDY_UP = BriefRow(BriefIcon.TRASH, "쓰레기 정리하기", "빈 병과 과자 봉지 챙겨 분리배출", "")
 
 /** Brief cards are 28 rounded in the design, a little less than the other car cards (CarShape.Card 32). */
 private val BriefShape = RoundedCornerShape(28.dp)
 
-/**
- * Figma text boxes keep the whole line height (Headline 42, Label 32). Compose trims the space above the first line and below the last,
- * which makes every line 3–4 lower than the design; these keep it. (Belongs in CarText — reported to F3.)
- */
-private val FullLine = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.None)
-private val BriefHeadline = CarText.Headline.copy(lineHeightStyle = FullLine)
-private val BriefLabel = CarText.Label.copy(lineHeightStyle = FullLine)
-
 @Composable
-private fun Picture(icon: BriefIcon, size: Int = 44, modifier: Modifier = Modifier) = Image(painterResource(icon.res), null, modifier.size(size.dp))
+private fun Picture(icon: BriefIcon, size: Int = 44) = Image(painterResource(icon.res), null, Modifier.size(size.dp))
 
 /**
- * One action row ('Briefing / action item / Car' 2056:2240): picture 44, gap 20, name (Headline) over '{who} 요청' (Label, gap 4),
- * amount at the right end. The picture is in front (C20, finalBrief) or at the right end (D19).
+ * One ask ('Briefing / action item / Car' 2056:2240): the name (Headline 32, ink) over the requester or note (Label 24, ink-2, gap 4),
+ * gap 20, the picture 44 at the right end.
  */
 @Composable
-private fun BriefLine(r: BriefRow, pictureFirst: Boolean, showWho: Boolean = true) {
+private fun AskLine(r: BriefRow, modifier: Modifier = Modifier) {
     val c = MaterialTheme.colorScheme
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-        if (pictureFirst) Picture(r.icon)
+    Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.dp)) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(r.name, style = BriefHeadline, color = c.onSurface, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            if (showWho && r.who.isNotEmpty()) Text(r.who, style = BriefLabel, color = c.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(r.name, style = CarText.Headline, color = c.onSurface, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            if (r.who.isNotEmpty()) Text(r.who, style = CarText.Label, color = c.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-        if (r.qty.isNotEmpty()) Text(r.qty, style = BriefHeadline, color = c.onSurface, maxLines = 1)
-        if (!pictureFirst) Picture(r.icon)
+        Picture(r.icon)
     }
 }
 
-/** '먼저 할 일'(accent-soft, label accent) / '잊지 말기' / '챙길 것' card: label (Label 24), gap 18, one line per ask. No label: the tidy-up card. */
+/** '먼저 할 일' 2056:2252: accent-soft, padding 24, gap 18; the label in accent (Label 24), the asks in ink, not the container's mint. */
 @Composable
-private fun BriefCard(label: String?, rows: List<BriefRow>, l: BriefLayout, accent: Boolean = false, pad: PaddingValues = l.pad) {
+private fun FirstCard(rows: List<BriefRow>) {
     val c = MaterialTheme.colorScheme
-    Surface(Modifier.fillMaxWidth(), BriefShape, color = if (accent) c.primaryContainer else c.surface) {
-        Column(Modifier.padding(pad), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-            if (label != null) Text(label, style = BriefLabel, color = if (accent) c.primary else c.onSurfaceVariant)
-            rows.forEach { BriefLine(it, l.pictureFirst) }
+    Surface(Modifier.fillMaxWidth(), BriefShape, color = c.primaryContainer, contentColor = c.onSurface) {
+        Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+            Text("먼저 할 일", style = CarText.Label, color = c.primary)
+            rows.forEach { AskLine(it) }
         }
     }
 }
 
 /**
- * '잊지 말고 살 것' card, gap 18. D19 (2131:6156): title, 'N개' at 203, cart 36 at the right end (12 in); goods are name and amount, 14
- * apart. C20 (2056:2260): cart 36 · title · 'N개' at the right end (gap 16); goods have their picture in front, 24 apart, in two
- * columns 40 apart on the wide screen (the left column fills first: 삼겹살·귤 | 젤리·탄산수).
+ * '잊지 말고 살 것' 2056:2260: surface, padding 24, gap 18. Header (gap 8): the title (Headline), 'N개' (Label, ink-2), cart 36 at the
+ * right end. Then one column of goods 14 apart, each the name and its amount at the right end (Headline, gap 20).
  */
 @Composable
-private fun BuyCard(rows: List<BriefRow>, l: BriefLayout, wide: Boolean) {
+private fun BuyCard(rows: List<BriefRow>) {
     val c = MaterialTheme.colorScheme
-    Surface(Modifier.fillMaxWidth(), BriefShape, color = c.surface) {
-        Column(Modifier.padding(l.pad), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-            if (l.pictureFirst) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    Picture(BriefIcon.CART, 36)
-                    Text("잊지 말고 살 것", Modifier.weight(1f), style = BriefHeadline, color = c.onSurface)
-                    Text("${rows.size}개", style = BriefLabel, color = c.onSurfaceVariant)
-                }
-                val cols = if (wide) rows.chunked((rows.size + 1) / 2) else listOf(rows)
-                Row(horizontalArrangement = Arrangement.spacedBy(40.dp)) {
-                    cols.forEach { col ->
-                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(24.dp)) { col.forEach { BriefLine(it, true, showWho = false) } }
+    Surface(Modifier.fillMaxWidth(), BriefShape, color = c.surface, contentColor = c.onSurface) {
+        Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("잊지 말고 살 것", style = CarText.Headline, color = c.onSurface, maxLines = 1)
+                Text("${rows.size}개", style = CarText.Label, color = c.onSurfaceVariant, maxLines = 1)
+                Spacer(Modifier.weight(1f))
+                Picture(BriefIcon.CART, 36)
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                rows.forEach { r ->
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+                        Text(r.name, Modifier.weight(1f), style = CarText.Headline, color = c.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        if (r.qty.isNotEmpty()) Text(r.qty, style = CarText.Headline, color = c.onSurface, maxLines = 1)
                     }
-                    if (wide && rows.size == 1) Spacer(Modifier.weight(1f))
                 }
-            } else {
-                Box(Modifier.fillMaxWidth().height(42.dp)) {
-                    Text("잊지 말고 살 것", style = BriefHeadline, color = c.onSurface)
-                    Text("${rows.size}개", Modifier.offset(203.dp, 5.dp), style = BriefLabel, color = c.onSurfaceVariant)
-                    Picture(BriefIcon.CART, 36, Modifier.align(Alignment.TopEnd).padding(end = 12.dp))
-                }
-                Column(verticalArrangement = Arrangement.spacedBy(14.dp)) { rows.forEach { BuyLine(it) } }
             }
         }
     }
 }
 
-/** A good in D19 (instance of 'Briefing / action item / Car' with picture and requester hidden): name, amount at the right end. */
+/** Any other ask, one card each (C20 '쓰레기 정리 / 내리기 전' 2063:3119): surface, padding 24 across and 20 up and down. */
 @Composable
-private fun BuyLine(r: BriefRow) {
+private fun TaskCard(r: BriefRow) {
     val c = MaterialTheme.colorScheme
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-        Text(r.name, Modifier.weight(1f), style = BriefHeadline, color = c.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        if (r.qty.isNotEmpty()) Text(r.qty, style = BriefHeadline, color = c.onSurface, maxLines = 1)
+    Surface(Modifier.fillMaxWidth(), BriefShape, color = c.surface, contentColor = c.onSurface) {
+        AskLine(r, Modifier.padding(horizontal = 24.dp, vertical = 20.dp))
     }
 }
 

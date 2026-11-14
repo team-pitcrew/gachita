@@ -7,30 +7,31 @@ import org.junit.Test
 import androidx.compose.ui.unit.dp
 
 class DriveTest {
-    private fun status(recording: Boolean = true, muted: Boolean = false, handoff: Handoff.State = Handoff.State.OFF, mic: Mic = Mic.ON,
-                       offPending: Boolean = false, waiting: Boolean = false, inPark: Boolean = true, waitingFor: List<String> = emptyList(),
-                       ended: Boolean = false, resumed: Boolean = false) =
-        driveStatus(recording, muted, handoff, mic, "", offPending, waiting, inPark, waitingFor, ended, resumed)
+    private fun note(recording: Boolean = true, muted: Boolean = false, handoff: Handoff.State = Handoff.State.OFF, mic: Mic = Mic.ON,
+                     offPending: Boolean = false, waiting: Boolean = false, inPark: Boolean = true, waitingFor: List<String> = emptyList(),
+                     ended: Boolean = false) =
+        driveNote(recording, muted, handoff, mic, "", offPending, waiting, inPark, waitingFor, ended)
 
-    @Test fun statusFollowsDesignWording() {
-        assertEquals(DriveStatus("기록 중", "아래 버튼으로 언제든 멈출 수 있어요", Hero.REC), status())
-        assertEquals(DriveStatus("기록 멈춤", "같은 버튼을 누르면 다시 기록해요", Hero.PAUSED), status(muted = true))
-        assertEquals("운전대 버튼을 누르세요", status(handoff = Handoff.State.WAITING).sub) // Gleo에게 넘김(T41)
-        assertEquals(Hero.PAUSED, status(mic = Mic.BLOCKED).hero)
-        assertEquals(Hero.PLAIN, status(mic = Mic.STARTING).hero)
-        assertEquals("동의 철회", status(recording = false, offPending = true).title)
-        assertEquals("모두 동의했어요. 출발하면 자동으로 기록해요", status(recording = false, waiting = true, inPark = true).sub)
-        assertEquals("서준, 하은 · 녹음 동의가 필요해요", status(recording = false, waitingFor = listOf("서준", "하은")).sub)
+    // 시안 C17에는 상태 칸이 없다: 기록 중·일시정지·마친 여행은 시안 제목('방금 받아 적은 말 N건'·'멈추기 전 마지막 대화'), 그 밖은 까닭을 제목 자리에
+    @Test fun heardTitleTellsOnlyWhatTheDesignLacks() {
+        assertEquals(null, note())
+        assertEquals(null, note(muted = true))
+        assertEquals(null, note(recording = false, ended = true))
+        assertEquals("운전대 버튼을 누르세요", note(handoff = Handoff.State.WAITING)) // Gleo에게 넘김(T41)
+        assertEquals("마이크를 쓸 수 있으면 다시 기록해요", note(mic = Mic.BLOCKED))
+        assertEquals("마이크를 켜고 있어요", note(mic = Mic.STARTING))
+        assertEquals("원음과 대화를 지우고 있어요", note(recording = false, offPending = true))
+        assertEquals("원음과 대화를 지우고 있어요", note(recording = false, offPending = true, ended = true)) // 철회 중이면 그 안내가 먼저
+        assertEquals("모두 동의했어요. 출발하면 자동으로 기록해요", note(recording = false, waiting = true, inPark = true))
+        assertEquals("서준, 하은 · 녹음 동의가 필요해요", note(recording = false, waitingFor = listOf("서준", "하은")))
     }
 
-    @Test fun bigButtonHasNoStartButton() {
-        assertEquals(DriveButton("일시정지", Press.STOP, true), driveButton(recording = true, muted = false, agreed = true, restricted = true)) // C17 ⏸ 2137:5845
-        assertEquals(DriveButton("녹화 재개", Press.GO, true), driveButton(recording = true, muted = true, agreed = true, restricted = true)) // C17p ● 2137:5853
-        assertEquals(DriveButton("출발하면 자동으로 기록해요", Press.OFF, false), driveButton(recording = false, muted = false, agreed = true, restricted = false)) // C03·C13
-        assertFalse(driveButton(recording = false, muted = false, agreed = true, restricted = true).enabled)
-        // 동의 전에는 다른 화면으로 들어가는 단추가 없다(시안 C17 막대) — 꺼진 안내만
-        assertEquals(DriveButton("각자 휴대폰에서 동의하면 기록해요", Press.OFF, false), driveButton(recording = false, muted = false, agreed = false, restricted = false))
-        assertFalse(driveButton(recording = false, muted = false, agreed = false, restricted = true).enabled)
+    // 녹음 막대의 ⏸/●(시안 C17 2137:5845 · C17p 2137:5853). 큰 단추·다른 화면으로 가는 단추는 없다
+    @Test fun recordBarControl() {
+        assertEquals(DriveButton("일시정지", Press.STOP, true), driveButton(recording = true, muted = false, agreed = true))
+        assertEquals(DriveButton("녹화 재개", Press.GO, true), driveButton(recording = true, muted = true, agreed = true))
+        assertEquals(DriveButton("녹화 재개", Press.GO, true), driveButton(recording = false, muted = false, agreed = true)) // 모두 동의 → 손으로 시작
+        assertEquals(DriveButton("녹화 재개", Press.OFF, false), driveButton(recording = false, muted = false, agreed = false)) // 동의 전: 꺼짐
     }
 
     @Test fun heardMetaNeverNamesFromSeat() {
@@ -38,17 +39,6 @@ class DriveTest {
         assertEquals("엄마 / 조수석", heardMeta("엄마", "ROW_1_RIGHT", 1)) // 확인된 사람의 자리가 구역보다 앞
         assertEquals("말한 사람 미확인 / 앞좌석", heardMeta(null, null, 0))
         assertEquals("말한 사람 미확인", heardMeta(null, null, null))
-    }
-
-    @Test fun resumedAndEndedStates() {
-        assertEquals("중지한 지점부터 이어서 기록해요", status(resumed = true).sub) // 2026:1969
-        assertEquals("아래 버튼으로 언제든 멈출 수 있어요", status(resumed = false).sub)
-        assertEquals(DriveStatus("여행 기록 완료", "오늘의 대화를 오래 간직해 보세요", Hero.PAUSED), status(recording = false, ended = true)) // 2026:2410
-        assertEquals("동의 철회", status(recording = false, offPending = true, ended = true).title) // 철회 중이면 그 안내가 먼저
-        assertEquals(DriveButton("새 여행 시작", Press.GO, true), driveButton(recording = false, muted = false, agreed = true, restricted = false, ended = true))
-        assertFalse(driveButton(recording = false, muted = false, agreed = true, restricted = true, ended = true).enabled)
-        assertEquals("대화 기록 중", liveChip(true)) // 2026:2308(개정)
-        assertEquals("대화 기록 멈춤", liveChip(false)) // 2026:2358, 개정된 2026:2308과 같은 꼴
     }
 
     @Test fun endedTripNeverRecords() {
@@ -63,12 +53,12 @@ class DriveTest {
     }
 
     @Test fun shellFollowsTheScreenNotTheWidth() {
-        assertEquals(Shell.RIDE, tripShell(parked = true, showsBrief = false, contentTab = false)) // ended: 주차 중에도 함께 타는 중 틀
+        assertEquals(Shell.RIDE, tripShell(parked = true, showsBrief = false, contentTab = false)) // 출발 전 C17(주차 중에도 함께 타는 중 틀)
         assertEquals(Shell.RIDE, tripShell(parked = false, showsBrief = false, contentTab = false)) // C17·C21
-        assertEquals(Shell.TALK, tripShell(parked = false, showsBrief = false, contentTab = false, talk = true)) // C44·liveTranscript
+        assertEquals(Shell.TALK, tripShell(parked = false, showsBrief = false, contentTab = false, talk = true)) // C44(주행 중에도)
         assertEquals(28.dp, Shell.RIDE.padV); assertEquals(16.dp, Shell.RIDE.gap) // C17 2005:3267 py28·간격 16
         assertEquals(32.dp, Shell.TALK.padV); assertEquals(24.dp, Shell.TALK.gap) // C44 2019:1966 p32·간격 24
-        assertEquals(Shell.PARKED, tripShell(parked = true, showsBrief = true, contentTab = false)) // C20·D19·finalBrief: '주차 중  P'
+        assertEquals(Shell.PARKED, tripShell(parked = true, showsBrief = true, contentTab = false)) // C20·D19·최종 목적지: '주차 중  P'
         assertEquals(Shell.PARKED, tripShell(parked = true, showsBrief = false, contentTab = true)) // C22–C38
         assertEquals(Shell.RIDE, tripShell(parked = false, showsBrief = true, contentTab = false)) // 주행 중에는 브리핑이 없다
     }

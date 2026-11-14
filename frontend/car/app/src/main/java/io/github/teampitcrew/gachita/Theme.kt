@@ -168,13 +168,3 @@ fun Mascot(listening: Boolean, size: Dp = 56.dp) {
     )
 }
 
-/** 상태 알약: 점과 글. 괜찮으면 민트, 아니면 빨강 기운. 움직이지 않는다. */
-@Composable
-fun Pill(text: String, ok: Boolean = true) {
-    val c = MaterialTheme.colorScheme
-    val (bg, fg) = if (ok) c.tertiaryContainer to c.tertiary else c.errorContainer to c.error // 시안 ok-soft·ok
-    Row(Modifier.clip(CircleShape).background(bg).padding(horizontal = 20.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        Canvas(Modifier.size(14.dp)) { drawCircle(fg) } // 시안 pill(2014:940): 점 14, 위아래 8
-        Text(text, color = fg, style = CarText.Label, maxLines = 1) // 시안 pill 글 24 Medium/32
-    }
-}

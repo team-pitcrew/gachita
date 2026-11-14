@@ -79,7 +79,7 @@ class Server(base: String, private val open: (URL) -> HttpURLConnection = { it.o
 
     /** 실제 차량 P 관측으로 호출하며, 서버가 확인한 주차 상태 뒤에 도착 판정을 요청합니다. */
     fun parkedForArrival(code: String, token: String): Got = got(call("PATCH", "/api/trips/$code", JSONObject().put("status", "parked"), token)!!)
-    /** 여행을 마친다(최종 목적지 브리핑의 '여행 마치고 기록 보기'). 서버의 여행 상태만 바꾸고 기록·동의는 그대로 둔다. */
+    /** 여행을 마친다(■ 녹화 종료·최종 목적지 브리핑의 '계속' → C22). 서버의 여행 상태만 바꾸고 기록·동의는 그대로 둔다. */
     fun endTrip(code: String, token: String): Got = got(call("PATCH", "/api/trips/$code", JSONObject().put("status", "ended"), token)!!)
 
     fun arrivalBriefing(code: String, token: String, generation: Int, observation: VehicleArrival): SharedArrival =
