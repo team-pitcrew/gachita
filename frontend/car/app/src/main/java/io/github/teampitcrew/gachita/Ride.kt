@@ -29,7 +29,8 @@ fun rideCode(text: String): String? = runCatching {
 }.getOrNull()
 
 /** 아무도 앉지 않은 자리(앞줄부터). */
-fun freeSeats(t: Trip): List<Seat> = Seat.entries.filter { s -> t.people.none { it.seat == s.name } }
+fun freeSeats(t: Trip, carSeats: List<String> = emptyList()): List<Seat> =
+    seatRows(carSeats).flatten().filter { s -> t.people.none { it.seat == s.name } }
 
 /**
  * 뒤를 보는 카메라(없으면 첫 카메라)로 미리보기와 QR 읽기를 한다. 처음 읽은 우리 QR 하나만 onCode로 넘기고(메인 스레드) 더 읽지 않는다.

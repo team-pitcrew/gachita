@@ -191,16 +191,18 @@ fun SeatMap(
             ) {
                 for (seat in seats) {
                     val p = people.firstOrNull { it.seat == seat.name }
-                    Column(Modifier.width(size + 40.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        if (p == null) {
-                            EmptySeat(size)
-                            // 차가 앉았다고 알리는데 여행에 없는 사람(T83): 폰 동승 연결이나 새 여행으로 넣는다
-                            Text(if (seat.name in car.occupied) "앉아 있어요" else "빈자리", color = c.onSurfaceVariant, maxLines = 1)
+                    Column(if (compact) Modifier.weight(1f) else Modifier.width(size + 40.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(if (compact) 4.dp else 6.dp)) {
+                        val label = p?.name ?: if (seat.name in car.occupied) "앉아 있어요" else "빈자리"
+                        if (compact) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                if (p == null) EmptySeat(36.dp) else Character(seat.ordinal, 36.dp, ring = p.id == highlight)
+                                Text(label, fontWeight = if (p != null) FontWeight.Bold else null, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
                         } else {
-                            Character(seat.ordinal, size, ring = p.id == highlight)
-                            Text(p.name, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            note?.invoke(p)?.let { (text, color) -> Text(text, color = color, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                            if (p == null) EmptySeat(size) else Character(seat.ordinal, size, ring = p.id == highlight)
+                            Text(label, fontWeight = if (p != null) FontWeight.Bold else null, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
+                        if (p != null) note?.invoke(p)?.let { (text, color) -> Text(text, color = color, maxLines = 1, overflow = TextOverflow.Ellipsis) }
                     }
                 }
             }
