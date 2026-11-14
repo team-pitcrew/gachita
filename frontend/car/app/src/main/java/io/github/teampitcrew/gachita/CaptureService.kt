@@ -38,6 +38,8 @@ object Live {
     var recent by mutableStateOf(emptyList<Utterance>())
     var count by mutableStateOf(0)
     var pending by mutableStateOf(0)
+    /** 함께 타는 중의 파형(D17): 최근 0.1초 조각들의 크기(0..1), 새 것이 끝. 메인 스레드가 조각마다 하나씩 민다. */
+    var wave by mutableStateOf(emptyList<Float>())
     /**
      * 원음(T63): 화면이 모두 동의한 것을 확인한 동의 세대. 수음 스레드는 이 세대로만 원음 파일을 연다(0이면 남기지 않음).
      * 동의 철회 뒤 화면이 알기 전에 읽힌 소리가 새 세대 파일로 넘어가지 않게.
@@ -290,6 +292,7 @@ class CaptureService : Service() {
     private fun chunk(c: Chunk, now: Long) {
         if (stopping) return
         block.chunk(c.allZero, now)
+        Live.wave = (Live.wave + waveLevel(c.left, c.right, c.mono.size)).takeLast(WAVE_BARS)
         if (sttReady) runCatching { stt?.sendAudio(c.mono) }.onFailure { Log.w(TAG, "sendAudio 실패", it) }
         judge()
     }

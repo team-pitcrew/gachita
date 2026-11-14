@@ -186,7 +186,7 @@ private fun BuyCard(rows: List<BriefRow>, wide: Boolean) {
 }
 
 /**
- * mock: F4 화면 확인용 시연 데이터(시안 '강릉 가족 여행'). 디버그 빌드에서 `--es f4 near|nearPaused|mart|finalNear|finalPaused|final`로만 켠다
+ * mock: F4 화면 확인용 시연 데이터(시안 '강릉 가족 여행'). 디버그 빌드에서 `--es f4 drive|drivePaused|driveResumed|driveContinue|near|nearPaused|mart|finalNear|finalPaused|final`로만 켠다
  * (MainActivity.f4Mock). 실제 화면은 서버 할 일(GET /todos·POST /arrival-briefing)과 내비 남은 시간을 쓴다.
  */
 internal object F4Mock {
@@ -204,6 +204,11 @@ internal object F4Mock {
     val martNear = listOf(mart[0],
         todo("n2", "마트", "buy", "고기랑 과일 사 가기", listOf(TodoItem("고기", null), TodoItem("과일", null)), "mom"),
         todo("n3", "마트", "bring", "간식과 음료 챙기기", listOf(TodoItem("간식", null), TodoItem("음료", null)), "").copy(requestedBy = emptyList()))
+    // 녹음 화면의 도착 전(A D20·D20p '화장실 가기 / 장보기 / 쓰레기 정리하기') 시안 부탁
+    val martBrief = martNear.take(2) + todo("n4", "마트", "remember", "쓰레기 정리하기", listOf(TodoItem("쓰레기", null)), "dad")
+    // 녹음 화면(A D17·D19) 시연 파형: 시안 wave/live(2107:5463) 막대 높이 ÷ 140
+    val wave = listOf(8, 47, 23, 23, 12, 24, 71, 11, 105, 44, 60, 25, 20, 75, 15, 123, 47, 77, 41, 11, 35, 14, 70, 27, 48, 29, 15, 10, 10, 31,
+        16, 36, 28, 22, 17, 10, 45, 24, 79, 63, 54, 51, 9, 48, 26, 108, 81, 77, 77, 17, 16, 16, 72, 53, 55, 54, 17, 17, 9, 28).map { it / 140f }
     val lodge = listOf(
         todo("l1", "숙소", "first", "화장실 먼저 다녀오기", listOf(TodoItem("화장실", null)), "haeun"),
         todo("l2", "숙소", "remember", "고기는 바로 냉장 보관", listOf(TodoItem("냉장 보관", null)), "mom"),

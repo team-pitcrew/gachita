@@ -186,13 +186,13 @@ internal fun TripHeader(parked: Boolean, gear: String?, online: Boolean, listeni
 @Composable
 internal fun TripTabs(labels: List<String>, selected: Int, enabled: (Int) -> Boolean, onSelect: (Int) -> Unit) {
     val c = MaterialTheme.colorScheme
-    Row(Modifier.fillMaxWidth().height(76.dp).clip(RoundedCornerShape(20.dp)).background(c.surfaceVariant).padding(4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    Row(Modifier.fillMaxWidth().height(80.dp).clip(RoundedCornerShape(20.dp)).background(c.surfaceVariant).padding(4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         labels.forEachIndexed { i, label ->
             val on = i == selected
             Surface(onClick = { onSelect(i) }, enabled = enabled(i), modifier = Modifier.weight(1f).fillMaxHeight(), shape = RoundedCornerShape(16.dp),
                 color = if (on) c.primaryContainer else Color.Transparent) {
                 Box(contentAlignment = Alignment.Center) {
-                    Text(label, color = if (on) c.onSurface else c.onSurfaceVariant, fontSize = 24.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+                    Text(label, color = if (on) c.onSurface else c.onSurfaceVariant, fontSize = 28.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
                 }
             }
         }

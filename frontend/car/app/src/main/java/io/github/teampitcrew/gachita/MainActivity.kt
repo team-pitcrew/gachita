@@ -67,6 +67,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -237,6 +238,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var handoff: Handoff // Gleo와 마이크 주고받기(T41). 프로세스에 하나(Handoff.of)
     /** Gleo로 '기록 멈추기'를 부름(T41). 동의는 그대로 두고 수음만 멈춘다. 앱이 다시 켜져도 멋대로 다시 기록하지 않게 저장한다. */
     private var muted by mutableStateOf(false)
+    private var recordedMs by mutableLongStateOf(0L) // 이 여행에서 받아 적은 시간(A D17 큰 시계). prefs "rec:{여행}"에 남긴다
     private val boardingIo = Executors.newSingleThreadExecutor()
     private data class BoardingRequest(val attempt: BoardingInviteAttempt, val token: String, val call: BoardingInviteCall = BoardingInviteCall())
     private var boardingCall: BoardingRequest? = null
@@ -425,7 +427,7 @@ class MainActivity : ComponentActivity() {
     /** 시연·E2E: --es route "위도,경도,이름"으로 내비에 목적지를 넣는다(디버그 빌드). 실제로는 운전자가 내비에서 정한다. */
     private fun routeFrom(i: Intent?) {
         if (debug) pendingRoute = i?.getStringExtra("route")?.split(",")?.takeIf { it.size == 3 } ?: pendingRoute
-        // mock: F4 화면 확인용 시연 데이터(near·nearPaused·finalNear·finalPaused·mart·final, 빈 값이면 끔). 디버그 빌드에서만
+        // mock: 화면 확인용 시연 데이터(drive·drivePaused·driveResumed·driveContinue·near·nearPaused·finalNear·finalPaused·mart·final, 빈 값이면 끔). 디버그 빌드에서만
         if (debug && i?.hasExtra("f4") == true) f4Mock = i.getStringExtra("f4")?.takeIf { it.isNotBlank() }
         routeIfReady()
     }
@@ -957,7 +959,7 @@ class MainActivity : ComponentActivity() {
 
     private fun newTrip() {
         destination = Destination.RIDE; managing = false; closeBoarding(); clearTranscript()
-        prefs.edit().remove("trip").remove("tokens").commit()
+        prefs.edit().remove("trip").remove("tokens").remove("rec:${s.trip?.code}").commit()
         sweep(filesDir, Live.seal(this), System.currentTimeMillis(), retentionMs).forEach(Live::forget)
         tokens = emptyMap()
         s = Session(gear = s.gear)
@@ -1802,18 +1804,26 @@ class MainActivity : ComponentActivity() {
         BackHandler(boarding.page != BoardingPage.HIDDEN) {
             if (boarding.page == BoardingPage.PEOPLE) closeBoarding() else openBoarding()
         }
-        val mockDriving = f4Mock in MOCK_DRIVING // mock: 도착 전 시연은 주행 중 모양
+        val mockDriving = f4Mock in MOCK_DRIVING // mock: 주행 시연은 주행 중 모양, 시연 여행은 서버에 없어 머리 줄은 '연결됨'으로 둔다
         val parked = !carStatus.restricted && !mockDriving
         if (boarding.page == BoardingPage.QR && parked && s.gear == "P") {
             BoardingQrScreen(boarding, s, ::boardingAction)
             return
         }
         val scope = contentScope()
+        // 녹음 시계(A D17·D18·D19): 실제로 받아 적는 동안만 흐르고 멈추면 그 자리에 선다. 탭을 옮겨도 이 화면에서 센다
+        val rolling = s.recording && !muted && recordWord(false, shortAt >= 0, handoff.state, Live.mic, Live.why) == null
+        LaunchedEffect(t.code, rolling) {
+            val key = "rec:${t.code}"
+            val base = prefs.getLong(key, 0L); val since = android.os.SystemClock.elapsedRealtime()
+            recordedMs = base
+            while (rolling) { kotlinx.coroutines.delay(1000); recordedMs = base + android.os.SystemClock.elapsedRealtime() - since; prefs.edit().putLong(key, recordedMs).apply() }
+        }
         LaunchedEffect(destination, scope, afterStart) {
             if (destination == Destination.CONVERSATION || (destination == Destination.SHORTS && afterStart != null)) loadTranscript()
         }
         Column(Modifier.fillMaxSize().padding(horizontal = 32.dp, vertical = 28.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            TripHeader(parked, carStatus.gear, s.online, listening = s.recording && Live.mic == Mic.ON && !muted && handoff.state == Handoff.State.OFF) { WindowSize() }
+            TripHeader(parked, carStatus.gear, s.online || mockDriving, listening = s.recording && Live.mic == Mic.ON && !muted && handoff.state == Handoff.State.OFF) { WindowSize() }
             TripTabs(Destination.entries.map { it.label }, destination.ordinal, { parked || it != Destination.SHORTS.ordinal }) { i ->
                 val tab = Destination.entries[i]
                 if (destination != tab) {
@@ -1845,14 +1855,15 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * 함께 타는 중(C17·C17p·C19·C19p·C21·C21p). 칸: 기록 상태 → 가운데 칸 → 일행 → 큰 단추(기록 중지·재개·시작).
+     * 함께 타는 중. 주행 중 기록·일시정지는 시안 A(Record.kt: 큰 시계·파형·2×2 좌석·마지막 말·도착 전 브리핑·일시정지/계속 기록 단추).
+     * Gleo는 호출어로 부른다(시안 A에 단추 없음). 그 밖(주차 중·동의 전·끝난 여행·휴게소 제안)은 C17 칸: 기록 상태 → 가운데 칸 → 일행 → 큰 단추.
      * 가운데 칸은 휴게소 제안 > (주차 중) 목소리 등록 > 방금 받아 적은 말 두 줄. 도착 전·도착 브리핑의 시안은 흐름 F4. 시안에 없는 Gleo에게 말하기·여행 관리는
      * 기록 상태 칸 오른쪽, 주행 중 동의 철회·주차 중 동승자 설정은 일행 칸 머리에 둔다.
      */
     @Composable
     private fun RideOverview(t: Trip, modifier: Modifier) {
         val c = MaterialTheme.colorScheme
-        val mock = f4Mock?.takeIf { it in MOCK_DRIVING } // mock: 도착 전 시연(C19·C19p·finalNear·finalPaused)
+        val mock = f4Mock?.takeIf { it in MOCK_DRIVING } // mock: 주행 중 시연(A D17–D20p, finalNear·finalPaused)
         val parked = !carStatus.restricted && mock == null
         heardTick // 말한 사람이 바뀌면 다시 그린다
         val sp = speakers?.takeIf { it.trip == t.code }
@@ -1865,6 +1876,29 @@ class MainActivity : ComponentActivity() {
         // 도착 전 카드: 내비가 다음 장소까지 5분 이하라고 알렸고 그 장소의 서버 할 일이 있을 때(C19·finalNear)
         val nearAsks = (mockApproach() ?: near?.takeIf { it.trip == t.code && !parked })?.let { a ->
             (if (mock != null) mockNearAsks() else placeAsks(a.place, todoList)).takeIf { it.isNotEmpty() }?.let { a to it }
+        }
+        // 주행 중 기록·일시정지(시안 A D17–D20p). 주차 중, 동의 전, 끝난 여행, 휴게소 제안은 아래 C17 칸 그대로
+        if (mock != null || s.recording && !parked && !ended && offer?.takeIf { it.stage != Offer.Stage.FINDING } == null) {
+            val paused = if (mock != null) mockPaused else muted
+            // 이 차가 받아 적은 말이 없으면(앱을 다시 켰거나 시드한 여행) 서버 기록본의 마지막 줄과 그 말한 사람
+            val heard = Live.recent.lastOrNull()?.let { u ->
+                LastLine(sp?.get(u.seq)?.who?.let { id -> t.people.firstOrNull { p -> p.id == id }?.name } ?: heardMeta(null, null, u.seatZone), u.text) to talking?.let { sp?.get(it.seq)?.who }
+            } ?: transcript.lastOrNull()?.let { l -> LastLine(t.people.firstOrNull { it.id == l.participantId }?.name ?: heardMeta(null, null, null), l.text) to l.participantId.takeUnless { muted } }
+            LaunchedEffect(t.code, Live.recent.isEmpty()) { if (mock == null && Live.recent.isEmpty() && transcript.isEmpty()) loadTranscript() }
+            RecordView(
+                paused = paused,
+                word = if (mock != null) recordWord(paused, false, Handoff.State.OFF, Mic.ON, "") else recordWord(muted, shortAt >= 0, handoff.state, Live.mic, Live.why),
+                note = if (mock != null) "" else s.note,
+                time = recordClock(if (mock != null) mockClock() else recordedMs),
+                wave = if (mock != null) F4Mock.wave else Live.wave,
+                people = t.people, seats = gridSeats(seatRows(carStatus.seats), t.people),
+                speaking = if (mock != null) mockSpeaker() else heard?.second,
+                last = if (mock != null) mockLast() else heard?.first,
+                near = nearAsks?.let { (a, asks) -> a to briefLines(asks) },
+                onWithdraw = { turnOff() }.takeIf { mock == null && t.people.any { it.consent } && !s.offPending },
+                onControl = ::recordingAction, modifier = modifier,
+            )
+            return
         }
         DriveLayout(
             status = {
@@ -1926,7 +1960,15 @@ class MainActivity : ComponentActivity() {
         "finalPaused" -> Approach("F4DEMO", "강릉 숙소", 3, 170, final = true) // 시안 화면 글이 '약 3분'(frames-text.md)
         else -> null
     }
-    private fun mockNearAsks(): List<SharedTodo> = if (f4Mock == "finalNear") F4Mock.lodge else F4Mock.martNear // finalPaused의 시안 글은 C19와 같다
+    // 녹음 화면 시안 A의 글: 시계 00:12:48(D17·D18)·00:12:49(D19)·00:38:14(D20), 마지막 말과 말하는 사람(T150 시연 상태 이름 그대로)
+    private fun mockClock(): Long = when (f4Mock) { "drive", "drivePaused" -> 768_000L; "driveResumed" -> 769_000L; else -> 2_294_000L }
+    private fun mockLast() = when (f4Mock) {
+        "driveResumed" -> LastLine("서준", "그럼 바다도 국이야?")
+        "driveContinue" -> LastLine("하은", "우리 내일도 같이 타면 안 돼?")
+        else -> LastLine("서준", "아빠, 바다는 왜 짜?")
+    }
+    private fun mockSpeaker(): String? = when { f4Mock?.endsWith("Paused") == true -> null; f4Mock == "driveContinue" -> "haeun"; else -> "seojun" }
+    private fun mockNearAsks(): List<SharedTodo> = if (f4Mock == "finalNear") F4Mock.lodge else F4Mock.martBrief // 녹음 화면 시안 A D20·D20p의 부탁
     private fun mockBrief(): Brief? = when (f4Mock) {
         "mart" -> Brief("하나로마트", F4Mock.mart, final = false)
         "final" -> Brief("강릉 숙소", F4Mock.lodge, final = true)
@@ -2241,4 +2283,4 @@ class MainActivity : ComponentActivity() {
 }
 
 /** mock: 도착 전 시연 값(주행 중 모양으로 그림). */
-private val MOCK_DRIVING = setOf("near", "nearPaused", "finalNear", "finalPaused")
+private val MOCK_DRIVING = setOf("near", "nearPaused", "finalNear", "finalPaused", "drive", "drivePaused", "driveResumed", "driveContinue") // drive…: 시연 17–19·22(T150)
