@@ -84,7 +84,6 @@ class Onboarding(private val context: Context, private val prefs: SharedPreferen
     private val seal get() = Live.seal(context)
 
     var step by mutableStateOf<OnboardStep?>(null); private set
-    var login by mutableStateOf(false); private set
     var email by mutableStateOf("")
     var password by mutableStateOf("")
     var name by mutableStateOf("")
@@ -95,7 +94,6 @@ class Onboarding(private val context: Context, private val prefs: SharedPreferen
     var note by mutableStateOf(""); private set
     var heard by mutableStateOf(0.0); private set // 녹음한 초
     var levels by mutableStateOf(DoubleArray(0)); private set // 막대 칸마다 실제로 들어온 소리 크기(VoiceMeter)
-    var recordDone by mutableStateOf(false); private set
     private var photoJpeg: ByteArray? = null
     private var recorder: VoiceRecorder? = null
     private var pcm: ByteArray? = null
@@ -126,7 +124,6 @@ class Onboarding(private val context: Context, private val prefs: SharedPreferen
     }
 
     fun go(next: OnboardStep) { note = ""; step = next }
-    fun toggleLogin() { login = !login; note = "" }
 
     private fun adopt(p: AccountProfile) {
         profile = p
@@ -148,24 +145,22 @@ class Onboarding(private val context: Context, private val prefs: SharedPreferen
         }
     }
 
-    /** C02: 가입 또는 로그인. */
+    /** C02 '가입하고 계속': 가입, 이미 가입한 이메일이면 같은 칸으로 로그인(AccountApi.enter). */
     fun submitAccount() {
         if (!validEmail(email)) { note = "이메일 주소를 확인해 주세요"; return }
         if (!validPassword(password)) { note = "비밀번호는 8~72자로 적어 주세요"; return }
-        val e = email.trim(); val pw = password; val isLogin = login; val url = server()
+        val e = email.trim(); val pw = password; val url = server()
         if (busy) return
         busy = true; note = ""
         io.execute {
-            val r = runCatching { AccountApi(url).let { if (isLogin) it.login(e, pw) else it.signup(e, pw) } }
+            val r = runCatching { AccountApi(url).enter(e, pw) }
             main.post {
                 busy = false
-                r.onSuccess { (p, t) ->
+                r.onSuccess { (got, existed) ->
+                    val (p, t) = got
                     saveToken(t); password = ""; adopt(p)
-                    nextAfterAccount(p, isLogin)?.let(::go) ?: finish()
-                }.onFailure {
-                    note = accountError(it, isLogin)
-                    if (it is ApiError && it.status == 409) login = true
-                }
+                    nextAfterAccount(p, existed)?.let(::go) ?: finish()
+                }.onFailure { note = accountError(it) }
             }
         }
     }
@@ -181,7 +176,7 @@ class Onboarding(private val context: Context, private val prefs: SharedPreferen
         work({ AccountApi(url).let { api -> jpeg?.let { api.photo(t, it) }; api.profile(t, n, c) } }) { adopt(it); photoJpeg = null; go(OnboardStep.VOICE) }
     }
 
-    /** C05: 기기 사진 보관함에서 고른 사진. 640px JPEG로 다시 그린다(위치 같은 덧붙은 정보가 빠짐). */
+    /** C05 '내 사진 선택': 기기 사진 보관함에서 고른 사진. 640px JPEG로 다시 그린다(위치 같은 덧붙은 정보가 빠짐). 고르면 C04로 돌아가 '목소리 등록하기'에서 함께 올린다. */
     fun picked(uri: Uri?) {
         uri ?: return
         io.execute {
@@ -196,9 +191,15 @@ class Onboarding(private val context: Context, private val prefs: SharedPreferen
                 val b = Bitmap.createScaledBitmap(raw, (raw.width * s).toInt().coerceAtLeast(1), (raw.height * s).toInt().coerceAtLeast(1), true)
                 b to ByteArrayOutputStream().also { b.compress(Bitmap.CompressFormat.JPEG, 85, it) }.toByteArray()
             }
-            main.post { r.onSuccess { (b, jpeg) -> photo = b; photoJpeg = jpeg; note = "" }.onFailure { note = "이 사진은 읽지 못했어요. 다른 사진을 골라 주세요" } }
+            main.post {
+                r.onSuccess { (b, jpeg) -> photo = b; photoJpeg = jpeg; note = ""; if (step == OnboardStep.PHOTO) step = OnboardStep.PROFILE }
+                    .onFailure { note = "이 사진은 읽지 못했어요. 다른 사진을 골라 주세요" }
+            }
         }
     }
+
+    /** C05 '캐릭터로 계속' → C04: 고른 사진을 올리지 않고 캐릭터로. */
+    fun useCharacter() { photo = null; photoJpeg = null; go(OnboardStep.PROFILE) }
 
     fun noGallery() { note = "이 차에는 사진 보관함이 없어요. 사진 대신 캐릭터로 계속해요" }
 
@@ -207,12 +208,12 @@ class Onboarding(private val context: Context, private val prefs: SharedPreferen
         if (profile?.consent != true) { note = "기록 동의를 먼저 받아요"; step = OnboardStep.CONSENT; return }
         if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) { note = "마이크 권한이 없어 녹음할 수 없어요"; return }
         stopRecording()
-        pcm = null; heard = 0.0; levels = DoubleArray(0); recordDone = false; note = ""; submitWhenStopped = false
+        pcm = null; heard = 0.0; levels = DoubleArray(0); note = ""; submitWhenStopped = false
         val meter = VoiceMeter(BARS.size)
         val rec = VoiceRecorder({ s, level -> meter.add(s, level); val snap = meter.snapshot(); main.post { if (recorder != null) { heard = s; levels = snap } } }) { bytes, failed ->
             main.post {
                 if (failed != null) { note = failed; step = OnboardStep.VOICE; recorder = null; return@post }
-                pcm = bytes; heard = bytes.size / 2.0 / RATE; recordDone = true; recorder = null
+                pcm = bytes; heard = bytes.size / 2.0 / RATE; recorder = null
                 if (submitWhenStopped) { submitWhenStopped = false; submitVoice() }
             }
         }
@@ -224,7 +225,7 @@ class Onboarding(private val context: Context, private val prefs: SharedPreferen
     fun stopRecording() { recorder?.cancel(); recorder = null }
 
     /** C07 '다시 녹음' → C06(녹음 전): 지금 녹음을 버리고 '녹음 시작'을 다시 누르게 한다(docs/car-frames.md 행선). */
-    fun again() { stopRecording(); pcm = null; heard = 0.0; levels = DoubleArray(0); recordDone = false; submitWhenStopped = false; go(OnboardStep.VOICE) }
+    fun again() { stopRecording(); pcm = null; heard = 0.0; levels = DoubleArray(0); submitWhenStopped = false; go(OnboardStep.VOICE) }
 
     /** C07 '녹음 완료': 멈추고 차 안에서 값으로 바꿔 올린다. */
     fun submitVoice() {
@@ -266,10 +267,10 @@ fun OnboardingScreen(o: Onboarding, gear: String?, onFamily: () -> Unit) {
         bottom = {
             when (step) {
                 OnboardStep.WELCOME -> CarButton("가치타 시작하기") { o.go(OnboardStep.SIGNUP) }
-                OnboardStep.SIGNUP -> CarButton(if (o.login) "로그인하고 계속" else "가입하고 계속", enabled = !o.busy) { o.submitAccount() }
+                OnboardStep.SIGNUP -> CarButton("가입하고 계속", enabled = !o.busy) { o.submitAccount() }
                 OnboardStep.CONSENT -> CarButton("동의하고 계속", enabled = !o.busy) { o.agree() }
                 OnboardStep.PROFILE -> CarButton("목소리 등록하기", enabled = !o.busy) { o.saveProfile() }
-                OnboardStep.PHOTO -> CarButton(if (o.photo != null) "사진으로 계속" else "캐릭터로 계속") { o.go(OnboardStep.PROFILE) } // 시안 행선: C05 → C04(저장은 C04에서)
+                OnboardStep.PHOTO -> CarButton("캐릭터로 계속") { o.useCharacter() } // 시안 행선: C05 → C04(저장은 C04 '목소리 등록하기')
                 OnboardStep.VOICE -> CarButton("녹음 시작", enabled = !o.busy) {
                     if (ctx.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) o.startRecording() else mic.launch(Manifest.permission.RECORD_AUDIO)
                 }
@@ -283,12 +284,12 @@ fun OnboardingScreen(o: Onboarding, gear: String?, onFamily: () -> Unit) {
     ) {
         val (title, sub) = when (step) {
             OnboardStep.WELCOME -> "함께 탄 순간을 오래" to "운전할 때는 부탁을, 여행 후에는 추억을."
-            OnboardStep.SIGNUP -> if (o.login) "내 계정으로 로그인" to "폰에서 만든 같은 계정으로 들어와요." else "내 계정 만들기" to "이 계정으로 차량과 폰을 함께 사용해요."
+            OnboardStep.SIGNUP -> "내 계정 만들기" to "이 계정으로 차량과 폰을 함께 사용해요."
             OnboardStep.CONSENT -> "우리의 대화를 남기기 전에" to "아래 내용을 확인하고 한 번에 동의해 주세요."
             OnboardStep.PROFILE -> "나를 소개해 주세요" to "01 프로필   →   02 목소리   →   03 가족"
             OnboardStep.PHOTO -> "프로필 사진" to "사진 대신 캐릭터도 언제든 선택할 수 있어요."
             OnboardStep.VOICE -> "15초만 들려주세요" to "02 목소리 등록 / 조용한 곳에서 혼자 읽어 주세요."
-            OnboardStep.RECORDING -> if (o.recordDone) "녹음을 마쳤어요" to "‘녹음 완료’를 누르면 등록해요." else "목소리를 듣고 있어요" to "주변 사람은 잠시 조용히 기다려 주세요."
+            OnboardStep.RECORDING -> "목소리를 듣고 있어요" to "주변 사람은 잠시 조용히 기다려 주세요."
             OnboardStep.DONE -> "${shownName}님의 목소리 등록 완료" to "차량과 폰에서 같은 프로필을 사용해요."
         }
         TitleBlock(title, sub)
@@ -303,7 +304,7 @@ fun OnboardingScreen(o: Onboarding, gear: String?, onFamily: () -> Unit) {
                 ArchivePreview()
             }
         } else Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
-            // 시안 C02–C08 본문: 가운데 988 폭, 위에서부터, 간격 24. 동의 문장·안내가 길어지면 이 칸만 스크롤한다.
+            // 시안 C02–C08 본문: 가운데 988 폭, 위에서부터, 간격 24. 작은 창·오류 글로 넘치면 이 칸만 스크롤한다.
             Column(Modifier.widthIn(max = 988.dp).fillMaxWidth().fillMaxHeight().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(24.dp)) {
                 when (step) {
                     OnboardStep.WELCOME -> Unit
@@ -311,17 +312,13 @@ fun OnboardingScreen(o: Onboarding, gear: String?, onFamily: () -> Unit) {
                         NoAutofill()
                         CarField("이메일", o.email, { o.email = it }, KeyboardType.Email, placeholder = "minjun@example.com")
                         CarField("비밀번호", o.password, { o.password = it }, KeyboardType.Password, secret = true)
-                        InfoCard(if (o.login) "처음이신가요?" else "이미 계정이 있나요?", if (o.login) "새 계정을 만들어 시작해요." else "같은 계정으로 로그인해 기록을 불러와요.", onClick = o::toggleLogin)
+                        InfoCard("이미 계정이 있나요?", "같은 계정으로 로그인해 기록을 불러와요.") // 같은 칸에 넣고 '가입하고 계속'이면 로그인(AccountApi.enter)
                     }
                     OnboardStep.CONSENT -> {
                         InfoCard("탑승 시 대화 자동 기록", "가족 그룹 연결 시 시작 / 기록 상태 표시와 일시정지 제공")
                         InfoCard("서버 전송과 콘텐츠 생성", "음성과 전사록 업로드, 요약과 편집에 사용")
                         InfoCard("목소리 등록과 발화자 식별", "등록한 음성 특징으로 말하는 사람 구분")
                         Text("함께 타는 성인은 직접 동의하고, 아이의 프로필과 녹음은 보호자가 관리해요.", style = CarText.Label, color = c.onSurfaceVariant)
-                        // 동의 문구: 소리 전체 올림·2일 뒤 지움 문장(#461, ADR-0024 7절)과 화자 식별 전환기 문장(ADR-0023 8절)은 시안 글로 바꿔도 빼지 않는다(폰 동의 문구와 같은 뜻).
-                        // 시안에는 없어 같은 안내 글 모양(Label 24, ink-2)으로 아래에 둔다.
-                        Text("여행을 마치고 주차하면 장면을 고를 수 있게 이 여행의 소리 전체가 서버로 올라가고, 다 올린 뒤 2일이 지나면 지워집니다. 콘텐츠는 고른 장면으로만 만들고, 소리 전체는 외부로 보내지 않습니다. 누가 말했는지는 차 안에서 가립니다. 이전 버전의 차량 앱과 웹 입력에서는 이를 위해 말소리가 잠시 서버로 갔다가 저장되지 않고 지워집니다. 등록한 목소리는 화자를 가리는 값으로만 바뀌어 서버에 저장되고, 동의를 끄면 지워집니다.",
-                            style = CarText.Label, color = c.onSurfaceVariant)
                     }
                     OnboardStep.PROFILE -> {
                         CarField("이름 또는 별명", o.name, { o.name = it.take(20) }, KeyboardType.Text, placeholder = "민준")
@@ -354,7 +351,7 @@ fun OnboardingScreen(o: Onboarding, gear: String?, onFamily: () -> Unit) {
                         val late = rec && o.heard >= 7 // 앞 문장을 다 읽을 즈음 시안 C07의 이어 읽을 문장으로 바꾼다
                         if (late) InfoCard("“함께 타는 순간을 오래 기억하고 싶어.”", "평소 말하는 목소리로 이어 읽어 주세요.", soft = true)
                         else InfoCard("“안녕, 나는 ${callName(shownName.ifBlank { "나" })}.", "우리 가족과 함께 여행하는 시간이 좋아. 오늘은 바다를 보러 가고, 맛있는 것도 먹을 거야.”", soft = true)
-                        VoiceTimeline(rec, o.recordDone, o.heard, o.levels)
+                        VoiceTimeline(rec, o.heard, o.levels)
                         if (!rec) Text("등록한 목소리로 차량에서 발화자를 구분해요.", style = CarText.Label, color = c.onSurfaceVariant)
                     }
                     OnboardStep.DONE -> {
@@ -409,12 +406,12 @@ private fun ArchivePreview() {
  * 녹음 전은 시안 모양(모두 accent). 녹음 중·뒤는 지난 칸·지금 칸이 실제 소리 크기(VoiceMeter), 앞으로 칸은 시안 높이의 line 막대.
  */
 @Composable
-private fun VoiceTimeline(rec: Boolean, done: Boolean, heard: Double, levels: DoubleArray) {
+private fun VoiceTimeline(rec: Boolean, heard: Double, levels: DoubleArray) {
     val c = MaterialTheme.colorScheme
     val s = minOf(heard, VOICE_SECONDS.toDouble())
     Surface(Modifier.fillMaxWidth(), CarShape.Card, color = c.surface) {
         Column(Modifier.padding(28.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
-            Text(if (!rec) "목소리 등록 준비" else "${if (done) "녹음 끝" else "녹음 중"}  ${s.toInt()} / ${VOICE_SECONDS}초", style = CarText.Label, color = c.onSurfaceVariant)
+            Text(if (!rec) "목소리 등록 준비" else "녹음 중  ${s.toInt()} / ${VOICE_SECONDS}초", style = CarText.Label, color = c.onSurfaceVariant)
             val now = if (rec) minOf(BARS.size, (s / VOICE_SECONDS * BARS.size).toInt()) else BARS.size
             Row(Modifier.fillMaxWidth().height(126.dp), Arrangement.spacedBy(7.dp), Alignment.CenterVertically) {
                 BARS.forEachIndexed { i, h ->
