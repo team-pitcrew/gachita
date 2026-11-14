@@ -2,6 +2,7 @@ package io.github.teampitcrew.gachita
 
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -64,5 +65,45 @@ class ContentsTest {
         assertEquals("강릉 숙소 가는 길", contentWay(62 * min, "하나로마트", done))
         assertEquals("강릉 숙소", contentWay(70 * min, "강릉 숙소", done))
         assertEquals(null, contentWay(0, null, emptyList()))
+    }
+
+    @Test
+    fun `v3 cover, title and clock helpers`() {
+        assertEquals("아빠보다 빠른\n서준의 정답", contentTwoLines("아빠보다 빠른 서준의 정답"))
+        assertEquals("내일도 같이\n타면 안 돼?", contentTwoLines("내일도 같이 타면 안 돼?"))
+        assertEquals("짧은 제목", contentTwoLines("짧은 제목"))
+        assertEquals("강릉\n가족 여행", contentTripTitleLines("강릉 가족 여행"))
+        val item = ContentItem("x", "제목", 32.0, 10_000, 8_000, null, null, null, "device", emptyList(),
+            listOf(ContentLine(8_000, "a", "아빠", "바다 언제 보여?"), ContentLine(10_500, "b", "서준", "아빠, 아까부터 바다 보이는데?"), ContentLine(14_000, "a", "아빠", "어? 진짜네!")), "/u")
+        assertEquals("서준", contentQuote(item)!!.name)
+        assertNull(contentQuote(item.copy(lines = emptyList())))
+        assertEquals("0:32", contentShortClock(32.4))
+        assertEquals("1:05", contentShortClock(65.0))
+        assertEquals("11.14", contentCoverDate(at(9, 32)))
+        // 시안 갤러리의 두 장면: tint-2, tint-3(CarTints 1, 2).
+        assertEquals(listOf(1, 2, 0, 3, 4, 1), (0..5).map { contentTint(it) })
+        assertEquals(4, contentTint(-1)) // 목록에 없는 장면(-1)도 범위 안
+    }
+
+    @Test
+    fun `trip range prefers places, then server times, then contents`() {
+        val trip = ContentTrip("AB", "강릉 가족 여행", 1, emptyList(), listOf(ContentPlace("start", "출발", 100), ContentPlace("arrived", "강릉 숙소", 900)), emptyList(), emptyList())
+        assertEquals(100L to 900L, contentTripRange(trip))
+        assertEquals(5L to 7L, contentTripRange(trip.copy(places = emptyList(), startedAt = 5, endedAt = 7)))
+        assertEquals(1L to 1L, contentTripRange(trip.copy(places = emptyList())))
+        val json = JSONObject("""{"code":"AB","title":"t","createdAt":1,"startedAt":5,"endedAt":null,"members":[],"places":[],"route":[],"contents":[]}""")
+        assertEquals(5L, parseContentTrip(json).startedAt)
+        assertNull(parseContentTrip(json).endedAt)
+    }
+
+    @Test
+    fun `bundled OpenStreetMap projection and the schematic fallback`() {
+        assertTrue(contentOnBundledMap(listOf(37.7519 to 128.8761, 37.7955 to 128.9050)))
+        assertFalse(contentOnBundledMap(listOf(37.5 to 127.0, 37.6 to 127.1)))
+        assertFalse(contentOnBundledMap(emptyList()))
+        val p = contentOsmProjector(1080f, 660f)
+        val nw = p(OSM_NORTH to OSM_WEST); val se = p(OSM_SOUTH to OSM_EAST)
+        assertEquals(0f, nw.x, 0.5f); assertEquals(-48f, nw.y, 0.5f) // 1200×840을 1080 폭에 맞추면 위아래 48씩 잘림(시안 object-cover)
+        assertEquals(1080f, se.x, 0.5f); assertEquals(708f, se.y, 0.5f)
     }
 }
