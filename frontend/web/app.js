@@ -12,6 +12,7 @@ import { createConversations } from "/conversations.js";
 import { createTodos } from "/todos.js";
 import { CHARACTER_OPTIONS, characterKey, characterImage, createShortFilm, exportShortFilm, recordingFormat } from "/short-film.js";
 import { createShortStudio } from "/short-studio.js";
+import { createContents } from "/contents.js";
 import { createScenePicker } from "/short-scenes.js";
 import { createBoarding } from "/boarding.js";
 import { appBar, arrivalCards, askState, createPlaces, driveState, journeyTabs, nearCard, recordingLine, rideHeading, seatMap, statusMoves } from "/ride.js";
@@ -118,7 +119,7 @@ const conversations = createConversations({
   isOnline: () => !offline,
   onHome: () => { location.hash = ""; },
   onCaptions: () => captions.open(),
-  onShorts: () => launchShort(),
+  onShorts: () => openContents(),
   onScenes: () => scenes.open(),
 });
 const todos = createTodos({
@@ -152,6 +153,28 @@ const boarding = createBoarding({ getProfile: () => profile, getToken: () => sto
   onLeave: ({ code: joinedCode }) => { store(`${joinedCode}:asked`, "1"); reading = false; if (code() === joinedCode) refresh(true); else location.hash = joinedCode; } });
 const startRide = () => boarding.open();
 const launchShort = () => studio.open();
+// 콘텐츠 기록 탭(F6, contents.js). 영상 파일은 그 여행의 참가자 토큰으로 받는다 — 이 폰에 없으면 프로필로 다시 참가해 받는다(places.md).
+const contents = createContents({
+  getProfileToken: () => store("profile"),
+  getTrip: () => trip,
+  getParticipant: () => trip?.participants.find((p) => p.id === myId()),
+  getParticipantToken: () => myToken(),
+  tokenFor: async (c) => {
+    const kept = store(`${c}:token`);
+    if (kept || !store("profile")) return kept;
+    const again = await api("POST", `/trips/${c}/participants`, {}, store("profile"));
+    store(c, again.id); store(`${c}:token`, again.token);
+    return again.token;
+  },
+  avatar: (person) => personAvatar(person),
+  isOnline: () => !offline,
+  onHome: () => { location.hash = ""; },
+  onRide: () => render(),
+  onTalk: () => openConversations(),
+  onProfile: () => { location.hash = "me"; },
+  onStudio: launchShort,
+});
+const openContents = () => contents.open();
 const openConversations = () => {
   if (trip?.code === code()) return conversations.open();
   const last = store("trip");
@@ -643,7 +666,7 @@ function tripView(me) {
 
   return [
     appBar({ online: !offline, onHome: () => { location.hash = ""; } }),
-    journeyTabs("ride", { talk: () => conversations.open(), contents: launchShort }),
+    journeyTabs("ride", { talk: () => conversations.open(), contents: openContents }),
     h("div", { className: "ride-title" }, h("h1", {}, heading.title), heading.sub && h("p", { className: "sub" }, heading.sub)),
     ...now,
     todos.card(),
