@@ -983,3 +983,49 @@ button.brand-home { min-height: 44px; padding: 0 4px 0 0; background: none; colo
 .ride-view .bar button.big { min-height: 76px; }
 .bar button.secondary { min-height: 56px; background: var(--surface-2); color: var(--ink); font-weight: 700; }
 main:has(.bar .big) { padding-bottom: calc(196px + env(safe-area-inset-bottom)); }
+
+/* 여행 마무리·추천 장면 고르기·생성·완성(최종 시안 P22–P32). 대화 기록과 같은 틀: 머리·탭·바닥은 고정하고 본문만 스크롤한다.
+   시안의 완성 카드 바탕(크림·분홍)은 토큰에 없어 민트 연한 바탕과 surface-2를 번갈아 쓴다. */
+.after-dialog { width: min(100%, 520px); height: 100dvh; max-height: 100dvh; max-width: 520px; margin: 0 auto; padding: 0; border-radius: 0; background: var(--bg); overflow: hidden; }
+.after-dialog[open] { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; gap: 12px; animation: none; }
+.after-dialog .app-bar { padding: max(8px, env(safe-area-inset-top)) var(--pad) 0; }
+.after-dialog .journey-tabs { margin: 0 var(--pad); }
+.after-body { overflow-y: auto; overscroll-behavior: contain; min-height: 0; padding: 0 var(--pad) 20px; display: grid; align-content: start; gap: 12px; }
+.after-summary { display: grid; gap: 4px; padding: 16px; border-radius: var(--r-phone-card); background: var(--accent-soft); }
+.after-summary strong { font-size: 19px; line-height: 28px; }
+.after-summary p { font-size: 15px; font-weight: 500; line-height: 22px; color: var(--ink-2); }
+.after-card { display: grid; gap: 12px; padding: 18px; border-radius: var(--r-phone-card); background: var(--surface); }
+.after-label { font-size: 15px; font-weight: 500; line-height: 22px; white-space: pre-wrap; }
+.after-note { font-size: 13px; line-height: 18px; color: var(--ink-2); }
+.trip-wave { display: flex; align-items: center; justify-content: space-between; gap: 2px; height: 64px; }
+.trip-wave i { flex: 0 1 4px; min-width: 2px; height: max(2px, calc(var(--v, 0) * 100%)); border-radius: 2px; background: var(--line); }
+.trip-wave i.mark { background: var(--ink-2); opacity: .45; }
+.trip-wave i.on { background: var(--accent-fill); opacity: 1; }
+.wave-axis { display: flex; justify-content: space-between; font-size: 13px; line-height: 18px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.scene-pick { display: grid; gap: 6px; padding: 16px; border-radius: var(--r-phone-card); background: var(--surface); }
+.scene-pick.on { background: var(--accent-soft); }
+.scene-pick label { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
+.scene-pick input { flex: none; width: 22px; height: 22px; margin: 3px 0 0; accent-color: var(--accent); }
+.pick-copy { display: grid; gap: 2px; min-width: 0; text-align: left; }
+.pick-copy strong { font-size: 18px; line-height: 26px; overflow-wrap: anywhere; }
+.pick-time { font-size: 15px; font-weight: 500; line-height: 22px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.pick-quote { padding-left: 32px; font-size: 15px; line-height: 22px; overflow-wrap: anywhere; }
+.scene-pick details { padding-left: 32px; }
+.scene-pick summary { min-height: 32px; display: flex; align-items: center; font-size: 13px; color: var(--ink-2); cursor: pointer; }
+.pick-lines { gap: 6px; padding: 4px 0 8px; font-size: 15px; line-height: 22px; }
+.pick-lines li + li { padding-top: 0; border-top: 0; }
+.make-items { gap: 6px; font-size: 15px; line-height: 22px; }
+.make-items li { display: flex; justify-content: space-between; gap: 12px; }
+.make-items li + li { padding-top: 6px; }
+.make-items .meta { flex: none; font-size: 13px; text-align: right; max-width: 55%; }
+.made-card { display: flex; align-items: center; gap: 14px; min-height: 84px; padding: 16px; border-radius: var(--r-phone-card); background: var(--accent-soft); color: var(--ink); font-weight: 400; text-align: left; }
+.made-card.tone-1 { background: var(--surface-2); }
+.made-card .avatar { flex: none; width: 52px; height: 52px; }
+button.after-pick { justify-self: center; min-height: 44px; color: var(--ink-2); text-decoration: underline; text-underline-offset: 3px; }
+.after-bottom { display: grid; gap: 8px; padding: 0 var(--pad) max(16px, env(safe-area-inset-bottom)); }
+.after-bottom button { min-height: 56px; border-radius: var(--r-phone-ctl); font-size: 19px; font-weight: 700; background: var(--surface-2); color: var(--ink); }
+.after-bottom button.primary { background: var(--accent-fill); color: var(--on-accent); }
+.after-bottom button.primary:disabled { background: var(--accent-soft); color: var(--ink-2); }
+.after-bottom button.plain { min-height: 44px; background: none; font-size: 15px; font-weight: 500; color: var(--ink-2); }
+.after-entry h2 { font-size: 19px; line-height: 28px; }
+.after-entry button { border-radius: var(--r-phone-ctl); }
