@@ -117,7 +117,8 @@ const launchLocalShort = () => {
   const me = trip?.participants.find((p) => p.id === myId());
   if (me) openShort(me).catch((e) => toast(e.status === 0 ? "연결이 끊겨서 열지 못했어요." : e.message));
 };
-const studio = createShortStudio({ getTrip: () => trip, getParticipant: () => trip?.participants.find((p) => p.id === myId()), getToken: myToken, onLocal: launchLocalShort });
+const studio = createShortStudio({ getTrip: () => trip, getParticipant: () => trip?.participants.find((p) => p.id === myId()), getToken: myToken,
+  getOwner: () => profile?.id ? `profile:${profile.id}` : (() => { let id = store("short-owner"); if (!id) { id = crypto.randomUUID(); store("short-owner", id); } return `device:${id}`; })(), onLocal: launchLocalShort });
 const launchShort = () => studio.open();
 const openConversations = () => {
   if (trip?.code === code()) return conversations.open();
@@ -429,6 +430,7 @@ function home() {
       h("p", { className: "sub" }, profile ? "차 안에서 나눈 이야기가 우리만의 기록이 돼요." : "이름과 얼굴을 정하고, 차에 QR을 보여 주세요."),
     ),
     profile ? entry("qr", "동승 연결", "차에 내 QR 보여주기", startRide, "ride-entry") : entry("pencil", "내 프로필 만들기", "사진 또는 캐릭터로 나를 소개해요", () => { location.hash = "me"; }, "ride-entry"),
+    entry("play", "우리 쇼츠", "짧게 남긴 대화와 내 보관함", launchShort),
     last && h("section", { className: "home-section" },
       h("div", { className: "between" }, h("h2", {}, "함께한 여행"), button("여행 열기", () => { location.hash = last; }, "plain")),
       entry("record", "대화 기록", "최근에 탄 여행의 이야기를 이어 봐요", openConversations),
@@ -689,7 +691,7 @@ const shortReadReason = (s) => Date.now() >= s.createdAt + 48 * 3600 * 1000 ? "�
   : trip?.code !== s.code || code() !== s.code ? "여행이 바뀌어 쇼츠를 닫았어요."
   : !trip.participants.find((p) => p.id === s.participantId)?.consent || trip.generation !== s.generation ? "기록 동의가 바뀌어 쇼츠를 닫았어요."
   : !myToken() || myToken() !== s.token ? "동승 연결을 다시 확인해 주세요." : "";
-const clearFilmFile = (s) => { if (s.fileUrl) URL.revokeObjectURL(s.fileUrl); s.fileUrl = null; s.file = null; };
+const clearFilmFile = (s) => { if (s.fileUrl) URL.revokeObjectURL(s.fileUrl); s.fileUrl = null; s.file = null; s.libraryId = null; };
 const cancelFilm = (s) => { s.exportJob?.abort(); s.exportJob = null; s.exportProgress = 0; };
 const checkFilmAccess = async (s, signal) => {
   const control = new AbortController();
@@ -730,10 +732,12 @@ async function makeShortFilm(s) {
   }
 }
 
-function saveShortFilm(s) {
+async function saveShortFilm(s) {
   if (!s.file || shortReadReason(s)) return;
-  const link = h("a", { href: s.fileUrl, download: s.file.name });
-  document.body.append(link); link.click(); link.remove();
+  try {
+    const id = await studio.keepFile(s.file, { id: s.libraryId ||= `local:${crypto.randomUUID()}`, title: s.scenes[s.at].label || s.title, seconds: s.scenes[s.at].seconds, verify: () => checkFilmAccess(s, s.controller.signal) });
+    closeShort(); studio.open({ selectedId: id }); toast("이 기기 보관함에 저장했어요.");
+  } catch (e) { toast(e.message); }
 }
 async function shareShortFilm(s) {
   if (!s.file || shortReadReason(s)) return;
@@ -843,7 +847,7 @@ function shortView() {
   prev.setAttribute("aria-label", "이전 쇼츠"); next.setAttribute("aria-label", "다음 쇼츠");
   const make = button("영상 만들기", () => makeShortFilm(s), "short-make");
   const cancel = button("취소", () => { cancelFilm(s); s.exportError = "영상 만들기를 취소했어요."; s.paint?.(); });
-  const save = button("영상 저장", () => saveShortFilm(s), "short-make");
+  const save = button("보관함에 저장", () => saveShortFilm(s), "short-make");
   const share = button("공유", () => shareShortFilm(s));
   const progress = h("progress", { className: "film-progress", max: 1, value: 0, "aria-label": "영상 만드는 중" });
   const exportNote = h("p", { className: "film-note", role: "status" });
