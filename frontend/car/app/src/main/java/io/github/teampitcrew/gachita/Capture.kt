@@ -221,6 +221,9 @@ class Outbox(dir: File, val trip: String, private val seal: Seal) {
 
     @Synchronized fun recent(n: Int): List<Utterance> = said.takeLast(n)
 
+    /** 지금 동의 세대의 글 있는 발화(시각 순). 차 안 판단(할 일 도출 T144)의 입력 — 철회로 지운 글과 옛 세대는 들어가지 않는다. */
+    @Synchronized fun lines(): List<Utterance> = said.filter { it.generation == generation }
+
     /** 그 순번들의 발화를 화자와 함께 다시 올릴 모양으로(서버가 화자가 빈 줄에만 채운다, ADR-0023). 글을 지웠거나 옛 세대면 뺀다. */
     @Synchronized fun wires(who: Map<Long, Speaker>): List<Pair<Long, JSONObject>> =
         items.filter { it.seq in who && it.seq <= acked }.mapNotNull { u -> u.wire(generation)?.takeIf { it.has("text") }?.let { u.seq to it.spokenBy(who.getValue(u.seq)) } }
