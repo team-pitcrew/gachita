@@ -68,6 +68,7 @@ gh secret set ARGOCD_REPO_TOKEN    -R team-pitcrew/gachita    # fine-grained 토
 gh secret set GOOGLE_CLIENT_ID     -R team-pitcrew/gachita    # 없어도 서버는 뜸
 gh secret set GOOGLE_CLIENT_SECRET -R team-pitcrew/gachita
 gh secret set ASR_TOKEN            -R team-pitcrew/gachita    # 재전사(T75) 상현님 Nemotron ASR 토큰. 없으면 보내지 않음
+gh secret set HF_CREDENTIALS       -R team-pitcrew/gachita    # Higgsfield 서버 키 ID:secret. 대화형 입력 또는 stdin만 사용
 gh secret set CLOUDFLARE_API_TOKEN -R team-pitcrew/gachita    # mangowhois.ai: DNS 편집, 영역 WAF(요청 수 제한 규칙) 편집
 gh secret set CLOUDFLARE_API_TOKEN_READ -R team-pitcrew/gachita   # PR 계획용: mangowhois.ai Zone·DNS·Zone WAF 읽기만(쓰기 토큰은 PR에 주지 않음)
 gh variable set CLOUDFLARE_ZONE_ID -R team-pitcrew/gachita --body <mangowhois.ai 영역 번호>
@@ -76,6 +77,16 @@ gh workflow run infra-secrets -R team-pitcrew/gachita --ref develop   # GitHub �
 
 - **저장소 읽기 자격:** 조직 설정으로 배포 키가 막혀 있어(2026-11-13, `Deploy keys are disabled for this repository`) 이 저장소 하나만 읽는 fine-grained 토큰을 HTTPS로 씁니다(T24, 11/14). 첫 부팅이 SSM에서 받아 파일(600)에 두고, git은 자격 도우미로, Argo CD는 저장소 자격(`argocd/gachita-repo`)으로 읽습니다. 토큰은 만료(지금 것은 2026-12-14)가 있어 바꿀 때는 같은 이름으로 다시 넣고 `infra-secrets`를 돌린 뒤 `ops` 워크플로의 `converge`(단계 `argocd`)를 돌립니다. 모든 비밀 값의 길과 바꾸는 법은 [ADR-0012](../../../docs/adr/0012-cluster-build-and-node-size.md#결정)의 표 한 곳에 둡니다.
 - Cloudflare 영역의 SSL/TLS 모드는 Full(strict)이어야 합니다. ALB는 443만 엽니다(영역 전체 설정이라 Terraform이 바꾸지 않음).
+
+### Higgsfield 키와 생성 활성화
+
+`HF_CREDENTIALS`는 `ID:secret` 형식의 서버 전용 자격입니다. GitHub Secrets에 입력하면 `infra-secrets`가 OIDC 적용 역할로 `/gachita/dev/app/higgsfield/HF_CREDENTIALS` SecureString에 넣습니다. 기존 ExternalSecret `higgsfield`가 같은 이름의 Kubernetes Secret으로 읽고 API 파드가 환경 변수로 받습니다. 키를 Git 파일, 셸 인자, 워크플로 출력 또는 앱 번들에 넣지 않습니다.
+
+키를 교체한 뒤에는 `infra-secrets` 실행 성공을 확인하고 ExternalSecret을 동기화합니다. `Ready=True`만으로는 값이 있다는 뜻이 아니므로 Secret의 존재와 `HF_CREDENTIALS` 키의 존재를 값 없이 확인합니다. 파드는 환경 변수를 시작 시 읽으므로 API를 다시 띄운 뒤 두 복제본의 자격 존재와 비과금 인증 응답을 확인합니다. 없는 요청을 조회했을 때 올바른 키는 404, 잘못된 키는 401을 반환하는 것으로 인증만 확인할 수 있습니다. 이는 영상 생성 성공의 검증이 아닙니다.
+
+기본 Deployment의 `SHORTS_ENABLED`는 false이고, dev 오버레이의 `shorts-enabled.yaml`이 true로 바꿉니다. 활성화 PR을 병합하기 전에 공급자 계정의 사용 가능한 잔액과 자동 충전 상태를 확인합니다. Higgsfield 웹의 무료 생성·구독 크레딧은 API 잔액과 별개입니다. 무료 프로모션도 계정별 조건을 확인해야 하며, 키가 있다고 생성 비용이 무료인 것은 아닙니다. 활성화해도 기존 `SHORTS_DAILY_SECONDS=120`과 여행별 진행 작업 2개 제한을 유지합니다.
+
+중단할 때는 dev 오버레이의 `SHORTS_ENABLED`를 false로 돌립니다. 새 요청은 막히지만 기존 작업과 외부 자료의 정리는 계속됩니다. 자격을 회수할 때는 공급자에서 키를 폐기하고 GitHub Secret과 SSM 파라미터를 함께 삭제한 뒤 ExternalSecret과 파드를 동기화합니다. GitHub Secret만 삭제하면 SSM 값이 남습니다.
 
 ## 만들기 전에 (develop에 병합해 둘 것)
 

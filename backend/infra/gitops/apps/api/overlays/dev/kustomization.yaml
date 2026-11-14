@@ -5,6 +5,8 @@ namespace: gachita
 resources:
   - namespace.yaml
   - ../../base
+patches:
+  - path: shorts-enabled.yaml
 images:
   - name: ghcr.io/team-pitcrew/gachita-api
     newTag: "83d90f17fbbb" # 병합 때 ci.yml의 publish가 올린 develop(#148). make deploy-tag TAG=<올린 태그> 로 바꾼다(커밋 SHA 앞 12자, 따옴표 필수)

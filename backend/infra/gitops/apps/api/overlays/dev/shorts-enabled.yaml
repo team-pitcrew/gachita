@@ -1,0 +1,13 @@
+# T88: dev에서 생성 요청을 받습니다. 실제 실행에는 HF_CREDENTIALS와 공급자 잔액이 필요합니다.
+# 일일 120초 상한과 여행별 동의·중복 방지 규칙은 기본 설정을 유지합니다.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gachita-api
+spec:
+  template:
+    spec:
+      containers:
+        - name: api
+          env:
+            - { name: SHORTS_ENABLED, value: "true" }
