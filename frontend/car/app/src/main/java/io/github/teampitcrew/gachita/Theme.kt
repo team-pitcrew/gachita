@@ -67,6 +67,8 @@ private val Dark = darkColorScheme(
     // 숏폼 표지(최종 시안 v3 'Archive / galleryCar·playerCar·listCar·pin'): 어두운 화면 위의 밝은 표지라 inverse 칸을 쓴다.
     // inverseSurface = tint-2(노랑), surfaceBright = tint-3(분홍), inverseOnSurface = 표지 글자(ink, 보조 글자는 투명도로).
     inverseSurface = Color(0xFFFCF0D9), surfaceBright = Color(0xFFFBE7EE), inverseOnSurface = Color(0xFF28221B),
+    // 밝은 바탕(실제 지도) 위의 초록 길(v3 D29 지도 경로 #20775B): 밝은 면 위의 primary라 inversePrimary.
+    inversePrimary = Color(0xFF20775B),
 )
 
 /**

@@ -56,7 +56,8 @@ class ContentsTest {
     @Test
     fun `moment place reads the way to the next place after a stop`() {
         val min = 60_000L
-        val log = listOf(ContentPlace("start", "집", 0), ContentPlace("stop", "하나로마트", 0), ContentPlace("destination", "강릉 숙소", 0),
+        // stop은 경유지에 들른 기록이라(places.md, 차 #422) 계획된 경유지는 넣지 않는다.
+        val log = listOf(ContentPlace("start", "집", 0), ContentPlace("destination", "강릉 숙소", 0),
             ContentPlace("approaching", "하나로마트", 35 * min), ContentPlace("arrived", "하나로마트", 40 * min))
         assertEquals("동해고속도로", contentWay(12 * min, "동해고속도로", log))
         assertEquals("하나로마트 가는 길", contentWay(37 * min, "하나로마트", log))
@@ -99,5 +100,16 @@ class ContentsTest {
         val trip = ContentTrip("AB", "강릉 가족 여행", 1, emptyList(), listOf(ContentPlace("start", "출발", 100), ContentPlace("arrived", "강릉 숙소", 900)), emptyList(), emptyList())
         assertEquals(100L to 900L, contentTripRange(trip))
         assertEquals(5L to 7L, contentTripRange(trip.copy(places = emptyList(), startedAt = 5, endedAt = 7)))
+    }
+
+    @Test
+    fun `moment place with the car's own place log (stop for a waypoint, destination first)`() {
+        val min = 60_000L
+        val car = listOf(ContentPlace("start", "출발", 0), ContentPlace("destination", "강릉 숙소", 0), ContentPlace("approaching", "하나로마트", 30 * min),
+            ContentPlace("stop", "하나로마트", 35 * min), ContentPlace("arrived", "강릉 숙소", 68 * min))
+        assertEquals("하나로마트 가는 길", contentWay(12 * min, "강릉 숙소", car))
+        assertEquals("하나로마트 가는 길", contentWay(32 * min, "하나로마트", car))
+        assertEquals("강릉 숙소 가는 길", contentWay(62 * min, "하나로마트", car))
+        assertEquals("강릉 숙소", contentWay(70 * min, "강릉 숙소", car))
     }
 }

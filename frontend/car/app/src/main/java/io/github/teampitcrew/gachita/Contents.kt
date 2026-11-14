@@ -127,12 +127,19 @@ internal fun contentPlaceChain(places: List<ContentPlace>): String {
  * or while approaching B, the design reads 'B 가는 길' (C34 '강릉 숙소 가는 길', player2 '하나로마트 가는 길'). Otherwise the server name stays.
  */
 internal fun contentWay(at: Long, place: String?, places: List<ContentPlace>): String? {
-    val last = places.lastOrNull { it.at <= at && it.kind in setOf("start", "approaching", "arrived") }
+    // 차(#422)는 경유지에 닿으면 stop, 마지막 목적지에 닿으면 arrived를 남긴다 — 둘 다 '닿은 곳'.
+    val reached = setOf("arrived", "stop")
+    val last = places.lastOrNull { it.at <= at && it.kind in setOf("start", "approaching") + reached }
     if (last?.kind == "approaching") return "${last.name.trim()} 가는 길"
-    if (last?.kind != "arrived") return place
+    if (last == null || last.kind == "start") {
+        // 출발 뒤 첫 도착 전: 서버가 준 이름이 내비 목적지면(차는 출발 때 목적지를 남김) 다음에 닿은 곳 가는 길.
+        val destinations = places.filter { it.kind == "destination" }.map { it.name.trim() }
+        val ahead = places.firstOrNull { it.at > at && it.kind in reached }?.name?.trim()
+        return if (ahead != null && place?.trim() in destinations) "$ahead 가는 길" else place
+    }
     val from = last.name.trim()
-    val next = places.firstOrNull { it.at > at && it.kind == "arrived" && it.name.trim() != from }
-        ?: places.lastOrNull { p -> p.kind == "destination" && p.name.trim() != from && places.none { it.kind == "arrived" && it.at <= at && it.name.trim() == p.name.trim() } }
+    val next = places.firstOrNull { it.at > at && it.kind in reached && it.name.trim() != from }
+        ?: places.lastOrNull { p -> p.kind == "destination" && p.name.trim() != from && places.none { it.kind in reached && it.at <= at && it.name.trim() == p.name.trim() } }
     return next?.let { "${it.name.trim()} 가는 길" } ?: place
 }
 
@@ -218,7 +225,8 @@ private enum class ContentsPage { GALLERY, TIMELINE, MAP, DETAIL, PLAYER, EXPORT
 
 // 최종 시안 v3(피그마 6I2bH121Z5pzWz2yciJUD8 '최종 디자인 비교 / 콘텐츠 기록' AFTER 2075:3789, D26·D30–D32)의 글자 단계와 모양.
 // AFTER 프레임은 0.6배로 그려져 있어 차 화면(1682×1210) 값으로 되돌려 쓴다. 색은 MaterialTheme.colorScheme에서만(Theme.kt):
-// surface-2 = surfaceVariant, accent-soft = primaryContainer, line = outlineVariant, 표지 tint-2·tint-3 = inverseSurface·surfaceBright, 표지 글자 = inverseOnSurface.
+// surface-2 = surfaceVariant, accent-soft = primaryContainer, line = outlineVariant, 표지 tint-2·tint-3 = inverseSurface·surfaceBright, 표지 글자 = inverseOnSurface,
+// 실제 지도 위 초록 길 = inversePrimary.
 private val Title40 = TextStyle(fontSize = 40.sp, lineHeight = 50.sp, fontWeight = FontWeight.Bold, letterSpacing = (-0.8).sp)
 private val Headline32 = TextStyle(fontSize = 32.sp, lineHeight = 42.sp, fontWeight = FontWeight.Bold, letterSpacing = (-0.32).sp)
 private val Body28 = TextStyle(fontSize = 28.sp, lineHeight = 40.sp, fontWeight = FontWeight.Medium)
@@ -593,7 +601,7 @@ private fun MapBox(trip: ContentTrip, items: List<ContentItem>, tones: List<Colo
                 val path = Path().apply { trip.route.forEachIndexed { i, p -> val o = project(p); if (i == 0) moveTo(o.x, o.y) else lineTo(o.x, o.y) } }
                 // 시안: 흰 테두리 12 위에 짙은 초록 6.
                 drawPath(path, c.onSurface, style = Stroke(12.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
-                drawPath(path, c.primaryContainer, style = Stroke(6.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
+                drawPath(path, c.inversePrimary, style = Stroke(6.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
             }
         }
         if (project == null) Text("기록한 위치가 없어 길을 그리지 못했어요.", style = Label24, color = c.onSurfaceVariant, modifier = Modifier.align(Alignment.BottomStart).padding(16.dp))
