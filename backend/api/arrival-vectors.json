@@ -1,0 +1,312 @@
+{
+ "rule": "todos.js arrivalBriefing: 주차가 아니면 not_parked, 위치가 60초보다 오래면 stale_position, 장소에서 250 m 밖이면 outside_place, 아니면 그 장소 낱말(띄어쓰기 무시)의 대기 할 일. distanceMeters는 하버사인(지구 반지름 6,371 km) 반올림",
+ "cases": [
+  {
+   "name": "주차·60초 안·250 m 안: 그 장소의 대기 할 일만",
+   "input": {
+    "source": "vehicle",
+    "parked": true,
+    "observedAt": 1762999995000,
+    "place": {
+     "name": "이마트 강릉점",
+     "lat": 37.7519,
+     "lng": 128.8761
+    },
+    "position": {
+     "lat": 37.7527,
+     "lng": 128.8766
+    }
+   },
+   "items": [
+    {
+     "id": "a",
+     "place": "마트",
+     "status": "pending"
+    },
+    {
+     "id": "b",
+     "place": "마트",
+     "status": "done"
+    },
+    {
+     "id": "c",
+     "place": "숙소",
+     "status": "pending"
+    },
+    {
+     "id": "d",
+     "place": "강릉점",
+     "status": "cancelled"
+    }
+   ],
+   "now": 1763000000000,
+   "expected": {
+    "eligible": true,
+    "reason": null,
+    "distanceMeters": 99,
+    "items": [
+     "a"
+    ]
+   }
+  },
+  {
+   "name": "주차가 아님",
+   "input": {
+    "source": "vehicle",
+    "parked": false,
+    "observedAt": 1762999995000,
+    "place": {
+     "name": "이마트 강릉점",
+     "lat": 37.7519,
+     "lng": 128.8761
+    },
+    "position": {
+     "lat": 37.7527,
+     "lng": 128.8766
+    }
+   },
+   "items": [
+    {
+     "id": "a",
+     "place": "마트",
+     "status": "pending"
+    },
+    {
+     "id": "b",
+     "place": "마트",
+     "status": "done"
+    },
+    {
+     "id": "c",
+     "place": "숙소",
+     "status": "pending"
+    },
+    {
+     "id": "d",
+     "place": "강릉점",
+     "status": "cancelled"
+    }
+   ],
+   "now": 1763000000000,
+   "expected": {
+    "eligible": false,
+    "reason": "not_parked",
+    "distanceMeters": 99,
+    "items": []
+   }
+  },
+  {
+   "name": "위치가 60초보다 오래됨",
+   "input": {
+    "source": "vehicle",
+    "parked": true,
+    "observedAt": 1762999939999,
+    "place": {
+     "name": "이마트 강릉점",
+     "lat": 37.7519,
+     "lng": 128.8761
+    },
+    "position": {
+     "lat": 37.7527,
+     "lng": 128.8766
+    }
+   },
+   "items": [
+    {
+     "id": "a",
+     "place": "마트",
+     "status": "pending"
+    },
+    {
+     "id": "b",
+     "place": "마트",
+     "status": "done"
+    },
+    {
+     "id": "c",
+     "place": "숙소",
+     "status": "pending"
+    },
+    {
+     "id": "d",
+     "place": "강릉점",
+     "status": "cancelled"
+    }
+   ],
+   "now": 1763000000000,
+   "expected": {
+    "eligible": false,
+    "reason": "stale_position",
+    "distanceMeters": 99,
+    "items": []
+   }
+  },
+  {
+   "name": "딱 60초는 받음",
+   "input": {
+    "source": "vehicle",
+    "parked": true,
+    "observedAt": 1762999940000,
+    "place": {
+     "name": "이마트 강릉점",
+     "lat": 37.7519,
+     "lng": 128.8761
+    },
+    "position": {
+     "lat": 37.7527,
+     "lng": 128.8766
+    }
+   },
+   "items": [
+    {
+     "id": "a",
+     "place": "마트",
+     "status": "pending"
+    },
+    {
+     "id": "b",
+     "place": "마트",
+     "status": "done"
+    },
+    {
+     "id": "c",
+     "place": "숙소",
+     "status": "pending"
+    },
+    {
+     "id": "d",
+     "place": "강릉점",
+     "status": "cancelled"
+    }
+   ],
+   "now": 1763000000000,
+   "expected": {
+    "eligible": true,
+    "reason": null,
+    "distanceMeters": 99,
+    "items": [
+     "a"
+    ]
+   }
+  },
+  {
+   "name": "250 m 밖",
+   "input": {
+    "source": "vehicle",
+    "parked": true,
+    "observedAt": 1762999995000,
+    "place": {
+     "name": "이마트 강릉점",
+     "lat": 37.7519,
+     "lng": 128.8761
+    },
+    "position": {
+     "lat": 37.7555,
+     "lng": 128.8761
+    }
+   },
+   "items": [
+    {
+     "id": "a",
+     "place": "마트",
+     "status": "pending"
+    },
+    {
+     "id": "b",
+     "place": "마트",
+     "status": "done"
+    },
+    {
+     "id": "c",
+     "place": "숙소",
+     "status": "pending"
+    },
+    {
+     "id": "d",
+     "place": "강릉점",
+     "status": "cancelled"
+    }
+   ],
+   "now": 1763000000000,
+   "expected": {
+    "eligible": false,
+    "reason": "outside_place",
+    "distanceMeters": 400,
+    "items": []
+   }
+  },
+  {
+   "name": "띄어쓰기를 보지 않는 장소 낱말",
+   "input": {
+    "source": "vehicle",
+    "parked": true,
+    "observedAt": 1762999995000,
+    "place": {
+     "name": "숙 소 앞",
+     "lat": 37.7519,
+     "lng": 128.8761
+    },
+    "position": {
+     "lat": 37.7527,
+     "lng": 128.8766
+    }
+   },
+   "items": [
+    {
+     "id": "a",
+     "place": "마트",
+     "status": "pending"
+    },
+    {
+     "id": "b",
+     "place": "마트",
+     "status": "done"
+    },
+    {
+     "id": "c",
+     "place": "숙소",
+     "status": "pending"
+    },
+    {
+     "id": "d",
+     "place": "강릉점",
+     "status": "cancelled"
+    }
+   ],
+   "now": 1763000000000,
+   "expected": {
+    "eligible": true,
+    "reason": null,
+    "distanceMeters": 99,
+    "items": [
+     "c"
+    ]
+   }
+  },
+  {
+   "name": "할 일 없음",
+   "input": {
+    "source": "vehicle",
+    "parked": true,
+    "observedAt": 1762999995000,
+    "place": {
+     "name": "이마트 강릉점",
+     "lat": 37.7519,
+     "lng": 128.8761
+    },
+    "position": {
+     "lat": 37.7527,
+     "lng": 128.8766
+    }
+   },
+   "items": [],
+   "now": 1763000000000,
+   "expected": {
+    "eligible": true,
+    "reason": null,
+    "distanceMeters": 99,
+    "items": []
+   }
+  }
+ ]
+}

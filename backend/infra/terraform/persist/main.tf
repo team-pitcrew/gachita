@@ -147,13 +147,12 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "clips" {
 resource "aws_s3_bucket_lifecycle_configuration" "clips" {
   bucket = aws_s3_bucket.clips.id
 
+  # T145: 클립은 시간으로 지우지 않는다(T90 보관 정책). 지우기는 사람의 요청·동의 철회 때 서버가 한다(clip_trash).
+  # 남은 규칙은 버전 관리를 끈 버킷의 이전 판과 끝나지 않은 나눠 올리기만 치운다.
   rule {
-    id     = "expire-clips"
+    id     = "clean-incomplete"
     status = "Enabled"
     filter {}
-    expiration {
-      days = 2 # 여행 보관 48시간
-    }
     noncurrent_version_expiration {
       noncurrent_days = 1
     }

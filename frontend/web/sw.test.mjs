@@ -49,3 +49,16 @@ test("원음·자막·공유 API는 계속 캐시를 우회한다", async () => 
     assert.equal(await app.request(path), undefined);
   }
 });
+
+test("app.js가 들여오는 화면 모듈은 모두 설치 때 받아 둔다(빠지면 끊긴 첫 화면이 모듈을 못 읽는다)", async () => {
+  const shell = new Set(JSON.parse(source.match(/const SHELL = (\[.*?\]);/s)[1]));
+  const seen = new Set(), todo = ["/app.js"];
+  while (todo.length) {
+    const path = todo.pop();
+    if (seen.has(path)) continue;
+    seen.add(path);
+    const text = await readFile(new URL(`.${path}`, import.meta.url), "utf8");
+    for (const [, spec] of text.matchAll(/^import [^;]*?from "(\.?\/[^"]+)"/gm)) todo.push(new URL(spec, `https://x${path}`).pathname);
+  }
+  assert.deepEqual([...seen].filter((p) => !shell.has(p)), []);
+});

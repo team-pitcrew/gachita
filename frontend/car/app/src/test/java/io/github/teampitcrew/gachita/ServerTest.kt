@@ -102,7 +102,8 @@ class ServerTest {
         val e = runCatching { Server(url).restStops(37.2459, 127.26, 80.0, null, null) }.exceptionOrNull()
         val took = System.currentTimeMillis() - t0
         assertTrue("마감 예외여야 함: $e", e is SocketTimeoutException)
-        assertTrue("2초 마감인데 ${took}ms 걸림", took in 1900..3000) // 본문 전체를 다 받으려면 한 바이트 300ms라 수십 초
+        // 마감이 없으면 본문(약 130바이트 × 300 ms)을 다 받는 데 수십 초. 부하 걸린 CI 러너에서 끊긴 뒤 예외가 늦게 올라와도 그보다 훨씬 짧다(T147)
+        assertTrue("2초 마감인데 ${took}ms 걸림", took in 1900..10_000)
     }
 
     /** 요청마다 serve가 답을 정하는 가짜 연결(JVM의 HttpURLConnection은 PATCH를 받지 않아 setRequestMethod를 덮는다). */
