@@ -101,6 +101,16 @@ export function lineAt(content, seconds) {
 
 // 좌표를 w×h 상자에 투영한다(위가 북쪽, 여백 pad). 시안처럼 도식 지도라 가로·세로를 따로 늘려 상자를 채운다
 // (한쪽이 다른 쪽의 3배를 넘으면 그만큼만 늘림). 좌표가 하나도 없으면 null.
+// 번들 지도 그림(maps/gangneung.jpg, 시안 'Asset / 강릉 실제 지도 / OpenStreetMap' 1200×840)의 경위도 범위 — 차 Contents.kt와 같은 값.
+export const OSM = { west: 128.7905, east: 128.9785, north: 37.8184, south: 37.7138, w: 1200, h: 840 };
+// 기록 좌표의 절반 이상이 번들 지도 안이면 그 그림을, 아니면 그린 지도를 쓴다.
+export const onBundledMap = (points) => points.length > 0 && points.filter(([lat, lng]) => lat >= OSM.south && lat <= OSM.north && lng >= OSM.west && lng <= OSM.east).length * 2 >= points.length;
+// 번들 지도를 w×h 틀에 가운데 맞춰 채울 때(cover) 경위도 → 틀 좌표.
+export function osmProjector(w, hgt) {
+  const k = Math.max(w / OSM.w, hgt / OSM.h), ox = (w - OSM.w * k) / 2, oy = (hgt - OSM.h * k) / 2;
+  return ([lat, lng]) => [ox + ((lng - OSM.west) / (OSM.east - OSM.west)) * OSM.w * k, oy + ((OSM.north - lat) / (OSM.north - OSM.south)) * OSM.h * k];
+}
+
 export function projector(points, w, hgt, pad = 24) {
   const ok = points.filter((p) => Number.isFinite(p?.[0]) && Number.isFinite(p?.[1]));
   if (!ok.length) return null;
@@ -114,7 +124,7 @@ export function projector(points, w, hgt, pad = 24) {
   return ([lat, lng]) => [ox + (lng - minLng) * kx * sx, oy + (maxLat - lat) * sy];
 }
 
-export function createContents({ getProfileToken, getTrip, getParticipant, getParticipantToken, tokenFor, avatar, isOnline = () => true, onHome, onRide, onTalk, onProfile, onStudio }) {
+export function createContents({ getProfileToken, getTrip, getParticipant, getParticipantToken, tokenFor, avatar, isOnline = () => true, onHome, onRide, onTalk }) {
   const dialog = h("dialog", { className: "conversations-dialog contents-dialog", "aria-labelledby": "contents-title" });
   document.body.append(dialog);
   let state = null;
@@ -195,22 +205,29 @@ export function createContents({ getProfileToken, getTrip, getParticipant, getPa
   }
 
   // 지도: 경로(초록 선)와 콘텐츠 핀. 시안의 도로·바다는 배경 무늬이고 실제 지형이 아니다.
-  function map(s, small = false) {
-    const W = 318, H = small ? 204 : 204;
+  // 지도(시안 P35·P36): 350×300 틀. 기록 좌표가 번들 OpenStreetMap 그림 범위 안이면 그 그림 위에, 아니면 그린 지도 위에 길과 핀.
+  function map(s) {
+    const W = 350, H = 300;
     const items = all(s).filter(({ item }) => Number.isFinite(item.lat) && Number.isFinite(item.lng));
     const trip = items[0]?.trip ?? contentGroups(s.trips)[0]?.trip;
     const route = (trip?.route ?? []).map((p) => [p[0], p[1]]);
-    // 핀은 점 위에 서므로 위쪽 여백을 더 둔다.
-    const fit = projector([...route, ...items.filter((x) => x.trip === trip).map(({ item }) => [item.lat, item.lng])], W, H - 70, 24);
-    const project = fit && ((p) => { const [x, y] = fit(p); return [x, y + 70]; });
+    const points = [...route, ...items.filter((x) => x.trip === trip).map(({ item }) => [item.lat, item.lng])];
+    const real = onBundledMap(points);
+    // 그린 지도는 핀이 점 위에 서니 위쪽 여백을 더 둔다. 번들 지도는 실제 자리 그대로(틀 밖이면 가장자리로).
+    const fit = real ? osmProjector(W, H) : projector(points, W, H - 70, 24);
+    const project = fit && (real ? ((p) => fit(p).map((v, i) => Math.max(8, Math.min((i ? H : W) - 8, v)))) : ((p) => { const [x, y] = fit(p); return [x, y + 70]; }));
     const ns = "http://www.w3.org/2000/svg";
     const svg = document.createElementNS(ns, "svg");
     svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.setAttribute("class", "content-map-art"); svg.setAttribute("aria-hidden", "true");
     const line = (d, cls) => { const p = document.createElementNS(ns, "path"); p.setAttribute("d", d); p.setAttribute("class", cls); svg.append(p); };
-    line(`M0 ${H * 0.66} L${W} ${H * 0.44}`, "map-road"); line(`M${W * 0.36} 0 L${W * 0.52} ${H}`, "map-road"); line(`M${W * 0.56} 0 L${W * 0.72} ${H}`, "map-road");
-    line(`M${W * 0.86} 0 C${W * 0.8} ${H * 0.3} ${W * 0.95} ${H * 0.6} ${W * 0.88} ${H} L${W} ${H} L${W} 0 Z`, "map-water");
+    if (!real) {
+      line(`M0 ${H * 0.66} L${W} ${H * 0.44}`, "map-road"); line(`M${W * 0.36} 0 L${W * 0.52} ${H}`, "map-road"); line(`M${W * 0.56} 0 L${W * 0.72} ${H}`, "map-road");
+      line(`M${W * 0.86} 0 C${W * 0.8} ${H * 0.3} ${W * 0.95} ${H * 0.6} ${W * 0.88} ${H} L${W} ${H} L${W} 0 Z`, "map-water");
+    }
     if (project && route.length > 1) line(route.map((p, i) => `${i ? "L" : "M"}${project(p).map((v) => v.toFixed(1)).join(" ")}`).join(" "), "map-route");
-    const box = h("div", { className: "content-map" }, svg);
+    const box = h("div", { className: `content-map${real ? " real" : ""}` },
+      real && h("img", { className: "content-map-tiles", src: "/maps/gangneung.jpg", alt: "", decoding: "async" }), svg,
+      real && h("p", { className: "content-map-credit" }, "© OpenStreetMap contributors"));
     if (project) items.filter((x) => x.trip === trip).forEach(({ item }, i) => {
       const [x, y] = project([item.lat, item.lng]);
       const pin = button("", () => { s.pin = item.id; paint(s); }, `content-pin tone-${i % 2}${s.pin === item.id ? " selected" : ""}`);
@@ -234,7 +251,7 @@ export function createContents({ getProfileToken, getTrip, getParticipant, getPa
   function detail(s) {
     const picked = find(s, s.pin) ?? all(s).find(({ item }) => Number.isFinite(item.lat)) ?? all(s)[0];
     const near = picked ? all(s).filter(({ item, trip }) => trip === picked.trip && item.place === picked.item.place) : [];
-    return [map(s, true), ...tripList(s, near)];
+    return [map(s), ...tripList(s, near)];
   }
 
   function player(s) {
@@ -338,14 +355,13 @@ export function createContents({ getProfileToken, getTrip, getParticipant, getPa
     const empty = s.ready && !all(s).length;
     const view = empty ? "empty" : s.view;
     const picked = find(s, s.selected)?.item;
-    const studio = onStudio && button("쇼츠 만들기·보관함", () => { close(); onStudio(); }, "plain contents-studio");
     let head, body;
     if (view === "player" && picked) { head = title(headline(picked), [`${monthDay(picked.at)} ${hhmm(picked.at)}`, picked.place].filter(Boolean).join("  ")); body = player(s); }
     else if (view === "export" && picked) { head = title("영상이 준비됐어요", "내 계정에 저장한 가족의 숏폼"); body = exporter(s); }
     else if (view === "detail") { head = title("이 길에서 나눈 이야기", "지도에서 선택한 우리 가족의 장면"); body = detail(s); }
     else {
       // 시안 P33–P35(eZ2xs): 제목 '콘텐츠 기록'만(부제 없음)
-      head = title("콘텐츠 기록", view === "empty" ? "우리 가족 / 차량과 폰에서 이어보기" : "", studio);
+      head = title("콘텐츠 기록", view === "empty" ? "우리 가족 / 차량과 폰에서 이어보기" : "");
       body = !s.ready ? [h("p", { className: "meta", role: "status" }, s.error || "콘텐츠 기록을 불러오고 있어요")]
         : empty ? [h("p", { className: "content-empty" }, "아직 생성한 콘텐츠가 없어요.", h("br"), "여행을 마친 뒤 대화에서 장면을 골라 보세요.")]
         : [seg(s), ...(view === "timeline" ? timeline(s) : view === "map" ? [map(s), ...tripList(s, all(s).filter(({ trip }) => trip === (all(s).find(({ item }) => Number.isFinite(item.lat))?.trip ?? all(s)[0]?.trip))), button("주행 지도 자세히 보기 →", () => go(s, "detail"), "plain content-more")] : gallery(s))];

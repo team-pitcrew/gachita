@@ -15,7 +15,13 @@ const EMOJI = [
   [/음료|탄산수|^물$|생수|커피|주스|우유|맥주|콜라|사이다/, "🥤"],
   [/가방|짐|캐리어|트렁크/, "🧳"],
   [/장보기|장 보/, "🛒"],
+  [/쓰레기|분리배출|휴지통/, "🗑"],
 ];
+// 이모지 → 시안 'Briefing / emoji' 그림 파일(brief-icons/, Twemoji CC-BY 4.0). 그림이 없는 이모지는 글자 그대로 쓴다.
+const ICON = { "🚻": "1f6bb", "🛒": "1f6d2", "🥩": "1f969", "🍊": "1f34a", "🍬": "1f36c", "🥤": "1f964", "🧊": "1f9ca", "🧳": "1f9f3", "🗑": "trash" };
+export const emojiIcon = (emoji, className = "brief-emoji") => ICON[emoji]
+  ? h("img", { className, src: `/brief-icons/${ICON[emoji]}.svg`, alt: "", "aria-hidden": "true" })
+  : h("span", { className, "aria-hidden": "true" }, emoji);
 const BY_KIND = { buy: "🛒", first: "🚻", remember: "🧊", bring: "🧳" };
 export const emojiOf = (name, category) => EMOJI.find(([re]) => re.test(String(name ?? "")))?.[1] ?? BY_KIND[category] ?? "🛒";
 
@@ -57,8 +63,8 @@ export function nearLine(todo, participants = []) {
   return titleOf(todo);
 }
 
-const row = (r, phone = true) => h("li", { className: "brief-row" },
-  h("span", { className: "brief-emoji", "aria-hidden": "true" }, r.emoji),
+const row = (r) => h("li", { className: "brief-row" },
+  emojiIcon(r.emoji),
   h("span", { className: "brief-copy" }, h("strong", {}, r.name), r.who && h("small", {}, r.who)),
   r.qty && h("span", { className: "brief-qty" }, r.qty),
 );
@@ -73,7 +79,7 @@ export function nearBrief(state, asks, participants = []) {
   const rows = [...g.first, ...(g.buy.length ? [{ emoji: emojiOf("장보기", "buy"), name: "장보기" }] : []), ...g.remember, ...g.bring];
   return h("section", { className: "ride-card near-card", role: "status" },
     h("p", { className: "brief-label" }, note ? "내리기 전, 가족이 말한 부탁" : rows.length ? "도착하면 할 일" : asks.kind === "stale" ? "받은 목록에는 이곳 부탁이 없어요" : "이곳에서 챙길 부탁은 아직 없어요"),
-    note ? h("p", {}, note) : rows.length > 0 && h("ul", { className: "near-rows" }, rows.map((r) => h("li", {}, h("span", { className: "brief-emoji", "aria-hidden": "true" }, r.emoji), h("strong", {}, r.name)))),
+    note ? h("p", {}, note) : rows.length > 0 && h("ul", { className: "near-rows" }, rows.map((r) => h("li", {}, emojiIcon(r.emoji), h("strong", {}, r.name)))),
     asks.kind === "stale" && h("p", { className: "meta" }, staleNote(asks)),
     h("p", { className: "near-foot" }, "정차하면 자세히 보여드릴게요"),
   );
@@ -88,7 +94,7 @@ export function arrivalBrief(state, asks, participants = []) {
   if (note || !g.todos.length)
     return [h("section", { className: "ride-card brief-card" }, h("p", { className: "brief-label" }, note ? "내리기 전, 가족이 말한 부탁" : asks.kind === "stale" ? "받은 목록에는 이곳 부탁이 없어요" : "여기서 챙길 부탁은 없어요"), note && h("p", { className: "ride-note" }, note)), footer];
   const buy = g.buy.length > 0 && h("section", { className: "ride-card brief-card" },
-    h("div", { className: "brief-head" }, h("span", { className: "brief-emoji small", "aria-hidden": "true" }, "🛒"), h("strong", {}, "잊지 말고 살 것"), h("span", { className: "brief-count" }, `${g.buy.length}개`)),
+    h("div", { className: "brief-head" }, emojiIcon("🛒", "brief-emoji small"), h("strong", {}, "잊지 말고 살 것"), h("span", { className: "brief-count" }, `${g.buy.length}개`)),
     h("ul", { className: "brief-rows" }, g.buy.map((r) => row({ ...r, who: "" })))); // 시안 P20: 살 것 줄은 이름·수량만(요청한 사람은 빼고)
   const first = card("먼저 할 일", g.first, "brief-first");
   const remember = card("잊지 말기", g.remember), bring = card("챙길 것", g.bring);

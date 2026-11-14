@@ -78,3 +78,14 @@ test("장면 자리 글: 들른 곳을 떠난 뒤와 곧 도착 중에는 다음
   assert.equal(wayLabel({ at: t0 + 70 * min, place: "강릉 숙소" }, done), "강릉 숙소", "마지막 도착 뒤에는 서버 글");
   assert.equal(wayLabel({ at: t0, place: null }, []), null);
 });
+
+test("번들 OpenStreetMap 지도(maps/gangneung.jpg): 범위 안 판단과 350×300 틀 cover 투영", async () => {
+  const { OSM, onBundledMap, osmProjector } = await import("./contents.js");
+  assert.equal(onBundledMap([[37.7519, 128.8761], [37.7645, 128.8996]]), true); // 하나로마트·강릉 숙소
+  assert.equal(onBundledMap([[37.7519, 128.8761], [37.6012, 129.0503], [37.5, 129.1]]), false); // 셋 중 둘이 밖이면 그린 지도
+  assert.equal(onBundledMap([]), false);
+  const p = osmProjector(350, 300), k = Math.max(350 / 1200, 300 / 840), ox = (350 - 1200 * k) / 2; // 높이에 맞춰 채움, 좌우가 넘침
+  const [x0, y0] = p([OSM.north, OSM.west]), [x1, y1] = p([OSM.south, OSM.east]);
+  assert.ok(Math.abs(y0) < 1e-9 && Math.abs(y1 - 300) < 1e-9, "북·남 끝이 틀 위아래 끝");
+  assert.ok(Math.abs(x0 - ox) < 1e-9 && x0 < 0 && Math.abs(x1 - (350 - ox)) < 1e-9, "동서는 틀보다 넓게(cover), 가운데 맞춤");
+});

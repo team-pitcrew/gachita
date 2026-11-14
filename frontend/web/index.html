@@ -32,26 +32,6 @@
   <body>
     <main id="app"></main>
 
-    <!-- 부탁 남기기. 화면을 다시 그려도 닫히지 않도록 #app 밖에 둔다. -->
-    <dialog id="sheet" aria-labelledby="sheet-title">
-      <form id="sheet-form">
-        <h2 id="sheet-title">어떤 부탁인가요?</h2>
-        <div class="chips" id="sheet-quick"></div>
-        <label class="field">
-          <span>부탁 내용</span>
-          <input id="sheet-text" name="text" required maxlength="200" autocomplete="off" placeholder="예: 화장실 가고 싶어요" />
-        </label>
-        <fieldset>
-          <legend>언제 챙길까요?</legend>
-          <div class="chips two" id="sheet-when"></div>
-        </fieldset>
-        <div class="row">
-          <button type="button" id="sheet-close">닫기</button>
-          <button class="primary grow">남기기</button>
-        </div>
-      </form>
-    </dialog>
-
     <p id="toast" role="status" hidden></p>
     <!-- 절대 주소: / 밖의 주소(구글 복귀 등)에서 열려도 같은 파일을 읽는다 -->
     <script type="module" src="/app.js"></script>

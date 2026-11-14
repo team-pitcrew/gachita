@@ -4,8 +4,8 @@ import { mediaButton, setMediaButton, audioPeaks, drawWaveform } from "/media-co
 // 이 폰이 누구인지(프로필 토큰, 여행마다 참가자 id와 토큰)는 localStorage에 둔다. 폰에서는 수음하지 않는다. 차가 표시한 참석 QR을 폰 카메라로 읽어 참여한다.
 // 사용자가 쓴 글은 textContent로만 넣는다(innerHTML 금지).
 
-import { SEATS, SEAT, WHEN, REQ, CLOSED, api, h, toast } from "/shared.js";
-import { createShares, shareIconButton } from "/shares.js";
+import { SEATS, SEAT, api, h, toast } from "/shared.js";
+import { createShares } from "/shares.js";
 import { createCaptions } from "/captions.js";
 import { createRecords } from "/records.js";
 import { createConversations } from "/conversations.js";
@@ -18,7 +18,7 @@ import { createBoarding } from "/boarding.js";
 import { accountReady, createOnboarding } from "/onboarding.js";
 import { createGroups } from "/groups.js";
 import { createAfterTrip } from "/after-trip.js";
-import { appBar, askState, CONTINUE_ASK, createPlaces, driveState, END_ASK, journeyTabs, recordingLine, rideHeading, seatMap, setAppBarEnd, statusMoves } from "/ride.js";
+import { appBar, askState, createPlaces, driveState, journeyTabs, recordingLine, rideHeading, seatMap, setAppBarEnd, statusMoves } from "/ride.js";
 import { createProfileMenu, forgetIdentity } from "/profile-menu.js";
 import { arrivalBrief, arrivalMove, nearBrief } from "/brief.js";
 
@@ -47,17 +47,8 @@ const CONSENT = [
 ];
 // 원본 말랑 10유형 × 큰·작은 전신 2종. API에는 20자 이내의 기존 character 값으로 저장합니다.
 const CHARACTERS = CHARACTER_OPTIONS;
-// 한 번 눌러 채우는 부탁: [단추 글자, 채울 문장, 언제]
-const QUICK = [
-  ["화장실", "화장실 가고 싶어요", "now"],
-  ["커피", "커피 사고 싶어요", "now"],
-  ["휴게소", "휴게소에 들러요", "now"],
-  ["편의점", "편의점에 들러요", "now"],
-  ["깨워 주세요", "도착 10분 전에 깨워 주세요", "before_arrival"],
-];
 
 const app = document.getElementById("app");
-const sheet = document.getElementById("sheet");
 // /#start는 계정·온보딩(T142). 여행 코드가 아니다.
 const code = () => (location.hash === "#me" || location.hash === "#start" ? "" : location.hash.slice(1).toUpperCase());
 // 이 폰이 기억하는 것. store(키)는 읽기, store(키, 값)은 쓰기, store(키, null)은 지우기.
@@ -126,9 +117,8 @@ const conversations = createConversations({
   avatar: (person) => personAvatar(person),
   isOnline: () => !offline,
   onHome: () => { location.hash = ""; },
-  onCaptions: () => captions.open(),
   onShorts: () => openContents(),
-  onScenes: () => afterTrip.open({ step: "select" }), // P44 '추천 장면 고르기' → 추천 장면 3개(P23). 옛 장면 고르기는 그 화면의 '직접 고르기'
+  onScenes: () => afterTrip.open({ step: "select" }), // P44 '추천 장면 고르기' → 추천 장면 3개(P23)
 });
 const todos = createTodos({
   getTrip: () => trip,
@@ -158,7 +148,7 @@ const scenes = createScenePicker({ getTrip: () => trip, getParticipant: () => tr
 const afterTrip = createAfterTrip({ getTrip: () => trip, getParticipant: () => trip?.participants.find((p) => p.id === myId()), getToken: myToken,
   request: (method, path, body, signal) => asMe(trip.participants.find((p) => p.id === myId()), (c, token) => api(method, `/trips/${c}${path}`, body, token, signal)),
   remember: store, avatar: (person) => personAvatar(person), getPlaces: () => places.items(), isOnline: () => !offline, onHome: () => { location.hash = ""; },
-  onTalk: () => conversations.open(), onContents: () => openContents(), onPick: () => scenes.open() });
+  onTalk: () => conversations.open(), onContents: () => openContents() });
 // 여행을 끝낸 직후(종료)에 이 폰에서 한 번, 그리고 멈춘 만들기가 남아 있으면 이 페이지에서 한 번 마무리 화면을 연다.
 // 주차(경유지·목적지 도착)에는 열지 않는다: 도착 브리핑(F4)을 덮지 않게, 장소를 읽기 전 첫 화면이 '주차'로 보여도. 주차 중에는 '여행 마무리 보기' 카드로 연다.
 // 다른 창(대화 기록·쇼츠·부탁 시트 등)이 열려 있으면 열지 않는다. 동의하고 이 폰에서 연결한 사람만.
@@ -231,8 +221,6 @@ const contents = createContents({
   onHome: () => { location.hash = ""; },
   onRide: () => render(),
   onTalk: () => openConversations(),
-  onProfile: () => { location.hash = "me"; },
-  onStudio: launchShort,
 });
 const openContents = () => contents.open();
 
@@ -604,7 +592,7 @@ function home() {
     h("span", { className: "entry-arrow", "aria-hidden": "true" }, uiIcon("arrow")),
   );
   return [
-    header(h("span", { className: "brand" }, "가치타"), h("span", { className: "meta" }, "함께 타고, 함께 남기고")),
+    appBar({ online: !offline, onHome: () => { location.hash = ""; } }),
     h("section", { className: "home-intro" },
       profile ? h("div", { className: "home-profile" }, editPortrait(), h("div", {}, h("p", { className: "meta" }, "오늘도 함께해요"), h("h1", {}, `${profile.name} 님`))) : h("h1", {}, "같이 탄 오늘,", h("br"), "함께 남겨요."),
       h("p", { className: "sub" }, profile ? "차 안에서 나눈 이야기가 우리만의 기록이 돼요." : "이름과 얼굴을 정하고, 차 화면의 QR을 스캔해 주세요."),
@@ -612,7 +600,8 @@ function home() {
     profile?.email && !profile.hasVoice && entry("record", "15초 목소리 등록", "차에서 말한 사람을 알아보는 데 써요", () => { onboarding.open(); location.hash = "start"; }),
     profile ? entry("qr", "차량 QR로 참여", "차 화면의 QR을 휴대폰으로 스캔해요", startRide, "ride-entry") : store("profile") ? profileConnection() : entry("pencil", "내 프로필 만들기", "사진 또는 캐릭터로 나를 소개해요", () => { location.hash = "me"; }, "ride-entry"),
     profile && entry("record", "우리 가족", "가족과 동승 그룹, 좌석과 초대 코드", () => groups.open()),
-    h("section", { className: "home-section" }, h("div", { className: "between" }, h("h2", {}, "다시 만나는 우리 이야기"), button("보관함", () => studio.open({ view: "library" }), "plain")), entry("play", "우리 쇼츠", "원래 목소리로 남긴 짧은 여행", launchShort)),
+    // 옛 쇼츠 보관함은 콘텐츠 기록 갤러리(P33)로 옮겨 갔다(폰은 쇼츠를 만들지 않는다, 11/15 오너).
+    profile && h("section", { className: "home-section" }, h("h2", {}, "다시 만나는 우리 이야기"), entry("play", "콘텐츠 기록", "여행에서 고른 장면으로 만든 영상", openContents)),
     last && h("section", { className: "home-section" },
       h("div", { className: "between" }, h("h2", {}, "함께한 여행"), button("여행 열기", () => { location.hash = last; }, "plain")),
       entry("record", "대화 기록", "최근에 탄 여행의 이야기를 이어 봐요", openConversations),
@@ -629,6 +618,8 @@ function home() {
       h("div", {}, h("h2", {}, "첫 이야기를 기다리고 있어요"), h("p", { className: "meta" }, "차에 연결하면 대화 기록과 남긴 장면이 여기에 모여요.")),
     ),
     h("p", { className: "home-footer" }, "우리의 목소리로 남기는 여행"),
+    // 도착 브리핑 그림(brief-icons/)의 라이선스 고지(CC-BY 4.0)와 콘텐츠 지도 바탕(OpenStreetMap, ODbL) 출처
+    h("p", { className: "home-footer license" }, "도착 브리핑 그림 Twemoji © Twitter, Inc. 외 · CC-BY 4.0 / 지도 © OpenStreetMap contributors"),
   ];
 }
 
@@ -701,7 +692,6 @@ function tripView(me) {
       const { deleted } = await asMe(me, (c, token) => api("DELETE", `/trips/${c}/utterances`, null, token));
       toast(deleted ? `내 이름이 붙은 글 ${deleted}줄을 지웠어요.` : "지울 내 글이 없어요.");
     });
-  const open = trip.requests.filter((r) => !CLOSED.includes(r.status));
 
   // 지금 상태 고르기. 할 일은 기록에 동의하고 이 폰에서 연결한 사람만 읽는다(todos.snapshot이 null이면 부탁을 말하지 않음).
   // 마지막 읽기가 실패한 목록(stale)으로는 완료·남은 수를 단정하지 않는다.
@@ -715,7 +705,7 @@ function tripView(me) {
 
   // 아래 단추: 기록 중지·재개(주행 중, 누구나), 곧 도착 '확인', 그 밖에는 운전석의 다음 여행 상태. 부탁 남기기는 늘 함께.
   const moves = driver ? statusMoves(trip) : [];
-  const move = ([label, status, ask], className) => button(label, () => (!ask || confirm(ask)) && patch("", { status })(), className);
+  const move = ([label, status], className) => button(label, () => patch("", { status })(), className); // 시안(P17–P21)에 확인 창이 없다
   const toggleRecording = async (e) => {
     const control = e.currentTarget;
     control.disabled = true;
@@ -728,30 +718,9 @@ function tripView(me) {
   else if (state.kind === "arrived" && driver) {
     // v2 도착 브리핑(T141): 경유지 '계속'(시안 P20), 최종 목적지 '여행 마치고 기록 보기'(끝낸 뒤 여행 마무리 P22로, 시연 24→25). 나머지 상태는 아래 카드에 남긴다.
     const [label, status] = arrivalMove(state);
-    main = button(label, () => confirm(status === "ended" ? END_ASK : CONTINUE_ASK) && patch("", { status })().then(() => status === "ended" && trip?.status === "ended" && !afterTrip.isOpen() && afterTrip.open()), "primary");
+    main = button(label, () => patch("", { status })().then(() => status === "ended" && trip?.status === "ended" && !afterTrip.isOpen() && afterTrip.open()), "primary");
     moves.splice(moves.findIndex((m) => m[1] === status), 1);
   } else if (moves.length) main = move(moves.shift(), "primary");
-  const ask = trip.status !== "ended" && button("부탁 남기기", () => (sheet.showModal(), sheet.querySelector("#sheet-text").focus()), main ? "secondary" : "primary");
-
-  // 운전자가 제안하고 수락한다. 반영 확인은 차량 앱이 내비 결과를 받은 뒤 누르는 자리다.
-  const request = (r) => {
-    const go = (label, status, className) => button(label, patch(`/requests/${r.id}`, { status }), className);
-    const actions = [
-      driver && r.status === "held" && go("들르자고 제안", "proposed"),
-      driver && r.status === "proposed" && go("수락", "accepted"),
-      driver && r.status === "proposed" && go("나중에", "held", "plain"),
-      driver && r.status === "accepted" && go("경유 반영 확인", "reflected"),
-      driver && r.status === "reflected" && go("완료", "done"),
-      !CLOSED.includes(r.status) && (driver || r.by === me.id) && go("취소", "cancelled", "plain"),
-    ].filter(Boolean);
-    return h(
-      "li",
-      { className: CLOSED.includes(r.status) ? "closed" : "" },
-      h("div", { className: "between" }, h("span", { className: "what grow" }, r.text), h("span", { className: `pill ${REQ[r.status][1]}` }, REQ[r.status][0])),
-      h("p", { className: "meta" }, `${by[r.by]?.name ?? "떠난 사람"} · ${WHEN[r.when]}`),
-      actions.length > 0 && h("div", { className: "row" }, actions),
-    );
-  };
 
   // 기록 상태 띠. 곧 도착 화면에서는 주 단추가 '확인'이라 기록 중지·재개를 띠 안에 둔다(멈추는 길을 가리지 않게).
   const band = (withToggle) => h("section", { className: `ride-status${recordOn ? " on" : ""}`, role: "status" },
@@ -772,57 +741,16 @@ function tripView(me) {
     journeyTabs("ride", { talk: () => conversations.open(), contents: openContents }),
     h("div", { className: "ride-title" }, h("h1", {}, heading.title), heading.sub && h("p", { className: "sub" }, heading.sub)),
     ...now,
-    // 곧 도착·도착에서는 위의 행동 항목이 같은 할 일을 보이므로 할 일 카드를 겹쳐 두지 않는다(v2 시안 P19·P20, T141)
-    !["near", "arrived"].includes(state.kind) && todos.card(),
-    // 폰에서 남긴 부탁이 있을 때만 보인다. 비어 있으면 시안(P17–P21)에 없는 빈 카드가 위의 브리핑('기억할 N가지')과 어긋나 보였다(T153).
-    trip.requests.length > 0 && h(
-      "section",
-      { className: "card" },
-      h("h2", {}, open.length ? `챙길 부탁 ${open.length}건` : "챙길 부탁"),
-      h("ul", {}, trip.requests.map(request)),
-    ),
-    h(
-      "section",
-      { className: "card" },
-      h("div", { className: "between" }, h("div", {}, h("p", { className: "what" }, "내 자리"), h("p", { className: "meta" }, `${SEAT[me.seat]} · ${TRIP[trip.status]}`)),
-        // 운전석의 나머지 여행 상태 단추(첫째는 아래 주 단추 자리). 시안 위쪽을 가리지 않게 여기 둔다.
-        moves.length > 0 && h("div", { className: "row ride-moves" }, moves.map((m) => move(m)))),
-      h(
-        "div",
-        { className: "between" },
+    // 시안(P17–P21) 밖의 기능 카드(할 일·챙길 부탁·내 자리·쇼츠·자막·공유)는 뺐다(11/15 오너 '시안에 맞춰 수렴'). 남긴 것은
+    // 법이 요구하는 동의 철회·동의 문구·내 글과 장면 소리 지우기뿐이고, 시안을 가리지 않게 접힌 한 줄로 둔다.
+    h("details", { className: "ride-privacy" }, h("summary", {}, "내 기록과 동의"),
+      h("div", { className: "between" },
         h("div", {}, h("p", { className: "what" }, "대화 기록 동의"), h("p", { className: "meta" }, me.consent ? "동의했어요." : "동의하지 않았어요.")),
-        me.consent ? button("동의 끄기", () => confirm(OFF_WIPES) && patch(`/participants/${me.id}`, { consent: false })()) : myToken() ? button("동의 켜기", () => ((reading = true), render(), scrollTo(0, 0))) : h("p", { className: "meta" }, ONLY_HERE),
-      ),
-      // 동의 문구가 약속한 지우기: 프로필로 참가한 사람의 자기 글(손님 발화는 누구 것인지 가릴 수 없어 서버가 403)
-      me.profileId &&
-        myToken() &&
-        h("div", { className: "between" }, h("div", {}, h("p", { className: "what" }, "내 글"), h("p", { className: "meta" }, "내 이름이 붙은 받아 적은 글")), button("내 글 지우기", eraseMine, "plain")),
-      // 이미 동의한 사람도 지금의 동의 문구(바뀐 것 포함)를 언제든 다시 본다
-      h("details", {}, h("summary", { className: "meta" }, "동의 문구 보기"), h("ul", {}, CONSENT.map((line) => h("li", {}, line)))),
-    ),
-    me.consent && myToken() && h("div", { className: "row" }, button("쇼츠로 남길 장면", () => scenes.open(), "grow primary"), button("자막 수정", () => captions.open(), "plain")),
-    trip.moments.length > 0 &&
-      h(
-        "section",
-        { className: "card" },
-        h("h2", {}, `남긴 장면 ${trip.moments.length}개`),
-        !(me.consent && myToken()) && h("p", { className: "meta" }, "기록에 동의한 사람만 숏폼을 볼 수 있어요."),
-        h(
-          "ul",
-          {},
-          trip.moments.map((m) =>
-            h(
-              "li",
-              { className: "between" },
-              h("div", { className: "grow" }, h("span", { className: "what" }, m.label || "이름 없는 장면"), " ", h("span", { className: "meta" }, new Date(m.at).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" }))),
-              me.consent && myToken() && button("원음·자막", () => scenes.open({ momentId: m.id }), "plain"),
-              myToken() && button("소리 지우기", () => eraseClip(m), "plain"),
-            ),
-          ),
-        ),
-      ),
-    profile && me.profileId === profile.id && me.consent && myToken() && trip.moments.length > 0 && h("section", { className: "card" }, h("div", { className: "between" }, h("h2", {}, "함께 나눌 장면"), shareIconButton("share", "내 장면 공유", () => shares.openCompose())), h("p", { className: "meta" }, "내 앨범에 남긴 장면과 받는 동승자를 직접 골라요.")),
-    (ask || main) && bar(ask, main),
+        me.consent ? button("동의 끄기", () => confirm(OFF_WIPES) && patch(`/participants/${me.id}`, { consent: false })()) : myToken() ? button("동의 켜기", () => ((reading = true), render(), scrollTo(0, 0))) : h("p", { className: "meta" }, ONLY_HERE)),
+      me.profileId && myToken() && h("div", { className: "between" }, h("div", {}, h("p", { className: "what" }, "내 글"), h("p", { className: "meta" }, "내 이름이 붙은 받아 적은 글")), button("내 글 지우기", eraseMine, "plain")),
+      myToken() && trip.moments.map((m) => h("div", { className: "between" }, h("div", {}, h("p", { className: "what" }, m.label || "이름 없는 장면"), h("p", { className: "meta" }, "남긴 장면의 소리")), button("소리 지우기", () => eraseClip(m), "plain"))),
+      h("details", {}, h("summary", { className: "meta" }, "동의 문구 보기"), h("ul", {}, CONSENT.map((line) => h("li", {}, line))))),
+    main && bar(main),
   ];
 }
 
@@ -1123,35 +1051,6 @@ function render() {
   }
 }
 
-// 부탁 남기기 시트는 한 번만 채운다
-{
-  const text = sheet.querySelector("#sheet-text");
-  sheet.querySelector("#sheet-quick").className = "chips free";
-  sheet.querySelector("#sheet-quick").append(
-    ...QUICK.map(([label, sentence, when]) =>
-      button(label, () => {
-        text.value = sentence;
-        sheet.querySelector(`input[name=when][value=${when}]`).checked = true;
-      }),
-    ),
-  );
-  sheet.querySelector("#sheet-when").append(...Object.entries(WHEN).map(([v, label]) => chip("when", v, label, { checked: v === "now", defaultChecked: v === "now" })));
-  sheet.querySelector("#sheet-close").onclick = () => sheet.close();
-  // 시트 위쪽 바깥을 누르면 닫는다. on* 속성에 넣은 함수가 false를 돌려주면 기본 동작(폼 제출)까지 막히므로 addEventListener를 쓴다.
-  sheet.addEventListener("click", (e) => {
-    if (e.target === sheet && e.clientY < sheet.getBoundingClientRect().top) sheet.close();
-  });
-  sheet.querySelector("form").onsubmit = (e) => {
-    e.preventDefault();
-    const body = { by: myId(), text: text.value, when: new FormData(e.target).get("when") };
-    act(async () => {
-      await call("POST", `/${code()}/requests`, body);
-      sheet.close();
-      e.target.reset();
-      toast("부탁을 남겼어요.");
-    });
-  };
-}
 
 addEventListener("hashchange", () => (boarding.close(), location.hash !== "#start" && onboarding.close(), openingShort?.abort(), (reading = false), short && closeShort(), location.hash === "#me" && fillDraft(), (trip = null), (failed = ""), refresh(true)));
 app.addEventListener("focusout", () => setTimeout(() => stale && !typing() && render())); // 입력이 끝나면 밀린 변경을 그린다

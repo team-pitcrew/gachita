@@ -650,7 +650,6 @@ input[type="file"]::file-selector-button {
 /* 홈은 연결과 보관함, 여행 안에서는 여행·대화·쇼츠로 같은 목적지를 유지한다. */
 .home-view { gap: 28px; padding-bottom: 32px; }
 .home-view .top { margin-bottom: 4px; }
-.home-view .top > .meta { font-size: 12px; }
 .home-intro { display: grid; gap: 20px; }
 .home-intro h1 { margin: 0; font-size: 32px; line-height: 1.3; letter-spacing: -.04em; }
 .home-intro > .sub { font-size: 15px; max-width: 32ch; }
@@ -695,7 +694,7 @@ input[type="file"]::file-selector-button {
 .journey-tabs button.selected { background: var(--accent-soft); color: var(--ink); }
 
 /* 대화 기록(최종 시안 P44). 머리·탭·바닥은 고정하고 본문만 스크롤한다. 대화 입력창은 두지 않는다. */
-.conversations-dialog { width: min(100%, 520px); height: 100dvh; max-height: 100dvh; max-width: 520px; margin: 0 auto; padding: 0; border-radius: 0; background: var(--bg); overflow: hidden; }
+.conversations-dialog { width: min(100%, 480px); height: 100dvh; max-height: 100dvh; max-width: 480px; margin: 0 auto; padding: 0; border-radius: 0; background: var(--bg); overflow: hidden; }
 .conversations-dialog[open] { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; gap: 12px; animation: none; }
 .conversations-dialog:not(.contents-dialog)[open] { gap: 16px; } /* 시안 P44(eZ2xs): 머리 줄–탭–제목 간격 16 */
 .conversations-dialog .app-bar { padding: max(20px, env(safe-area-inset-top)) var(--pad) 0; } /* 시안 P44: 머리 줄 y 20, 탭 64, 제목 124 */
@@ -954,7 +953,7 @@ input[type="file"]::file-selector-button {
 
 /* 함께 타는 중(최종 시안 P17–P21). 색은 위의 밝은·어두운 토큰, 반경은 --r-phone-*를 쓴다. 글꼴은 앱의 Pretendard(시안은 Noto Sans KR). */
 .ride-view { gap: 12px; }
-.app-bar { min-height: 32px; } /* 시안 app bar 350×32. 처음으로 단추는 44px 누름 영역을 위아래 6px씩 넘겨 둔다 */
+.app-bar { min-height: 32px; } /* 시안 app bar 350×32. 처음으로·내 얼굴 단추는 44px 누름 영역을 위아래 6px씩 넘겨 둔다(전역 button 최소 48을 44로 눌러야 머리 줄이 36이 되지 않는다) */
 button.brand-home { min-height: 44px; margin-block: -6px; padding: 0 4px 0 0; gap: 10px; background: none; color: var(--ink); font-size: 19px; font-weight: 700; letter-spacing: -0.01em; }
 .app-bar .brand::before { width: 24px; height: 24px; border-radius: 0; background: center / contain no-repeat var(--mascot-mark); }
 .link-state { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink-2); }
@@ -980,6 +979,10 @@ button.brand-home { min-height: 44px; margin-block: -6px; padding: 0 4px 0 0; ga
 .ride-status strong { font-size: 19px; line-height: 28px; }
 .ride-status .meta { font-size: 13px; line-height: 18px; }
 .ride-card { display: grid; gap: 14px; padding: 20px; border-radius: var(--r-phone-card); background: var(--surface); }
+/* 시안 밖이지만 법이 요구하는 동의 철회·동의 문구·지우기 — 함께 타는 중 아래 접힌 한 줄(11/15 수렴) */
+.ride-privacy { padding: 4px 4px; color: var(--ink-2); }
+.ride-privacy > summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; font-size: 13px; line-height: 18px; color: var(--ink-2); }
+.ride-privacy[open] { display: grid; gap: 12px; padding: 4px 16px 16px; border-radius: var(--r-phone-card); background: var(--surface); }
 .near-card { gap: 8px; padding: 16px; border-radius: var(--r-phone-panel); background: var(--accent-soft); } /* 시안 P19(eZ2xs) 350×198: 반경 20·여백 16·간격 8 */
 .near-card .brief-label { color: var(--accent); }
 .near-rows { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
@@ -997,7 +1000,6 @@ button.brand-home { min-height: 44px; margin-block: -6px; padding: 0 4px 0 0; ga
 .ask-title { font-size: 19px; line-height: 28px; font-weight: 700; white-space: pre-wrap; overflow-wrap: anywhere; }
 .ask-detail { font-size: 15px; line-height: 22px; font-weight: 500; color: var(--ink-2); }
 .ride-note { font-size: 13px; line-height: 18px; color: var(--ink-2); }
-.ride-moves button { background: var(--surface-2); color: var(--ink); border-radius: var(--r-phone-ctl); }
 .ride-view .bar button { border-radius: var(--r-phone-ctl); }
 .ride-view .bar button.primary, .bar button.secondary { font-size: 19px; }
 .ride-view .bar button.big { min-height: 76px; }
@@ -1098,8 +1100,8 @@ button.ob-other { justify-self: start; min-height: 40px; font-size: 13px; font-w
 .group-ready { font-size: 13px; line-height: 18px; color: var(--accent); }
 .group-seats .seat { border: 0; font: inherit; color: inherit; }
 .group-seats .seat.picked, .group-ghost.picked { outline: 3px solid var(--accent); }
-.group-actions { position: fixed; left: 0; right: 0; bottom: 0; padding: 4px var(--pad) calc(20px + env(safe-area-inset-bottom)); background: linear-gradient(to top, var(--bg) 78%, transparent); }
-.group-actions > * { max-width: calc(480px - var(--pad) * 2); margin: 8px auto 0; }
+/* 바닥 단추 묶음은 .bar와 같은 틀: 폰 열(최대 480) 가운데, 좌우 20, 단추는 열 폭을 채운다. 넓은 화면에서 초록 단추만 왼쪽에 붙던 것(inline 단추에 auto 여백이 안 먹음)을 막는다. */
+.group-actions { position: fixed; left: 0; right: 0; bottom: 0; display: grid; gap: 8px; padding: 12px max(var(--pad), calc(50% - 240px + var(--pad))) calc(20px + env(safe-area-inset-bottom)); background: linear-gradient(to top, var(--bg) 78%, transparent); }
 .group-actions:empty { display: none; }
 .group-share { width: min(350px, calc(100vw - 40px)); box-sizing: border-box; padding: 20px; border: 0; border-radius: 28px; background: var(--surface); color: var(--ink); display: grid; gap: 12px; } /* 시안 2047:2316 350×292 */
 .group-share h2 { margin: 0; font-size: 22px; line-height: 30px; letter-spacing: -0.01em; }
@@ -1153,8 +1155,8 @@ button.ob-other { justify-self: start; min-height: 40px; font-size: 13px; font-w
 .brief-rows { display: grid; gap: 12px; }
 .brief-rows li { padding: 0; border: 0; }
 .brief-row { display: grid; grid-template-columns: 30px 1fr auto; align-items: center; gap: 12px; min-height: 30px; } /* 시안 행동 항목: 이름만 318×30, 요청한 사람까지 318×48 · 이모지 30 */
-.brief-emoji { font-size: 26px; line-height: 30px; text-align: center; }
-.brief-emoji.small { font-size: 24px; line-height: 28px; }
+.brief-emoji { display: block; width: 30px; height: 30px; font-size: 26px; line-height: 30px; text-align: center; } /* 시안 'Briefing / emoji / Phone 30'(Twemoji, brief-icons/) */
+.brief-emoji.small { width: 24px; height: 24px; font-size: 22px; line-height: 24px; }
 .brief-copy { display: grid; gap: 2px; min-width: 0; }
 .brief-copy strong { font-size: 19px; line-height: 28px; letter-spacing: -0.01em; overflow-wrap: anywhere; }
 .brief-copy small { font-size: 13px; line-height: 18px; color: var(--ink-2); }
@@ -1164,7 +1166,6 @@ button.ob-other { justify-self: start; min-height: 40px; font-size: 13px; font-w
 @media (prefers-color-scheme: dark) { :root { --tint-2: #3a3122; --tile-0: #3a3122; --tile-1: #3a2733; --map-bg: #26231f; --map-road: #c9c0b2; --map-water: #5c7a80; } }
 .contents-dialog .contents-body { display: grid; align-content: start; gap: 12px; padding: 0 var(--pad) 12px; overflow-y: auto; }
 .contents-title .between { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.contents-studio { min-height: 32px; padding: 0 10px; border-radius: 10px; background: none; color: var(--ink-2); font-size: 13px; font-weight: 500; }
 /* 콘텐츠 기록(시안 eZ2xs P33–P38). 보기 전환 'Archive / 보기 전환 / Phone': 흰 틀 350×44·반경 12·여백 4, 칸 36·반경 8, 고른 칸 surface-2·굵게 */
 .contents-dialog .contents-body { gap: 20px; }
 .contents-dialog .contents-title + .contents-seg { margin-top: -8px; } /* 시안: 제목–보기 전환 12, 그 아래 20 */
@@ -1212,6 +1213,9 @@ button.content-more { justify-self: start; min-height: 44px; padding: 0; backgro
 .content-map-card { display: grid; gap: 12px; }
 .content-map { position: relative; aspect-ratio: 350 / 300; border-radius: 16px; overflow: hidden; background: var(--map-bg); }
 .content-map-art { position: absolute; inset: 0; width: 100%; height: 100%; }
+.content-map-tiles { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; } /* 번들 OpenStreetMap 그림(maps/), 타일 서버 안 부름 */
+.content-map-credit { position: absolute; left: 10px; bottom: 6px; margin: 0; font-size: 13px; line-height: 18px; color: var(--ink); text-shadow: 0 0 3px var(--surface); }
+.content-map.real .map-route { stroke: var(--accent); stroke-width: 3; }
 .content-map-art .map-road { fill: none; stroke: var(--map-road); stroke-width: 2; }
 .content-map-art .map-water { fill: var(--map-water); stroke: none; }
 .content-map-art .map-route { fill: none; stroke: var(--accent); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
@@ -1235,7 +1239,7 @@ button.content-more { justify-self: start; min-height: 44px; padding: 0; backgro
 .content-empty { margin: 0; font-size: 19px; font-weight: 700; line-height: 28px; color: var(--ink-2); }
 /* 여행 마무리·추천 장면 고르기·생성·완성(최종 시안 P22–P32). 대화 기록과 같은 틀: 머리·탭·바닥은 고정하고 본문만 스크롤한다.
    시안의 완성 카드 바탕(크림·분홍)은 토큰에 없어 민트 연한 바탕과 surface-2를 번갈아 쓴다. */
-.after-dialog { width: min(100%, 520px); height: 100dvh; max-height: 100dvh; max-width: 520px; margin: 0 auto; padding: 0; border-radius: 0; background: var(--bg); overflow: hidden; }
+.after-dialog { width: min(100%, 480px); height: 100dvh; max-height: 100dvh; max-width: 480px; margin: 0 auto; padding: 0; border-radius: 0; background: var(--bg); overflow: hidden; }
 .after-dialog[open] { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; gap: 12px; animation: none; }
 .after-dialog .app-bar { padding: max(20px, env(safe-area-inset-top)) var(--pad) 0; } /* 시안 P22–P32: 머리 줄 y 20, 탭 64, 제목 124 */
 .after-dialog .journey-tabs { margin: 0 var(--pad); }
@@ -1254,24 +1258,11 @@ button.content-more { justify-self: start; min-height: 44px; padding: 0; backgro
 .wave-axis { display: flex; justify-content: space-between; font-size: 13px; line-height: 18px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
 .scene-pick { display: grid; gap: 4px; padding: 12px; border-radius: var(--r-phone-card); background: var(--surface); }
 .scene-pick.on { background: var(--accent-soft); }
-.scene-pick label { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
-.scene-pick input { flex: none; width: 22px; height: 22px; margin: 3px 0 0; accent-color: var(--accent); }
+.scene-pick label { display: flex; align-items: flex-start; gap: 6px; cursor: pointer; } /* 시안 P23–P30: '☐ 1. 제목' 한 줄 — 상자는 제목 글자 앞 */
+.scene-pick input { flex: none; width: 18px; height: 18px; min-height: 0; margin: 5px 0 0; accent-color: var(--ink); }
 .pick-copy { display: grid; gap: 4px; min-width: 0; text-align: left; } /* 시안 장면 카드 350×78: 여백 12, 19/28 · 15/22, 간격 4 */
 .pick-copy strong { font-size: 19px; line-height: 28px; letter-spacing: -0.01em; overflow-wrap: anywhere; }
 .pick-time { font-size: 15px; font-weight: 500; line-height: 22px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
-.scene-pick details { padding-left: 32px; }
-.scene-pick summary { min-height: 32px; display: flex; align-items: center; gap: 6px; cursor: pointer; list-style: none; }
-.scene-pick summary::-webkit-details-marker { display: none; }
-.scene-pick summary::after { content: "대화 보기"; flex: none; margin-left: auto; font-size: 13px; color: var(--ink-2); text-decoration: underline; text-underline-offset: 3px; }
-.scene-pick details[open] summary::after { content: "접기"; }
-.pick-quote { min-width: 0; font-size: 15px; line-height: 22px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pick-lines { gap: 6px; padding: 4px 0 8px; font-size: 15px; line-height: 22px; }
-.pick-lines li + li { padding-top: 0; border-top: 0; }
-.make-items, .pick-lines { margin: 0; padding: 0; list-style: none; }
-.make-items { gap: 6px; font-size: 15px; line-height: 22px; }
-.make-items li { display: flex; justify-content: space-between; gap: 12px; }
-.make-items li + li { padding-top: 6px; }
-.make-items .meta { flex: none; font-size: 13px; text-align: right; max-width: 55%; }
 button.after-pick { justify-self: center; min-height: 44px; color: var(--ink-2); text-decoration: underline; text-underline-offset: 3px; }
 .after-bottom { display: grid; gap: 8px; padding: 0 var(--pad) max(20px, env(safe-area-inset-bottom)); } /* 시안 하단 작업: 아래 20 */
 .after-bottom button { min-height: 56px; border-radius: var(--r-phone-ctl); font-size: 19px; font-weight: 700; background: var(--surface-2); color: var(--ink); }
@@ -1308,7 +1299,7 @@ button.after-pick { justify-self: center; min-height: 44px; color: var(--ink-2);
 
 /* 오른쪽 위 내 얼굴과 프로필 드롭다운(시안 C17m 2206:5852·로그아웃 확인 2220:5864를 폰 톤으로, docs/design.md §5) */
 .app-bar-end { display: inline-flex; align-items: center; gap: 12px; margin-left: auto; }
-.me-button { flex: none; display: inline-grid; place-items: center; width: 44px; height: 44px; margin: -6px -6px -6px 0; padding: 0; border-radius: 50%; background: none; }
+.me-button { flex: none; display: inline-grid; place-items: center; width: 44px; height: 44px; min-height: 44px; margin: -6px -6px -6px 0; padding: 0; border-radius: 50%; background: none; }
 .me-button .avatar { width: 32px; height: 32px; background-color: var(--surface-2); }
 .me-button .avatar, .menu-head .avatar, .profile-hero .avatar { border-radius: 50%; overflow: hidden; } /* 시안 '프로필 사진' 원(캐릭터도 원 안에) */
 .menu-dialog { position: fixed; inset: 0; width: 100vw; max-width: none; height: 100dvh; max-height: none; margin: 0; padding: max(56px, calc(env(safe-area-inset-top) + 48px)) 16px 16px; border: 0; border-radius: 0; background: rgb(0 0 0 / 0.56); color: var(--ink); }
