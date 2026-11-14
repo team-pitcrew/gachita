@@ -77,8 +77,9 @@ internal fun parseContentTrip(json: JSONObject): ContentTrip {
     val members = json.optJSONArray("members").list { ContentPerson(it.getString("participantId"), it.optString("name"), it.optString("character"), it.str("seat")) }
     val seat = members.associate { it.id to it.seat }
     val route = json.optJSONArray("route")?.let { a -> (0 until a.length()).map { a.getJSONArray(it).let { p -> p.getDouble(0) to p.getDouble(1) } } }.orEmpty()
+    val places = json.optJSONArray("places").list { ContentPlace(it.optString("kind"), it.optString("name"), it.optLong("at")) }.filter { it.name.isNotBlank() }.sortedBy { it.at }
     return ContentTrip(json.getString("code"), json.optString("title"), json.optLong("createdAt"), members,
-        json.optJSONArray("places").list { ContentPlace(it.optString("kind"), it.optString("name"), it.optLong("at")) }.filter { it.name.isNotBlank() }.sortedBy { it.at },
+        places,
         route,
         json.optJSONArray("contents").list { c ->
             ContentItem(c.getString("id"), c.optString("title"), c.optDouble("seconds", 0.0), c.getLong("at"), c.num("from")?.toLong(), c.num("lat"), c.num("lng"),
@@ -86,7 +87,7 @@ internal fun parseContentTrip(json: JSONObject): ContentTrip {
                 c.optJSONArray("cast").list { ContentPerson(it.getString("participantId"), it.optString("name"), it.optString("character"), seat[it.getString("participantId")]) },
                 c.optJSONArray("lines").list { ContentLine(it.getLong("at"), it.str("participantId"), it.str("name"), it.optString("text")) },
                 c.getString("url"))
-        }.sortedBy { it.at })
+        }.map { it.copy(place = contentWay(it.at, it.place, places)) }.sortedBy { it.at })
 }
 
 private fun hhmm(at: Long) = SimpleDateFormat("HH:mm", Locale.KOREA).format(Date(at))
@@ -107,7 +108,28 @@ internal fun contentTripLine(places: List<ContentPlace>): String {
 /** 지도 아래 '동해고속도로 → 하나로마트 → 강릉 숙소': 출발·곧 도착을 뺀 장소 이름을 처음 나온 순서로. */
 internal fun contentPlaceChain(places: List<ContentPlace>) = places.filter { it.kind != "start" && it.kind != "approaching" }.map { it.name.trim() }.distinct().joinToString(" → ")
 
-internal fun contentPinLabel(title: String) = title.trim().let { if (it.length > 10) it.take(9) + "…" else it }
+/**
+ * Place line of a moment. The server sends the last place name before it. After arriving somewhere (A) and before the next arrival (B),
+ * or while approaching B, the design reads 'B 가는 길' (C34 '강릉 숙소 가는 길', player2 '하나로마트 가는 길'). Otherwise the server name stays.
+ */
+internal fun contentWay(at: Long, place: String?, places: List<ContentPlace>): String? {
+    val last = places.lastOrNull { it.at <= at && it.kind in setOf("start", "approaching", "arrived") }
+    if (last?.kind == "approaching") return "${last.name.trim()} 가는 길"
+    if (last?.kind != "arrived") return place
+    val from = last.name.trim()
+    val next = places.firstOrNull { it.at > at && it.kind == "arrived" && it.name.trim() != from }
+        ?: places.lastOrNull { p -> p.kind == "destination" && p.name.trim() != from && places.none { it.kind == "arrived" && it.at <= at && it.name.trim() == p.name.trim() } }
+    return next?.let { "${it.name.trim()} 가는 길" } ?: place
+}
+
+/** Map pin label (C35 '아빠보다 빠른 정답'): when long, drop a speaker's '○○의 ', then cut at a word boundary. */
+internal fun contentPinLabel(title: String, names: List<String> = emptyList()): String {
+    var t = title.trim()
+    names.forEach { if (it.isNotBlank() && t.length > 10) t = t.replace("${it}의 ", "") }
+    if (t.length <= 10) return t
+    val cut = t.take(10).lastIndexOf(' ')
+    return t.take(if (cut > 0) cut else 9) + "…"
+}
 
 // mock: 서버에 장면 머리글(시안 '바다를 찾는 아빠와 이미 찾은 서준')의 원천이 없다. 말한 사람 이름으로 만든 글(#392 플랜 표 '목업').
 internal fun contentHeadline(item: ContentItem): String {
@@ -454,7 +476,7 @@ private fun MapCard(trip: ContentTrip, pin: String?, tones: List<Color>, modifie
                         modifier = Modifier.offset(dx.coerceAtLeast(0.dp), dy.coerceAtLeast(0.dp)).size(pinW, pinH)) {
                         Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Face(x.cast.getOrNull(1) ?: x.cast.firstOrNull(), 48.dp)
-                            Text(contentPinLabel(x.title), fontSize = 20.sp, color = c.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(contentPinLabel(x.title, x.cast.map { it.name }), fontSize = 20.sp, color = c.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     }
                 } }
