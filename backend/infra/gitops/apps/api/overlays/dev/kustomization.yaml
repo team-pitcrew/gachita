@@ -7,4 +7,4 @@ resources:
   - ../../base
 images:
   - name: ghcr.io/team-pitcrew/gachita-api
-    newTag: "475c46d3fbc1" # 병합 때 ci.yml의 publish가 올린 develop(#148). make deploy-tag TAG=<올린 태그> 로 바꾼다(커밋 SHA 앞 12자, 따옴표 필수)
+    newTag: "dbdf2e5bbebe" # 병합 때 ci.yml의 publish가 올린 develop(#148). make deploy-tag TAG=<올린 태그> 로 바꾼다(커밋 SHA 앞 12자, 따옴표 필수)
