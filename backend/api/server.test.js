@@ -2034,7 +2034,7 @@ test("장소별 할 일은 실제 전사·교정본에서 묶고 완료·취소�
   const [, stranger] = await join(another.code, "다른 여행", "ROW_1_LEFT");
   assert.equal((await call("GET", `${t}/todos`))[0], 401);
   assert.equal((await call("GET", `${t}/todos`, null, stranger.token))[0], 401);
-  assert.deepEqual((await call("GET", `${t}/todos`, null, p.token))[1], { generation: 1, method: "place-rules-v1", items: [], arrival: null });
+  assert.deepEqual((await call("GET", `${t}/todos`, null, p.token))[1], { generation: 1, method: "place-rules-v2", items: [], arrival: null });
   const texts = ["마트에서 우유 사자", "숙소에서는 아이 가방부터 꺼내야지", "마트에서 우유 사자", "화장실 가고 싶어"];
   const items = texts.map((text, i) => ({ seq: i + 1, at: trip.createdAt + i * 1000, text }));
   assert.equal((await call("POST", `${t}/utterances`, { device: "web-source", generation: 1, items }, p.token))[0], 200);
@@ -2063,7 +2063,7 @@ test("장소별 할 일은 실제 전사·교정본에서 묶고 완료·취소�
   await call("PATCH", `${t}/participants/${p.id}`, { consent: false });
   assert.equal((await list())[0], 403);
   await call("PATCH", `${t}/participants/${p.id}`, { consent: true }, p.token);
-  assert.deepEqual((await list())[1], { generation: 2, method: "place-rules-v1", items: [], arrival: null });
+  assert.deepEqual((await list())[1], { generation: 2, method: "place-rules-v2", items: [], arrival: null });
   assert.equal((await tripsDb().query("SELECT count(*)::int AS n FROM todo_states WHERE trip_code=$1", [trip.code])).rows[0].n, 0);
   assert.equal((await call("PATCH", path, body, p.token))[0], 409);
 });
@@ -2099,6 +2099,8 @@ test("도착 브리핑은 현재 여행 주차·최신 위치·장소 범위를 
   const result = (await briefing())[1];
   assert.equal(result.eligible, true); assert.equal(result.items.length, 1);
   assert.equal(result.items[0].place, "마트"); assert.equal(result.distanceMeters, 0);
+  assert.equal(result.method, "place-rules-v2");
+  assert.deepEqual([result.items[0].category, result.items[0].items, result.items[0].requestedBy], ["buy", [{ name: "우유", qty: null }], []], "도착 브리핑 항목에도 행동 항목 칸이 있습니다(T141)");
   assert.equal(result.source, "browser");
   const arrival = async () => (await call("GET", `${t}/todos`, null, p.token))[1].arrival;
   assert.deepEqual(await arrival(), { place: "이마트 강릉점", at: input.observedAt, source: "browser" }, "도착 판정을 받은 장소 이름만 남겨 폰이 읽습니다(T119)");
