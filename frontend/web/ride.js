@@ -86,7 +86,9 @@ export function driveState(trip, { places: items = [], arrival = null, seenArriv
   if (status === "boarding" || status === "ended") return { kind: status, target };
   if (status === "parked") {
     const place = arrival?.place || (last?.kind === "arrived" ? last.name : "");
-    return place ? { kind: "arrived", place, target } : { kind: "parked", target };
+    // 최종 목적지(finalBrief)인지: 차가 남긴 목적지 기록과 이름이 같을 때(v2 도착 브리핑, T141)
+    const final = Boolean(place) && places.some((p) => p.kind === "destination" && key(p.name) === key(place));
+    return place ? { kind: "arrived", place, target, final } : { kind: "parked", target };
   }
   if (last?.kind === "approaching" && placeId(last) !== nearSeen) return { kind: "near", place: last.name, eta: Number.isFinite(last.etaSeconds) ? last.etaSeconds : null, target: last.name, id: placeId(last) };
   if (!trip?.recording) return { kind: "paused", target };
@@ -103,12 +105,12 @@ export function askState(list) {
   if (!list.ready) return { kind: list.error ? "failed" : "loading", items: [] };
   return { kind: list.error ? "stale" : "fresh", items: Array.isArray(list.items) ? list.items : [], at: list.at ?? null };
 }
-const ASK_NOTE = {
+export const ASK_NOTE = {
   denied: "기록에 동의하고 이 폰에서 연결한 사람만 부탁을 볼 수 있어요.",
   loading: "부탁을 불러오고 있어요.",
   failed: "연결이 끊겨 부탁을 불러오지 못했어요. 다시 이어지면 보여 드려요.",
 };
-const staleNote = (asks) => `연결이 끊겨 ${asks.at ? `${hhmm(asks.at)}에 ` : ""}받은 부탁이에요. 그 뒤에 바뀐 것은 아직 보이지 않아요.`;
+export const staleNote = (asks) => `연결이 끊겨 ${asks.at ? `${hhmm(asks.at)}에 ` : ""}받은 부탁이에요. 그 뒤에 바뀐 것은 아직 보이지 않아요.`;
 
 // 그 장소에서 챙길 미완료 할 일(서버와 같은 이름 포함 규칙).
 export const asksAt = (items, place) => (place && Array.isArray(items) ? items.filter((t) => t.status === "pending" && placeMatches(t.place, place)) : []);
@@ -152,12 +154,13 @@ export function rideHeading(state, { title, waiting = [], asks = null } = {}) {
   switch (state.kind) {
     case "drive": return { title: "지금은 운전에 집중하세요", sub: [trip, going].filter(Boolean).join(" / ") };
     case "paused": return { title: "기록을 잠시 멈췄어요", sub: waiting.length ? `${waiting.join(", ")} 님의 기록 동의를 기다리고 있어요.` : "대화가 더 이상 기록되지 않아요." };
-    case "near": return { title: `곧 ${state.place}에 도착해요`, sub: [state.eta != null && `도착 약 ${Math.max(1, Math.round(state.eta / 60))}분 전`, "일행이 말한 부탁"].filter(Boolean).join(" / ") };
-    case "arrived": return { title: `${state.place}에 도착했어요`, sub: "내리기 전, 일행이 말한 부탁을 한눈에" };
+    case "near": return { title: `곧 ${state.place}에 도착해요`, sub: [state.eta != null && `도착 약 ${Math.max(1, Math.round(state.eta / 60))}분 전`, "가족이 말한 부탁"].filter(Boolean).join(" / ") };
+    // v2 도착 브리핑(P20·finalBrief, T141): 경유지는 먼저 할 일과 살 것, 최종 목적지는 세 가지
+    case "arrived": return { title: `${state.place} 도착`, sub: state.final ? "내리기 전, 이 세 가지만 기억하세요" : "먼저 할 일과 살 것을 모았어요" };
     case "continue": {
       const left = todos && asksAt(todos, state.place).length;
       const done = todos == null ? `${state.place}에서 다시 출발` : left ? `${state.place}의 부탁 ${left}건 남음` : `${state.place}의 부탁은 완료`;
-      return { title: "다시, 우리의 여행", sub: [done, state.target && `${ro(state.target)} 이동`].filter(Boolean).join(" / ") };
+      return { title: "다시, 우리 가족의 여행", sub: [done, state.target && `${ro(state.target)} 이동`].filter(Boolean).join(" / ") };
     }
     case "parked": return { title: "주차했어요", sub: "이번 주행의 기록을 마감했어요." };
     case "ended": return { title: "여행을 마쳤어요", sub: "함께한 대화와 남긴 장면을 다시 볼 수 있어요." };

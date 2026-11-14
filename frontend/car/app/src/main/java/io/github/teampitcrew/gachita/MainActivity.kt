@@ -114,6 +114,7 @@ class MainActivity : ComponentActivity() {
     private val main = Handler(Looper.getMainLooper())
     private lateinit var prefs: SharedPreferences
     private lateinit var car: Car
+    private lateinit var onboarding: Onboarding // 계정·온보딩 C01–C08(T142, Onboarding.kt)
 
     private var state by mutableStateOf(Session())
 
@@ -160,7 +161,7 @@ class MainActivity : ComponentActivity() {
         }
     private enum class Destination(val label: String) { RIDE("함께 타는 중"), CONVERSATION("대화 기록"), SHORTS("콘텐츠 기록") } // 콘텐츠 기록은 K3 전까지 쇼츠 화면
     private var destination by mutableStateOf(Destination.RIDE)
-    // 가족·동승 그룹(흐름 F2, Family.kt). mock: 차 로그인(흐름 F1) 전에는 디버그 실행 인자(--es profileToken)로만 토큰을 받는다.
+    // 가족·동승 그룹(흐름 F2, Family.kt). 토큰은 차 로그인(흐름 F1, Onboarding.token). 디버그 실행 인자 --es profileToken이 있으면 그것을 앞세운다(시험용).
     private var familyOpen by mutableStateOf(false)
     private var profileToken by mutableStateOf<String?>(null)
     private var shortStudioActive = false
@@ -213,10 +214,23 @@ class MainActivity : ComponentActivity() {
     private var enrolling by mutableStateOf<Person?>(null)
     private var voiceNote by mutableStateOf("")
     private var clipsAfter = 0L // 다시 해도 되는 실패(403·503·끊김) 뒤에는 이때까지 쉰다. 큰 원음 파일을 10초마다 다시 읽지 않게
-    private val todoList get() = todoState.items
+    private var carTodos: Pair<String, List<TodoAction>> = "" to emptyList()
+    /**
+     * 할 일은 차가 자기 보관함의 발화로 도출하고(T144, TodoActions.kt), 서버 목록에서는 상태·버전과 차에 없는 것(폰 입력·교정본)만 받는다.
+     * 참가자 동의가 없거나 보관함의 동의 세대가 서버 목록의 세대와 다르면 차 결과를 쓰지 않는다. 상태 바꾸기는 그대로 PATCH /todos/{id}.
+     */
+    private val todoList: List<SharedTodo> get() {
+        val scope = todoState.scope ?: return emptyList()
+        val box = Live.box?.takeIf { it.trip == scope.trip && it.generation == scope.generation } ?: return todoState.items
+        val key = "${box.trip}:${box.generation}:${Live.count}" // Live.count는 화면 상태라 새 발화가 들어오면 다시 그린다
+        if (carTodos.first != key) carTodos = key to deriveActionTodos(box.lines().map { TodoLine("car", it.seq, it.startedAt, it.text) })
+        return withCarTodos(carTodos.second, todoState.items)
+    }
     /** 보이고 있는 도착 브리핑. place가 null이면 모든 장소(Gleo로 부름). 주차해 주행 제한이 풀렸을 때만 그린다. */
-    private data class Brief(val place: String?, val arrivalItems: List<SharedTodo>? = null)
+    private data class Brief(val place: String?, val arrivalItems: List<SharedTodo>? = null, val final: Boolean = false)
     private var brief by mutableStateOf<Brief?>(null)
+    private var near by mutableStateOf<Approach?>(null) // 도착 전 브리핑(C19·finalNear). 주행 중 조회마다 내비 남은 시간으로 바꾸고 주차하면 지운다
+    private var f4Mock by mutableStateOf<String?>(null) // mock: 디버그 빌드의 --es f4 …(F4 화면 확인용 시연 데이터, Arrival.kt F4Mock)
     private var appVisible by mutableStateOf(false) // onStart ~ onStop
     private var resumed = false // 우리 화면이 앞: 마이크 서비스는 이때만 시작할 수 있다(T10)
     private var askedMic = false
@@ -276,6 +290,8 @@ class MainActivity : ComponentActivity() {
     /** 이 차가 참가시킨 사람의 참가자 토큰(id → 토큰). 그 사람의 동의 켜기와 발화 올리기에 쓴다(T68). 참가할 때 한 번만 온다. */
     private var tokens: Map<String, String> = emptyMap()
     private var refreshing = false
+    private var placeLog: PlaceLog? = null // 지금 여행의 장소 기록(T131)
+    private var placing = false // 장소 올리기가 통신 줄에 있음
     private var uploading = false // 올리기가 통신 줄에 있음. 느린 길에서 조회마다 쌓여 동의 확인을 밀어내지 않게
 
     /** 화면이 보이는 동안, 그리고 수음 중이면 화면 뒤에서도 조회해 폰에서 끈 동의를 반영한다. */
@@ -284,7 +300,7 @@ class MainActivity : ComponentActivity() {
         override fun run() {
             val every = ++n % RESYNC_EVERY == 0
             if (every && retentionMs != null) expire()
-            refresh(resync = every || !s.online, prune = every); locate(); depart()
+            refresh(resync = every || !s.online, prune = every); locate(); approaching(); depart()
             if (destination == Destination.CONVERSATION) loadTranscript()
             if (appVisible || s.recording) main.postDelayed(this, if (boarding.page == BoardingPage.QR) 2_000L else POLL_MS)
         }
@@ -339,6 +355,8 @@ class MainActivity : ComponentActivity() {
         if (debug) { profileToken = intent.getStringExtra("profileToken"); familyOpen = intent.getBooleanExtra("family", false) }
         server = prefs.getString("server", null) ?: DEFAULT_SERVER
         device = prefs.getString("device", null) ?: UUID.randomUUID().toString().also { prefs.edit().putString("device", it).apply() }
+        onboarding = Onboarding(this, prefs) { server }
+        if (debug && !intent.getBooleanExtra("onboarding", true)) onboarding.skipForDebug() // --ez onboarding false: 기존 e2e는 처음 화면을 여행 만들기로 본다
         // 기본값은 무기한. --el keepMs를 명시한 디버그 빌드에서만 시간에 따른 정리를 시험한다.
         val now = System.currentTimeMillis()
         retentionMs = if (debug && intent.hasExtra("keepMs")) intent.getLongExtra("keepMs", -1).takeIf { it >= 0 } else null
@@ -359,8 +377,10 @@ class MainActivity : ComponentActivity() {
                 if (arrivalLoading) arrivalNote = "차량 상태가 바뀌어 도착 확인을 멈췄어요"
                 arrivalRequest++; arrivalLoading = false
                 if (it.gear != "P" || it.restricted) brief = null
+                if (!it.restricted) near = null // 주차하면 도착 전 카드는 끝(도착 브리핑이 이어 받음)
             }
             if (it.restricted) cancelShortExport("주행 중에는 영상 만들기를 멈춰요")
+            if (it.restricted) onboarding.stopRecording() // 온보딩은 주차 중에만(목소리 녹음도 멈춤)
             // 주행 중에도 대화 기록은 읽기만으로 보인다(시안 2026:2308·2358, T11 완화). 콘텐츠 기록과 여행 관리는 주차 중에만
             if (it.restricted) { managing = false; if (destination == Destination.SHORTS) destination = Destination.RIDE }
             if (it.restricted || it.gear != "P") closeBoarding() // 주행 제한·기어 변경은 QR을 즉시 가리고 초대를 폐기한다
@@ -382,15 +402,17 @@ class MainActivity : ComponentActivity() {
                 // ponytail: --ei widthDp 841은 창을 나누지 않고 반쪽 너비만 흉내 낸다(e2e.py). 실제 반쪽 창은 Pleos 창 바(⋮)로 나눈다(README)
                 val w = if (debug) intent.getIntExtra("widthDp", 0) else 0
                 Surface(if (w > 0) Modifier.fillMaxHeight().width(w.dp) else Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-                    val t = s.trip
+                    // mock: --es f4 …이면 저장된 여행 대신 시안의 '강릉 가족 여행'(F4Mock)을 띄운다(디버그 빌드)
+                    val t = f4Mock?.let { Trip("F4DEMO", "강릉 가족 여행", "driving", F4Mock.people, 0, 1) } ?: s.trip
                     when {
                         t != null -> TripScreen(t)
                         carStatus.restricted -> SetupLocked()
+                        onboarding.showing -> OnboardingScreen(onboarding, carStatus.gear) { familyOpen = true } // C08 '가족 그룹 만들기' → 가족 흐름(F2)
                         destination == Destination.SHORTS && appVisible -> ShortStudio(server, "", 0, null, "",
                             canRead = { false }, canPlay = { appVisible && !isDestroyed && !carStatus.restricted },
                             onClose = { destination = Destination.RIDE },
                             onActiveChange = ::shortStudioActiveChanged, modifier = Modifier.fillMaxSize())
-                        familyOpen -> FamilyFlow(server, profileToken, onClose = { familyOpen = false }, onStart = ::startGroupTrip)
+                        familyOpen -> FamilyFlow(server, profileToken ?: onboarding.token, onClose = { familyOpen = false }, onStart = ::startGroupTrip)
                         else -> Setup()
                     }
                 }
@@ -403,6 +425,8 @@ class MainActivity : ComponentActivity() {
     /** 시연·E2E: --es route "위도,경도,이름"으로 내비에 목적지를 넣는다(디버그 빌드). 실제로는 운전자가 내비에서 정한다. */
     private fun routeFrom(i: Intent?) {
         if (debug) pendingRoute = i?.getStringExtra("route")?.split(",")?.takeIf { it.size == 3 } ?: pendingRoute
+        // mock: F4 화면 확인용 시연 데이터(near·nearPaused·finalNear·finalPaused·mart·final, 빈 값이면 끔). 디버그 빌드에서만
+        if (debug && i?.hasExtra("f4") == true) f4Mock = i.getStringExtra("f4")?.takeIf { it.isNotBlank() }
         routeIfReady()
     }
 
@@ -430,6 +454,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         closeBoarding()
+        onboarding.close()
         boardingIo.shutdown() // 발급 중 닫힌 요청은 같은 실행기에서 초대를 폐기하고 끝난다
         cancelRecordingStart?.invoke()
         recordingIo.shutdownNow()
@@ -471,7 +496,7 @@ class MainActivity : ComponentActivity() {
 
     /** '이 가족과 출발'(C13): 그룹의 저장된 자리·각자 동의로 여행을 만들고, 이 차가 맡을 참가자 토큰(나와 내 아이)을 받는다(T133). */
     private fun startGroupTrip(groupId: String) {
-        val token = profileToken ?: return
+        val token = profileToken ?: onboarding.token ?: return
         val url = server
         s = s.copy(busy = true); error = ""
         bg({
@@ -517,6 +542,7 @@ class MainActivity : ComponentActivity() {
                 speakers(t) // 올릴 새 발화가 없어도 밀린 대조와 고침을 잇는다
                 s.trip?.let(::clips)
                 loadTodos()
+                s.trip?.let(::places)
             }
                 .onFailure {
                     if (it is Gone) forget(t.code) else s = s.pollFailed(it) // 조회를 못 하면 이번에는 올리지 않는다
@@ -524,8 +550,43 @@ class MainActivity : ComponentActivity() {
                     if (it !is Gone && s.trip?.code == t.code) s = s.consentUnseen(System.currentTimeMillis() - consentSeenAt)
                     // 서버에 닿지 않아도(끊김) 차 안 대조는 잇는다: 마지막으로 동의를 확인한 지 5분 안이고 그때 모두 동의였을 때만.
                     // 서버가 거절한 것(ApiError)은 동의·권한이 달라졌을 수 있어 잇지 않는다
-                    if (it !is ApiError && it !is Gone && System.currentTimeMillis() - consentSeenAt < CONSENT_FRESH_MS && s.trip?.code == t.code) speakers(t)
+                    if (it !is ApiError && it !is Gone && System.currentTimeMillis() - consentSeenAt < CONSENT_FRESH_MS && s.trip?.code == t.code) { speakers(t); s.trip?.let(::places) } // 장소도 끊긴 동안 쌓았다 나중에 보낸다
                 }
+        }
+    }
+
+    private fun placesOf(code: String) = placeLog?.takeIf { it.trip == code } ?: PlaceLog(filesDir, code, Live.seal(this)).also { placeLog = it }
+
+    /**
+     * 장소 기록(T149): 여행 조회가 성공한 뒤(끊겼으면 마지막 동의 확인 5분 안에서만), 모두 동의한 동안에만 내비의 출발·목적지를 남기고 밀린 것을 보낸다
+     * (곧 도착은 approaching(), 도착·경유는 arrive()).
+     * 콘텐츠 기록 타임라인·지도의 장소 이름과 폰의 '…로 이동 중'이 이것을 읽는다. 위치는 기록 중에 물어 둔 마지막 위치(1분 안)만 붙인다.
+     */
+    private fun places(t: Trip) {
+        if (!s.consented || s.offPending) return
+        car.destinationNamed { dest ->
+            if (s.trip?.code != t.code || !s.consented || s.offPending) return@destinationNamed
+            val now = System.currentTimeMillis()
+            val gear = carStatus.gear
+            placesOf(t.code).see(gear != null && gear != "P", dest, Live.fix?.takeIf { now - it.at in 0..60_000 }, t.generation, now)
+            sendPlaces(t)
+        }
+    }
+
+    /** 밀린 장소를 하나씩 보낸다. 끊기거나 서버 오류면 남겨 두었다 다음 조회에 다시(관측 시각 at을 붙여 보내므로 제자리에 들어감). */
+    private fun sendPlaces(t: Trip) {
+        val log = placesOf(t.code)
+        val up = tokens.minByOrNull { it.key }?.value ?: return
+        if (placing || !s.consented || s.offPending) return
+        val next = log.next(t.generation) ?: return
+        placing = true
+        val url = server
+        bg({ Server(url).place(t.code, up, next) }) { r ->
+            placing = false
+            val e = r.exceptionOrNull()
+            if (e != null && !(e is ApiError && e.status == 400)) { Log.w(TAG, "장소 올리기 못 함 ${if (e is ApiError) e.message else "연결"}"); return@bg }
+            log.done(next) // 400: 서버가 받지 않는 값(여행 전 시각 등)은 다시 보내지 않는다
+            if (s.trip?.code == t.code) sendPlaces(t)
         }
     }
 
@@ -730,8 +791,27 @@ class MainActivity : ComponentActivity() {
     private fun forget(code: String) {
         val current = s.trip?.code == code
         if (current) newTrip() // 기록을 멈추고 처음 화면으로
+        if (placeLog?.trip == code) placeLog = null
         dropTrip(filesDir, code); Live.forget(code) // 새 여행을 만든 뒤 늦게 온 앞 여행의 404여도 그 사본은 지운다
         if (current) error = "서버에 없는 여행이라 이 차에 남은 기록도 지웠어요"
+    }
+
+    /**
+     * 도착 전 브리핑(C19·finalNear, F4): 주행 중 조회마다 내비의 다음 도착지(첫 경유지, 없으면 목적지) 이름과 남은 시간을 읽어 둔다.
+     * 5분 이하면 함께 타는 중 가운데 칸에 그 장소의 서버 할 일을 카드로 보이고, 폰(P19)도 보도록 서버에 '곧 도착'을 남긴다(POST /places,
+     * 녹음에 동의한 참가자 토큰, 같은 분 안에는 한 번). 휴게소를 찾는 중이면 그 물음을 끊지 않게 묻지 않는다.
+     */
+    private fun approaching() {
+        val code = s.trip?.code
+        if (code == null || !carStatus.restricted || !s.agreed || offer?.stage == Offer.Stage.FINDING || arrivalLoading) { if (!carStatus.restricted) near = null; return }
+        car.nextPlaceEta { name, sec, final ->
+            if (s.trip?.code != code || !carStatus.restricted) return@nextPlaceEta
+            val a = approach(code, name, sec, final)
+            near = a
+            // 폰(P19)도 보도록 '곧 도착'을 장소 기록에 남긴다(T149 PlaceLog: 같은 장소·같은 분에 한 번, 끊기면 두었다 나중에, 모두 동의한 동안만)
+            val t = s.trip?.takeIf { it.code == code } ?: return@nextPlaceEta
+            if (a != null && s.consented && !s.offPending && placesOf(code).approach(a.place, a.minutes, a.seconds, t.generation, System.currentTimeMillis())) sendPlaces(t)
+        }
     }
 
     /** 기록 중이면 내비에 지금 위치를 물어 둔다. 발화에 붙인다(FIX_MS). 휴게소를 찾는 중이면 그 물음을 끊지 않게 묻지 않는다. */
@@ -1094,7 +1174,7 @@ class MainActivity : ComponentActivity() {
             if (!current()) return
             arrivalLoading = false; arrivalNote = note; brief = Brief(null); loadTodos(force = true)
         }
-        car.nextArrivalPlace place@{ place ->
+        car.nextArrivalPlace place@{ place, final ->
             if (!current()) return@place
             if (place == null) { failed("내비의 다음 장소 좌표를 확인하지 못했어요. 도착 안내를 보류했어요"); return@place }
             car.here position@{ lat, lng, _ ->
@@ -1116,6 +1196,8 @@ class MainActivity : ComponentActivity() {
                         if (!current()) return@checked
                         arrivalLoading = false
                         val answer = checked.getOrElse { failed("도착 확인을 마치지 못했어요 · ${reason(it)}"); return@checked }
+                        // 장소 기록(T149): 서버가 이 장소에 닿았다고 본 도착은 최종 목적지면 도착, 아니면 경유로 남긴다(폰 P20·기록이 같은 곳을 봄, 모두 동의한 동안만)
+                        if (answer.eligible && s.consented) s.trip?.takeIf { it.code == scope.trip }?.let { t -> if (placesOf(t.code).arrived(place, final, t.generation, observed.observedAt)) sendPlaces(t) }
                         if (!canReadArrival(answer, observed, scope, todoScope(), vehicleParked(), System.currentTimeMillis())) {
                             failed(when (answer.reason) {
                                 "outside_place" -> "아직 이 장소에 도착하지 않았어요"
@@ -1126,7 +1208,7 @@ class MainActivity : ComponentActivity() {
                         }
                         arrivalNote = if (answer.items.isEmpty()) "이 장소의 미완료 할 일이 없어요" else "서버에서 도착과 미완료 항목을 확인했어요"
                         if (answer.items.isNotEmpty()) {
-                            brief = Brief(place.name, answer.items)
+                            brief = Brief(place.name, answer.items, final)
                             car.speak(sharedBriefingLine(place.name, answer.items))
                         }
                         loadTodos(force = true)
@@ -1622,6 +1704,7 @@ class MainActivity : ComponentActivity() {
             AppBar(TITLE, listening = false, *pills(online = null))
             Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 OutlinedButton(onClick = { destination = Destination.SHORTS }, shape = RoundedCornerShape(10.dp)) { Text("저장한 쇼츠", fontSize = 24.sp) }
+                OutlinedButton(onClick = { onboarding.reopen() }, shape = RoundedCornerShape(10.dp)) { Text("계정·목소리 등록", fontSize = 24.sp) }
                 OutlinedButton(onClick = { familyOpen = true }, shape = RoundedCornerShape(10.dp)) { Text("우리 가족", fontSize = 24.sp) }
                 WindowSize()
             }
@@ -1705,7 +1788,8 @@ class MainActivity : ComponentActivity() {
         BackHandler(boarding.page != BoardingPage.HIDDEN) {
             if (boarding.page == BoardingPage.PEOPLE) closeBoarding() else openBoarding()
         }
-        val parked = !carStatus.restricted
+        val mockDriving = f4Mock in MOCK_DRIVING // mock: 도착 전 시연은 주행 중 모양
+        val parked = !carStatus.restricted && !mockDriving
         if (boarding.page == BoardingPage.QR && parked && s.gear == "P") {
             BoardingQrScreen(boarding, s, ::boardingAction)
             return
@@ -1719,14 +1803,14 @@ class MainActivity : ComponentActivity() {
             TripTabs(Destination.entries.map { it.label }, destination.ordinal, { parked || it != Destination.SHORTS.ordinal }) { i ->
                 val tab = Destination.entries[i]
                 if (destination != tab) {
-                    stopShort(); closeBoarding(); managing = false; shortsCreate = false
+                    stopShort(); closeBoarding(); managing = false; shortsCreate = false; studioOpen = false
                     // 주차·종료한 여행의 콘텐츠 기록 탭은 여행 마무리(C22)부터. 거기서 '콘텐츠 기록으로'를 누르면 쇼츠 화면
                     afterStart = if (tab == Destination.SHORTS && t.status in listOf("parked", "ended")) AfterStep.UPLOAD else null
                     destination = tab
                 }
             }
             Box(Modifier.weight(1f).fillMaxWidth()) {
-                val b = brief?.takeIf { vehicleParked() && offer?.stage.let { it == null || it == Offer.Stage.FINDING } } // 실제 P이고 제한이 풀린 동안만, 휴게소 제안이 먼저
+                val b = mockBrief() ?: brief?.takeIf { vehicleParked() && offer?.stage.let { it == null || it == Offer.Stage.FINDING } } // 실제 P이고 제한이 풀린 동안만, 휴게소 제안이 먼저
                 when {
                     takeover() -> Takeover(t, Modifier.fillMaxSize())
                     boarding.page != BoardingPage.HIDDEN && parked -> BoardingPanel(boarding, s, carStatus.seats, Modifier.fillMaxSize(), ::boardingAction)
@@ -1734,6 +1818,11 @@ class MainActivity : ComponentActivity() {
                     destination == Destination.CONVERSATION -> Conversations(t, Modifier.fillMaxSize())
                     destination == Destination.SHORTS && parked && afterStart != null -> AfterTripTab(t, afterStart!!, Modifier.fillMaxSize())
                     destination == Destination.SHORTS && parked -> ShortsLibrary(t, Modifier.fillMaxSize())
+                    b?.place != null -> ArrivalBrief(b.place, b.final, b.arrivalItems ?: placeAsks(b.place, todoList), if (f4Mock != null) F4Mock.people else t.people,
+                        when { arrivalNote.isNotEmpty() -> arrivalNote; todoState.note.isNotEmpty() -> todoState.note; else -> "" },
+                        onMain = { arrivalMain(b) }, onRefresh = { loadTodos(force = true) },
+                        onArrive = (::arrive).takeIf { vehicleParked() && todoScope() != null && !arrivalLoading }, modifier = Modifier.fillMaxSize(),
+                        details = if (f4Mock == "final") F4Mock.lodgeDetails else emptyMap())
                     b != null -> BriefCard(b, Modifier.fillMaxSize())
                     else -> RideOverview(t, Modifier.fillMaxSize())
                 }
@@ -1749,13 +1838,20 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun RideOverview(t: Trip, modifier: Modifier) {
         val c = MaterialTheme.colorScheme
-        val parked = !carStatus.restricted
+        val mock = f4Mock?.takeIf { it in MOCK_DRIVING } // mock: 도착 전 시연(C19·C19p·finalNear·finalPaused)
+        val parked = !carStatus.restricted && mock == null
         heardTick // 말한 사람이 바뀌면 다시 그린다
         val sp = speakers?.takeIf { it.trip == t.code }
         val talking = Live.recent.lastOrNull()?.takeIf { s.recording && !muted } // 방금 받아 적은 말의 좌석 구역(T37)과 말한 사람
         val ended = t.status == "ended" // 폰의 '여행 끝내기'나 최종 목적지에서 마친 여행(시안 2026:2410). 녹음은 하지 않는다(Session.withTrip)
-        val st = driveStatus(s.recording, muted, shortAt >= 0, handoff.state, Live.mic, Live.why, s.offPending, s.waiting, s.gear == "P",
+        val mockPaused = mock?.endsWith("Paused") == true
+        val st = if (mock != null) driveStatus(true, mockPaused, false, Handoff.State.OFF, Mic.ON, "", false, false, false, emptyList())
+            else driveStatus(s.recording, muted, shortAt >= 0, handoff.state, Live.mic, Live.why, s.offPending, s.waiting, s.gear == "P",
             t.people.filterNot { it.consent }.map { it.name }, ended = ended, resumed = justResumed)
+        // 도착 전 카드: 내비가 다음 장소까지 5분 이하라고 알렸고 그 장소의 서버 할 일이 있을 때(C19·finalNear)
+        val nearAsks = (mockApproach() ?: near?.takeIf { it.trip == t.code && !parked })?.let { a ->
+            (if (mock != null) mockNearAsks() else placeAsks(a.place, todoList)).takeIf { it.isNotEmpty() }?.let { a to it }
+        }
         DriveLayout(
             status = {
                 StatusCard(st, s.note) {
@@ -1768,6 +1864,7 @@ class MainActivity : ComponentActivity() {
                 when {
                     o != null -> OfferCard(o, m)
                     enrolling != null && parked -> EnrollCard(t, m)
+                    nearAsks != null -> NearCard(nearAsks.first, nearLine(nearAsks.second, if (mock != null) F4Mock.people else t.people), m)
                     else -> HeardCard(
                         if (s.recording && muted || ended) "멈추기 전 마지막 대화" else "방금 받아 적은 말 ${Live.count}건",
                         listOfNotNull("부탁 ${t.heldRequests}".takeIf { t.heldRequests > 0 }, "할 일 ${todoList.count { it.pending }}".takeIf { todoList.any { it.pending } },
@@ -1788,10 +1885,38 @@ class MainActivity : ComponentActivity() {
                     if (parked) CardAction("동승자 설정", onClick = ::openBoarding)
                 }
             },
-            button = driveButton(s.recording, muted, s.agreed, carStatus.restricted, ended = ended),
+            button = if (mock != null) driveButton(true, mockPaused, true, true) else driveButton(s.recording, muted, s.agreed, carStatus.restricted, ended = ended),
             // 새 여행은 지금처럼 동의를 끈 뒤에만(#239). 그 전이면 여행 관리의 '새 여행 만들기'와 그 안내를 연다
             onButton = { if (!ended) recordingAction() else if (!s.agreed && !s.switchOn && !s.busy) newTrip() else managing = true }, modifier = modifier,
         )
+    }
+
+    /**
+     * 도착 브리핑의 주 단추. 경유지 '장보고 여행 계속'은 브리핑을 닫고(내비는 다음 장소로), 최종 목적지 '여행 마치고 기록 보기'는
+     * 서버 여행을 마친 뒤(PATCH status ended, 폰의 '여행 끝내기'와 같은 요청) 대화 기록 탭을 연다. 실패하면 브리핑에 이유를 남긴다.
+     */
+    private fun arrivalMain(b: Brief) {
+        if (f4Mock != null) { if (b.final) destination = Destination.CONVERSATION; f4Mock = null; return } // mock: 시연은 화면만 넘긴다
+        if (!b.final) { brief = null; return }
+        val scope = todoScope() ?: return
+        bg({ Server(scope.server).endTrip(scope.trip, scope.token) }) { r ->
+            r.onSuccess { got -> s = s.withTrip(keep(got)); brief = null; destination = Destination.CONVERSATION }
+                .onFailure { arrivalNote = "여행을 마치지 못했어요 · ${reason(it)}" }
+        }
+    }
+
+    // mock: F4 화면 확인용(디버그 빌드의 --es f4 …). 실제 값은 내비 남은 시간과 서버 할 일이다
+    private fun mockApproach(): Approach? = when (f4Mock) {
+        "near", "nearPaused" -> Approach("F4DEMO", "하나로마트", 3, 170)
+        "finalNear" -> Approach("F4DEMO", "강릉 숙소", 1, 60, final = true)
+        "finalPaused" -> Approach("F4DEMO", "강릉 숙소", 3, 170, final = true) // 시안 화면 글이 '약 3분'(frames-text.md)
+        else -> null
+    }
+    private fun mockNearAsks(): List<SharedTodo> = if (f4Mock == "finalNear") F4Mock.lodge else F4Mock.martNear // finalPaused의 시안 글은 C19와 같다
+    private fun mockBrief(): Brief? = when (f4Mock) {
+        "mart" -> Brief("하나로마트", F4Mock.mart, final = false)
+        "final" -> Brief("강릉 숙소", F4Mock.lodge, final = true)
+        else -> null
     }
 
     @Composable
@@ -1842,6 +1967,9 @@ class MainActivity : ComponentActivity() {
             onBack = { destination = Destination.RIDE })
     }
 
+    // 콘텐츠 기록 탭(F6, Contents.kt). 예전 쇼츠 스튜디오(생성·보관함·삭제)는 그 안의 '쇼츠 만들기·보관함'으로 연다.
+    private var studioOpen by mutableStateOf(false)
+
     /** 여행 마무리·추천 장면 고르기·생성·결과(C22–C32). 후보는 차 안 규칙, 고른 장면은 POST /moments, 소리는 이 차의 클립 올리기(clips). */
     @Composable
     private fun AfterTripTab(t: Trip, start: AfterStep, modifier: Modifier) {
@@ -1861,6 +1989,16 @@ class MainActivity : ComponentActivity() {
         if (!appVisible || carStatus.restricted || t.status == "driving") return
         val scope = contentScope()
         val url = server
+        if (!studioOpen && shortNote != "숏폼을 받고 있어요") {
+            androidx.compose.runtime.key(url, t.code, t.generation, scope?.token) {
+                ContentsRecord(url, t.code, scope?.token,
+                    canRead = { appVisible && !isDestroyed && s.online && !carStatus.restricted && scope != null && contentScope() == scope && server == url && s.trip?.status != "driving" && handoff.state == Handoff.State.OFF },
+                    canPlay = { appVisible && !isDestroyed && !carStatus.restricted && s.trip?.status != "driving" && handoff.state == Handoff.State.OFF },
+                    onRide = { destination = Destination.RIDE }, onStudio = { studioOpen = true },
+                    onActiveChange = ::shortStudioActiveChanged, members = t.people.size, modifier = modifier)
+            }
+            return
+        }
         Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
             if (shortNote.isNotBlank()) Text(shortNote, fontSize = 22.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             if (shortNote == "숏폼을 받고 있어요") {
@@ -1870,7 +2008,7 @@ class MainActivity : ComponentActivity() {
                 ShortStudio(url, t.code, t.generation, scope?.token, t.title,
                     canRead = { appVisible && !isDestroyed && s.online && !carStatus.restricted && scope != null && contentScope() == scope && server == url && s.trip?.people?.all { it.consent } == true && s.trip?.status != "driving" && handoff.state == Handoff.State.OFF },
                     canPlay = { appVisible && !isDestroyed && !carStatus.restricted && s.trip?.status != "driving" && handoff.state == Handoff.State.OFF },
-                    onClose = { destination = Destination.RIDE },
+                    onClose = { studioOpen = false; shortsCreate = false },
                     onActiveChange = ::shortStudioActiveChanged, participantId = tokens.entries.singleOrNull { it.value == scope?.token }?.key, modifier = Modifier.weight(1f).fillMaxWidth(),
                     startCreate = shortsCreate)
             }
@@ -2084,3 +2222,6 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun Card(tone: Tone = Tone.Plain, modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) = CarCard(tone, modifier, content = content)
 }
+
+/** mock: 도착 전 시연 값(주행 중 모양으로 그림). */
+private val MOCK_DRIVING = setOf("near", "nearPaused", "finalNear", "finalPaused")

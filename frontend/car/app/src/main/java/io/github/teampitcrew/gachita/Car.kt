@@ -261,6 +261,9 @@ class Car(ctx: Context, private val onChange: (CarStatus) -> Unit) {
         runCatching { navi.getDestinationInfo() }.onFailure { Log.w(TAG, "내비 호출 실패", it); dest.answer(null, round) }
     }
 
+    /** 장소 기록(T131): 내비 목적지의 이름·좌표. 안내 중이 아니거나 이름·좌표를 모르면 null. 화면은 넘어가지 않는다. */
+    fun destinationNamed(done: (Place?) -> Unit) = destinationInfo { d -> done(d?.let { arrivalPlace(it.name, it.latitude, it.longitude) }) }
+
     /** 그곳까지의 거리(m)와 시간(초). 들르면 늘어나는 시간이 아니다. 화면은 넘어가지 않는다. */
     fun distanceTo(p: Place, done: (Int?, Int?) -> Unit) =
         trip.start({ done(it?.distance, it?.eta) }) { navi.requestTrip(TripRequest(latitude = p.lat, longitude = p.lng, poiId = "", poiName = p.name, poiSubId = "0")) }
@@ -274,14 +277,24 @@ class Car(ctx: Context, private val onChange: (CarStatus) -> Unit) {
         destinationInfo { d -> done(d?.name?.takeIf { it.isNotBlank() }) }
     }) { navi.getWaypointInfo() }
 
-    /** T113: 다음 실제 장소 좌표를 읽습니다. 경유지가 있지만 좌표를 모르면 목적지로 대신하지 않습니다. */
-    fun nextArrivalPlace(done: (Place?) -> Unit) = wps.start({ waypoints ->
-        if (waypoints == null) return@start done(null)
+    /** T113: 다음 실제 장소 좌표를 읽습니다. 경유지가 있지만 좌표를 모르면 목적지로 대신하지 않습니다. final은 경유지가 없어 목적지인지(최종 목적지 브리핑). */
+    fun nextArrivalPlace(done: (Place?, Boolean) -> Unit) = wps.start({ waypoints ->
+        if (waypoints == null) return@start done(null, false)
         if (waypoints.isNotEmpty()) {
             val first = waypoints.first()
-            return@start done(arrivalPlace(first.name, first.latitude, first.longitude))
+            return@start done(arrivalPlace(first.name, first.latitude, first.longitude), false)
         }
-        destinationInfo { d -> done(d?.let { arrivalPlace(it.name, it.latitude, it.longitude) }) }
+        destinationInfo { d -> done(d?.let { arrivalPlace(it.name, it.latitude, it.longitude) }, true) }
+    }) { navi.getWaypointInfo() }
+
+    /**
+     * 도착 전 브리핑(C19): 다음 도착지(첫 경유지, 없으면 목적지)의 이름과 남은 시간(초, `remainTime`). 모르면 null. 화면은 넘어가지 않는다.
+     * 좌표는 보지 않는다(에뮬레이터는 경유지 좌표를 0.0으로 준다). 같은 경유지 조회(wps)를 쓰므로 주차 중 도착 확인과 겹치지 않게 주행 중에만 부른다.
+     */
+    fun nextPlaceEta(done: (name: String?, remainSeconds: Int?, final: Boolean) -> Unit) = wps.start({ waypoints ->
+        if (waypoints == null) return@start done(null, null, false)
+        waypoints.firstOrNull()?.let { return@start done(it.name, it.remainTime, false) }
+        destinationInfo { d -> done(d?.name, d?.remainTime, true) }
     }) { navi.getWaypointInfo() }
 
     /** 지금 경로에 들를 곳을 더한다. 내비가 앞으로 나오고, 반영 알림(onWaypointChanged ADD)이 오면 true. 경로 오류나 30초 넘으면 false. */
