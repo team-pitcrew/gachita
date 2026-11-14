@@ -210,9 +210,10 @@ async function issueToken(profileId, device = "", token = randomBytes(32).toStri
 // prefs는 좌석·공조 선호를 걷어내기(T68) 전에 만든 여행 문서에만 있다(응답에서는 제외함).
 const asParticipant = ({ tokenHash, olderTokenHashes, prefs, ...p }) => p;
 // arrival(도착한 장소 이름, T119)은 토큰 없이 읽는 여행 문서에 싣지 않는다. 동의한 참가자가 GET /todos로만 읽는다.
-// places(장소 기록, T131)는 그 전에 만든 여행 문서에 없다 — 빈 목록으로 채워 늘 같은 모양을 준다.
-// 그룹으로 만든 여행의 그룹 id·이름(T133)은 싣지 않는다 — 구성원은 자기 그룹 목록(GET /groups)과 내 여행 목록으로 안다.
-const tripView = ({ arrival, groupId, groupName, ...trip }) => ({ ...trip, places: trip.places ?? [], participants: trip.participants.map(asParticipant) });
+// places(차가 남긴 장소, T131)도 같다 — 가족이 어디로 가고 어디에 닿았는지를 여행 코드만 아는 사람(과 서비스 워커 캐시)에게 내주지 않는다.
+// 동의한 참가자가 GET /places·/transcript로만 읽는다.
+// 그룹으로 만든 여행의 그룹 id·이름(T133)도 싣지 않는다 — 구성원은 자기 그룹 목록(GET /groups)과 내 여행 목록으로 안다.
+const tripView = ({ arrival, places, groupId, groupName, ...trip }) => ({ ...trip, participants: trip.participants.map(asParticipant) });
 
 // 참가자 토큰(ADR-0007·docs/api/voice.md). 여행·참가에 묶이고 문서에는 해시만 남는다.
 // 프로필 토큰과 별개다 — 발화 올리기·기록본·동의 켜기의 인증에 쓴다.
@@ -1020,7 +1021,6 @@ async function trips(req, [code, sub, id, leaf, ...rest], b, query, signal) {
       participants: [],
       requests: [],
       moments: [],
-      places: [], // 차가 내비에서 읽은 장소(T131)
       version: 1,
       createdAt: Date.now(),
     };
@@ -1234,9 +1234,14 @@ async function handle(trip, { req, m, sub, id, leaf, b, query, profile }, client
   }
 
   if (sub === "places") {
-    // 장소 기록(T131): 차가 내비의 출발·경유·곧 도착·도착·목적지를 남긴다. 그 여행의 참가자 토큰으로.
+    // 장소 기록(T131): 차가 내비의 출발·경유·곧 도착·도착·목적지를 남긴다(그 여행의 참가자 토큰으로, 녹음 동의와 무관).
+    // 읽기는 /todos의 도착 장소(T119)와 같은 규칙으로 녹음에 동의한 참가자만 — 토큰 없는 여행 문서에는 싣지 않는다.
     if (id) fail(404, "없는 경로");
-    if (m !== "POST") fail(405, "POST만 됨");
+    if (m === "GET") {
+      if (!participantOf(req, trip).consent) fail(403, "녹음에 동의한 참가자만 볼 수 있음");
+      return [200, { items: trip.places ?? [] }];
+    }
+    if (m !== "POST") fail(405, "GET, POST만 됨");
     return changed(201, addPlace(trip, participantOf(req, trip), b, { text, num, int, oneOf }));
   }
 
@@ -1474,7 +1479,7 @@ async function handle(trip, { req, m, sub, id, leaf, b, query, profile }, client
 
   if (sub === "transcript") {
     const all = await lines();
-    return [200, { generation: trip.generation ?? 1, utterances: all, requests: trip.requests, todos: await todos(all) }];
+    return [200, { generation: trip.generation ?? 1, utterances: all, requests: trip.requests, todos: await todos(all), places: trip.places ?? [] }];
   }
 
   if (sub === "scene-suggestions") {

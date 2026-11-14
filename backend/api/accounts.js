@@ -38,7 +38,10 @@ export async function verifyPassword(password, stored) {
 let dummy;
 const dummyHash = () => (dummy ??= hashPassword(randomBytes(16).toString("hex")));
 
+// NUL과 짝 없는 서로게이트는 Postgres의 text가 받지 않아(22021) 묻는 순간 500이 된다 — 그 전에 400으로 거른다(server.js의 text와 같은 기준).
+const writable = (v) => !v.includes("\0") && v.isWellFormed();
 const email = (v) => {
+  if (typeof v === "string" && !writable(v)) fail(400, "email: 쓸 수 없는 문자(NUL, 짝 없는 서로게이트)");
   const e = typeof v === "string" ? v.trim().toLowerCase() : "";
   return e.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e) ? e : fail(400, "email: 이메일 주소");
 };
@@ -58,6 +61,7 @@ export async function accounts(req, kind, b, { profileOf, profileById, issueToke
   const device = optional(b.device, 20, "device", text) ?? "";
   if (kind === "sessions") {
     if (typeof b.email !== "string" || typeof b.password !== "string") fail(400, "email, password: 글자");
+    if (!writable(b.email)) fail(400, "email: 쓸 수 없는 문자(NUL, 짝 없는 서로게이트)"); // 계정이 있는지와 관계없이 같은 400
     const { rows } = await profilesDb().query("SELECT id, password_hash FROM profiles WHERE email = $1", [b.email.trim().toLowerCase()]);
     const ok = await verifyPassword(b.password, rows[0]?.password_hash ?? (await dummyHash()));
     if (!rows[0] || !ok) fail(401, "이메일 또는 비밀번호가 맞지 않아요");

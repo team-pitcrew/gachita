@@ -38,7 +38,7 @@ export function addPlace(trip, caller, b, { text, num, int, oneOf }) {
 const placeAt = (places, at) => places.findLast((p) => p.at <= at)?.name ?? null;
 
 // GET /profiles/me/trips: 내 프로필이 참가한 여행을 최신 순으로. 여행을 가로질러 두 저장소를 읽는다.
-// 경로(발화 좌표)와 콘텐츠는 기록본과 같은 규칙으로 — 그 여행에서 내 참가자가 녹음에 동의했을 때만 채운다.
+// 장소·경로(발화 좌표)·콘텐츠는 기록본과 같은 규칙으로 — 그 여행에서 내 참가자가 녹음에 동의했을 때만 채운다.
 // ponytail: 참가자 검색은 문서 포함(@>)이라 여행 표를 훑는다. 여행이 수만 개가 되면 참가자 표나 GIN 색인으로.
 export async function myTrips(me) {
   const { rows } = await tripsDb().query(
@@ -84,7 +84,7 @@ export async function myTrips(me) {
   const character = new Map(chars.map((r) => [r.id, r.character]));
 
   const items = trips.map((trip) => {
-    const places = trip.places ?? [];
+    const places = open.includes(trip) ? (trip.places ?? []) : [];
     const route = points.filter((r) => r.trip_code === trip.code).map((r) => [r.lat, r.lng, Number(r.at)]);
     const contents = media
       .filter((r) => r.trip_code === trip.code)
