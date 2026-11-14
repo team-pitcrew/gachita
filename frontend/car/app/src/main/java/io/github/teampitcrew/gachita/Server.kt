@@ -38,6 +38,15 @@ class Server(base: String, private val open: (URL) -> HttpURLConnection = { it.o
         call("PATCH", "/api/trips/$code/participants/$id", JSONObject().put("consent", on), token)
     }
 
+    /**
+     * 본인 동의 켜기와 그 뒤 여행 조회. PATCH는 한 번만 보낸다: 서버는 값을 대입하므로 다시 보내면 그사이 다른 기기의 철회를
+     * 되살린다(Astra #352). PATCH가 502여도(서버에 닿았는지 모름) 다시 보내지 않고 사용자가 다시 누르게 한다. 뒤의 조회만 다시 묻는다(T122).
+     */
+    fun agree(code: String, id: String, token: String): Got {
+        consent(code, id, true, token)
+        return retryTransient { trip(code)!! }
+    }
+
     fun seat(code: String, id: String, seat: Seat) {
         call("PATCH", "/api/trips/$code/participants/$id", JSONObject().put("seat", seat.name))
     }
