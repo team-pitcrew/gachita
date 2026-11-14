@@ -136,6 +136,9 @@ fun seatChanges(saved: List<GroupMember>, edited: List<GroupMember>): Map<String
     return edited.filter { before[it.profileId] != it.seat }.associate { it.profileId to it.seat }
 }
 
+/** 아이 목소리 등록(C12·C42)의 읽을 문장. 받침에 따라 '서준이야'·'하은이야'·'지우야'(시안 글자). */
+fun childLine(name: String) = "“나는 $name${if (batchim(name)) "이야" else "야"}. 바다에 가서 모래성을 만들 거야.”"
+
 /** 우리 가족(C13) 아래 줄. */
 fun readiness(members: List<GroupMember>): String {
     val consent = members.count { it.consent }
@@ -205,12 +208,15 @@ fun FamilyFlow(server: String, token: String?, onClose: () -> Unit, onStart: (St
     fun family() = groups.firstOrNull { it.kind == "family" }
     fun current() = groups.firstOrNull { it.id == groupId } ?: family()
     fun put(g: CarGroup) { groups = groups.filter { it.id != g.id } + g }
+    // 요청 하나가 끝나기 전의 두 번째 누름은 버린다(C11을 빠르게 두 번 눌러 서준이 둘 생김). busy는 다시 그리기 전에도 막도록 따로 쥔다.
+    val inFlight = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
     fun act(work: suspend () -> Unit) {
-        if (busy) return
+        if (!inFlight.compareAndSet(false, true)) return
         busy = true; note = ""
         scope.launch {
             runCatching { work() }.onFailure { note = failureText(it) }
             busy = false
+            inFlight.set(false)
         }
     }
     suspend fun <T> io(block: () -> T): T = withContext(Dispatchers.IO) { block() }
@@ -247,6 +253,8 @@ fun FamilyFlow(server: String, token: String?, onClose: () -> Unit, onStart: (St
             FamilyView.INVITE -> if (current()?.kind == "guest") FamilyView.GROUP else FamilyView.MEMBER
             FamilyView.CHILD, FamilyView.CHILD_VOICE -> FamilyView.MEMBER
             FamilyView.SEAT, FamilyView.GUEST -> FamilyView.GROUP
+            // 아이를 저장하면 바로 좌석 지도(C13)로 오므로, 다음 아이를 더하려면 뒤로 가족 추가(C40)로 돌아간다.
+            FamilyView.GROUP -> if (token != null) FamilyView.MEMBER else { onClose(); view }
             else -> { onClose(); view }
         }
     }
@@ -290,7 +298,7 @@ fun FamilyFlow(server: String, token: String?, onClose: () -> Unit, onStart: (St
                         }
                         FamilyView.CHILD_VOICE -> {
                             val name = child?.name ?: childName.ifBlank { "아이" }
-                            Heading("${name}의 목소리 등록", "“나는 ${name}야. 바다에 가서 모래성을 만들 거야.”")
+                            Heading("${name}의 목소리 등록", childLine(name))
                             Card2 {
                                 Text("아이 목소리  $voiceSec / 15초", color = c.onSurfaceVariant)
                                 Row(Modifier.fillMaxWidth().height(96.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -343,11 +351,17 @@ fun FamilyFlow(server: String, token: String?, onClose: () -> Unit, onStart: (St
                         act {
                             val fam = ensureFamily()
                             val made = io { api.addChild(token!!, fam.id, childName.trim(), childChar, childConsent) }
-                            put(made); child = made.members.lastOrNull { it.role == "child" }; view = FamilyView.CHILD_VOICE
+                            // 만든 뒤 이름 칸을 비워, 뒤로 와서 다시 눌러도 같은 아이가 또 생기지 않게 한다.
+                            put(made); child = made.members.lastOrNull { it.role == "child" }; childName = ""; view = FamilyView.CHILD_VOICE
                         }
                     }
                     FamilyView.CHILD_VOICE -> Primary(if (voiceSec >= 15) "가족 그룹에 저장" else "녹음 중", voiceSec >= 15 && !busy, Modifier.weight(1f)) {
-                        act { load(); childName = ""; view = FamilyView.MEMBER }
+                        // 시안 13→16: 아이를 저장하면 가족이 둘 이상일 때 바로 좌석 지도(C13)로 — 자리를 정하고 '이 가족과 출발'.
+                        act {
+                            load(); childName = ""
+                            val fam = family()
+                            if (fam != null && fam.members.size >= 2) { groupId = fam.id; saved = false; view = FamilyView.GROUP } else view = FamilyView.MEMBER
+                        }
                     }
                     FamilyView.GROUP -> {
                         Ghost("새 동승 그룹", true, Modifier.weight(0.6f)) { guestName = ""; view = FamilyView.GUEST }

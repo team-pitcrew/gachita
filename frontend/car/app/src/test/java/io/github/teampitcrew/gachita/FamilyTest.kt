@@ -72,4 +72,10 @@ class FamilyTest {
         val moved = placeSeat(g.members, "girl", "ROW_1_LEFT") // 아빠 자리로: 아빠는 하은의 원래 자리(없음)로
         assertEquals(mapOf("dad" to null, "girl" to "ROW_1_LEFT"), seatChanges(g.members, moved))
     }
+
+    @Test fun `아이 문장은 받침에 따라 이야·야`() {
+        assertEquals("“나는 서준이야. 바다에 가서 모래성을 만들 거야.”", childLine("서준"))
+        assertEquals("“나는 하은이야. 바다에 가서 모래성을 만들 거야.”", childLine("하은"))
+        assertEquals("“나는 지우야. 바다에 가서 모래성을 만들 거야.”", childLine("지우"))
+    }
 }
