@@ -98,11 +98,11 @@ STEPS = [
     ("Q1", "폰 / 동의와 참여", "D補 phoneJoin 2043:1711", "폰", "F2"), ("Q2", "폰 / 참여 완료", "D補 phoneJoined 2043:1743", "폰", "F2"),
     (10, "엄마 참여 확인", "D10 2007:1615", "전체", "F2"), (11, "서준 프로필", "D11 2007:1658", "전체", "F2"), (12, "서준 목소리", "D12 2007:1699", "전체", "F2"),
     (13, "다음 구성원", "D13 2007:1802", "전체", "F2"), (14, "하은 프로필", "D14 2007:1845", "전체", "F2"), (15, "하은 목소리", "D15 2007:1886", "전체", "F2"),
-    (16, "가족 좌석 / 출발", "D16 2007:1989", "전체", "F2"),
-    # 그룹 화면 여섯(#458, Figma eZ2xsOXkrszqdP489kduCs, 시연판 D16*): 16에서 '전체 그룹'으로 들어가 동승 그룹·초대·가족 상세·좌석 배정·구성원 선택을 거쳐 출발
-    ("16L", "전체 그룹", "D16L 2097:4582 · C16L 2097:4631", "전체", "F2"), ("16G", "동승 그룹 상세", "D16G 2094:4367 · C16G 2094:4746", "전체", "F2"),
-    ("16I", "구성원 초대", "D16I 2095:4735 · C16I 2095:4786", "전체", "F2"), ("16A", "그룹 상세", "C16A 2094:4566", "전체", "F2"),
-    ("16B", "좌석 배정", "C16B 2094:4626", "전체", "F2"), ("16C", "구성원 선택", "D16C 2094:4307 · C16C 2094:4686", "전체", "F2"),
+    # 16–16C(원본 Figma 시연 플로우 2045:1782): 전체 그룹 목록에서 동승 그룹 곁가지(G4 상세 → G2 초대)를 보고 우리 가족 · 좌석 선택 · 앉을 사람을 거쳐 출발(16D)
+    (16, "전체 그룹 목록", "D16 2007:1989 · D16L 2097:4582 · C16 groups 2005:3085", "전체", "F2"),
+    ("16G", "새 그룹 확인", "D16G 2094:4367 · C16G 2094:4746", "전체", "F2"), ("16I", "QR와 링크 초대", "D補 guestInvite 2026:2241 · C16 guestInvite 2005:3229", "전체", "F2"),
+    ("16A", "우리 가족", "D16A 2026:2133 · C16A 2094:4566", "전체", "F2"), ("16B", "좌석 선택", "D16B 2026:2076 · C16B 2094:4626", "전체", "F2"),
+    ("16C", "앉을 사람 선택", "D16C 2094:4307 · C16C 2094:4686", "전체", "F2"),
     (17, "주행 / 기록 중", "D17 2007:2042", "좁은 창", "F3"), (18, "기록 중지", "D17p 2014:1327", "좁은 창", "F3"), (19, "기록 재개", "D補 resumed 2026:1969", "좁은 창", "F3"),
     (20, "마트 도착 전", "D18 2007:2082", "좁은 창", "F4"), (21, "마트 도착 브리핑", "D19 2007:2110", "좁은 창", "F4"), (22, "여행 계속", "D20 2007:2145", "좁은 창", "F3"),
     (23, "숙소 도착 전", "D補 finalNear 2043:1835", "좁은 창", "F4"), (24, "최종 목적지 브리핑", "D補 finalBrief 2043:1890", "좁은 창", "F4"),
@@ -519,9 +519,8 @@ def onboarding():
     st.setdefault("dad", {}).setdefault("email", os.environ.get("DEMO_DAD_EMAIL", f"minjun+{os.urandom(3).hex()}@example.com"))
     st["dad"].setdefault("password", "demo-" + os.urandom(6).hex()); save()
     typed = type_into(0, st["dad"]["email"]) and type_into(1, st["dad"]["password"])
-    step(2, ["가입하고 계속", "로그인하고 계속"], note_="" if typed else "이메일·비밀번호 칸을 찾지 못함")
-    tap("가입하고 계속", "로그인하고 계속")
-    if seen("로그인하고 계속"): tap("로그인하고 계속")  # 같은 이메일이 이미 있으면(409) 앱이 로그인으로 바꾼다
+    step(2, ["가입하고 계속", "내 계정 만들기"], note_="" if typed else "이메일·비밀번호 칸을 찾지 못함")
+    tap("가입하고 계속")  # 같은 이메일이 이미 있으면(409) 앱이 같은 칸으로 로그인한다(AccountApi.enter)
     # 차는 가입 때 이메일 앞부분을 임시 이름으로 둔다. 한글은 adb로 넣지 못하니 같은 계정에 로그인해 이름을 민준으로 정한다(실제 API)
     if step(3, ["동의하고 계속", "우리의 대화를 남기기 전에"]):
         account("dad", "아빠"); api("PATCH", "/profiles/me", {"name": PEOPLE["아빠"][3], "character": PEOPLE["아빠"][1]}, st["dad"]["token"])
@@ -534,7 +533,7 @@ def onboarding():
         t = threading.Thread(target=lambda: said.append(say("enroll-아빠")), daemon=True); t.start()
         step(6, ["목소리를 듣고 있어요", "녹음 중"], 5)  # 누른 바로 뒤에 본다(15초 녹음 중에만 있는 글)
         t.join(30)  # 다 넣은 뒤에 멈춘다(녹음이 닫힌 채 넣으면 에뮬레이터가 멈춘 적이 있음)
-        wait(["녹음을 마쳤어요", "녹음 끝"], 25); tap("녹음 완료")
+        wait(["15 / 15초"], 25); tap("녹음 완료")  # 15초 녹음이 닫힐 때까지(시안 C07 글 '녹음 중  15 / 15초')
     step(7, ["목소리 등록 완료"], 20)
     account("dad", "아빠")
     if not any(said):  # 차가 아빠 목소리 대신 빈 소리를 등록했으면 화자 식별이 안 되므로 같은 합성 음성의 값으로 바꾼다(실제 API)
@@ -570,17 +569,18 @@ def family_steps():
             adb("shell", "input", "keyevent", "4"); mark(12 + 3 * i, "대체", f"{kid} 아이 프로필·목소리를 API로(차 화면은 이름 입력 단계)")
             child(kid); open_family()  # 가족 화면은 열 때만 그룹을 읽는다
         if i == 0: step(13, ["까지 준비됐어요"])
-    children(); guest_group(); open_family()  # 좌석(시안 16)과 동승 그룹을 실제 API로 맞추고 다시 읽는다 → 모두 자리가 있으면 '우리 가족' 좌석 지도
-    step(16, ["이 가족과 출발", "좌석을 눌러 변경"])
+    children(); guest_group(); open_family()  # 좌석과 동승 그룹을 실제 API로 맞추고 다시 읽는다 → 모두 자리가 있으면 '우리 가족' 좌석(C43)
+    tap("함께 타는 중", timeout=6)  # 주차 중 위 탭 '함께 타는 중' → 전체 그룹 목록(C16 groups)
+    step(16, ["내 동승 그룹", "+ 새 그룹 만들기"], note_=f"우리 가족 + 시드 동승 그룹 '{GUEST}'(D16L과 같은 목록)")
     return group_screens()
 
 
 def group_screens():
-    """16 '우리 가족'에서 그룹 화면 여섯(#458)을 거쳐 '이 그룹과 출발'. 화면이 없으면(옛 판) 16의 '이 가족과 출발'로 떠난다."""
-    if not tap("전체 그룹", timeout=4):
-        for n in ("16L", "16G", "16I", "16A", "16B", "16C"): mark(n, "없음", "'전체 그룹' 단추가 없음 — " + flow_state("F2"))
+    """16 전체 그룹 목록에서 동승 그룹(16G 상세 → 16I 초대)과 우리 가족(16A 상세 → 16B 좌석 → 16C 앉을 사람)을 거쳐 '이 그룹과 출발'(16D).
+    목록이 없으면(옛 판) 우리 가족 좌석의 '이 가족과 출발'로 떠난다."""
+    if not seen("내 동승 그룹"):
+        for n in ("16G", "16I", "16A", "16B", "16C"): mark(n, "없음", "전체 그룹 목록이 없음 — " + flow_state("F2"))
         return tap("이 가족과 출발")
-    step("16L", ["내 동승 그룹", "+ 새 그룹 만들기"], note_=f"우리 가족 + 시드 동승 그룹 '{GUEST}'")
     tap(GUEST); step("16G", ["초대 코드, QR 또는 링크로 함께할 사람을 초대해 주세요."], note_="아빠 혼자인 동승 그룹(시드)")
     tap("동승자 초대하기"); step("16I", ["초대 코드와 링크를 만들었어요"], note_="TRIP- 초대 코드(서버가 고름)")
     tap("그룹으로 돌아가기"); tap("전체 그룹 보기", timeout=4)
@@ -598,7 +598,6 @@ TAPS = {"Onboarding.kt": ["가치타 시작하기", "가입하고 계속", "동�
         "Arrival.kt": ["먼저 할 일과 살 것을 모았어요", "잊지 말고 살 것", "계속", "여행 마치고 기록 보기", "내리기 전, 할 일과 챙길 것"],
         "AfterTrip.kt": ["오늘의 주행을 기록했어요", "남기고 싶은 순간을 골라요", "장면을 선택해 주세요", "콘텐츠를 만들어요", "콘텐츠 생성 중", "순간이 완성됐어요", "콘텐츠 기록 보기"],
         "Contents.kt": ["우리 가족 / 차량과 폰에서 이어보기", "갤러리", "타임라인", "지도", "주행 지도 자세히 보기 →", "이 장면 보기", "영상 내보내기", "영상이 준비됐어요", "콘텐츠 기록으로"]}
-
 
 def check_labels():
     """TAPS의 글이 앱 소스(frontend/car/app/src/main)에 있는지. 없으면 그 글과 파일을 적고 종료 코드 1."""
@@ -756,20 +755,20 @@ def drive_steps_seed(code):
     rec_part(2)
     if not split(): note("split.fail")
     drive(); seed_status(code, "driving"); seed_place(code, "start", "출발"); seed_place(code, "destination", "강릉 숙소"); seed_lines(code, "A")
-    f4("drive"); step(17, ["방금 받아 적은 말 42건", "아래 버튼으로 언제든 멈출 수 있어요"], note_="차 목업 drive + 서버 기록본 5줄(화자 분리)", seeded=True)
-    f4("drivePaused"); step(18, ["같은 버튼을 누르면 다시 기록해요"], note_="차 목업 drivePaused", seeded=True)
-    f4("driveResumed"); step(19, ["중지한 지점부터 이어서 기록해요"], note_="차 목업 driveResumed", seeded=True)
+    f4("drive"); step(17, ["일시정지"], note_="차 목업 drive + 서버 기록본 5줄(화자 분리)", seeded=True)
+    f4("drivePaused"); step(18, ["마지막 대화", "계속 기록"], note_="차 목업 drivePaused", seeded=True)
+    f4("driveResumed"); step(19, ["일시정지"], note_="차 목업 driveResumed", seeded=True)
     seed_lines(code, "B"); seed_place(code, "approaching", "하나로마트", eta=180)
-    f4("near"); step(20, ["하나로마트 도착까지"], note_="차 목업 near + 서버 approaching", seeded=True)
+    f4("near"); step(20, ["분 후 도착"], note_="차 목업 near + 서버 approaching", seeded=True)
     park(); seed_arrive(code, "하나로마트")
-    f4("mart"); step(21, ["먼저 할 일과 살 것을 모았어요", "장보고 여행 계속"], note_="차 목업 mart + 서버 도착 브리핑", seeded=True)
-    tap("장보고 여행 계속", timeout=4)
+    f4("mart"); step(21, ["먼저 할 일과 살 것을 모았어요", "잊지 말고 살 것"], note_="차 목업 mart + 서버 도착 브리핑", seeded=True)
+    tap("계속", timeout=4)
     drive(); seed_status(code, "driving"); seed_lines(code, "C")
-    f4("driveContinue"); step(22, ["내일도 같이 타면 안 돼", "아래 버튼으로 언제든 멈출 수 있어요"], note_="차 목업 driveContinue + 서버 기록본 5줄", seeded=True)
+    f4("driveContinue"); step(22, ["내일도 같이 타면 안 돼", "일시정지"], note_="차 목업 driveContinue + 서버 기록본 5줄", seeded=True)
     seed_place(code, "approaching", "강릉 숙소", eta=60)
-    f4("finalNear"); step(23, ["강릉 숙소 도착까지"], note_="차 목업 finalNear + 서버 approaching", seeded=True)
+    f4("finalNear"); step(23, ["분 후 도착"], note_="차 목업 finalNear + 서버 approaching", seeded=True)
     park(); seed_arrive(code, "강릉 숙소")
-    f4("final"); step(24, ["여행 마치고 기록 보기", "내리기 전, 이 세 가지만 기억하세요"], note_="차 목업 final + 서버 도착 브리핑", seeded=True)
+    f4("final"); step(24, ["여행 마치고 기록 보기", "내리기 전, 할 일과 챙길 것"], note_="차 목업 final + 서버 도착 브리핑", seeded=True)
     tap("여행 마치고 기록 보기", timeout=4)  # 목업은 화면만 넘기므로 여행은 폰의 '여행 끝내기'와 같은 요청으로 마친다
     seed_status(code, "ended")
 
@@ -782,25 +781,25 @@ def drive_steps(code):
     tap("함께 타는 중", timeout=3); drive()
     wait(["아래 버튼으로 언제든 멈출 수 있어요"], 15)
     say("talk")
-    step(17, ["아래 버튼으로 언제든 멈출 수 있어요"], 30, "대사 5줄(서준·아빠·하은·엄마)")
-    tap("기록 중지"); step(18, ["같은 버튼을 누르면 다시 기록해요"])
-    tap("기록 재개"); step(19, ["중지한 지점부터 이어서 기록해요"], 8)
+    step(17, ["일시정지"], 30, "대사 5줄(서준·아빠·하은·엄마)")
+    tap("일시정지"); step(18, ["마지막 대화", "계속 기록"])
+    tap("계속 기록"); step(19, ["일시정지"], 8)
     say("mart")
     here = navi_here()
     # 길로 가까운 쪽: 11/15 emulator-5586 내비에서 GPS의 서쪽 200 m는 '1분 · 140m', 남쪽 200 m는 '1분 · 260m', 북·동쪽은 5–6분(1.5–1.7 km 돌아감)
     mart, lodge = near(here, 0, -NEAR_M), near(here, -NEAR_M, 0)
     launch("--es", "route", f"{lodge[0]},{lodge[1]},강릉 숙소", "--es", "stops", f"{mart[0]},{mart[1]},하나로마트", "--ei", "approachSeconds", APPROACH_S)
     split(); tap("함께 타는 중", timeout=3)
-    step(20, ["하나로마트 도착까지"], 25, f"시연 경로: 경유 하나로마트 {mart}, 목적지 강릉 숙소 {lodge}(내비 위치 {here}에서 약 {NEAR_M:.0f} m)")
-    park(); step(21, ["먼저 할 일과 살 것을 모았어요", "장보고 여행 계속"], 25)
+    step(20, ["분 후 도착"], 25, f"시연 경로: 경유 하나로마트 {mart}, 목적지 강릉 숙소 {lodge}(내비 위치 {here}에서 약 {NEAR_M:.0f} m)")
+    park(); step(21, ["먼저 할 일과 살 것을 모았어요", "잊지 말고 살 것"], 25)
     if results[21]["result"] == "없음" and seen("도착했어요"): results[21] = {**results[21], "result": "다른 화면", "note": "develop의 T123 도착 카드(v1) — " + flow_state("F4")}
-    tap("장보고 여행 계속", "닫기", timeout=4)
+    tap("계속", "닫기", timeout=4)
     launch("--es", "route", f"{FAR_LODGE[0]},{FAR_LODGE[1]},강릉 숙소"); split(); tap("함께 타는 중", timeout=3)
     drive(); say("lodge")
-    step(22, ["내일도 같이 타면 안 돼", "아래 버튼으로 언제든 멈출 수 있어요"], 20, "대사 5줄(하은·엄마·아빠)")
+    step(22, ["내일도 같이 타면 안 돼", "일시정지"], 20, "대사 5줄(하은·엄마·아빠)")
     launch("--es", "route", f"{lodge[0]},{lodge[1]},강릉 숙소", "--ei", "approachSeconds", APPROACH_S); split(); tap("함께 타는 중", timeout=3)
-    step(23, ["강릉 숙소 도착까지"], 25)
-    park(); step(24, ["여행 마치고 기록 보기", "내리기 전, 이 세 가지만 기억하세요"], 25)
+    step(23, ["분 후 도착"], 25)
+    park(); step(24, ["여행 마치고 기록 보기", "내리기 전, 할 일과 챙길 것"], 25)
     if not tap("여행 마치고 기록 보기", timeout=4):
         # 차의 최종 브리핑이 없으면 폰의 '여행 끝내기'와 같은 요청으로 여행을 마친다(PATCH status ended)
         tok = st.get("trip", {}).get("mom")
