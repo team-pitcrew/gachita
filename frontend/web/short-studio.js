@@ -19,6 +19,7 @@ export function createShortStudio({ getTrip, getParticipant, getToken, getOwner,
   let session;
   const remoteValid = (s) => {
     const t = getTrip(), p = getParticipant();
+    if (!t || !p) return false;
     return t?.code === s.code && t.generation === s.generation && t.status !== "driving" && Date.now() < t.createdAt + 48 * 3600 * 1000 && p?.id === s.participant && t.participants.every((x) => x.consent) && getToken() === s.token;
   };
   const posterUrl = (s, item) => {
