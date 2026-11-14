@@ -126,9 +126,9 @@ test("생성 진행률은 장면별 실제 단계의 평균, 세 줄은 단계�
 });
 
 // 차 이식(F5)과 같은 결과를 맞추는 시험 벡터: 서버 추천 후보(scenes.js) → 번호·시각·제목·대사.
-test("scene-vectors.json: 추천 후보에서 고른 3개의 번호·시각·제목·대사가 벡터와 같다", async () => {
+test("scene-picks-vectors.json: 추천 후보에서 고른 3개의 번호·시각·제목·대사가 벡터와 같다", async () => {
   const { readFile } = await import("node:fs/promises");
-  const v = JSON.parse(await readFile(new URL("./scene-vectors.json", import.meta.url), "utf8"));
+  const v = JSON.parse(await readFile(new URL("./scene-picks-vectors.json", import.meta.url), "utf8"));
   const got = topScenes(v.items).map((p, i) => ({ number: i + 1, from: p.from, to: p.to, time: spanLabel(p.from, p.to, v.origin), ...sceneTitle(p, v.participants) }));
   assert.deepEqual(got, v.expected);
   assert.equal(v.items.length, 5, "서버는 5개까지 주고 폰은 점수 상위 3개만 보인다");
