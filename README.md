@@ -36,7 +36,7 @@
 
 ### 차량 앱(Pleos 에뮬레이터)
 
-1. **서버:** 저장소 루트에서 `make run`. `http://localhost:8787`에 API와 웹앱이 뜨고 로컬 Postgres 컨테이너를 같이 띄웁니다(Docker 필요).
+1. **서버:** 제출용 release APK는 `https://gachita.mangowhois.ai`에 연결합니다. 인터넷 연결이 필요합니다. 로컬 개발은 `make run`으로 API·웹앱·Postgres를 실행하고 디버그 APK에 `--es server http://10.0.2.2:8787`을 넘깁니다.
 2. **에뮬레이터:** Pleos Connect Emulator 2.1.0(AVD `Pleos_Connect_v2_0` 기기 정의)을 **Cold boot**로 켭니다. Quick boot에서는 기어 같은 차량 값을 읽지 못합니다. 기어와 속도는 Virtual Console(`adb forward tcp:8088 tcp:8088` 뒤 `http://127.0.0.1:8088/`)에서 바꿉니다.
    - 차량 마이크에 말하려면 에뮬레이터의 Extended controls > Microphone에서 PC 마이크를 가상 마이크로 쓰게 켭니다(Pleos 문서). 우리 Mac에는 마이크가 없어 PC 마이크로는 해 보지 않았고, 음성 파일을 gRPC로 넣었습니다(`-grpc 8556 -grpc-use-token -audio none`으로 켜고 [차량 앱 README](frontend/car/README.md)의 스크립트).
 3. **설치와 실행:** 앱은 사용자 10에서 돕니다. 같은 패키지의 디버그 빌드를 깔았던 에뮬레이터라면 서명이 달라 먼저 지웁니다(`adb uninstall io.github.teampitcrew.gachita`).
@@ -49,10 +49,10 @@ adb install --user 10 -r -g apk/PITCREW_가치타_release.apk
 adb shell am start --user 10 -n io.github.teampitcrew.gachita/.MainActivity
 ```
 
-4. **기록 시작:** 첫 화면에서 가족을 고르고 '여행 만들기'(서버 주소 기본값 `http://10.0.2.2:8787`은 에뮬레이터에서 본 PC의 `make run`) → 기어 P에서 '대화 기록 동의'를 켬('● 기록 중'). 마이크·알림 권한은 처음 기록할 때 묻습니다(`-g`로 설치하면 미리 허용).
+4. **기록 시작:** 첫 화면에서 가족을 고르고 'N명으로 여행 만들기' → 기어 P에서 '대화 기록 동의'를 켬('● 기록 중'). 마이크·알림 권한은 처음 기록할 때 묻습니다(`-g`로 설치하면 미리 허용).
 5. **부탁이 경유지로:** 순정 내비에서 목적지를 정하고(예: 강릉역) 우리 앱을 다시 앞으로, 기어 D → 차량 마이크에 "화장실 가고 싶어" → 제안 카드와 "용인휴게소에 들를까요?" → "응, 다음 휴게소 가자"(또는 '경유지로 추가') → 내비가 앞으로 나와 경유지가 들어가고, 앱으로 돌아오면 '경유지를 추가했어요'.
 6. **도착 브리핑:** 내비 목적지를 이름에 '마트'가 든 곳(예: 이마트 강릉점)으로 정하고 경유지는 두지 않음 → 기어 D에서 "마트에서 우유랑 간식 사자" → 속도를 5 km/h 이하로 두고 기어 P → '마트에서 할 일' 카드와 TTS. 앱은 주차한 순간 내비가 향하는 다음 곳(첫 경유지, 없으면 목적지)이 할 일의 장소일 때 알리므로, 5에서 넣은 휴게소가 남아 있으면 알리지 않습니다.
-   - 자동으로 같은 흐름을 도는 스크립트(`frontend/car/demo.py`, `waypoint_e2e.py`, `arrival_e2e.py`)는 디버그 빌드용입니다(서버·목적지를 실행 인자로 받음). 시연 영상도 디버그 빌드와 `demo.py`로 찍었습니다. release APK로는 4까지 에뮬레이터에서 확인했습니다.
+   - 자동으로 같은 흐름을 도는 스크립트(`frontend/car/demo.py`, `waypoint_e2e.py`, `arrival_e2e.py`)는 디버그 빌드용입니다(서버·목적지를 실행 인자로 받음). 시연 영상도 디버그 빌드와 `demo.py`로 찍었습니다. 11/13의 이전 release는 4까지 확인했습니다. 11/14 갱신 release는 서명·설치·첫 화면을 확인했습니다. 같은 차량 소스의 디버그 APK에서는 합성 음성·제안·주차·대화 전체 보기와 동의·단절 검사를 수행했습니다([결과](frontend/car/verification/20261114/README.md)).
 
 ### 서버와 웹앱
 
@@ -88,4 +88,8 @@ make check     # CI와 같은 검사
 
 ## APK 파일 위치
 
-[`apk/PITCREW_가치타_release.apk`](apk/PITCREW_가치타_release.apk) — 차량 앱 release 빌드(패키지 `io.github.teampitcrew.gachita`, 버전 0.1.0, minSdk 29, targetSdk 34). 같은 커밋의 `frontend/car`에서 `./gradlew assembleRelease`로 만들었습니다.
+[`apk/PITCREW_가치타_release.apk`](apk/PITCREW_가치타_release.apk) — 차량 앱 release 빌드(패키지 `io.github.teampitcrew.gachita`, 버전 0.1.0, minSdk 29, targetSdk 34). 차량 소스 `1f2d067270e6bee5c21ef030ad66a492b3bd71b4`에서 `./gradlew assembleRelease`로 만들었습니다. 빌드 실행 JDK는 21이며 릴리스 lint를 포함해 통과했습니다.
+
+- 파일 SHA-256: `7bafb82e90756425597fe208ce12431fc09953152375aae728319750813c1e6b`
+- 서명 인증서 SHA-256: `6f07b9fd44ef8e0e04782c160983e05b91cf8c7f10cff22cf7d5e690e599b2f6`. 이전 제출용 APK와 같습니다.
+- [제출 준비와 영상 검증](docs/submission-readiness.md), [실제 휴대폰·심사 접근 확인](docs/device-acceptance.md)을 함께 봅니다. 실제 휴대폰 검사와 심사용 계정 접근은 미확인입니다.
