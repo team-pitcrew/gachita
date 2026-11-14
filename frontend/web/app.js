@@ -1038,7 +1038,18 @@ function render() {
   app.classList.toggle("home-view", page === "home");
   app.classList.toggle("onboarding-view", page === "onboarding");
   app.classList.toggle("ride-view", page === "trip");
+  // 강제로 다시 그리면(첫 로드·주소 바뀜의 refresh(true)) 입력하던 칸이 새 칸으로 바뀌어 포커스가 사라지고, 이어 친 글자가 어디에도 들어가지 않는다.
+  // 같은 자리·같은 종류의 새 칸으로 포커스와 커서를 옮긴다. 값은 각 칸의 oninput이 초안에 두어 새 칸에 이미 있다.
+  // ponytail: 칸의 순서로 짝짓는다. 다시 그리며 칸 순서가 바뀌는 화면이면 못 옮긴다(그때는 지금처럼 포커스만 빠진다).
+  const fields = () => [...app.querySelectorAll("input, select, textarea")];
+  const was = typing() ? document.activeElement : null, at = was ? fields().indexOf(was) : -1;
+  const caret = was && (() => { try { return [was.selectionStart, was.selectionEnd]; } catch { return null; } })();
   app.replaceChildren(...view.flat().filter(Boolean));
+  const now = at >= 0 && fields()[at];
+  if (now && now !== was && now.tagName === was.tagName && now.type === was.type) {
+    now.focus({ preventScroll: true });
+    try { if (caret?.[0] != null) now.setSelectionRange(...caret); } catch {} // email 칸 등은 커서 자리를 못 정한다
+  }
   if (!short && me && ownProfile && myToken() && (asking(me) || reading)) boarding.openConsent(trip, me, myToken());
   if (conversationPending && me && !asking(me) && !reading) { conversationPending = false; conversations.open(); }
   if (failed || (trip && !me)) conversationPending = false;
