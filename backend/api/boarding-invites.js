@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { tripsDb } from "./db.js";
 import { withActiveProfile } from "./profile-lifecycle.js";
+import { accountConsents } from "./accounts.js";
 
 const fail = (status, error) => { throw { status, error }; };
 const hash = (value) => createHash("sha256").update(value).digest();
@@ -58,7 +59,8 @@ export async function boardingInvites(req, path, body, { profileOf, withTrip, se
   }
   const profile = (await profileOf(req)) ?? fail(401, "본인 프로필로 로그인한 뒤 참여해 주세요");
   if (!seats.includes(body.seat)) fail(400, "seat: 사용할 수 있는 자리");
-  // 동의는 가입 후 본인 참가자 토큰으로 별도로 켭니다. 입력으로 대리 동의를 넘기지 못하게 합니다.
+  // 동의는 입력으로 받지 않습니다(대리 동의를 넘기지 못하게). 본인이 계정에서 지금 문구 판에 동의해 두었으면 켠 채로,
+  // 아니면 꺼진 채로 들어가 본인 참가자 토큰으로 켭니다(T128). 프로필의 기본값(consentDefault)은 여기서 쓰지 않습니다.
   if (Object.keys(body).some((key) => key !== "seat")) fail(400, "참가 요청에는 seat만 넣어 주세요");
   const candidate = await read();
   active(candidate, candidate?.doc);
@@ -69,7 +71,7 @@ export async function boardingInvites(req, path, body, { profileOf, withTrip, se
     const again = trip.participants.find((p) => p.profileId === me.id);
     if (!again && trip.participants.some((p) => p.seat === body.seat)) fail(409, "다른 사람이 먼저 선택한 자리예요");
     const token = randomBytes(32).toString("base64url");
-    const participant = again ?? { id: randomUUID().slice(0, 8), profileId: me.id, name: me.name, character: me.character, seat: body.seat, consent: false };
+    const participant = again ?? { id: randomUUID().slice(0, 8), profileId: me.id, name: me.name, character: me.character, seat: body.seat, consent: accountConsents(me) };
     if (again) participant.olderTokenHashes = [...(participant.olderTokenHashes ?? []), participant.tokenHash].slice(-4);
     else {
       trip.participants.push(participant);

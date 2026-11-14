@@ -14,6 +14,9 @@ const COST = { N: 16384, r: 8, p: 1 };
 const KEY_BYTES = 64;
 // 계정 동의 문구의 판. 화면이 판을 보내지 않으면 이 값을 남긴다.
 export const CONSENT_VERSION = "2026-11-14";
+// 계정 동의가 여행으로 이어지는지: 켜져 있고, 지금 문구 판에 동의했을 때만. 문구가 바뀌면(판을 올리면) 다시 동의를 받는다.
+// 본인이 자기 프로필 토큰으로 여행에 들어갈 때만 쓴다(참가, 차량 QR 초대) — 다른 사람이 대신 켜지 못한다.
+export const accountConsents = (profile) => profile.consent === true && profile.consentVersion === CONSENT_VERSION;
 
 export async function hashPassword(password) {
   const salt = randomBytes(16);
@@ -44,13 +47,15 @@ const password = (v) => {
   const n = [...v].length;
   return n >= 8 && n <= 72 ? v : fail(400, "password: 글자 8~72자");
 };
+// 선택 칸의 빈 글은 보내지 않은 것과 같다(화면이 빈 입력칸을 그대로 보내도 되게).
+const optional = (v, max, name, text) => (v === undefined || v === "" ? undefined : text(v, max, name));
 const bearer = (req) => /^Bearer ([A-Za-z0-9_-]{40,})$/.exec(req.headers.authorization ?? "")?.[1];
 const emailTaken = (e) => e?.code === "23505" && e.constraint === "profiles_email";
 
 // POST /api/accounts, POST /api/sessions. deps는 server.js의 프로필 도구(같은 검사·같은 모양을 쓰려고).
 export async function accounts(req, kind, b, { profileOf, profileById, issueToken, text, tokenHash }) {
   if (req.method !== "POST") fail(405, "POST만 됨");
-  const device = b.device === undefined ? "" : text(b.device, 20, "device");
+  const device = optional(b.device, 20, "device", text) ?? "";
   if (kind === "sessions") {
     if (typeof b.email !== "string" || typeof b.password !== "string") fail(400, "email, password: 글자");
     const { rows } = await profilesDb().query("SELECT id, password_hash FROM profiles WHERE email = $1", [b.email.trim().toLowerCase()]);
@@ -65,9 +70,9 @@ export async function accounts(req, kind, b, { profileOf, profileById, issueToke
   const me = await profileOf(req); // 토큰이 없으면 null, 틀리면 401
   const secret = await hashPassword(plain);
   if (me) {
-    // 기기 프로필에 계정을 붙인다. 이름·캐릭터는 보냈을 때만 바꾼다. 이미 계정이 있는 프로필은 바꾸지 않는다(비밀번호 바꾸기가 아님).
-    const name = b.name === undefined ? me.name : text(b.name, 20, "name");
-    const character = b.character === undefined ? me.character : text(b.character, 20, "character");
+    // 기기 프로필에 계정을 붙인다. 이름·캐릭터는 보냈을 때만(빈 글이 아닐 때만) 바꾼다. 이미 계정이 있는 프로필은 바꾸지 않는다(비밀번호 바꾸기가 아님).
+    const name = optional(b.name, 20, "name", text) ?? me.name;
+    const character = optional(b.character, 20, "character", text) ?? me.character;
     const { rowCount } = await profilesDb()
       .query("UPDATE profiles SET email = $2, password_hash = $3, name = $4, character = $5, updated_at = now() WHERE id = $1 AND email IS NULL", [me.id, address, secret, name, character])
       .catch((e) => (emailTaken(e) ? fail(409, "이미 가입한 이메일") : Promise.reject(e)));
@@ -77,7 +82,7 @@ export async function accounts(req, kind, b, { profileOf, profileById, issueToke
   }
   const id = randomUUID();
   const name = text(b.name, 20, "name");
-  const character = b.character === undefined ? "" : text(b.character, 20, "character");
+  const character = optional(b.character, 20, "character", text) ?? "";
   const token = randomBytes(32).toString("base64url");
   // 첫 토큰은 옛 칸(token_hash)에도 적는다 — POST /profiles와 같은 까닭(이전 이미지로 되돌려도 읽히게).
   await profilesDb()
