@@ -21,3 +21,7 @@ PNG 파생본은 macOS `sips -z 높이 너비 원본 --out 대상`으로 만들�
 안전 영역 기준은 [Web App Manifest](https://www.w3.org/TR/appmanifest/#icon-masks)와 [Android adaptive icon 문서](https://developer.android.com/develop/ui/compose/system/icon_design_adaptive)를 따릅니다. 마스터 원본의 바깥 그림자는 핵심 윤곽 측정에서 제외했습니다.
 
 `mascot.svg`는 최종 시안(민준 개선안)의 가치타 본체 마스코트 `Mascot`(Figma 노드 `7:544`, 상태=기록 중) 24×24 선 그림입니다. 폰 머리 줄(app bar)에 씁니다. Figma MCP의 에셋 주소에서 받은 SVG에서 표시용 속성(`style`, `preserveAspectRatio`)과 레이어 id만 지웠고 경로는 그대로입니다. 대표 캐릭터(앱 아이콘)와 다른 실루엣입니다.
+
+## 첫 화면(P01) 보관함 카드 그림
+
+`welcome-dad.png`·`welcome-seojun.png`(192×192)는 최신 시안 P01(`eZ2xsOXkrszqdP489kduCs` 2073:3697 'Archive / 캐릭터 / 아빠·서준')의 그림을 그대로 받은 것입니다. 기본 캐릭터(`../chars/`)와 자르기·바탕이 달라 따로 둡니다.
