@@ -793,7 +793,7 @@ class MainActivity : ComponentActivity() {
                 s = s.copy(note = ""); mute(!muted); justResumed = !muted; syncCapture()
             }
             s.agreed -> startRecording()
-            !carStatus.restricted -> openBoarding()
+            // 동의 전에는 큰 단추가 꺼진 안내다(시안 C17 막대에는 일시정지·녹화 재개·녹화 종료만). 동의는 각자 휴대폰에서 한다.
         }
     }
 
@@ -1129,12 +1129,13 @@ class MainActivity : ComponentActivity() {
                 revokeInvite()
                 boarding = boarding.copy(invite = null, issuing = false, note = "참석 QR 시간이 끝났어요. 새 QR을 만들어 주세요.")
             }
-            is BoardingAction.PickSeat -> if (!s.busy) boarding = boarding.copy(seat = action.seat, note = "")
+            // C16B 좌석을 누르면 C16C '누가 앉나요?'(그 좌석), 사람을 고르면 그 사람을 그 자리로 옮긴다(빈자리 또는 이미 그 자리인 사람).
+            is BoardingAction.PickSeat -> if (!carStatus.restricted && !s.busy) { revokeInvite(); boarding = BoardingState(BoardingPage.SEAT, seat = action.seat) }
             is BoardingAction.Move -> if (!carStatus.restricted && !s.busy) {
-                revokeInvite()
-                boarding = BoardingState(BoardingPage.SEAT, personId = action.person.id, seat = Seat.entries.firstOrNull { it.name == action.person.seat })
+                val trip = s.trip
+                if (trip != null && !selectableSeat(trip, carStatus.seats, boarding.seat, action.person.id)) boarding = boarding.copy(note = "빈자리로만 옮길 수 있어요")
+                else { boarding = boarding.copy(personId = action.person.id, note = ""); connectPassenger() }
             }
-            BoardingAction.Connect -> connectPassenger()
         }
     }
 
@@ -1306,7 +1307,8 @@ class MainActivity : ComponentActivity() {
             if (destination == Destination.CONVERSATION || (destination == Destination.SHORTS && afterStart != null)) loadTranscript()
         }
         val b = mockBrief() ?: brief?.takeIf { vehicleParked() && offer?.stage.let { it == null || it == Offer.Stage.FINDING } } // 실제 P이고 제한이 풀린 동안만, 휴게소 제안이 먼저
-        val shell = tripShell(parked, destination == Destination.RIDE && b != null && boarding.page == BoardingPage.HIDDEN, destination == Destination.SHORTS,
+        // 도착 브리핑(C20)과 좌석 배정·참석 QR(C16B·C16C·C16 guestInvite)은 주차 틀('주차 중  P')
+        val shell = tripShell(parked, destination == Destination.RIDE && (b != null || boarding.page != BoardingPage.HIDDEN), destination == Destination.SHORTS,
             talk = destination == Destination.CONVERSATION)
         // C17 계열(기록 중인 함께 타는 중)은 머리 줄에 '연결됨'이 없다. 대화 기록(C44)·끝난 여행(2026:2410)·기록 전에는 있다
         val recordingView = destination == Destination.RIDE && b == null && boarding.page == BoardingPage.HIDDEN &&

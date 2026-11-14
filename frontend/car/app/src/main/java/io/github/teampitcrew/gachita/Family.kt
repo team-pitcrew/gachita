@@ -757,7 +757,7 @@ private fun SeatGrid(members: List<GroupMember>, onPick: (SeatPick) -> Unit) {
 
 /** 좌석 배정(C16B): surface·모서리 28·여백 28·간격 20, 칸 surface-2·높이 240·간격 24, 캐릭터 88 · 자리 Label · 이름 Headline. 칸을 누르면 구성원 선택(C16C). */
 @Composable
-private fun SeatAssign(members: List<GroupMember>, onSeat: (String) -> Unit) {
+internal fun SeatAssign(members: List<GroupMember>, swaps: Boolean = true, onSeat: (String) -> Unit) {
     val c = MaterialTheme.colorScheme
     val at = members.filter { it.seat != null }.associateBy { it.seat }
     Surface(Modifier.fillMaxWidth(), GroupShape, color = c.surface) {
@@ -779,7 +779,9 @@ private fun SeatAssign(members: List<GroupMember>, onSeat: (String) -> Unit) {
             }
         }
     }
-    Text("이미 앉은 사람을 선택하면 두 사람의 자리가 바뀌어요.", Modifier.fillMaxWidth(), style = CarText.Label, color = c.onSurfaceVariant, textAlign = TextAlign.Center)
+    // 여행 중 자리(동승자 설정)는 서버가 한 사람씩만 옮겨 맞바꿀 수 없다 — 빈자리로만 옮긴다.
+    Text(if (swaps) "이미 앉은 사람을 선택하면 두 사람의 자리가 바뀌어요." else "빈자리를 누르고 그 자리로 옮길 사람을 선택해 주세요.", Modifier.fillMaxWidth(), style = CarText.Label,
+        color = c.onSurfaceVariant, textAlign = TextAlign.Center)
 }
 
 /**
@@ -787,7 +789,7 @@ private fun SeatAssign(members: List<GroupMember>, onSeat: (String) -> Unit) {
  * 자리로 정한다(자리 없음 = 이번 여행에 타지 않음). 자리 없는 사람을 앉은 사람의 자리에 고르면 FamilyFlow가 알림으로 이유를 알린다.
  */
 @Composable
-private fun MemberPicker(members: List<GroupMember>, seat: String, onPick: (GroupMember) -> Unit) {
+internal fun MemberPicker(members: List<GroupMember>, seat: String, onPick: (GroupMember) -> Unit) {
     val c = MaterialTheme.colorScheme
     Surface(Modifier.fillMaxWidth(), GroupShape, color = c.surface) {
         Row(Modifier.padding(28.dp), horizontalArrangement = Arrangement.spacedBy(24.dp)) {
@@ -867,7 +869,7 @@ private fun InviteTitle(g: CarGroup?, counted: Boolean) {
 
 /** 스캔 가능한 초대 QR(320): 흰 바탕 검은 칸(QR은 테마와 관계없이 흑백이어야 읽힌다). */
 @Composable
-private fun InviteQr(url: String) {
+internal fun InviteQr(url: String) {
     val matrix = remember(url) { QRCodeWriter().encode(url, BarcodeFormat.QR_CODE, 0, 0, mapOf(EncodeHintType.MARGIN to 2)) }
     Canvas(Modifier.size(320.dp).semantics { contentDescription = "초대 QR" }) {
         drawRect(Color.White)
@@ -924,7 +926,7 @@ private fun InviteBody(g: CarGroup?, invite: GroupInvite?, copy: (String) -> Uni
  * 카카오톡·메시지는 그 앱으로 바로 보내고, 차에 그 앱이 없으면 링크를 복사한다('복사했어요'). 안드로이드 공유 화면 대신 시안의 시트를 쓴다.
  */
 @Composable
-private fun ShareSheet(name: String, code: String, url: String, ctx: Context, copyLink: () -> Unit, close: () -> Unit) {
+internal fun ShareSheet(name: String, code: String, url: String, ctx: Context, copyLink: () -> Unit, close: () -> Unit) {
     val text = "$name 초대 $code\n$url"
     fun send(intent: Intent) { if (runCatching { ctx.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }.isFailure) copyLink(); close() }
     CarSheet(close) {

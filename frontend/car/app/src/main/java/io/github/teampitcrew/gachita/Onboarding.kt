@@ -267,7 +267,7 @@ fun OnboardingScreen(o: Onboarding, gear: String?, driving: Boolean = false, onF
         gear = gear ?: "P",
         bottom = {
             when (step) {
-                OnboardStep.WELCOME -> CarButton(if (driving) "주차한 뒤 시작할 수 있어요" else "가치타 시작하기", enabled = !driving) { o.go(OnboardStep.SIGNUP) }
+                OnboardStep.WELCOME -> CarButton("가치타 시작하기", enabled = !driving) { o.go(OnboardStep.SIGNUP) }
                 OnboardStep.SIGNUP -> CarButton("가입하고 계속", enabled = !o.busy) { o.submitAccount() }
                 OnboardStep.CONSENT -> CarButton("동의하고 계속", enabled = !o.busy) { o.agree() }
                 OnboardStep.PROFILE -> CarButton("목소리 등록하기", enabled = !o.busy) { o.saveProfile() }

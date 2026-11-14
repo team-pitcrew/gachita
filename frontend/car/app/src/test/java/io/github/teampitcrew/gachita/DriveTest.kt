@@ -28,7 +28,8 @@ class DriveTest {
         assertEquals(DriveButton("녹화 재개", Press.GO, true), driveButton(recording = true, muted = true, agreed = true, restricted = true)) // C17p ● 2137:5853
         assertEquals(DriveButton("출발하면 자동으로 기록해요", Press.OFF, false), driveButton(recording = false, muted = false, agreed = true, restricted = false)) // C03·C13
         assertFalse(driveButton(recording = false, muted = false, agreed = true, restricted = true).enabled)
-        assertEquals("동승자 설정", driveButton(recording = false, muted = false, agreed = false, restricted = false).label)
+        // 동의 전에는 다른 화면으로 들어가는 단추가 없다(시안 C17 막대) — 꺼진 안내만
+        assertEquals(DriveButton("각자 휴대폰에서 동의하면 기록해요", Press.OFF, false), driveButton(recording = false, muted = false, agreed = false, restricted = false))
         assertFalse(driveButton(recording = false, muted = false, agreed = false, restricted = true).enabled)
     }
 
