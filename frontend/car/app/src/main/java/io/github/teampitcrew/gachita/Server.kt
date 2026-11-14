@@ -194,11 +194,6 @@ class Server(base: String, private val open: (URL) -> HttpURLConnection = { it.o
     fun moment(code: String, token: String, at: Long, from: Long, to: Long, label: String, lat: Double?, lng: Double?): String =
         JSONObject(call("POST", "/api/trips/$code/moments", JSONObject().put("at", at).put("from", from).put("to", to).put("label", label).apply { if (lat != null && lng != null) put("lat", lat).put("lng", lng) }, token)!!).getString("id")
 
-    /** 출발 전 목소리 등록(ADR-0023): 그 참가자 본인의 토큰으로, 녹음 동의가 켜져 있을 때만. 차 안에서 계산한 값만 보낸다(소리는 보내지 않음). */
-    fun voice(code: String, id: String, token: String, vector: DoubleArray, seconds: Double) {
-        call("POST", "/api/trips/$code/participants/$id/voice", voiceValue(vector, seconds), token)
-    }
-
     /** 녹음에 동의한 탑승자의 목소리 대조 값과 기준(GET /voice-prints). 차 안 대조에 쓴다. 옛 서버면 404 ApiError. */
     fun voicePrints(code: String, token: String): JSONObject = JSONObject(call("GET", "/api/trips/$code/voice-prints", null, token)!!)
 

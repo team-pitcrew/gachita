@@ -599,6 +599,7 @@ TAPS = {"Onboarding.kt": ["가치타 시작하기", "가입하고 계속", "동�
         "AfterTrip.kt": ["오늘의 주행을 기록했어요", "남기고 싶은 순간을 골라요", "장면을 선택해 주세요", "콘텐츠를 만들어요", "콘텐츠 생성 중", "순간이 완성됐어요", "콘텐츠 기록 보기"],
         "Contents.kt": ["우리 가족 / 차량과 폰에서 이어보기", "갤러리", "타임라인", "지도", "주행 지도 자세히 보기 →", "이 장면 보기", "영상 내보내기", "영상이 준비됐어요", "콘텐츠 기록으로"]}
 
+
 def check_labels():
     """TAPS의 글이 앱 소스(frontend/car/app/src/main)에 있는지. 없으면 그 글과 파일을 적고 종료 코드 1."""
     src = pathlib.Path(__file__).resolve().parent / "app/src/main/java/io/github/teampitcrew/gachita"
@@ -847,11 +848,12 @@ def after_steps(code):
     if not made: tap("콘텐츠 기록", timeout=4)  # 30 뒤에는 이미 콘텐츠 기록이 열려 있다(탭을 다시 누르면 여행 마무리로 감)
     sd = "서버 시드 장면·영상(seed_contents)" if SEED else ""
     if step(31, ["우리 가족 / 차량과 폰에서 이어보기", "갤러리"], 12, sd, seeded=SEED):
-        tap("타임라인"); step(32, ["날짜를 따라 다시 보는 우리 가족", "지도에서 보기"], note_=sd, seeded=SEED)
-        tap("지도에서 보기"); step(33, ["어디에서 나눈 이야기였을까요?", "장면 확대하기"], note_=sd, seeded=SEED)
-        tap("장면 확대하기"); tap("이 장면 보기", timeout=5)
+        # 보기 전환(갤러리·타임라인·지도, 시안 v3) → 지도 옆 '주행 지도 자세히 보기 →'(C36 상세) → '이 장면 보기'(C37) → 내보내기(C38)
+        tap("타임라인"); step(32, ["타임라인"], note_=sd, seeded=SEED)
+        tap("지도"); step(33, ["주행 지도 자세히 보기 →"], note_=sd, seeded=SEED)
+        tap("주행 지도 자세히 보기 →"); tap("이 장면 보기", timeout=5)
         step(34, ["영상 내보내기"], note_=sd, seeded=SEED); tap("영상 내보내기")
-        step(35, ["공유할 준비가 됐어요"], note_=sd, seeded=SEED); tap("콘텐츠 기록으로", timeout=4)
+        step(35, ["영상이 준비됐어요"], note_=sd, seeded=SEED); tap("콘텐츠 기록으로", timeout=4)
     else:
         for n in (32, 33, 34, 35): mark(n, "없음", "31 갤러리 화면이 없어 건너뜀 — " + flow_state("F6"))
 
