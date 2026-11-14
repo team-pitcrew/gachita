@@ -124,7 +124,7 @@ fun seatPick(members: List<GroupMember>, pick: SeatPick?, target: SeatPick): Sea
     }
     if (seatOf(who) != null) { // 앉은 사람끼리 맞바꿈
         val a = name(who)
-        return SeatResult(swapSeats(members, who, other), null, "$a${if (batchim(a)) "과" else "와"} ${name(other)}의 자리 위치를 바꿨어요.")
+        return SeatResult(swapSeats(members, who, other), null, "$a${if (batchim(a)) "과" else "와"} ${name(other)}의 ${if (seatOf(who)?.startsWith("ROW_2_") == true && target.seat.startsWith("ROW_2_")) "뒷자리" else "자리"} 위치를 바꿨어요.") // 시안 C14: 둘 다 뒷줄이면 '뒷자리'
     }
     return SeatResult(null, pick, "앉은 사람이 있는 자리예요. 빈자리를 눌러 주세요.") // 자리 없는 사람은 빈자리에만
 }
@@ -154,7 +154,7 @@ fun childLine(name: String) = "“나는 $name${if (batchim(name)) "이야" else
 fun readiness(members: List<GroupMember>): String {
     val consent = members.count { it.consent }
     val voice = members.count { it.hasVoice }
-    return if (consent == members.size && voice == members.size) "녹음 동의 ${members.size}명 완료 / 목소리 등록 ${members.size}명 완료"
+    return if (consent == members.size && voice == members.size) "동의와 목소리 등록 완료 / 다음 탑승부터 자동 기록 켜짐"
     else "녹음 동의 $consent/${members.size}명 / 목소리 등록 $voice/${members.size}명"
 }
 
@@ -314,7 +314,7 @@ fun FamilyFlow(server: String, token: String?, onClose: () -> Unit, onStart: (St
     val g = current()
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().padding(32.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
-            AppBar("우리 가족", listening = false, "주차 중 · P" to true)
+            AppBar("", listening = false, "주차 중  P" to true)
             if (view == FamilyView.GROUP || view == FamilyView.SEAT || view == FamilyView.GUEST) Tabs(onClose)
             Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(24.dp)) {
                 Column(Modifier.weight(1.6f), verticalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -324,7 +324,7 @@ fun FamilyFlow(server: String, token: String?, onClose: () -> Unit, onStart: (St
                             val kids = others.filter { it.role == "child" }
                             val adults = others.filter { it.role != "child" }
                             Heading(when { kids.isNotEmpty() -> "${kids.last().name}까지 준비됐어요"; adults.isNotEmpty() -> "${adults.last().name}${if (batchim(adults.last().name)) "이" else "가"} 함께해요"; else -> "우리 가족 추가" },
-                                when { kids.isNotEmpty() -> "다음 아이를 추가해 주세요."; adults.isNotEmpty() -> "${adults.last().name} 계정 연결 완료 / 이제 아이를 추가해 주세요."; else -> "기존 계정 연결 또는 아이 프로필 직접 만들기" })
+                                when { kids.isNotEmpty() -> "${(listOf(myName) + adults.map { it.name } + kids.map { it.name }).joinToString(", ")} 준비 완료 / 다음 아이를 추가해 주세요."; adults.isNotEmpty() -> "${adults.last().name} 계정 연결 완료 / 이제 아이를 추가해 주세요."; else -> "기존 계정 연결 또는 아이 프로필 직접 만들기" })
                             Row2(soft = true) { Face("glasses", 72); Column { Text(myName, fontSize = 30.sp, fontWeight = FontWeight.Bold); Text("내 계정 / 목소리 등록 완료", color = c.onSurfaceVariant) } }
                             (adults + kids).forEach { m -> Row2 { Face(m.character, 64); Column { Text(m.name, fontSize = 28.sp, fontWeight = FontWeight.Bold); Text(if (m.role == "child") "아이 프로필 / ${if (m.hasVoice) "목소리 등록 완료" else "목소리 등록 전"}" else "계정 연결 완료", color = c.onSurfaceVariant) } } }
                             Ghost("가족 계정 초대하기", !busy) { act { issue(ensureFamily()) } }

@@ -232,6 +232,7 @@ class MainActivity : ComponentActivity() {
     /** 보이고 있는 도착 브리핑. place가 null이면 모든 장소(Gleo로 부름). 주차해 주행 제한이 풀렸을 때만 그린다. */
     private data class Brief(val place: String?, val arrivalItems: List<SharedTodo>? = null, val final: Boolean = false)
     private var brief by mutableStateOf<Brief?>(null)
+    private var nextPlaceName: String? = null // 내비의 다음 도착지 이름(거리와 상관없이 마지막으로 읽은 것). 그곳에 묶인 부탁은 휴게소를 제안하지 않는다
     private var near by mutableStateOf<Approach?>(null) // 도착 전 브리핑(C19·finalNear). 주행 중 조회마다 내비 남은 시간으로 바꾸고 주차하면 지운다
     private var f4Mock by mutableStateOf<String?>(null) // mock: 디버그 빌드의 --es f4 …(F4 화면 확인용 시연 데이터, Arrival.kt F4Mock)
     private var appVisible by mutableStateOf(false) // onStart ~ onStop
@@ -828,6 +829,7 @@ class MainActivity : ComponentActivity() {
         if (code == null || !carStatus.restricted || !s.agreed || offer?.stage == Offer.Stage.FINDING || arrivalLoading) { if (!carStatus.restricted) near = null; return }
         car.nextPlaceEta { name, sec, final ->
             if (s.trip?.code != code || !carStatus.restricted) return@nextPlaceEta
+            nextPlaceName = name?.takeIf { it.isNotBlank() }
             val a = approach(code, name, sec, final, approachLimit)
             if (debug && "$name|$sec" != etaSeen) { etaSeen = "$name|$sec"; Log.i(TAG, "다음 장소 $name 남은 ${sec}초 · 카드 ${if (a != null) "보임" else "없음"}") } // 시연·E2E 확인용
             near = a
@@ -987,7 +989,7 @@ class MainActivity : ComponentActivity() {
             if (a == Answer.NO) later(o) else if (canAccept(u)) accept(o) else Log.i(TAG, "뒷줄의 수락은 받지 않음")
             return
         }
-        if (isRestRequest(u.text)) return hold(t, u)
+        if (isRestRequest(u.text, nextPlaceName ?: near?.place)) return hold(t, u) // '하나로마트 가면 화장실…'은 도착 할 일(F4), 휴게소 제안 아님
         // 장소별 할 일은 서버 전사에서 읽습니다. 기존 경유지 재질문 분기만 건너뛰고 로컬 목록에는 더하지 않습니다(T113).
         if (todoOf(u.text) != null) return
         if (o != null && o.asked < 2 && canAccept(u)) { // 한 번만 다시 묻는다. 답 낱말을 넣지 않는다(스피커 소리가 마이크로 되돌아와 답이 되지 않게)
@@ -1890,8 +1892,8 @@ class MainActivity : ComponentActivity() {
                     nearAsks != null -> NearCard(nearAsks.first, nearLine(nearAsks.second, if (mock != null) F4Mock.people else t.people), m)
                     else -> HeardCard(
                         if (s.recording && muted || ended) "멈추기 전 마지막 대화" else "방금 받아 적은 말 ${Live.count}건",
-                        listOfNotNull("부탁 ${t.heldRequests}".takeIf { t.heldRequests > 0 }, "할 일 ${todoList.count { it.pending }}".takeIf { todoList.any { it.pending } },
-                            "미전송 ${Live.pending}".takeIf { parked && Live.pending > 0 }).joinToString(" · "),
+                        // 시안 C17은 제목만 둔다(부탁·할 일 수는 도착 전 카드·장소별 할 일에서). 주차 중 미전송 수는 원음을 잃지 않게 남긴다
+                        "미전송 ${Live.pending}".takeIf { parked && Live.pending > 0 }.orEmpty(),
                         Live.recent.asReversed().map { u ->
                             val who = sp?.get(u.seq)?.who?.let { id -> t.people.firstOrNull { it.id == id } }
                             HeardRow(heardMeta(who?.name, who?.seat, u.seatZone), u.text, who?.let(::seatCharacter))
@@ -1981,10 +1983,10 @@ class MainActivity : ComponentActivity() {
                 transcriptNote.isNotEmpty() -> transcriptNote
                 live -> ""
                 transcriptLoading -> "대화를 불러오고 있어요"
-                else -> "서버에 저장된 대화 · ${transcript.size}개"
+                else -> "" // 시안 C44는 목록 밑에 상태 줄이 없다. 불러오기·동의·오류일 때만 적는다
             },
             canPick = scope != null && s.online,
-            onRefresh = ::loadTranscript, onFixSpeakers = { managing = true },
+            onFixSpeakers = { managing = true },
             onPick = { stopShort(); closeBoarding(); afterStart = AfterStep.SELECT; destination = Destination.SHORTS }, modifier = modifier, // 추천 장면 3개(C23)
             live = if (live) liveChip(s.recording && !muted && handoff.state == Handoff.State.OFF && Live.mic == Mic.ON) else null,
             onBack = { destination = Destination.RIDE })
