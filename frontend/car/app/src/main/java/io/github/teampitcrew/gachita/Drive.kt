@@ -38,8 +38,8 @@ import androidx.compose.ui.unit.sp
 
 /*
  * Ride tab of the final design (Figma fJmxFDb3TrpycwDjGJNP62, page 2004:57): C17/C17p recording and paused,
- * C21/C21p driving on after an arrival, the resumed and ended states, plus the header and tab bar (C13 look).
- * Pre-arrival and arrival briefs belong to flow F4.
+ * C19/C19p and finalNear/finalPaused approaching the next place (flow F4, T141), C21/C21p driving on after an arrival,
+ * the resumed and ended states, plus the header and tab bar (C13 look). The arrival brief itself is Arrival.kt.
  * Slots keep fixed sizes so cards appearing or disappearing never shift the other slots while driving (T11, T83).
  * The pure functions here are covered by DriveTest.
  */
@@ -108,6 +108,53 @@ internal fun heardMeta(name: String?, seat: String?, zone: Int?): String =
 
 /** Character index used everywhere in the car app: guests have no character value yet, so it follows seat order (Theme.kt). */
 internal fun seatCharacter(p: Person): Int = Seat.entries.indexOfFirst { it.name == p.seat }.coerceAtLeast(0)
+
+/** Pre-arrival brief (C19, finalNear 2043:1835): the next place from the navigation and whole minutes left, rounded up. final: no waypoint left. */
+internal data class Approach(val trip: String, val place: String, val minutes: Int, val seconds: Int, val final: Boolean = false)
+
+internal const val APPROACH_SECONDS = 300
+
+/** Approaching when the navigation reports 0 < remaining time <= 5 minutes for a named place. 0 means the navigation has no estimate. */
+internal fun approach(trip: String, name: String?, remainSeconds: Int?, final: Boolean = false): Approach? {
+    val place = name?.trim().orEmpty()
+    if (place.isEmpty() || remainSeconds == null || remainSeconds !in 1..APPROACH_SECONDS) return null
+    return Approach(trip, place, maxOf(1, (remainSeconds + 59) / 60), remainSeconds, final)
+}
+
+/** Open server todos whose place word is in the navigation name, the same rule as the server's arrival match ('마트' in '하나로마트 강릉점'). */
+internal fun placeAsks(place: String, items: List<SharedTodo>): List<SharedTodo> = items.filter { it.pending && arrivedAt(it.place, place) }
+
+/** First confirmed speaker of an ask: the server's requestedBy first, else the earliest source with a trip participant. Unknown stays null. */
+internal fun askSpeaker(item: SharedTodo, people: List<Person>): Person? =
+    item.requestedBy.firstNotNullOfOrNull { id -> people.find { it.id == id } }
+        ?: item.sources.sortedBy { it.at }.firstNotNullOfOrNull { s -> people.find { it.id == s.participantId } }
+
+/** '고기와 과일', '삼겹살과 귤', three or more '고기, 과일과 음료' (와/과 by the final consonant). */
+internal fun andWords(names: List<String>): String = when (names.size) {
+    0 -> ""
+    1 -> names[0]
+    else -> names.dropLast(1).joinToString(", ") + (if (hasBatchim(names[names.size - 2])) "과 " else "와 ") + names.last()
+}
+
+internal fun hasBatchim(word: String): Boolean = word.trim().lastOrNull()?.let { it in '가'..'힣' && (it - '가') % 28 != 0 } ?: false
+
+/**
+ * One short phrase per ask for the narrow card. C19 '하은 화장실 / 고기와 과일 / 간식과 음료', finalNear '하은 화장실 / 엄마 냉장 보관 /
+ * 아빠 체크인과 가방 챙기기': things to buy as a list of goods, anything else with the confirmed requester's name in front, things to bring
+ * end with '챙기기'. Older servers without action items give the ask text.
+ */
+internal fun nearPhrase(item: SharedTodo, people: List<Person>): String {
+    val names = item.items.map { it.name }
+    val who = askSpeaker(item, people)?.name
+    return when (item.category) {
+        "buy" -> andWords(names).ifEmpty { item.title ?: item.text }
+        "first", "remember" -> listOfNotNull(who, names.firstOrNull() ?: item.title ?: item.text).joinToString(" ")
+        "bring" -> listOfNotNull(who, if (names.isEmpty()) item.title ?: item.text else "${andWords(names)} 챙기기").joinToString(" ")
+        else -> item.text
+    }
+}
+
+internal fun nearLine(asks: List<SharedTodo>, people: List<Person>): String = asks.joinToString(" / ") { nearPhrase(it, people) }
 
 // ---- UI ----
 
@@ -219,6 +266,20 @@ internal fun HeardCard(title: String, counts: String, rows: List<HeardRow>, dim:
                     }
                 }
             }
+        }
+    }
+}
+
+/** C19·finalNear '{place} 도착까지 약 N분' card in the middle slot. Details are shown after parking (C20, finalBrief). */
+@Composable
+internal fun NearCard(a: Approach, line: String, modifier: Modifier) {
+    val c = MaterialTheme.colorScheme
+    Surface(modifier, RoundedCornerShape(32.dp), color = c.primaryContainer) {
+        Column(Modifier.padding(horizontal = 24.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("${a.place} 도착까지 약 ${a.minutes}분", color = c.primary, fontSize = 24.sp, lineHeight = 32.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("내리기 전, 기억할 부탁", color = c.onSurface, fontSize = 32.sp, lineHeight = 42.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+            Text(line, Modifier.weight(1f, fill = false), color = c.onSurface, fontSize = 28.sp, lineHeight = 40.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text("주차 후 자세히 보여드릴게요.", color = c.onSurfaceVariant, fontSize = 24.sp, lineHeight = 32.sp, maxLines = 1)
         }
     }
 }

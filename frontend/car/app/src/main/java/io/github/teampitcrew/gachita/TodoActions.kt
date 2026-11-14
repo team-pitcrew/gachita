@@ -156,3 +156,20 @@ fun deriveActionTodos(lines: List<TodoLine>): List<TodoAction> {
             sources.mapNotNull { it.participantId }.distinct(), sources)
     }
 }
+
+/**
+ * 차가 낸 할 일에 서버 목록을 붙인다. 같은 id면 서버 것(상태·버전·확인된 화자). 서버가 같은 발화(순번·시각)에서 다른 할 일을 냈으면
+ * 교정본이 반영된 것이라 차 것을 뺀다. 서버가 아직 받지 못한 발화의 할 일은 대기·버전 0으로 둔다. 서버에만 있는 할 일(폰 입력)은 뒤에.
+ */
+fun withCarTodos(own: List<TodoAction>, server: List<SharedTodo>): List<SharedTodo> {
+    val byId = server.associateBy { it.id }
+    val heard = server.flatMapTo(HashSet()) { t -> t.sources.map { it.seq to it.at } }
+    val mine = own.mapNotNull { a ->
+        byId[a.id] ?: if (a.sources.any { (it.seq to it.at) in heard }) null
+        else SharedTodo(a.id, a.place, a.text, "pending", 0, a.sources.map { SharedTodoSource(it.device, it.seq, it.at, it.text, it.text, it.participantId) },
+            // 도착 브리핑의 행동 항목(F4, T141): 서버가 아직 받지 못한 것도 차가 낸 분류·물건·요청한 사람·제목으로 보인다
+            a.category, a.items.map { TodoItem(it.name, it.qty) }, a.requestedBy, a.title)
+    }
+    val shown = mine.mapTo(HashSet()) { it.id }
+    return mine + server.filter { it.id !in shown }
+}
