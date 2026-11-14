@@ -24,6 +24,7 @@ import { boardingInvites, tripBoardingInvites } from "./boarding-invites.js";
 import { restStops, SOURCE as REST_STOPS_SOURCE } from "./rest-stops.js";
 import { shortGenerations, shortTemplateCatalog } from "./short-generations.js";
 import { shortAssets, revokeShortAssets } from "./short-assets.js";
+import { tripAudio } from "./trip-audio.js";
 import { arrivalBriefing, deriveTodos, TODO_METHOD } from "./todos.js";
 
 const WEB = fileURLToPath(new URL("../../frontend/web/", import.meta.url));
@@ -90,6 +91,7 @@ for (const word of ["todos", "arrival-briefing"]) ROUTE_WORDS.add(word);
 for (const word of ["short-assets", "source"]) ROUTE_WORDS.add(word);
 ROUTE_WORDS.add("rest-stops");
 ROUTE_WORDS.add("boarding-invites");
+for (const word of ["audio", "parts", "start", "complete"]) ROUTE_WORDS.add(word);
 const routeOf = (pathname) =>
   pathname === "/healthz" ? pathname : pathname.startsWith("/api/") ? `/${pathname.split("/").filter(Boolean).map((s) => (ROUTE_WORDS.has(s) ? s : ":p")).join("/")}` : "/(web)";
 // ALB가 붙이는 추적 id(X-Amzn-Trace-Id)를 그대로 쓴다. 없거나 모양이 이상하면 새로.
@@ -143,6 +145,7 @@ export async function migrate() {
   await tripsDb().query(await readFile(new URL("trips-12-short-assets.sql", import.meta.url), "utf8"));
   await tripsDb().query(await readFile(new URL("trips-13-utterance-segments.sql", import.meta.url), "utf8"));
   await tripsDb().query(await readFile(new URL("trips-14-utterance-speaker.sql", import.meta.url), "utf8"));
+  await tripsDb().query(await readFile(new URL("trips-15-trip-audio.sql", import.meta.url), "utf8"));
   await profilesDb().query(await readFile(PROFILES_SQL, "utf8"));
   await profilesDb().query(await readFile(LINKS_SQL, "utf8"));
   await profilesDb().query(await readFile(ALBUM_SQL, "utf8"));
@@ -995,6 +998,7 @@ async function trips(req, [code, sub, id, leaf, ...rest], b, query, signal) {
   }
   if ((sub === "short-plans" || sub === "short-generations") && !rest.length) return shortService.request(req, code, sub, id, leaf, b);
   if (sub === "short-assets" && !rest.length) return shortAssetService.request(req, code, id, leaf, query);
+  if (sub === "audio" && !rest.length) return tripAudioService.request(req, code, id, leaf, b, query); // 전체 음성(ADR-0024)
   if (rest.length || (leaf !== undefined && !(sub === "participants" && leaf === "voice") && sub !== "utterances" && sub !== "captions")) fail(404, "없는 경로");
   if (sub === "boarding-invites") return tripBoardingInvites(req, code, id, { withTrip, participantOf });
   if (sub === "captions") {
@@ -1026,12 +1030,16 @@ async function trips(req, [code, sub, id, leaf, ...rest], b, query, signal) {
   if (sub === "voice-match" && !id) return voiceMatch(code, req, query);
   if (sub === "voice-prints" && !id) return voicePrints(code, req);
   if (sub === "transcriptions" && !id) return transcriptions(code, req, query, signal);
+  // 차의 클립이 없는 장면은 전체 음성에서 잘라 클립으로 남긴 뒤 같은 길로 준다(ADR-0024)
+  if (sub === "recordings" && id && m === "GET") await tripAudioService.cutScenes(req, code, id);
   if (sub === "recordings") return recordings(code, id, req, query);
   if (sub === "participants" && m === "POST" && !id && b.profileId !== undefined) fail(410, RETIRED_GROUP);
   if (leaf === "voice") return participantVoice(code, id, req);
+  if (sub === "shortform" && m === "GET" && !id) await tripAudioService.cutScenes(req, code);
   const profile = sub === "participants" && m === "POST" && !id ? await profileOf(req) : null;
   const act = (activeProfile, lockedClient) => withTrip(code, m !== "GET", (trip, client) => handle(trip, { req, m, sub, id, leaf, b, query, profile: activeProfile }, client), lockedClient);
   const result = profile ? await withActiveProfile(profile.id, db => profileOf(req, db), act) : await act(null);
+  if (sub === "scene-suggestions" && result[0] === 200) result[1].items = await tripAudioService.audible(code, result[1].items);
   if (sub === "participants" && m === "PATCH") void sweepClips(); // 동의 철회가 적은 클립을 커밋 뒤에 버킷에서 지운다
   // 커밋 뒤에: 클립보다 늦게 온 발화를 다시 받아 적는다(T75)
   if (sub === "utterances" && m === "POST") requeueRetranscribe(String(code).toUpperCase()).catch((e) => log("warn", "clip_retranscribe_failed", { err: errFields(e) }));
@@ -1450,6 +1458,7 @@ async function composition(trip, client, all) {
 export const shortServiceContext = { withTrip, participantOf, composition };
 const shortService = shortGenerations(shortServiceContext);
 const shortAssetService = shortAssets(shortServiceContext);
+const tripAudioService = tripAudio({ withTrip, participantOf, sweepClips, queueRetranscribe });
 
 // 확장자 없는 주소는 화면이다: 그 폴더의 index.html(/demo), 없으면 웹앱 첫 화면 — Google 로그인 콜백처럼 웹앱이 주소를 읽는다.
 // 웹 파일은 쓸 때마다 다시 확인하게 한다(no-cache + ETag). 지시가 없으면 Cloudflare가 4시간 캐시해

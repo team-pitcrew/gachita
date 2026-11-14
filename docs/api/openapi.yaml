@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: 가치타 API
-  version: 0.12.0
+  version: 0.15.0
   summary: 여행 세션, 기기 프로필, 동승 연결, 부탁, 장면, 기록본, 화자 대조
   description: |
     웹앱(frontend/web)과 차량 앱(frontend/car)이 부르는 API입니다. 구현은 backend/api/server.js입니다.
@@ -17,6 +17,7 @@ info:
     - 목소리 등록·발화 대조(ADR-0019)의 음성은 WAV(16 kHz PCM) 이진 본문입니다. 등록 음성 원본은 어디에도 저장하지 않고 대조용 값만 남습니다.
 
     - 녹음 클립(`/recordings`)은 사람이 장면으로 고른 구간의 원음입니다. WAV(16 kHz·16비트·모노) 이진 본문을 5 MB까지 받아 클립 버킷(S3)에 두고, 받아 적은 글과 같은 참가자 토큰으로 듣고 지웁니다(T76).
+    - 여행 전체 음성(`/audio`, ADR-0024, T132)은 주차한 뒤 차가 올리는 여행의 원음 전체입니다. 16 kHz 모노 s16le PCM 조각(`application/octet-stream`, 4 MiB까지)을 받아 클립 버킷에 하나로 잇고, 차가 장면 클립을 올리지 않은 장면은 `/recordings/{id}`가 그 구간을 잘라 줍니다. 전체를 내려받는 경로는 없습니다.
 
     선택 영상 생성은 힉스필드(T85, `SHORTS_ENABLED`·서버 키·저장소가 준비됐을 때)를 사용합니다. 생성 요청 전에 외부 전송 자료를 확인하며 원음은 최종 합성에 유지합니다. 상세 계약은 docs/api/short-generation.md입니다.
 
@@ -1542,6 +1543,7 @@ paths:
         기록본에서 말이 몰린 구간을 규칙으로 골라 후보로 줍니다(T43, LLM 없음). 사람이 골라 `POST /moments`로 `at`·`from`·`to`를 남기면 장면이 됩니다.
         기준: 각 발화에서 시작하는 30초 창의 발화 수와 말한 사람 수(좌석 구역, 모르면 화자 대조로 붙은 프로필, 둘 다 없으면 세지 않음). 점수 = 발화 수 + 2 × (말한 사람 수 − 1), 발화 4개 미만은 뺍니다. 장면으로 남길 수 있는 시각(여행을 만든 뒤 ~ 지금+1분)의 발화만 봅니다.
         이미 남긴 장면의 구간(`from`~`to`, 없으면 `at` 앞 20초~뒤 10초)과 겹치는 창은 빼고, 점수 순으로 서로 겹치지 않게 최대 5개를 골라 **시각 순**으로 줍니다.
+        여행 전체 음성(`/audio`)이 다 올라와 있으면 그 소리가 후보 구간의 절반 넘게 덮는 후보만 줍니다 — 서버가 잘라 클립으로 만들 수 있는 것만(ADR-0024).
         구간은 창의 첫 발화 1초 전 ~ 마지막 발화 4초 뒤(15~35초). `lines`는 처음 30줄까지. 요청할 때만 계산하고 저장하지 않습니다. 녹음에 동의한 참가자만 읽습니다(받아 적은 글이 들어감).
       security: [{ participantToken: [] }]
       responses:
@@ -1577,6 +1579,7 @@ paths:
       summary: 숏폼 구성 데이터
       description: |
         클립이 올라온 장면마다 소리 주소·자막 큐·말한 사람을 줍니다(T43, ADR-0021). 웹은 9:16 화면에, 차는 그 자리에서 이 데이터로 재생하고, 기기에서 영상 파일로도 만듭니다(ADR-0022). 서버가 만드는 영상은 `/short-generations`입니다.
+        여행 전체 음성(`/audio`)이 다 올라와 있으면 읽기 전에 클립이 없는 장면(최대 20개)을 전체 음성에서 잘라 클립으로 남기고 함께 줍니다(ADR-0024). 동의하지 않은 탑승자가 있으면 자르지 않고 있는 클립만 줍니다.
         소리는 `clip`(같은 출처의 `/api/trips/{code}/recordings/{id}`)을 참가자 토큰 머리말로 받습니다 — 웹은 `fetch` → blob → `<audio>`. 자막 큐의 시각은 클립 첫 표본에서 잰 초입니다.
         발화의 `at`과 실제 `endAt`가 있으면 그 구간과 겹침을 보존하고 클립 양끝에서 자릅니다. `endAt`가 없으면 끝을 글자 수로 어림합니다(글자당 0.15초, 1~6초). 추정 구간은 다음 자막에서 자르되 1초를 남기고 클립 끝을 넘지 않습니다.
         말한 사람은 화자 대조(T38)로 붙은 프로필의 참가자만 채우고, 아니면 `participantId: null`과 좌석 구역만 줍니다(자리만으로 이름을 붙이지 않음). 녹음에 동의한 참가자만 읽습니다.
@@ -1683,6 +1686,7 @@ paths:
       description: |
         받은 WAV 바이트를 그대로, `Cache-Control: private, no-store`로 줍니다. 기록본처럼 녹음에 동의한 참가자만 듣습니다(`403`).
         토큰은 머리말로만 보냅니다 — 웹은 `fetch` → blob → `<audio>`로 재생합니다(클립 하나 약 0.5~1.1 MB). 서명한 S3 주소를 주지 않고, 별도 media 주소도 두지 않습니다(ADR-0021). 서버가 만든 영상도 같은 주소의 API가 내주므로 ADR-0020은 대체된 채입니다(ADR-0022).
+        차가 그 장면의 클립을 올리지 않았고 여행 전체 음성(`/audio`)이 다 올라와 있으면, 장면 구간(`from`~`to`, 없으면 `at` 앞 20초~뒤 10초)과 전체 음성이 겹치는 곳을 잘라 클립으로 남긴 뒤 줍니다(ADR-0024). 겹치는 곳이 장면 구간의 절반에 못 미치면 `404`, 동의하지 않은 탑승자가 있으면 자르지 않고 `403`입니다. 사람이 지운 장면은 다시 자르지 않습니다.
       security: [{ participantToken: [] }]
       responses:
         "200": { description: WAV 바이트, content: { audio/wav: { schema: { type: string, format: binary } } } }
@@ -1704,6 +1708,143 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /api/trips/{code}/audio:
+    parameters: [{ $ref: "#/components/parameters/code" }]
+    get:
+      tags: [클립]
+      summary: 전체 음성 올리기 상태와 진행률
+      description: |
+        여행 전체 음성(ADR-0024)의 상태입니다. 차가 올리는 동안 폰(P22)과 차(C22)가 진행률을 읽습니다. 소리가 아니라 이 여행의 참가자라면 녹음 동의와 관계없이 읽습니다.
+        `none`은 아직 없음(사람이 지웠으면 `deleted: true`), `uploading`은 받는 중(`expectedBytes`는 `start` 뒤에), `ready`는 다 올라와 장면을 자를 수 있음입니다. 다시 출발해 새로 올리는 동안에는 `uploading`이고 앞서 올린 것이 `previous`에 남습니다.
+      security: [{ participantToken: [] }]
+      responses:
+        "200": { description: 상태, content: { application/json: { schema: { $ref: "#/components/schemas/TripAudio" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [클립]
+      summary: 전체 음성 지우기
+      description: |
+        이 여행의 참가자라면 누구나(녹음 동의와 관계없이) 지웁니다. 다 올린 전체 음성, 받던 조각, 전체 음성에서 서버가 잘라 둔 장면 클립을 지우고 표시를 남깁니다 — 그 동의 세대의 전체 음성은 다시 받지 않습니다(`start`·조각·`complete`가 `409`, 차는 버림). 차가 올린 장면 클립은 `/recordings/{id}`로 따로 지웁니다.
+        버킷에서는 커밋 뒤에 지웁니다(실패하면 10분마다 다시). 녹음 동의를 철회하면(세대 오름) 전체 음성도 함께 지워집니다.
+      security: [{ participantToken: [] }]
+      responses:
+        "204": { description: 지움(없어도 204) }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /api/trips/{code}/audio/start:
+    parameters: [{ $ref: "#/components/parameters/code" }]
+    post:
+      tags: [클립]
+      summary: 전체 음성 올리기 시작
+      description: |
+        올리기 전에 전체 크기·길이·첫 표본의 시각을 알립니다. 같은 값으로 다시 부르면 받은 조각을 그대로 두고, 이미 다 올린 것과 같으면 `ready`를 그대로 줍니다(재시도 안전). 값이 다르면 새로 올리기를 열고 받던 조각을 버립니다(다 올린 앞의 것은 새것을 다 올릴 때까지 남음).
+        그 여행의 발화를 올린 기기(참가자)만, 녹음에 모두 동의한 동안, 지금 동의 세대로만 받습니다. 옛 세대·지운 전체 음성·다른 기기가 올리는 중이면 `409`(차는 버림), 동의하지 않은 탑승자가 있으면 `403`(나중에 다시), 합치는 중이면 `429`(잠시 뒤 다시). 8시간(921,600,000 B)을 넘으면 `413`.
+      security: [{ participantToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [generation, expectedBytes, seconds, startedAt]
+              properties:
+                generation: { type: integer, minimum: 1, description: 녹음할 때의 동의 세대 }
+                expectedBytes: { type: integer, minimum: 2, maximum: 921600000, description: 전체 PCM 바이트(짝수). 16 kHz 모노 s16le라 초당 32,000 B }
+                seconds: { type: number, description: 전체 길이(초). expectedBytes ÷ 32,000과 1초 안으로 맞아야 함 }
+                startedAt: { type: integer, description: 첫 표본의 시각(epoch 밀리초). 장면 시각을 바이트 위치로 바꾸는 기준. 여행을 만들기 1분 전부터 지금+1분까지 }
+      responses:
+        "200": { description: 지금 상태, content: { application/json: { schema: { $ref: "#/components/schemas/TripAudio" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /api/trips/{code}/audio/parts/{n}:
+    parameters:
+      - { $ref: "#/components/parameters/code" }
+      - { name: n, in: path, required: true, schema: { type: integer, minimum: 0, maximum: 9999 }, description: 조각 번호(0부터, 앞에 0을 붙이지 않음) }
+    put:
+      tags: [클립]
+      summary: 전체 음성 조각 올리기
+      description: |
+        16 kHz 모노 s16le PCM 조각(머리 없음, 짝수 바이트, 4 MiB = 4,194,304 B까지). 같은 `n`을 다시 보내면 덮습니다(재시도 안전). 순서는 상관없습니다. 조각 크기가 서로 달라도 됩니다.
+        권한·세대 규칙은 `start`와 같습니다. `start` 전에 온 조각도 받지만(크기를 몰라 진행률 0) 다 올린 뒤에는 `start` 없이 받지 않습니다(`409`). 합치는 중이면 `429`.
+        본문을 받아 버킷에 두는 동안 여행을 잠그지 않고, 둔 뒤 다시 확인합니다 — 그 사이 동의가 철회됐거나 지웠으면 둔 조각을 버리고 `409`.
+      security: [{ participantToken: [] }]
+      parameters:
+        - { name: generation, in: query, required: true, schema: { type: integer, minimum: 1 }, description: 녹음할 때의 동의 세대 }
+      requestBody:
+        required: true
+        content:
+          application/octet-stream: { schema: { type: string, format: binary } }
+      responses:
+        "201":
+          description: 받음
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [n, bytes]
+                properties:
+                  n: { type: integer }
+                  bytes: { type: integer }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /api/trips/{code}/audio/complete:
+    parameters: [{ $ref: "#/components/parameters/code" }]
+    post:
+      tags: [클립]
+      summary: 전체 음성 올리기 끝내기
+      description: |
+        조각 `0`~`parts-1`을 순서대로 이어 sha256을 세며 클립 버킷에 객체 하나로 두고(8 MiB가 넘으면 S3 멀티파트), 조각을 지웁니다. 다 올린 앞의 전체 음성이 있으면 바꿉니다.
+        sha256이 틀리면 `409` — 받은 조각을 모두 버리니 같은 올리기에 조각을 처음부터 다시 보냅니다. 빠진 조각이 있거나 받은 크기가 `start`의 `expectedBytes`와 다르면 `409`(조각은 그대로, 상태의 `partNumbers`로 빠진 것을 봄). 길이가 받은 크기와 1초 넘게 다르면 `400`.
+        완료 응답을 받지 못해 다시 부르면 같은 sha256이면 `200`. 합치는 동안(최대 10분 잠금) 다른 완료는 `429`. 합치는 사이 동의가 철회되거나 지웠으면 이은 것을 버리고 `409`/`403`.
+        차는 `ready`를 받은 뒤 차 안에 암호화해 둔 원음을 지웁니다(ADR-0024).
+      security: [{ participantToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [generation, parts, seconds, sha256]
+              properties:
+                generation: { type: integer, minimum: 1 }
+                parts: { type: integer, minimum: 1, maximum: 10000, description: 조각 수. 0부터 parts-1까지 잇고 그 뒤 번호는 버림 }
+                seconds: { type: number, description: 전체 길이(초) }
+                sha256: { type: string, pattern: "^[0-9a-fA-F]{64}$", description: 이은 PCM 전체의 sha256 }
+                startedAt: { type: integer, description: 첫 표본의 시각(epoch 밀리초). start를 부르지 않았을 때만 필요 }
+      responses:
+        "200":
+          description: 다 올림
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [state, seconds]
+                properties:
+                  state: { type: string, enum: [ready] }
+                  seconds: { type: number, description: 받은 크기로 잰 길이 }
+                  bytes: { type: integer }
+                  startedAt: { type: integer }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
         "503": { $ref: "#/components/responses/Error" }
   /api/trips/{code}/todos:
     parameters: [{ $ref: "#/components/parameters/code" }]
@@ -2107,6 +2248,27 @@ components:
         label: { type: string }
         from: { type: integer, description: 장면 구간의 시작(T43). 남길 때 준 경우에만 }
         to: { type: integer, description: 장면 구간의 끝 }
+    TripAudio:
+      type: object
+      required: [state, receivedParts, receivedBytes, progress]
+      properties:
+        state: { type: string, enum: [none, uploading, ready] }
+        receivedParts: { type: integer, description: 받은 조각 수(ready면 이은 조각 수) }
+        receivedBytes: { type: integer }
+        expectedBytes: { type: integer, description: start에서 알린 전체 크기. ready면 저장한 크기 }
+        seconds: { type: number }
+        progress: { type: number, minimum: 0, maximum: 1, description: receivedBytes ÷ expectedBytes(크기를 모르면 0, ready면 1) }
+        generation: { type: integer, description: 녹음할 때의 동의 세대 }
+        startedAt: { type: integer, description: 첫 표본의 시각(epoch 밀리초) }
+        partNumbers: { type: array, items: { type: integer }, description: 받은 조각 번호(uploading일 때) }
+        previous:
+          type: object
+          description: 새로 올리는 동안 장면 자르기에 쓰는 앞서 다 올린 전체 음성(uploading일 때만)
+          properties:
+            bytes: { type: integer }
+            seconds: { type: number }
+            startedAt: { type: integer }
+        deleted: { type: boolean, description: 사람이 지움 — 이 동의 세대의 전체 음성은 다시 받지 않는다(none일 때만) }
     Recording:
       type: object
       required: [id, momentId, startAt, seconds, bytes]
