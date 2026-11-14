@@ -177,7 +177,7 @@ export function createAfterTrip({ getTrip, getParticipant, getToken, request, re
   const valid = (s) => { const t = getTrip(), p = getParticipant(); return !!(s && t && p && t.code === s.code && (t.generation ?? 1) === s.generation && p.id === s.participantId && getToken() && parkedNow(t)); };
   const canMake = (s) => valid(s) && getParticipant()?.consent;
   const planKey = (code, id) => `after:${code}:${id}`;
-  const crew = () => "우리"; // 가족 그룹(W5) 전에는 여행에 손님도 타서 가족인지 모른다(W1과 같음)
+  const crew = () => "우리 가족"; // 시안 P22·P31·P32의 글. 여행 문서에는 그룹 종류가 없어 동승 그룹에도 같은 글을 쓴다
 
   const stop = () => { clearTimeout(timer); poll?.abort(); poll = null; };
   // 닫을 때 다 만든 계획은 이 폰에서 지운다(완성 화면을 본 뒤). 만들던 일은 닫아도 계속한다.
@@ -251,7 +251,7 @@ export function createAfterTrip({ getTrip, getParticipant, getToken, request, re
       sub: [arrived && `${arrived} 도착`, trip.status === "ended" ? "여행을 마쳤어요" : "주차 후 여행 마무리"].filter(Boolean).join(" / "),
       body: [
         h("section", { className: "after-summary" },
-          h("strong", {}, [`${crew()} 일행 ${trip.participants.length}명`, durationLabel(time.seconds)].filter(Boolean).join(" / ")),
+          h("strong", {}, [crew(), durationLabel(time.seconds)].filter(Boolean).join(" / ")),
           s.lines?.length ? h("p", {}, dayRange(time.origin, time.end)) : h("p", {}, s.lines ? "받아 적은 대화가 아직 없어요" : getParticipant()?.consent ? "대화를 불러오고 있어요" : "기록에 동의한 사람만 대화 시간을 볼 수 있어요")),
         h("section", { className: "after-card", role: "status" },
           h("p", { className: "after-label" }, audio === undefined ? "올리기 상태를 확인하고 있어요" : step.label),
@@ -324,7 +324,7 @@ export function createAfterTrip({ getTrip, getParticipant, getToken, request, re
           h("p", { className: "after-label" }, stage.content),
           wave(bars, (i) => i < Math.round(stage.overall * bars.length)), axis(time.seconds),
           h("ol", { className: "make-items" }, r.items.map((item) => h("li", {}, h("span", {}, item.label), h("span", { className: "meta" }, item.phase === "render" ? `${PHASE.render} ${Math.floor((item.progress || 0) * 100)}%` : item.error ? `${PHASE.failed} · ${item.error}` : PHASE[item.phase] ?? "대기"))))),
-        h("p", { className: "after-note" }, "영상은 이 폰에서 소리를 재생하며 만들어요. 다른 탭으로 가도 계속 만들고 완성되면 알려드려요. 폰 화면을 끄거나 앱을 나가면 멈췄다가, 돌아오면 남은 장면부터 이어서 만들어요."),
+        h("p", { className: "after-note" }, "이 화면을 나가도 완성되면 알려드려요. 영상은 이 폰에서 소리를 재생하며 만들어서, 폰 화면을 끄거나 앱을 나가면 멈췄다가 돌아오면 남은 장면부터 이어서 만들어요."),
       ],
       actions: [
         r.paused && !r.active && button("이어서 만들기", () => go(r), "primary"),
