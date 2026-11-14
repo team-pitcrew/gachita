@@ -602,7 +602,7 @@ def group_screens():
 # 스크립트가 누르거나 기다리는 차 화면 글. --check가 앱 소스에 그대로 있는지 본다(에뮬레이터 없이 화면 글이 바뀐 것을 잡음).
 TAPS = {"Onboarding.kt": ["가치타 시작하기", "가입하고 계속", "동의하고 계속", "목소리 등록하기", "녹음 시작", "녹음 완료", "가족 그룹 만들기"],
         "Family.kt": ["계속", "아이 프로필 만들기", "참여 확인", "동의하고 목소리 등록", "가족 그룹에 저장", "이 가족과 출발", "내 동승 그룹", "+ 새 그룹 만들기", "초대 코드, QR 또는 링크로 함께할 사람을 초대해 주세요.", "동승자 초대하기", "초대 코드와 링크를 만들었어요", "그룹으로 돌아가기", "전체 그룹 보기", "우리 가족 보기", "오늘 함께 탈 가족과 좌석을 확인해 주세요.", "좌석 배정", "좌석을 누르고 앉을 사람을 선택해 주세요.", "빈자리", "누가 앉나요?", "좌석 배정으로", "그룹으로", "이 그룹과 출발", "우리 가족 추가", "코드 복사", "까지 준비됐어요"],
-        "Drive.kt": ["일시정지", "녹화 재개", "방금 받아 적은 말", "멈추기 전 마지막 대화", "도착까지 약"],
+        "Drive.kt": ["일시정지", "녹화 재개", "방금 받아 적은 말", "멈추기 전 마지막 대화", "정차하면 자세히"],
         "Arrival.kt": ["먼저 할 일과 살 것을 모았어요", "잊지 말고 살 것", "계속"],
         "AfterTrip.kt": ["오늘의 주행을 기록했어요", "남기고 싶은 순간을 골라요", "장면을 선택해 주세요", "콘텐츠를 만들어요", "콘텐츠 생성 중", "순간이 완성됐어요", "콘텐츠 기록 보기"],
         "Contents.kt": ["우리 가족 / 차량과 폰에서 이어보기", "갤러리", "타임라인", "지도", "주행 지도 자세히 보기 →", "이 장면 보기", "영상 내보내기", "영상이 준비됐어요", "콘텐츠 기록으로"]}
@@ -633,8 +633,8 @@ def start_trip(from_family):
         return None
     st["trip"] = {"code": code}; save()
     trip_tokens(code)
-    tap("함께 타는 중", timeout=3); tap("기록 시작", timeout=6)  # 모두 동의면 주차 중 '기록 시작'(자동 기록이 들어오면 저절로)
-    note("trip", code=code, recording=wait(["아래 버튼으로 언제든 멈출 수 있어요"], 20))
+    tap("녹화 재개", timeout=6)  # '이 가족과 출발' 뒤 C17. 모두 동의면 막대의 ●로 기록 시작(자동 기록이 들어오면 저절로). 주차 중 위 탭 '함께 타는 중'은 C16 groups라 누르지 않는다
+    note("trip", code=code, recording=wait(["방금 받아 적은 말"], 20))  # C17 제목(기록 중)
     return code
 
 
@@ -756,7 +756,7 @@ def drive_steps_seed(code):
     drive(); seed_status(code, "driving"); seed_lines(code, "C")
     f4("driveContinue"); step(22, ["내일도 같이 타면 안 돼", "방금 받아 적은 말"], note_="차 목업 driveContinue + 서버 기록본 5줄", seeded=True)
     seed_place(code, "approaching", "강릉 숙소", eta=60)
-    f4("finalNear"); step(23, ["도착까지 약"], note_="차 목업 finalNear + 서버 approaching", seeded=True)
+    f4("finalNear"); step(23, ["정차하면 자세히"], note_="차 목업 finalNear + 서버 approaching", seeded=True)
     park(); seed_arrive(code, "강릉 숙소")
     f4("final"); step(24, ["강릉 숙소 도착", "먼저 할 일과 살 것을 모았어요"], note_="차 목업 final + 서버 도착 브리핑", seeded=True)
     tap("계속", timeout=4)  # 최종 목적지도 C20 모양과 '계속'. 목업은 화면만 넘기므로 여행은 폰의 '여행 끝내기'와 같은 요청으로 마친다
@@ -768,8 +768,8 @@ def drive_steps(code):
     global part
     rec_part(2)
     if not split(): note("split.fail")
-    tap("함께 타는 중", timeout=3); drive()
-    wait(["아래 버튼으로 언제든 멈출 수 있어요"], 15)
+    drive(); tap("함께 타는 중", timeout=3)  # 주행 중 탭은 C17(주차 중이면 C16 groups)
+    wait(["방금 받아 적은 말"], 15)
     say("talk")
     step(17, ["방금 받아 적은 말"], 30, "대사 5줄(서준·아빠·하은·엄마)")
     tap("일시정지"); step(18, ["멈추기 전 마지막 대화"])
@@ -784,11 +784,11 @@ def drive_steps(code):
     park(); step(21, ["먼저 할 일과 살 것을 모았어요", "잊지 말고 살 것"], 25)
     if results[21]["result"] == "없음" and seen("도착했어요"): results[21] = {**results[21], "result": "다른 화면", "note": "develop의 T123 도착 카드(v1) — " + flow_state("F4")}
     tap("계속", "닫기", timeout=4)
-    launch("--es", "route", f"{FAR_LODGE[0]},{FAR_LODGE[1]},강릉 숙소"); split(); tap("함께 타는 중", timeout=3)
-    drive(); say("lodge")
+    launch("--es", "route", f"{FAR_LODGE[0]},{FAR_LODGE[1]},강릉 숙소"); split(); drive(); tap("함께 타는 중", timeout=3)
+    say("lodge")
     step(22, ["내일도 같이 타면 안 돼", "방금 받아 적은 말"], 20, "대사 5줄(하은·엄마·아빠)")
     launch("--es", "route", f"{lodge[0]},{lodge[1]},강릉 숙소", "--ei", "approachSeconds", APPROACH_S); split(); tap("함께 타는 중", timeout=3)
-    step(23, ["도착까지 약"], 25)
+    step(23, ["정차하면 자세히"], 25)
     park(); step(24, ["강릉 숙소 도착", "먼저 할 일과 살 것을 모았어요"], 25)
     if not tap("계속", timeout=4):
         # 차의 최종 브리핑이 없으면 폰의 '여행 끝내기'와 같은 요청으로 여행을 마친다(PATCH status ended)

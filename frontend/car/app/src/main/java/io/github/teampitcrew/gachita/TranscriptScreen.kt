@@ -18,8 +18,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -34,8 +32,7 @@ import java.util.Locale
 import java.util.TimeZone
 
 /*
- * Conversation tab of the design (C44 2019:1966, wide D33 2019:2052, liveTranscript 2026:2308; pausedTranscript 2026:2358 follows the live frame with
- * '대화 기록 멈춤'): the trip title and date range, then the current trip's server transcript as a chat — 'HH:MM  place' section heads,
+ * Conversation tab of the design (C44 2019:1966, wide D33 2019:2052; driving uses the same C44): the trip title and date range, then the current trip's server transcript as a chat — 'HH:MM  place' section heads,
  * the speaker's character, name and a bubble with the time; the driver's own lines on the right in accent-soft ('아빠 (나)').
  * Grouping is covered by TranscriptGroupTest.
  */
@@ -82,9 +79,6 @@ internal fun tripRange(createdAt: Long, lines: List<TranscriptLine>, zone: TimeZ
 
 private fun clock(at: Long) = SimpleDateFormat("HH:mm", Locale.KOREA).format(Date(at))
 
-/** Line under the title while driving (liveTranscript 2026:2308 '대화 기록 중'; paused '대화 기록 멈춤'). */
-internal fun liveChip(capturing: Boolean) = "대화 기록 ${if (capturing) "중" else "멈춤"}"
-
 // C44 2019:1966 and Conversation / Car 2120:5693 text sizes (the design's own values)
 private val TitleText = CarText.Title.copy(fontSize = 48.sp, lineHeight = 60.sp) // 48 Bold, -1.5%
 private val HeadText = CarText.Label.copy(fontSize = 26.sp, lineHeight = 35.sp, fontWeight = FontWeight.Normal) // '09:32  동해고속도로'
@@ -96,24 +90,21 @@ private val ButtonText = CarText.Headline.copy(fontSize = 36.sp, fontWeight = Fo
 /**
  * C44 body. [status] is the loading/consent/error line under the list. [canPick] gates '추천 장면 고르기' (scene picking, C23).
  * [me] is the driver's own participant id ('(나)', right side).
- * [live] non-null = driving (liveTranscript·pausedTranscript): read only, the line under the title shows [live], the newest line is kept in
- * view, and the only control is '함께 타는 중으로' ([onBack]). Picking scenes stays parked-only; the list reloads whenever the tab opens.
+ * Driving shows the same C44 (the C frame wins over D補 liveTranscript·pausedTranscript); only picking scenes waits for parking ([canPick]).
  * Ask lines are ordinary bubbles in the revised C44 (no '○○의 부탁' card).
  */
 @Composable
 internal fun TranscriptScreen(
     trip: Trip, lines: List<TranscriptLine>, places: List<TripPlace>, loading: Boolean, status: String, canPick: Boolean,
-    onPick: () -> Unit, modifier: Modifier = Modifier, live: String? = null, me: String? = null, onBack: () -> Unit = {},
+    onPick: () -> Unit, modifier: Modifier = Modifier, me: String? = null,
 ) {
     val c = MaterialTheme.colorScheme
     val scroll = rememberScrollState()
-    // 주행 중에는 손으로 넘기지 않아도 가장 새 줄이 보이게, 내용이 늘 때만 끝으로 옮긴다(움직이는 효과 없이 바로).
-    if (live != null) LaunchedEffect(Unit) { snapshotFlow { scroll.maxValue }.collect { scroll.scrollTo(it) } }
     // 넓은 창(D33 2019:2052)은 1120 폭의 대화 줄을 가운데에 둔다
     Box(modifier, contentAlignment = Alignment.TopCenter) { Column(Modifier.widthIn(max = 1120.dp).fillMaxSize(), verticalArrangement = Arrangement.spacedBy(24.dp)) {
         Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) { // 화면 제목 2019:1974
             Text(trip.title.ifBlank { "함께하는 여행" }, style = TitleText, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(live ?: tripRange(trip.createdAt, lines), color = c.onSurfaceVariant, style = CarText.Body, maxLines = 1)
+            Text(tripRange(trip.createdAt, lines), color = c.onSurfaceVariant, style = CarText.Body, maxLines = 1)
         }
         Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(scroll), verticalArrangement = Arrangement.spacedBy(24.dp)) {
             transcriptItems(lines, emptySet(), places).forEach { item ->
@@ -128,8 +119,7 @@ internal fun TranscriptScreen(
         }
         if (status.isNotEmpty()) Text(status, color = c.onSurfaceVariant, style = CarText.Label, maxLines = 2)
         // 하단 작업(시안 112 높이, accent)
-        if (live != null) CarButton("함께 타는 중으로", height = 112.dp, style = ButtonText, onClick = onBack)
-        else CarButton("추천 장면 고르기", enabled = canPick, height = 112.dp, style = ButtonText, onClick = onPick)
+        CarButton("추천 장면 고르기", enabled = canPick, height = 112.dp, style = ButtonText, onClick = onPick)
     } }
 }
 

@@ -82,54 +82,41 @@ import androidx.compose.animation.core.Animatable
  * logout check (2220:5864). Pure functions are covered by DriveTest.
  */
 
-/** Background of the status card: recording (red tint), paused or blocked (amber tint), anything else (plain). */
-internal enum class Hero { REC, PAUSED, PLAIN }
-
-internal data class DriveStatus(val title: String, val sub: String, val hero: Hero)
-
 /**
- * Status text for the current recording state. Mirrors the old StatusHero order, with the design's '기록' wording.
- * ended: the trip's server status is 'ended' (2026:2410). resumed: recording came back from a pause and nothing new was heard yet (2026:1969).
- * Option A shows only the timer for REC and the user's pause; the sub line appears there for the other holds (Gleo, microphone).
+ * Words for the heard card's title (C17 '방금 받아 적은 말 N건' 자리) when the trip is not plainly taking the talk down or paused by the user.
+ * The design has no status card, so holds (Gleo, microphone), consent and withdrawal are told here; null = the design's own title.
  */
-internal fun driveStatus(
+internal fun driveNote(
     recording: Boolean, muted: Boolean, handoff: Handoff.State, mic: Mic, why: String,
-    offPending: Boolean, waiting: Boolean, inPark: Boolean, waitingFor: List<String>, ended: Boolean = false, resumed: Boolean = false,
-): DriveStatus = when {
-    ended && !offPending -> DriveStatus("여행 기록 완료", "오늘의 대화를 오래 간직해 보세요", Hero.PAUSED)
-    recording && muted -> DriveStatus("기록 멈춤", "같은 버튼을 누르면 다시 기록해요", Hero.PAUSED)
-    recording && handoff != Handoff.State.OFF ->
-        DriveStatus("기록 잠시 멈춤", if (handoff == Handoff.State.WAITING) "운전대 버튼을 누르세요" else "Gleo가 끝나면 기록을 이어 가요", Hero.PAUSED)
+    offPending: Boolean, waiting: Boolean, inPark: Boolean, waitingFor: List<String>, ended: Boolean = false,
+): String? = when {
+    ended && !offPending -> null
+    recording && muted -> null
+    recording && handoff != Handoff.State.OFF -> if (handoff == Handoff.State.WAITING) "운전대 버튼을 누르세요" else "Gleo가 끝나면 기록을 이어 가요"
     recording -> when (mic) {
-        Mic.ON -> DriveStatus("기록 중", if (resumed) "중지한 지점부터 이어서 기록해요" else "아래 버튼으로 언제든 멈출 수 있어요", Hero.REC)
-        Mic.BLOCKED -> DriveStatus("기록 잠시 멈춤", "마이크를 쓸 수 있으면 다시 기록해요", Hero.PAUSED)
-        Mic.FAILED -> DriveStatus("기록 못 함", why.ifBlank { "마이크를 열지 못했어요" }, Hero.PAUSED)
-        else -> DriveStatus("기록 준비 중", "마이크를 켜고 있어요", Hero.PLAIN)
+        Mic.ON -> null
+        Mic.BLOCKED -> "마이크를 쓸 수 있으면 다시 기록해요"
+        Mic.FAILED -> why.ifBlank { "마이크를 열지 못했어요" }
+        else -> "마이크를 켜고 있어요"
     }
-    offPending -> DriveStatus("동의 철회", "원음과 대화를 지우고 있어요", Hero.PLAIN)
-    waiting -> DriveStatus("기록 준비됨", if (inPark) "모두 동의했어요. 출발하면 자동으로 기록해요" else "곧 자동으로 기록을 시작해요", Hero.PLAIN)
-    else -> DriveStatus("동의 대기", if (waitingFor.isEmpty()) "동승자를 확인해 주세요" else "${waitingFor.joinToString(", ")} · 녹음 동의가 필요해요", Hero.PLAIN)
+    offPending -> "원음과 대화를 지우고 있어요"
+    waiting -> if (inPark) "모두 동의했어요. 출발하면 자동으로 기록해요" else "곧 자동으로 기록을 시작해요"
+    else -> if (waitingFor.isEmpty()) "동승자를 확인해 주세요" else "${waitingFor.joinToString(", ")} · 녹음 동의가 필요해요"
 }
 
-/** Look of the full-width bottom button: stop (option A: ink, C17 cards: red tint), go (accent), off (disabled). */
+/** The recording bar's left button (C17 ⏸ '일시정지', C17p ● '녹화 재개'); OFF = shown but not pressable. */
 internal enum class Press { STOP, GO, OFF }
 
 internal data class DriveButton(val label: String, val press: Press, val enabled: Boolean)
 
 /**
- * The one big control (C17 bar ⏸ '일시정지' and ● '녹화 재개' — the recording bar uses these labels as button names — ended '새 여행 시작'). Recording starts by itself once the trip
- * turns to driving with everyone's consent (Session.autoStart, C03·C13), so there is no start button: before that the button only says so.
- * Pause and resume keep consent; without consent it is a disabled note (consent is given on each phone). An ended trip never records again; a new trip is
- * started while parked.
+ * The recording bar's ⏸/● (its label is the button's accessibility name). Recording starts by itself once the trip turns to driving with
+ * everyone's consent (Session.autoStart), and ● starts it by hand then. Without everyone's consent ● stays off — consent is given on each phone.
  */
-internal fun driveButton(recording: Boolean, muted: Boolean, agreed: Boolean, restricted: Boolean, ended: Boolean = false): DriveButton = when {
-    ended && restricted -> DriveButton("주차한 뒤 새 여행을 시작해요", Press.OFF, false)
-    ended -> DriveButton("새 여행 시작", Press.GO, true)
+internal fun driveButton(recording: Boolean, muted: Boolean, agreed: Boolean): DriveButton = when {
     recording && !muted -> DriveButton("일시정지", Press.STOP, true)
-    recording -> DriveButton("녹화 재개", Press.GO, true)
-    agreed -> DriveButton("출발하면 자동으로 기록해요", Press.OFF, false)
-    // 동의 전: 다른 화면으로 들어가지 않는 꺼진 안내(시안에 이 상태 글이 없어 짧게 쓴다). 동의는 각자 휴대폰에서 QR로.
-    else -> DriveButton("각자 휴대폰에서 동의하면 기록해요", Press.OFF, false)
+    recording || agreed -> DriveButton("녹화 재개", Press.GO, true)
+    else -> DriveButton("녹화 재개", Press.OFF, false)
 }
 
 /** Seat word for the heard line ('서준 / 뒷좌석'). Only the server seat names are known; anything else is null. */
@@ -268,20 +255,18 @@ class Me(val face: Int, val open: (Shell, Int) -> Unit)
 val LocalMe = compositionLocalOf { Me(R.drawable.char_basic) { _, _ -> } }
 
 /**
- * Header row: mascot, '가치타', then the '● 연결됨' chip where the design has it ([chip]: C44·ended; the C17 family has none), '주차 중  P' on
- * parked screens, and always the '내 얼굴' button at the right end ([LocalMe], 2200:5920) — every screen draws its header here.
- * Offline always shows '연결 대기'.
+ * Header row: mascot, '가치타', '주차 중  P' on parked screens, and always the '내 얼굴' button at the right end ([LocalMe], 2200:5920) — every
+ * screen draws its header here. The live frames have no connection chip (C17·C44·C20…); a lost connection is told inside the screen.
  */
 @Composable
-internal fun TripHeader(shell: Shell, gear: String?, online: Boolean, listening: Boolean, chip: Boolean = true) {
+internal fun TripHeader(shell: Shell, listening: Boolean) {
     val c = MaterialTheme.colorScheme
     val park = shell == Shell.PARKED
     Row(Modifier.fillMaxWidth().height(shell.head), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(shell.headGap)) {
         Mascot(listening, 48.dp)
         Text("가치타", style = CarText.Headline, maxLines = 1)
         Spacer(Modifier.weight(1f))
-        if (!online) Pill("연결 대기", ok = false) else if (!park && chip) Pill("연결됨")
-        if (park) Text(if (gear == "P") "주차 중  P" else "정차 중", color = c.onSurfaceVariant, style = CarText.Label, maxLines = 1)
+        if (park) Text("주차 중  P", color = c.onSurfaceVariant, style = CarText.Label, maxLines = 1)
         val me = LocalMe.current
         MeButton(me.face) { me.open(shell, me.face) }
     }
@@ -311,15 +296,12 @@ internal fun TripTabs(
  * '일행 N명' seats, and the recording bar at the bottom, 16 apart.
  */
 @Composable
-internal fun RideLayout(middle: @Composable (Modifier) -> Unit, seats: @Composable (compact: Boolean) -> Unit, bar: @Composable () -> Unit, modifier: Modifier = Modifier) {
-    BoxWithConstraints(modifier) {
-        // 시안 본문 982(가운데 384 · 좌석 418 · 막대 136 · 간격 16 셋). 낮은 창에서는 좌석 칸을 한 줄로 줄여 가운데 칸이 남게
-        val compact = maxHeight < 760.dp
-        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            middle(Modifier.fillMaxWidth().weight(1f, fill = false).height(384.dp)) // 시안 384, 남는 높이는 아래로(시안도 위 정렬)
-            seats(compact)
-            bar()
-        }
+internal fun RideLayout(middle: @Composable (Modifier) -> Unit, seats: @Composable () -> Unit, bar: @Composable () -> Unit, modifier: Modifier = Modifier) {
+    // 시안 본문 982(가운데 384 · 좌석 418 · 막대 136 · 간격 16 셋). 남는 높이는 아래로(시안도 위 정렬)
+    Column(modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        middle(Modifier.fillMaxWidth().weight(1f, fill = false).height(384.dp))
+        seats()
+        bar()
     }
 }
 
@@ -331,7 +313,7 @@ internal fun RideLayout(middle: @Composable (Modifier) -> Unit, seats: @Composab
 @Composable
 internal fun RecordBar(control: DriveButton, live: Boolean, time: String, levels: () -> List<Float>, onControl: () -> Unit, onStop: () -> Unit, modifier: Modifier = Modifier) {
     val c = MaterialTheme.colorScheme
-    val paused = control.press == Press.GO
+    val paused = control.press != Press.STOP // ● '녹화 재개'(꺼짐이어도 ●)
     // 테두리 1은 기록 중에만(원본 C19·C21·finalNear·resumed·D17·D18·D20). 멈춤 프레임(C17p·C19p·C21p·finalPaused·D*p)에는 없다. 원본 C17만 예외로 없지만 같은 화면의 D17은 있다.
     Box(modifier.fillMaxWidth().height(136.dp).then(if (paused) Modifier else Modifier.border(1.dp, CarRecord.Edge, CarShape.Card))) {
         Row(Modifier.align(Alignment.CenterStart).padding(start = 7.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -380,26 +362,22 @@ internal fun Wave(levels: () -> List<Float>, live: Boolean, modifier: Modifier) 
 }
 
 /**
- * '도착 전 브리핑 / C1n 카드' (accent-soft, corner 32, padding 24/16, gap 8, rows 40 Bold ink with Twemoji 44 at gap 20, '정차하면 자세히
- * 보여드릴게요' 24 ink-2). Details come after parking (C20, flow F4). The live frames differ and each is followed:
- * - finalNear (2043:1849): '{place} 도착까지 약 N분' 24 accent, picture left, rows 8 apart.
- * - C19 (2014:1079): '기록' (2254:5849, Noto Sans KR Medium 24 accent — the system Korean font), picture right, rows 99·53·87 high, 5 apart.
+ * '도착 전 브리핑 / C1n 카드' (C19 2014:1079): accent-soft, corner 32, padding 24/16, gap 8 — '기록' (2254:5849, Noto Sans KR Medium 24 accent —
+ * the system Korean font), rows 40 Bold ink with the Twemoji 44 at the right, 99·53·87 high and 5 apart, '정차하면 자세히 보여드릴게요' 24 ink-2.
+ * The final destination (D補 finalNear) uses this C19 card too — the C frame wins over the D frame. Details come after parking (C20).
  */
 @Composable
-internal fun NearCard(a: Approach, lines: List<NearRow>, modifier: Modifier) {
+internal fun NearCard(lines: List<NearRow>, modifier: Modifier) {
     val c = MaterialTheme.colorScheme
     Surface(modifier, CarShape.Card, color = c.primaryContainer, contentColor = c.onSurface) {
         Column(Modifier.padding(horizontal = 24.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (a.final) Text("${a.place} 도착까지 약 ${a.minutes}분", color = c.primary, style = CarText.Label, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            else Text("기록", color = c.primary, style = CarText.Label.copy(fontFamily = FontFamily.Default), maxLines = 1)
-            Column(verticalArrangement = Arrangement.spacedBy(if (a.final) 8.dp else 5.dp)) {
+            Text("기록", color = c.primary, style = CarText.Label.copy(fontFamily = FontFamily.Default), maxLines = 1)
+            Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
                 lines.forEachIndexed { i, l ->
-                    val icon = @Composable { Image(painterResource(l.icon.res), null, Modifier.size(44.dp)) }
-                    Row(if (a.final) Modifier.fillMaxWidth() else Modifier.fillMaxWidth().height(C19_ROWS.getOrElse(i) { 53 }.dp),
-                        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-                        if (a.final) icon()
+                    Row(Modifier.fillMaxWidth().height(C19_ROWS.getOrElse(i) { 53 }.dp), verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(20.dp)) {
                         Text(l.text, Modifier.weight(1f), style = CarText.Title.copy(letterSpacing = (-0.02).em), maxLines = 1, overflow = TextOverflow.Ellipsis) // 40 Bold, -0.8px
-                        if (!a.final) icon()
+                        Image(painterResource(l.icon.res), null, Modifier.size(44.dp))
                     }
                 }
             }
@@ -411,66 +389,19 @@ internal fun NearCard(a: Approach, lines: List<NearRow>, modifier: Modifier) {
 /** C19 줄 높이(2246:5864·5873·5886) 그대로. */
 private val C19_ROWS = listOf(99, 53, 87)
 
-// ---- 함께 타는 중 before recording and after the trip: ended 2026:2410 ----
-
-/**
- * Slot layout (ended 2026:2410): status card, middle card (takes the remaining height), seat card, big button 132.
- * Below 860dp of body height the seat card turns into one line and the button gets shorter, so the middle card keeps room.
- */
-@Composable
-internal fun DriveLayout(
-    status: @Composable () -> Unit, middle: @Composable (Modifier) -> Unit, seats: @Composable (compact: Boolean) -> Unit,
-    button: DriveButton, onButton: () -> Unit, modifier: Modifier = Modifier,
-) {
-    BoxWithConstraints(modifier) {
-        val compact = maxHeight < 860.dp
-        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            status()
-            middle(Modifier.weight(1f).fillMaxWidth())
-            seats(compact)
-            BigButton(button, onButton, Modifier.fillMaxWidth().height(if (compact) 96.dp else 132.dp))
-        }
-    }
-}
-
-@Composable
-internal fun BigButton(b: DriveButton, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    val c = MaterialTheme.colorScheme
-    val (bg, fg) = when (b.press) { Press.STOP -> c.errorContainer to c.error; Press.GO -> c.primary to c.onPrimary; Press.OFF -> c.surfaceVariant to c.onSurfaceVariant }
-    Surface(onClick = onClick, enabled = b.enabled, modifier = modifier, shape = CarShape.Ctl, color = bg) {
-        Box(contentAlignment = Alignment.Center) { Text(b.label, color = fg, style = CarText.Headline, maxLines = 1) }
-    }
-}
-
-/** Status hero (ended 2026:2419, 140 high, padding 28/20, gap 4): '● 여행 기록 완료' 56 with the sub line 24. A pending note replaces the sub line. */
-@Composable
-internal fun StatusCard(status: DriveStatus, note: String) {
-    val c = MaterialTheme.colorScheme
-    val (bg, fg) = when (status.hero) { Hero.REC -> c.errorContainer to c.error; Hero.PAUSED -> c.secondaryContainer to c.secondary; Hero.PLAIN -> c.surface to c.onSurface }
-    Surface(Modifier.fillMaxWidth().heightIn(min = 140.dp), CarShape.Card, color = bg) {
-        Column(Modifier.padding(horizontal = 28.dp, vertical = 20.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                if (status.hero != Hero.PLAIN) Canvas(Modifier.size(24.dp)) { drawCircle(fg) }
-                Text(status.title, Modifier.weight(1f), color = fg, style = if (status.title.length <= 7) CarText.Status else CarText.Title,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-            Text(note.ifBlank { status.sub }, color = c.onSurfaceVariant, style = CarText.Label, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        }
-    }
-}
-
 // ---- shared cards ----
 
 /** One heard line: speaker character ([face] picture, else seat-order [character], else an empty circle), '{name} / {seat}', the words. */
 internal data class HeardRow(val meta: String, val text: String, val character: Int?, val face: Int? = null)
 
 /**
- * 'heard' card: C17 (2014:948) '방금 받아 적은 말 N건', padding 46 (bottom 16), gap 14, the first line 34 lower; ended (2026:2424) padding
- * 24/16, gap 12 ([roomy] false). Paused or ended: '멈추기 전 마지막 대화' at 60%. Newest first, two lines, each avatar 48 · '{name} / {seat}' 24
+ * 'heard' card: C17 (2014:948) '방금 받아 적은 말 N건', padding 46 (bottom 16), gap 14, the first line 34 lower. Paused or ended:
+ * '멈추기 전 마지막 대화' at 60%. Newest first, two lines, each avatar 48 · '{name} / {seat}' 24
  * ink-2 · the words 28 on one line.
  */
 @Composable
-internal fun HeardCard(title: String, rows: List<HeardRow>, dim: Boolean, roomy: Boolean, modifier: Modifier) {
+internal fun HeardCard(title: String, rows: List<HeardRow>, dim: Boolean, modifier: Modifier) {
+    val roomy = true
     val c = MaterialTheme.colorScheme
     Surface(modifier, CarShape.Card, color = c.surface) {
         Column(Modifier.then(if (dim) Modifier.alpha(0.6f) else Modifier)
@@ -498,22 +429,16 @@ internal fun HeardCard(title: String, rows: List<HeardRow>, dim: Boolean, roomy:
 /**
  * 'seat map' card (C17 2114:5922, ended 2026:2436): '일행 N명' 32 · '차 앞쪽 ▲' 24, the car body (surface-2, corner 40, padding 12, gap 8) with
  * the car's seat rows (padding 8/12): face 80, name 24 (the speaker Bold with the mint ring 2209:5864), an empty seat as a dashed circle at
- * 60% and '빈자리'. Consent notes appear only for people who have not consented yet. compact = one line for short windows.
+ * 60% and '빈자리'. Consent waiting is told in the heard card's title, not here (the design has no note under the names).
  */
 @Composable
-internal fun SeatCard(people: List<Person>, car: CarStatus, speaking: String?, compact: Boolean, note: (Person) -> Pair<String, Color>?) {
+internal fun SeatCard(people: List<Person>, car: CarStatus, speaking: String?) {
     val c = MaterialTheme.colorScheme
     Surface(Modifier.fillMaxWidth(), CarShape.Card, color = c.surface) {
         Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 Text("일행 ${people.size}명", Modifier.weight(1f), style = CarText.Headline, maxLines = 1)
-                if (!compact) Text("차 앞쪽 ▲", color = c.onSurfaceVariant, style = CarText.Label, maxLines = 1)
-            }
-            if (compact) {
-                val who = people.find { it.id == speaking }
-                Text(people.joinToString(" · ") { if (it == who) "${it.name}(말하는 중)" else it.name }, color = c.onSurfaceVariant, style = CarText.Label,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis)
-                return@Column
+                Text("차 앞쪽 ▲", color = c.onSurfaceVariant, style = CarText.Label, maxLines = 1)
             }
             Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(40.dp)).background(c.surfaceVariant).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 seatRows(car.seats).forEach { seats ->
@@ -527,11 +452,10 @@ internal fun SeatCard(people: List<Person>, car: CarStatus, speaking: String?, c
                                     if (talking) SpeakerRing()
                                 }
                                 Text(
-                                    when { p == null -> if (seat.name in car.occupied) "앉아 있어요" else "빈자리"; else -> p.name },
+                                    p?.name ?: "빈자리",
                                     color = if (p == null) c.onSurfaceVariant else c.onSurface,
                                     style = CarText.Label.copy(fontWeight = if (talking) FontWeight.Bold else FontWeight.Medium), maxLines = 1, overflow = TextOverflow.Ellipsis,
                                 )
-                                p?.let(note)?.let { (text, color) -> Text(text, color = color, style = CarText.Label, maxLines = 1, overflow = TextOverflow.Ellipsis) }
                             }
                         }
                     }
@@ -566,25 +490,28 @@ internal fun MeButton(face: Int, onClick: () -> Unit) {
 }
 
 /**
- * Profile menu (2200:5854): 480 wide at the top right, corner 26, border 2, padding 24/20, gap 12, outside black 56%. Face 48 and name 29 with
- * 닫기; the current riding group (ok-soft 106: '현재 동승 그룹' 19, name 25, 👤 count, 2×2 faces, ›) that opens the group change; 좌석 배정;
- * 🖼 갤러리 바로가기; while driving the note '그룹 변경과 좌석 배정은 주차 후에 이용해 주세요.' with those blocked; 로그아웃.
- * [wide] is the parked 1682 window (2257:5870, Noto Sans KR — the system Korean font): profile row 86, group card 114 with just the name 30/36
- * and 👤 count (#ADC2B8), 갤러리 바로가기 without the picture (#F5F2ED), 로그아웃 92% white, and the note always last, centred.
+ * Profile menu — live 2200:5852 (841 window, top 92 · right 37) and 2257:5780 (1682 window, top 120 · right 45) are the same card: 480 wide,
+ * corner 26, border 2 #7A9C87, padding 24/20, gap 12, outside black 56%. Profile row 86 (face 48, name 29/42); the riding group (ok-soft 114:
+ * name 30/36 · 👤 count #ADC2B8 · 2×2 faces · ›) → group change; 좌석 배정; 갤러리 바로가기 (#F5F2ED); 로그아웃 (92% white); the note
+ * '그룹 변경과 좌석 배정은 주차 후에 이용해 주세요.' last, centred (18/30). Noto Sans KR in the design = the system Korean font.
+ * Group change and seats are off while driving. [keepBottom]: the bottom strip the scrim leaves pressable — on the driving window the
+ * recording bar's ●/■ still work with the menu open (C17m 2206:5852).
  */
 @Composable
 internal fun BoxScope.ProfileMenu(
     name: String, face: Int, group: String, people: List<Person>, driving: Boolean, top: Dp, end: Dp,
-    onClose: () -> Unit, onGroup: () -> Unit, onSeats: () -> Unit, onGallery: () -> Unit, onLogout: () -> Unit, wide: Boolean = false,
+    onClose: () -> Unit, onGroup: () -> Unit, onSeats: () -> Unit, onGallery: () -> Unit, onLogout: () -> Unit, keepBottom: Dp = 0.dp,
 ) {
     fun menuText(size: Int, line: Int, weight: FontWeight = FontWeight.Bold): TextStyle =
-        CarText.Label.copy(fontSize = size.sp, lineHeight = line.sp, fontWeight = weight).let { if (wide) it.copy(fontFamily = FontFamily.Default) else it }
+        CarText.Label.copy(fontSize = size.sp, lineHeight = line.sp, fontWeight = weight, fontFamily = FontFamily.Default)
     val c = MaterialTheme.colorScheme
-    Scrim(CarMenu.Scrim, onClose)
+    Box(Modifier.matchParentSize().background(CarMenu.Scrim)) // 어둡게만(누름은 아래 칸이 받는다)
+    Box(Modifier.align(Alignment.TopStart).fillMaxWidth().fillMaxHeight().padding(bottom = keepBottom)
+        .clickable(remember { MutableInteractionSource() }, indication = null, onClick = onClose))
     Surface(Modifier.align(Alignment.TopEnd).padding(top = top, end = end).width(480.dp), RoundedCornerShape(26.dp), color = CarMenu.Surface,
         border = BorderStroke(2.dp, CarMenu.Line), shadowElevation = 18.dp) {
         Column(Modifier.padding(horizontal = 24.dp, vertical = 20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Row(Modifier.fillMaxWidth().height(if (wide) 86.dp else 58.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxWidth().height(86.dp), verticalAlignment = Alignment.CenterVertically) {
                 Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                     CharAvatar(face, 48.dp)
                     Text(name, style = menuText(29, 42), color = c.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -592,18 +519,13 @@ internal fun BoxScope.ProfileMenu(
                 Box(Modifier.size(48.dp).clip(CircleShape).clickable(role = Role.Button, onClick = onClose).semantics { contentDescription = "닫기" },
                     contentAlignment = Alignment.Center) { Canvas(Modifier.size(16.dp)) { cross(c.onSurface) } }
             }
-            Surface(onClick = onGroup, enabled = !driving, modifier = Modifier.fillMaxWidth().height(if (wide) 114.dp else 106.dp), shape = RoundedCornerShape(18.dp),
-                color = c.tertiaryContainer) {
+            Surface(onClick = onGroup, enabled = !driving, modifier = Modifier.fillMaxWidth().height(114.dp), shape = RoundedCornerShape(18.dp), color = c.tertiaryContainer) {
                 Row(Modifier.padding(horizontal = 18.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                        if (!wide) Text("현재 동승 그룹", style = menuText(19, 26, FontWeight.Medium), color = c.onSurface, maxLines = 1)
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Text(group, Modifier.weight(1f, fill = false), style = if (wide) menuText(30, 36) else menuText(25, 34), color = c.onSurface, maxLines = 1,
-                                overflow = TextOverflow.Ellipsis)
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                Image(painterResource(R.drawable.ic_menu_person), null, Modifier.size(20.dp))
-                                Text("${people.size}", style = menuText(19, 26, FontWeight.Medium), color = if (wide) CarMenu.CountWide else CarMenu.Count, maxLines = 1)
-                            }
+                    Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text(group, Modifier.weight(1f, fill = false), style = menuText(30, 36), color = c.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Image(painterResource(R.drawable.ic_menu_person), null, Modifier.size(20.dp))
+                            Text("${people.size}", style = menuText(19, 26, FontWeight.Medium), color = CarMenu.CountWide, maxLines = 1)
                         }
                     }
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -612,17 +534,15 @@ internal fun BoxScope.ProfileMenu(
                     }
                 }
             }
-            MenuRow("좌석 배정", null, c.onSurface, !driving, onSeats, wide)
-            MenuRow("갤러리 바로가기", if (wide) null else R.drawable.ic_menu_gallery, if (wide) CarMenu.InkWide else CarMenu.Ink, !driving, onGallery, wide)
-            val noteText = "그룹 변경과 좌석 배정은 주차 후에 이용해 주세요."
-            if (driving && !wide) Text(noteText, Modifier.fillMaxWidth(), color = c.onSurfaceVariant, style = menuText(18, 30, FontWeight.Normal))
+            MenuRow("좌석 배정", c.onSurface, !driving, onSeats)
+            MenuRow("갤러리 바로가기", CarMenu.InkWide, !driving, onGallery)
             Surface(onClick = onLogout, modifier = Modifier.fillMaxWidth().height(60.dp), shape = RoundedCornerShape(16.dp), color = Color.Transparent) {
                 Box(Modifier.padding(horizontal = 18.dp), contentAlignment = Alignment.CenterStart) {
-                    Text("로그아웃", style = menuText(24, 34), color = if (wide) Color.White.copy(alpha = 0.92f) else CarMenu.ConfirmInk, maxLines = 1)
+                    Text("로그아웃", style = menuText(24, 34), color = Color.White.copy(alpha = 0.92f), maxLines = 1)
                 }
             }
-            if (wide) Text(noteText, Modifier.fillMaxWidth().height(47.dp).wrapContentHeight(), color = c.onSurfaceVariant, style = menuText(18, 30, FontWeight.Normal),
-                textAlign = TextAlign.Center)
+            Text("그룹 변경과 좌석 배정은 주차 후에 이용해 주세요.", Modifier.fillMaxWidth().height(47.dp).wrapContentHeight(), color = c.onSurfaceVariant,
+                style = menuText(18, 30, FontWeight.Normal), textAlign = TextAlign.Center)
         }
     }
 }
@@ -654,14 +574,13 @@ private fun BoxScope.Scrim(color: Color, onClick: () -> Unit) {
     Box(Modifier.matchParentSize().background(color).clickable(remember { MutableInteractionSource() }, indication = null, onClick = onClick))
 }
 
-/** Menu row (2200:5876·2220:5905): 66 high, corner 16, padding 18, surface-2, icon 26 (gap 13), text 25 Bold, '›' 20×28 at the right. Off while driving. */
+/** Menu row (2257:5852·5857): 66 high, corner 16, padding 18, surface-2, text 25/36 Bold, '›' 20×28 at the right. Off while driving. */
 @Composable
-private fun MenuRow(label: String, icon: Int?, ink: Color, enabled: Boolean, onClick: () -> Unit, wide: Boolean = false) {
+private fun MenuRow(label: String, ink: Color, enabled: Boolean, onClick: () -> Unit) {
     val c = MaterialTheme.colorScheme
     Surface(onClick = onClick, enabled = enabled, modifier = Modifier.fillMaxWidth().height(66.dp), shape = RoundedCornerShape(16.dp), color = c.surfaceVariant) {
-        Row(Modifier.padding(horizontal = 18.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(13.dp)) {
-            icon?.let { Image(painterResource(it), null, Modifier.size(26.dp)) }
-            Text(label, Modifier.weight(1f), style = menuText(25, 36).let { if (wide) it.copy(fontFamily = FontFamily.Default) else it }, color = ink, maxLines = 1)
+        Row(Modifier.padding(horizontal = 18.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(label, Modifier.weight(1f), style = menuText(25, 36).copy(fontFamily = FontFamily.Default), color = ink, maxLines = 1)
             Canvas(Modifier.size(20.dp, 28.dp)) { chevron(c.onSurface) }
         }
     }
