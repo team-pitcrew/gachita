@@ -296,8 +296,8 @@ internal fun AfterTrip(trip: Trip, lines: List<AfterLine>, base: String, token: 
         val (title, sub) = when (step) {
             AfterStep.UPLOAD -> "오늘의 주행을 기록했어요" to (if (trip.status == "ended") "여행을 마쳤어요" else "주차 후 여행 마무리")
             AfterStep.SELECT -> "남기고 싶은 순간을 골라요" to (if (picks.isEmpty()) "아직 추천할 장면을 찾지 못했어요" else "${if (audio == AudioState.READY) "전체 음성" else "받아 적은 대화"}에서 찾은 추천 장면 ${picks.size}개")
-            AfterStep.MAKE -> "우리의 콘텐츠를 만들어요" to "선택한 장면에 캐릭터와 자막을 입히는 중"
-            AfterStep.DONE -> (running?.items?.count { it.phase == Phase.DONE }?.takeIf { it > 0 }?.let { "${it}개의 순간이 완성됐어요" } ?: "우리의 순간이 완성됐어요") to "선택한 장면을 콘텐츠 기록에 저장했어요."
+            AfterStep.MAKE -> "우리 가족의 콘텐츠를 만들어요" to "선택한 장면에 캐릭터와 자막을 입히는 중"
+            AfterStep.DONE -> (running?.items?.count { it.phase == Phase.DONE }?.takeIf { it > 0 }?.let { "${it}개의 순간이 완성됐어요" } ?: "우리 가족의 순간이 완성됐어요") to "선택한 장면을 콘텐츠 기록에 저장했어요."
         }
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(title, fontSize = 40.sp, lineHeight = 52.sp, fontWeight = FontWeight.Bold)
@@ -306,7 +306,7 @@ internal fun AfterTrip(trip: Trip, lines: List<AfterLine>, base: String, token: 
         Box(Modifier.weight(1f).fillMaxWidth()) {
             when (step) {
                 AfterStep.UPLOAD -> Split(trip) {
-                    Summary("우리 일행 ${trip.people.size}명" + afterDuration(seconds).let { if (it.isEmpty()) "" else " / $it" }, dayRange(origin, end))
+                    Summary("우리 가족" + afterDuration(seconds).let { if (it.isEmpty()) "" else " / $it" }, dayRange(origin, end))
                     WaveCard(audioLabel(audio, upload), bars, upload, seconds)
                     Text(audioNote(audio), fontSize = 24.sp, color = c.onSurfaceVariant)
                 }
@@ -386,10 +386,10 @@ private fun Split(trip: Trip, left: @Composable ColumnScope.() -> Unit) {
         Column(Modifier.weight(.62f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(24.dp), content = left)
         CarCard(modifier = Modifier.weight(.38f).fillMaxHeight(), pad = 32.dp, gap = 20.dp) {
             Text("차가 바뀌어도\n우리는 그대로", fontSize = 40.sp, lineHeight = 50.sp, fontWeight = FontWeight.Bold)
-            Text("한 번 만든 프로필로 차량과 폰에서 이어가세요.", fontSize = 26.sp, lineHeight = 36.sp, color = c.onSurfaceVariant)
+            Text("한 번 만든 가족 프로필로 차량과 폰에서 이어가세요.", fontSize = 26.sp, lineHeight = 36.sp, color = c.onSurfaceVariant)
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) { trip.people.take(5).forEach { Character(seatCharacter(it), 88.dp) } }
-            Text("우리 일행  ${trip.people.size}명", fontSize = 32.sp, fontWeight = FontWeight.Bold)
-            Text("프로필과 목소리, 그룹을 같은 계정으로 함께 사용", fontSize = 24.sp, lineHeight = 32.sp, color = c.onSurfaceVariant)
+            Text("우리 가족  ${trip.people.size}명", fontSize = 32.sp, fontWeight = FontWeight.Bold)
+            Text("프로필과 목소리, 가족 그룹을 같은 계정으로 함께 사용", fontSize = 24.sp, lineHeight = 32.sp, color = c.onSurfaceVariant)
         }
     }
 }
