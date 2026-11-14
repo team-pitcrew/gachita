@@ -7,11 +7,12 @@ const fail = (status, error) => {
   throw { status, error };
 };
 export const PLACE_KINDS = ["start", "stop", "approaching", "arrived", "destination"];
-const MAX_PLACES = 200; // 여행 하나에. 차는 상태가 바뀔 때(출발·경유·곧 도착·도착·목적지 바꿈)만 올린다
+const MAX_PLACES = 200; // 여행 하나에. 차는 상태가 바뀔 때(출발·경유·곧 도착·도착·목적지 바꿈)만 올린다. 넘으면 at이 가장 이른 것부터 버린다
 const MAX_ROUTE = 200; // 내 여행 하나의 경로 점
 const MAX_TRIPS = 50;
 
 // POST /trips/{code}/places. 여행 줄을 잠근 채 부른다(handle). v는 server.js의 입력 검사(같은 문구를 쓰려고).
+// places는 늘 at 순서로 둔다(같은 at이면 받은 순서) — 늦게 도착한 '곧 도착'이 그 뒤의 '도착'을 덮지 않게, 지금 상태는 at이 가장 큰 마지막 항목이다.
 export function addPlace(trip, caller, b, { text, num, int, oneOf }) {
   const kind = oneOf(b.kind, PLACE_KINDS, "kind");
   const name = text(b.name, 100, "name");
@@ -28,18 +29,13 @@ export function addPlace(trip, caller, b, { text, num, int, oneOf }) {
     ...(b.etaSeconds !== undefined ? { etaSeconds: int(b.etaSeconds, 0, 86_400, "etaSeconds") } : {}),
     by: caller.id,
   };
-  trip.places ??= [];
-  if (trip.places.length >= MAX_PLACES) fail(409, `장소 기록이 한도(${MAX_PLACES}개)에 닿음`);
-  trip.places.push(place);
+  trip.places = [...(trip.places ?? []), place].sort((a, b) => a.at - b.at); // 정렬은 안정적이라 같은 at은 받은 순서
+  if (trip.places.length > MAX_PLACES) trip.places.splice(0, trip.places.length - MAX_PLACES);
   return place;
 }
 
-// 그 시각에 어디쯤이었는지: 그 시각 전에 남은 마지막 장소의 이름(곧 도착·목적지면 그쪽으로 가던 길).
-const placeAt = (places, at) => {
-  let name = null;
-  for (const p of [...places].sort((a, b) => a.at - b.at)) if (p.at <= at) name = p.name;
-  return name;
-};
+// 그 시각에 어디쯤이었는지: 그 시각 전에 남은 마지막 장소의 이름(곧 도착·목적지면 그쪽으로 가던 길). places는 at 순서다.
+const placeAt = (places, at) => places.findLast((p) => p.at <= at)?.name ?? null;
 
 // GET /profiles/me/trips: 내 프로필이 참가한 여행을 최신 순으로. 여행을 가로질러 두 저장소를 읽는다.
 // 경로(발화 좌표)와 콘텐츠는 기록본과 같은 규칙으로 — 그 여행에서 내 참가자가 녹음에 동의했을 때만 채운다.

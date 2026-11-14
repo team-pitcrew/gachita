@@ -61,11 +61,11 @@ test("차가 장소를 남기면 여행 문서의 places에 쌓이고, 참가자
     ["destination", "속초 해수욕장", 38.19, 128.6, 7200, driver.id]
   );
   assert.ok(Math.abs(made.data.at - Date.now()) < 5000);
-  const late = await call("POST", path, { kind: "approaching", name: "속초 해수욕장", at: trip.createdAt + 1000, etaSeconds: 240 }, driver.token);
+  const late = await call("POST", path, { kind: "approaching", name: "속초 해수욕장", at: trip.createdAt - 30_000, etaSeconds: 240 }, driver.token);
   assert.equal(late.status, 201);
   assert.equal(late.data.lat, undefined, "좌표 없는 장소도 남긴다");
   const seen = (await call("GET", `/trips/${trip.code}`)).data;
-  assert.deepEqual(seen.places.map((p) => p.id), [made.data.id, late.data.id]);
+  assert.deepEqual(seen.places.map((p) => p.id), [late.data.id, made.data.id], "at 순서");
 
   // 권한과 입력
   assert.equal((await call("POST", path, { kind: "stop", name: "휴게소" })).status, 401, "참가자 토큰이 없으면 거절");
@@ -88,11 +88,34 @@ test("차가 장소를 남기면 여행 문서의 places에 쌓이고, 참가자
   assert.equal((await call("POST", `${path}/x`, { kind: "stop", name: "휴게소" }, driver.token)).status, 404);
   assert.equal((await call("GET", `/trips/${trip.code}`)).data.places.length, 2, "거절한 요청은 남지 않음");
 
-  // 한도: 200개
+  // 한도: 200개. 넘으면 at이 가장 이른 것부터 버리고, 새로 받은 것은 201
   const doc = (await tripsDb().query("SELECT doc FROM trips WHERE code = $1", [trip.code])).rows[0].doc;
-  doc.places = Array.from({ length: 200 }, (_, i) => ({ id: `p${i}`, kind: "stop", name: `경유 ${i}`, at: trip.createdAt, by: driver.id }));
+  doc.places = Array.from({ length: 200 }, (_, i) => ({ id: `p${i}`, kind: "stop", name: `경유 ${i}`, at: trip.createdAt - 60_000 + i, by: driver.id }));
   await tripsDb().query("UPDATE trips SET doc = $2 WHERE code = $1", [trip.code, doc]);
-  assert.equal((await call("POST", path, { kind: "arrived", name: "속초" }, driver.token)).status, 409);
+  const last = await call("POST", path, { kind: "arrived", name: "속초" }, driver.token);
+  assert.equal(last.status, 201);
+  const full = (await call("GET", `/trips/${trip.code}`)).data.places;
+  assert.deepEqual([full.length, full[0].id, full.at(-1).id], [200, "p1", last.data.id], "가장 이른 p0을 버림");
+  const older = await call("POST", path, { kind: "stop", name: "더 이른 곳", at: trip.createdAt - 60_000 }, driver.token);
+  assert.equal(older.status, 201);
+  const kept = (await call("GET", `/trips/${trip.code}`)).data.places;
+  assert.deepEqual([kept.length, kept[0].id, kept.some((p) => p.id === older.data.id)], [200, "p1", false], "모두보다 이른 것은 바로 밀려남");
+});
+
+test("늦게 도착한 장소도 at 순서로 놓여, 지금 상태는 at이 가장 큰 마지막 장소다", async () => {
+  const trip = await newTrip();
+  const driver = await join(trip.code, { name: "운전자" }, "ROW_1_LEFT");
+  const path = `/trips/${trip.code}/places`;
+  const t = trip.createdAt - 50_000; // 받을 수 있는 가장 이른 때(만들기 1분 전) 안쪽. 아래 '받은 시각'보다 모두 이르다
+  const arrived = (await call("POST", path, { kind: "arrived", name: "속초", at: t + 5000 }, driver.token)).data;
+  // 통신이 끊겼다가 나중에 올라온 '곧 도착'(10:00)이 이미 받은 '도착'(10:05) 뒤에 오지 않는다
+  const approaching = (await call("POST", path, { kind: "approaching", name: "속초", at: t + 1000, etaSeconds: 240 }, driver.token)).data;
+  const start = (await call("POST", path, { kind: "start", name: "집", at: t }, driver.token)).data;
+  const same = (await call("POST", path, { kind: "stop", name: "같은 시각 둘째", at: t + 5000 }, driver.token)).data;
+  const now = (await call("POST", path, { kind: "destination", name: "강릉" }, driver.token)).data; // at 없음 = 받은 시각
+  const places = (await call("GET", `/trips/${trip.code}`)).data.places;
+  assert.deepEqual(places.map((p) => p.id), [start.id, approaching.id, arrived.id, same.id, now.id], "at 순서, 같은 at은 받은 순서");
+  assert.equal(places.at(-1).kind, "destination");
 });
 
 test("옛 여행 문서도 places를 빈 목록으로 주고, 출발·끝 시각을 상태가 바뀔 때 남긴다", async () => {

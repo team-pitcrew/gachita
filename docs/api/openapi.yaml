@@ -1067,7 +1067,8 @@ paths:
         차가 내비에서 읽은 장소 이름을 여행 문서의 `places`에 쌓습니다(T131, docs/api/places.md). 콘텐츠 기록의 지도·타임라인과 폰의 '곧 도착'이 읽습니다.
         그 여행의 참가자 토큰이 있어야 합니다(없거나 다른 여행의 토큰이면 401). 녹음 동의와 관계없습니다 — 음성이 아니라 내비의 장소입니다.
         `at`을 안 보내면 서버 시각을 씁니다. 늦게 올릴 때는 그때의 시각을 보내되 여행을 만들기 1분 전 ~ 지금+1분 안이어야 합니다. 좌표는 둘 다 있거나 둘 다 없음만 받습니다.
-        여행 하나에 200개까지입니다(넘으면 409). 차는 상태가 바뀔 때만 올립니다. 장소는 장면처럼 여행 코드로 읽는 여행 문서에 실립니다.
+        `places`는 늘 `at` 순서(같으면 받은 순서)라, 늦게 도착한 장소도 제 시각 자리에 들어갑니다. **지금 상태는 `at`이 가장 큰 장소(마지막)**입니다.
+        여행 하나에 200개까지 두고, 넘으면 `at`이 가장 이른 것부터 버립니다. 차는 상태가 바뀔 때만 올립니다. 장소는 장면처럼 여행 코드로 읽는 여행 문서에 실립니다.
       security: [{ participantToken: [] }]
       requestBody:
         required: true
@@ -1088,7 +1089,6 @@ paths:
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
-        "409": { $ref: "#/components/responses/Error" }
   /api/trips/{code}/utterances:
     parameters: [{ $ref: "#/components/parameters/code" }]
     post:
@@ -2301,7 +2301,7 @@ components:
         participants: { type: array, items: { $ref: "#/components/schemas/Participant" } }
         requests: { type: array, items: { $ref: "#/components/schemas/Request" } }
         moments: { type: array, items: { $ref: "#/components/schemas/Moment" } }
-        places: { type: array, items: { $ref: "#/components/schemas/Place" }, description: 차가 남긴 장소(T131). 그 전에 만든 여행은 빈 목록 }
+        places: { type: array, maxItems: 200, items: { $ref: "#/components/schemas/Place" }, description: "차가 남긴 장소(T131), at 순서(같으면 받은 순서). 지금 상태는 마지막(at이 가장 큰) 장소. 그 전에 만든 여행은 빈 목록" }
         startedAt: { type: integer, description: 처음 주행을 시작한 시각(T131). 그 전에는 없음 }
         endedAt: { type: integer, description: 끝낸 시각. 끝낸 여행에만 }
         version: { type: integer, description: 바뀔 때마다 1씩 늘어남 }
