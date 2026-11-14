@@ -15,6 +15,7 @@ import { createShortStudio } from "/short-studio.js";
 import { createScenePicker } from "/short-scenes.js";
 import { createBoarding } from "/boarding.js";
 import { createOnboarding } from "/onboarding.js";
+import { createGroups } from "/groups.js";
 import { appBar, arrivalCards, askState, createPlaces, driveState, journeyTabs, nearCard, recordingLine, rideHeading, seatMap, statusMoves } from "/ride.js";
 
 // 여행 상태 이름. 상태별 제목·부제·운전석 단추는 ride.js가 고른다.
@@ -168,6 +169,19 @@ const onboarding = createOnboarding({
   onOther: () => { location.hash = "me"; },
   isOnline: () => !offline && navigator.onLine !== false,
 });
+// 가족·동승 그룹(흐름 F2, groups.js). 초대 링크(/?group=코드)는 프로필을 읽은 뒤 연다.
+const groups = createGroups({
+  getProfile: () => profile,
+  getToken: () => store("profile"),
+  onProfile: () => { location.hash = "me"; },
+  onTrip: (tripCode, participantId, token) => {
+    if (participantId) store(tripCode, participantId);
+    if (token) store(`${tripCode}:token`, token);
+    location.hash = tripCode;
+  },
+  onChange: () => loadProfile(),
+});
+groups.remember();
 const startRide = () => boarding.open();
 const launchShort = () => studio.open();
 const openConversations = () => {
@@ -520,6 +534,7 @@ function home() {
     ),
     profile?.email && !profile.hasVoice && entry("record", "15초 목소리 등록", "차에서 말한 사람을 알아보는 데 써요", () => { onboarding.open(); location.hash = "start"; }),
     profile ? entry("qr", "차량 QR로 참여", "차 화면의 QR을 휴대폰으로 스캔해요", startRide, "ride-entry") : store("profile") ? profileConnection() : entry("pencil", "내 프로필 만들기", "사진 또는 캐릭터로 나를 소개해요", () => { location.hash = "me"; }, "ride-entry"),
+    profile && entry("record", "우리 가족", "가족과 동승 그룹, 좌석과 초대 코드", () => groups.open()),
     h("section", { className: "home-section" }, h("div", { className: "between" }, h("h2", {}, "다시 만나는 우리 이야기"), button("보관함", () => studio.open({ view: "library" }), "plain")), entry("play", "우리 쇼츠", "원래 목소리로 남긴 짧은 여행", launchShort)),
     last && h("section", { className: "home-section" },
       h("div", { className: "between" }, h("h2", {}, "함께한 여행"), button("여행 열기", () => { location.hash = last; }, "plain")),
@@ -1009,6 +1024,7 @@ function render() {
   if (conversationPending && me && !asking(me) && !reading) { conversationPending = false; conversations.open(); }
   if (failed || (trip && !me)) conversationPending = false;
   if (location.hash !== "#me" && !savingProfile && boarding.pending()) boarding.resume();
+  if (location.hash !== "#me" && !savingProfile && profile) groups.resume();
 }
 
 // 부탁 남기기 시트는 한 번만 채운다
