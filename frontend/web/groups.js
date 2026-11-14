@@ -178,7 +178,7 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
       button("아이 프로필 만들기", () => go("child"), "group-ghost", s.busy),
       h("div", { className: "group-card" }, h("strong", {}, "가족 그룹은 한 번만"), h("small", {}, "저장한 구성원과 좌석을 다음 여행에도 사용")),
     ], [
-      kids.length >= 2 && button("우리 가족 좌석 보기", () => go("group"), "group-ghost"), // 시안 P39·P40에는 없음: 둘째 아이 뒤(P43으로 가는 때)부터
+      g && g.members.length > 1 && button("우리 가족 좌석 보기", () => go("group"), "group-ghost"), // 시안 P39·P40에는 없는 의도적 추가: 아이 0–1명·어른만 가족도 좌석과 출발로 갈 길이 있게(기능이 시안보다 우선)
       adults.length ? button(kids.length ? "다음 아이 프로필 만들기" : "아이 프로필 만들기", () => go("child"), "primary") : button("가족 계정 초대하기", () => act(invite), "primary", s.busy),
     ]);
   }
