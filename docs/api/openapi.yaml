@@ -1718,7 +1718,9 @@ paths:
         여행 상태가 parked/ended이고 parked=true, 관측이 60초 이내이며 장소에서 250m 이내일 때만 해당 장소의 pending 항목을 반환합니다.
         장소 매칭은 차량 Todos.kt와 같은 이름 포함 규칙입니다. 다른 장소·완료·취소 항목은 제외합니다.
         source는 클라이언트가 제공한 관측 출처입니다. 서버가 실차 센서를 직접 확인했다는 뜻이 아닙니다.
-        좌표나 관측값을 저장하거나 외부 제공자로 보내지 않으며 내비·여행 상태를 바꾸지 않습니다.
+        좌표를 저장하거나 외부 제공자로 보내지 않으며 내비·여행 상태를 바꾸지 않습니다.
+        eligible=true이면 장소 이름·관측 시각·출처만 여행에 남겨 `GET /todos`의 `arrival`로 알립니다(T119). 폰은 내비의 장소를 모르기 때문입니다.
+        다시 주행(또는 탑승)으로 바뀌거나 동의 세대가 오르면 지웁니다. 토큰 없이 읽는 여행 문서(`GET /api/trips/{code}`)에는 싣지 않습니다.
       security: [{ participantToken: [] }]
       requestBody:
         required: true
@@ -1828,6 +1830,16 @@ components:
         generation: { type: integer }
         method: { type: string, const: place-rules-v1 }
         items: { type: array, items: { $ref: "#/components/schemas/Todo" } }
+        arrival:
+          description: 마지막으로 도착 판정(eligible=true)을 받은 장소(T119). 없거나 다시 출발했으면 null. 좌표는 없습니다. 클라이언트가 보낸 관측에 대한 판정이며 서버가 차량 센서를 확인했다는 뜻이 아닙니다.
+          oneOf:
+            - { type: "null" }
+            - type: object
+              required: [place, at, source]
+              properties:
+                place: { type: string, description: 호출자가 보낸 장소 이름(내비의 다음 경유지나 목적지) }
+                at: { type: integer, description: 관측 시각 epoch ms }
+                source: { type: string, enum: [vehicle, browser] }
     ShortPlanInput:
       type: object
       properties:
