@@ -304,7 +304,7 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
     const sec = Math.floor(Math.min(s.meter?.elapsed() ?? 0, VOICE_SECONDS));
     const saved = s.voiceState === "saved";
     const retry = s.voiceState === "failed" || s.voiceState === "blocked";
-    return page(`${kid?.name ?? "아이"}의 목소리 등록`, `“나는 ${kid?.name ?? "아이"}야. 바다에 가서 모래성을 만들 거야.”`, [
+    return page(`${kid?.name ?? "아이"}의 목소리 등록`, `“나는 ${kid?.name ?? "아이"}${batchim(kid?.name ?? "아이") ? "이야" : "야"}. 바다에 가서 모래성을 만들 거야.”`, [
       h("div", { className: "group-card" }, h("small", {}, `아이 목소리  ${sec} / ${VOICE_SECONDS}초`),
         voiceBars(s.meter, { className: "group-wave", slots: 28, ready: [10], min: 10, max: 58, upcoming: 10 }), h("small", {}, `00:${String(sec).padStart(2, "0")}`)),
       s.voiceNote && h("p", { className: "meta", role: "status" }, s.voiceNote),
