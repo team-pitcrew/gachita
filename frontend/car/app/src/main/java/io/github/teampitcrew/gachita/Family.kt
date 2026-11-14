@@ -1,5 +1,10 @@
 package io.github.teampitcrew.gachita
 
+import androidx.compose.runtime.DisposableEffect
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.compose.rememberLauncherForActivityResult
+import android.content.pm.PackageManager
+import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -280,6 +285,9 @@ fun FamilyFlow(server: String, token: String?, onClose: () -> Unit, onStart: (St
     var childConsent by remember { mutableStateOf(true) }
     var child by remember { mutableStateOf<GroupMember?>(null) }
     var voiceSec by remember { mutableStateOf(0) }
+    var voiceLevels by remember { mutableStateOf(DoubleArray(0)) } // 막대 칸마다 실제 들어온 소리 크기(VoiceMeter)
+    var voiceState by remember { mutableStateOf("") } // recording · saving · saved · failed · blocked
+    var voiceTry by remember { mutableStateOf(0) } // '다시 녹음'
     var seats by remember { mutableStateOf<List<GroupMember>>(emptyList()) }
     var pick by remember { mutableStateOf<SeatPick?>(null) }
     var seatNote by remember { mutableStateOf<String?>(null) }
@@ -352,11 +360,38 @@ fun FamilyFlow(server: String, token: String?, onClose: () -> Unit, onStart: (St
             else -> { onClose(); view }
         }
     }
-    // mock: 아이 목소리 15초(C12·C42)는 진행만 그린다. 값 올리기(Voice.kt embed → POST /groups/{id}/members/{profileId}/voice)는 다음 커밋.
-    LaunchedEffect(view, child) {
-        if (view != FamilyView.CHILD_VOICE) return@LaunchedEffect
-        voiceSec = 0
-        while (voiceSec < 15) { delay(1000); voiceSec++ }
+    // 아이 목소리 15초(C12·C42): 차 마이크로 15초(막대는 실제 소리 크기, VoiceMeter.kt) → Voice.kt embed → 값만
+    // POST /groups/{id}/members/{profileId}/voice(보호자 토큰). 보호자 동의가 꺼진 아이는 녹음하지 않는다. 400(말소리 없음)은 다시 녹음.
+    val mic = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { if (it) voiceTry++ else { voiceState = "failed"; note = "마이크 권한이 없어 녹음할 수 없어요" } }
+    DisposableEffect(view, child, voiceTry) {
+        var rec: VoiceRecorder? = null
+        val kid = child
+        val gid = family()?.id
+        if (view == FamilyView.CHILD_VOICE && kid != null && gid != null && token != null) {
+            voiceSec = 0; voiceLevels = DoubleArray(0)
+            when {
+                !kid.consent -> { voiceState = "blocked"; note = "보호자 동의가 꺼져 있어 아이 목소리를 녹음하지 않아요" }
+                ctx.checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED -> mic.launch(Manifest.permission.RECORD_AUDIO)
+                else -> {
+                    voiceState = "recording"
+                    val meter = VoiceMeter(40)
+                    rec = VoiceRecorder({ sec, level -> meter.add(sec, level); val snap = meter.snapshot(); scope.launch { voiceSec = minOf(15, sec.toInt()); voiceLevels = snap } }) { pcm, failed ->
+                        scope.launch {
+                            if (failed != null) { voiceState = "failed"; note = failed; return@launch }
+                            voiceState = "saving"; voiceSec = 15
+                            runCatching {
+                                io {
+                                    val v = embed(pcmSamples(pcm)) ?: throw ApiError(400, "소리가 너무 짧아요")
+                                    AccountApi(server).childVoice(token, gid, kid.profileId, v, pcm.size / 2.0 / RATE)
+                                }
+                            }.onSuccess { voiceState = "saved" }
+                                .onFailure { voiceState = "failed"; note = if (it is ApiError && it.status == 400) "말소리가 없어 등록할 수 없음" else failureText(it) }
+                        }
+                    }.also { it.start() }
+                }
+            }
+        }
+        onDispose { rec?.cancel() } // 화면을 떠나면 마이크를 놓고 모은 소리를 버린다
     }
 
     val g = current()
@@ -463,12 +498,14 @@ fun FamilyFlow(server: String, token: String?, onClose: () -> Unit, onStart: (St
                             Heading("${name}의 목소리 등록", childLine(name))
                             Card2 {
                                 Text("아이 목소리  $voiceSec / 15초", color = c.onSurfaceVariant)
+                                // 지난 칸·지금 칸은 실제 들어온 소리 크기, 앞으로 칸은 시안처럼 낮은 막대(12dp).
+                                val now = if (voiceState == "recording") minOf(40, voiceSec * 40 / 15) else if (voiceLevels.isEmpty()) -1 else 40
                                 Row(Modifier.fillMaxWidth().height(96.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    repeat(40) { i -> Box(Modifier.weight(1f).height(if (i < voiceSec * 40 / 15) (24 + (i * 37) % 60).dp else 12.dp).background(c.primary, RoundedCornerShape(3.dp))) }
+                                    repeat(40) { i -> Box(Modifier.weight(1f).height(if (i <= now) (12 + 72 * (voiceLevels.getOrNull(i) ?: 0.0)).toInt().dp else 12.dp).background(c.primary, RoundedCornerShape(3.dp))) }
                                 }
                                 Text("00:${voiceSec.toString().padStart(2, '0')}", color = c.onSurfaceVariant)
                             }
-                            if (voiceSec >= 15) Row2(soft = true) { Face(child?.character ?: childChar, 72); Column { Text("${name}의 프로필 준비 완료", fontSize = 28.sp, fontWeight = FontWeight.Bold); Text("다음 아이도 같은 방법으로 추가할 수 있어요.", color = c.onSurfaceVariant) } }
+                            if (voiceState == "saved") Row2(soft = true) { Face(child?.character ?: childChar, 72); Column { Text("${name}의 프로필 준비 완료", fontSize = 28.sp, fontWeight = FontWeight.Bold); Text("다음 아이도 같은 방법으로 추가할 수 있어요.", color = c.onSurfaceVariant) } }
                         }
                         FamilyView.GROUP, FamilyView.SEAT -> {
                             val list = if (view == FamilyView.SEAT) seats else g?.members.orEmpty()
@@ -518,8 +555,10 @@ fun FamilyFlow(server: String, token: String?, onClose: () -> Unit, onStart: (St
                             put(made); child = made.members.lastOrNull { it.role == "child" }; childName = ""; view = FamilyView.CHILD_VOICE
                         }
                     }
-                    FamilyView.CHILD_VOICE -> Primary(if (voiceSec >= 15) "가족 그룹에 저장" else "녹음 중", voiceSec >= 15 && !busy, Modifier.weight(1f)) {
-                        act { load(); childName = ""; afterChildSaved() }
+                    FamilyView.CHILD_VOICE -> when (voiceState) {
+                        "saved", "blocked" -> Primary("가족 그룹에 저장", !busy, Modifier.weight(1f)) { act { load(); childName = ""; voiceState = ""; afterChildSaved() } }
+                        "failed" -> Primary("다시 녹음", !busy, Modifier.weight(1f)) { note = ""; voiceTry++ }
+                        else -> Primary(if (voiceState == "saving") "등록 중" else "녹음 중", false, Modifier.weight(1f)) {}
                     }
                     FamilyView.GROUP -> {
                         Ghost("전체 그룹", true, Modifier.weight(0.6f)) { view = FamilyView.GROUPS } // 전체 그룹(C16L)에서 새 동승 그룹을 만든다

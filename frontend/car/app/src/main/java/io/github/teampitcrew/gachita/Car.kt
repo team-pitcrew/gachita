@@ -141,6 +141,7 @@ class Car(ctx: Context, private val onChange: (CarStatus) -> Unit) {
     private val stop = Wait<Boolean>(30_000) // onWaypointChanged까지 11/13 7.6초, 11/13 밤 9.9~12.9초
     private val dest = Shared<DestinationInfo>() // 휴게소 추천(destination)과 도착 알림(nextStopName·nextArrivalPlace)이 함께 쓴다
     private val wps = Wait<List<WaypointInfo>>(2_000)
+    private val sent = SentPlaces() // 이 앱이 내비에 보낸 곳(목적지·경유지·휴게소). 내비가 좌표를 주지 않으면 도착 확인에 쓴다
 
     private val naviListener = object : NaviHelperEventListener {
         override fun onRouteStarted(routeStartInfo: RouteStartInfo) = naviEvent("경로 시작 ${routeStartInfo.name ?: ""}")
@@ -262,7 +263,7 @@ class Car(ctx: Context, private val onChange: (CarStatus) -> Unit) {
     }
 
     /** 장소 기록(T131): 내비 목적지의 이름·좌표. 안내 중이 아니거나 이름·좌표를 모르면 null. 화면은 넘어가지 않는다. */
-    fun destinationNamed(done: (Place?) -> Unit) = destinationInfo { d -> done(d?.let { arrivalPlace(it.name, it.latitude, it.longitude) }) }
+    fun destinationNamed(done: (Place?) -> Unit) = destinationInfo { d -> done(d?.let { arrivalPlaceOrSent(it.name, it.latitude, it.longitude, sent) }) }
 
     /** 그곳까지의 거리(m)와 시간(초). 들르면 늘어나는 시간이 아니다. 화면은 넘어가지 않는다. */
     fun distanceTo(p: Place, done: (Int?, Int?) -> Unit) =
@@ -282,9 +283,9 @@ class Car(ctx: Context, private val onChange: (CarStatus) -> Unit) {
         if (waypoints == null) return@start done(null, false)
         if (waypoints.isNotEmpty()) {
             val first = waypoints.first()
-            return@start done(arrivalPlace(first.name, first.latitude, first.longitude), false)
+            return@start done(arrivalPlaceOrSent(first.name, first.latitude, first.longitude, sent), false)
         }
-        destinationInfo { d -> done(d?.let { arrivalPlace(it.name, it.latitude, it.longitude) }, true) }
+        destinationInfo { d -> done(d?.let { arrivalPlaceOrSent(it.name, it.latitude, it.longitude, sent) }, true) }
     }) { navi.getWaypointInfo() }
 
     /**
@@ -299,12 +300,14 @@ class Car(ctx: Context, private val onChange: (CarStatus) -> Unit) {
 
     /** 지금 경로에 들를 곳을 더한다. 내비가 앞으로 나오고, 반영 알림(onWaypointChanged ADD)이 오면 true. 경로 오류나 30초 넘으면 false. */
     fun addStop(p: Place, done: (Boolean) -> Unit) = stop.start({ done(it == true) }) {
+        sent.remember(p)
         navi.addWaypoint(RequestWaypointInfo(latitude = p.lat, longitude = p.lng, poiName = p.name, waypointIndex = WaypointIndex.FIRST, poiId = "", address = p.address, poiSubId = "0"))
     }
 
     /** 순정 내비에 목적지와 들를 곳(둘까지)을 보낸다. 반영은 onWaypointChanged로 온다(T9). */
     fun route(dest: Place, stops: List<Place>): Boolean {
         if (!status.navi) return false
+        sent.remember(dest); stops.forEach(sent::remember)
         val to = RouteInfo(latitude = dest.lat, longitude = dest.lng, poiName = dest.name, poiId = "", address = dest.address, poiSubId = "0")
         return runCatching {
             if (stops.isEmpty()) navi.requestRoute(to)

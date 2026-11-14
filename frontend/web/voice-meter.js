@@ -6,6 +6,8 @@ import { h } from "./shared.js";
 import { embed, RATE, toMono16k, voiceValue } from "./voice-embed.js";
 
 export const VOICE_SECONDS = 15;
+// 최종 시안 목소리 파형(P06·P07·P12·P42) 막대 36개의 높이(px, 314×72 틀). 녹음 전·다 들은 뒤의 모양이고, 녹음 중에는 실제 소리 크기.
+export const WAVE_BARS = [23, 40, 57, 21, 38, 55, 19, 36, 53, 17, 34, 51, 15, 32, 49, 13, 30, 47, 11, 28, 45, 62, 26, 43, 60, 24, 41, 58, 22, 39, 56, 20, 37, 54, 18, 35];
 export const MIN_SECONDS = 5; // '녹음 완료'가 눌리는 최소 길이. 서버는 1~20초를 받는다
 
 // 시간 영역 표본의 RMS.
@@ -35,7 +37,7 @@ export function record(meter, slot, level) {
 
 /**
  * 막대 그리기. 녹음 전(meter 없음)은 시안의 모양(ready 높이, 모두 켬). 녹음 중·뒤에는 지난 칸과 지금 칸이 잰 크기,
- * 앞으로 칸은 upcoming 높이(숫자 하나 또는 칸별 높이)로 꺼 둔다. 색·간격·둥근 끝은 부르는 쪽 CSS(.ob-wave, .group-wave) 그대로.
+ * 앞으로 칸은 upcoming 높이(숫자 하나 또는 칸별 높이)로 꺼 둔다. 색·간격·둥근 끝은 부르는 쪽 CSS(.ob-wave) 그대로.
  */
 export function voiceBars(meter, { className, slots, ready, min, max, upcoming }) {
   const now = meter ? slotAt(meter.elapsed(), meter.seconds, slots) : -1;
