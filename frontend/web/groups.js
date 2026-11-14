@@ -27,6 +27,25 @@ export function seatTo(members, who, seat) {
   const from = members.find((m) => m.profileId === who)?.seat ?? null;
   return members.map((m) => (m.profileId === who ? { ...m, seat } : m.seat === seat ? { ...m, seat: from } : m));
 }
+// 좌석 바꾸기에서 누른 것의 결과. 자리는 '자리를 눌러야만' 정해지고, 사람을 누르면 고른 사람만 바뀐다.
+// 앉아 있던 사람이 자리를 잃는 일은 없게 한다 — 자리 없는 사람을 앉은 사람의 자리에 넣지 않는다(#413 재점검: 엄마가 자리를 잃음).
+// target: 자리 칸이면 {seat, member?(그 자리의 사람)}, '자리 없음' 줄이면 {member}. 돌려주는 것: {members?, picked, note?}.
+export function seatPick(members, picked, target) {
+  const seatOf = (id) => members.find((m) => m.profileId === id)?.seat ?? null;
+  if (!target.seat) return { picked: target.member === picked ? null : target.member }; // 자리 없음 줄: 고르기만
+  if (!picked) return target.member ? { picked: target.member } : { picked: null, note: "먼저 앉힐 사람을 눌러 주세요." };
+  if (target.member === picked) return { picked: null };
+  if (!target.member) return { members: seatTo(members, picked, target.seat), picked: null }; // 빈자리에 앉힘
+  if (seatOf(picked)) return { members: swapSeats(members, picked, target.member), picked: null }; // 앉은 사람끼리 맞바꿈
+  return { picked, note: "앉은 사람이 있는 자리예요. 빈자리를 눌러 주세요." }; // 자리 없는 사람은 빈자리에만
+}
+
+// 저장한 그룹에서 앉아 있다가 자리를 잃는 사람(저장·출발을 막는다).
+export function lostSeats(saved, edited) {
+  const before = new Map(saved.map((m) => [m.profileId, m.seat ?? null]));
+  return edited.filter((m) => before.get(m.profileId) && !m.seat);
+}
+
 export function swapSeats(members, a, b) {
   const seatA = members.find((m) => m.profileId === a)?.seat ?? null;
   const seatB = members.find((m) => m.profileId === b)?.seat ?? null;
@@ -296,7 +315,7 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
     if (!g) return memberView();
     const free = g.members.filter((m) => !m.seat);
     return page(g.kind === "guest" ? g.name : "우리 가족", s.saved ? "새 좌석을 저장했어요." : `${g.members.length}명 / ${g.kind === "guest" ? "동승 그룹" : "기본 그룹"} / 좌석을 눌러 변경`, [
-      seatGrid(g.members, (m) => { s.seats = g.members; s.swapped = null; s.moved = null; s.picked = m?.profileId ?? null; s.saved = false; go("seat"); }),
+      seatGrid(g.members, (m) => { s.seats = g.members; s.swapped = null; s.moved = null; s.note = null; s.picked = m?.profileId ?? null; s.saved = false; go("seat"); }),
       free.length > 0 && h("p", { className: "meta" }, `자리 없음: ${free.map((m) => m.name).join(", ")}`),
       h("p", { className: "group-ready" }, readiness(g.members)),
     ], [
@@ -311,26 +330,24 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
   }
   function seatView() {
     const g = current();
-    // 사람 → 사람은 맞바꾸고, 사람 → 빈자리는 그 자리에 앉힌다(자리 없는 아이·초대로 들어온 사람·동승자도 자리를 받게).
+    // 사람 → 빈자리는 앉히고, 앉은 사람 → 앉은 사람은 맞바꾼다. '자리 없음' 줄을 누르면 고르기만 한다(seatPick).
     const pick = (m, seat) => {
-      if (!m) {
-        if (!s.picked || !seat) return;
-        s.moved = s.seats.find((x) => x.profileId === s.picked)?.name;
-        s.seats = seatTo(s.seats, s.picked, seat);
-        s.swapped = null;
-        s.picked = null;
-        return paint();
+      const before = s.picked;
+      const r = seatPick(s.seats, s.picked, { member: m?.profileId, seat });
+      s.note = r.note ?? null;
+      if (r.members) {
+        const name = (id) => s.seats.find((x) => x.profileId === id)?.name;
+        s.swapped = m ? [name(before), m.name] : null;
+        s.moved = m ? null : name(before);
+        s.seats = r.members;
       }
-      if (!s.picked || s.picked === m.profileId) { s.picked = m.profileId; return paint(); }
-      s.seats = swapSeats(s.seats, s.picked, m.profileId);
-      s.swapped = [s.seats.find((x) => x.profileId === s.picked)?.name, m.name];
-      s.moved = null;
-      s.picked = null;
+      s.picked = r.picked;
       paint();
     };
     const changed = s.seats.some((m) => (m.seat ?? null) !== (g.members.find((x) => x.profileId === m.profileId)?.seat ?? null));
+    const lost = lostSeats(g.members, s.seats);
     const free = s.seats.filter((m) => !m.seat);
-    const sub = s.swapped ? `${and(s.swapped[0])} ${s.swapped[1]}의 자리 위치를 바꿨어요.` : s.moved ? `${s.moved}의 자리를 정했어요.` : s.picked ? "빈자리나 바꿀 사람을 눌러 주세요." : "사람을 누른 뒤 빈자리나 다른 사람을 눌러 주세요.";
+    const sub = lost.length ? `${lost.map((m) => m.name).join(", ")}의 자리가 없어져요. 빈자리에 다시 앉혀 주세요.` : s.note ?? (s.swapped ? `${and(s.swapped[0])} ${s.swapped[1]}의 자리 위치를 바꿨어요.` : s.moved ? `${s.moved}의 자리를 정했어요.` : s.picked ? "빈자리나 바꿀 사람을 눌러 주세요." : "사람을 누른 뒤 빈자리나 다른 사람을 눌러 주세요.");
     return page("가족 좌석 바꾸기", sub, [seatGrid(s.seats, pick, s.picked),
       free.length > 0 && h("p", { className: "meta" }, "자리 없음: 눌러서 고른 뒤 빈자리를 눌러요"),
       free.length > 0 && h("div", { className: "group-pair" }, free.map((m) => button(m.name, () => pick(m), `group-ghost${m.profileId === s.picked ? " picked" : ""}`))),
@@ -340,7 +357,7 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
       s.groups = s.groups.map((x) => (x.id === saved.id ? saved : x));
       s.saved = true;
       go("group");
-    }), "primary", s.busy || !changed)], true);
+    }), "primary", s.busy || !changed || lost.length > 0)], true);
   }
 
   function guestView() {
