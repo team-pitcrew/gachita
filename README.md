@@ -66,7 +66,7 @@ make check     # CI와 같은 검사
 
 ## 테스트 환경 및 필요한 설정
 
-- **차량 앱:** Pleos Connect Emulator 2.1.0(Android 14, API 34, arm64), Mac mini M5 Pro, 2026-11-13. 실차에서는 확인하지 않았습니다. 화면 크기와 확인 범위는 [에뮬레이터 스펙](docs/emulator/README.md)에 있습니다.
+- **차량 앱:** Pleos Connect Emulator 2.1.0(Android 14, API 34, arm64), Mac mini M5 Pro, 2026-11-13. 실차에서는 확인하지 않았습니다. 에뮬레이터 화면은 2560×1440 px(160 dpi), 전체 앱 창은 1682×1210 px이며 반쪽 창 검증은 너비 841dp를 사용했습니다. 화면 크기와 확인 범위는 [에뮬레이터 스펙](docs/emulator/README.md)에 있습니다.
 - 차량 앱이 서버에 닿는 주소의 기본값은 실제 서버 `https://gachita.mangowhois.ai`입니다. 디버그 빌드만 실행 인자 `--es server`로 바꿉니다(첫 화면의 '서버 주소' 칸은 #239에서 뺌). 평문 http는 `10.0.2.2`·`localhost`·`127.0.0.1`에만 열려 있고 그 밖은 https만 씁니다.
 - 차량 앱을 빌드하려면 JDK 21과 Android SDK 34가 필요합니다(`cd frontend/car && ./gradlew assembleRelease`). 릴리스 서명 키는 저장소에 없고, `~/.gachita/keystore.properties`가 있을 때만 서명합니다.
 - Node.js 22 이상, Docker(로컬 Postgres 17 컨테이너용). API 서버의 의존성은 `pg` 하나입니다.
@@ -93,4 +93,4 @@ make check     # CI와 같은 검사
 - 파일 SHA-256: `7bafb82e90756425597fe208ce12431fc09953152375aae728319750813c1e6b`
 - 서명 인증서 SHA-256: `6f07b9fd44ef8e0e04782c160983e05b91cf8c7f10cff22cf7d5e690e599b2f6`. 이전 제출용 APK와 같습니다.
 - [최신 UI 세로 검토 영상](frontend/car/verification/20261114/current-ui-review.mp4) · 54.96초 · Pleos 에뮬레이터와 합성 음성입니다.
-- [제출 준비와 영상 검증](docs/submission-readiness.md), [실제 휴대폰·심사 접근 확인](docs/device-acceptance.md)을 함께 봅니다. 실제 휴대폰 검사와 심사용 계정 접근은 미확인입니다.
+- [제출 준비와 영상 검증](docs/submission-readiness.md), [실제 휴대폰·심사 접근 확인](docs/device-acceptance.md)을 함께 봅니다. 실제 휴대폰 검증은 진행 중입니다. 최신 공식 규정은 심사 계정 초대를 요구하지 않으며, [소스·APK 압축본 제출 준비](docs/submission-package.md)를 따릅니다.
