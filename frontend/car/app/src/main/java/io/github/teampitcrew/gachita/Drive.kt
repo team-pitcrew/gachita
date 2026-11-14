@@ -26,9 +26,14 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -38,8 +43,8 @@ import androidx.compose.ui.unit.sp
 
 /*
  * Ride tab of the final design (Figma fJmxFDb3TrpycwDjGJNP62, page 2004:57): C17/C17p recording and paused,
- * C21/C21p driving on after an arrival, the resumed and ended states, plus the header and tab bar (C13 look).
- * Pre-arrival and arrival briefs belong to flow F4.
+ * C19/C19p and finalNear/finalPaused approaching the next place (flow F4, T141), C21/C21p driving on after an arrival,
+ * the resumed and ended states, plus the header and tab bar (C13 look). The arrival brief itself is Arrival.kt.
  * Slots keep fixed sizes so cards appearing or disappearing never shift the other slots while driving (T11, T83).
  * The pure functions here are covered by DriveTest.
  */
@@ -69,7 +74,7 @@ internal fun driveStatus(
         else -> DriveStatus("기록 준비 중", "마이크를 켜고 있어요", Hero.PLAIN)
     }
     offPending -> DriveStatus("동의 철회", "원음과 대화를 지우고 있어요", Hero.PLAIN)
-    waiting -> DriveStatus("기록 준비됨", if (inPark) "모두 동의했어요. 아래 버튼으로 기록을 시작해요" else "주차(P)한 뒤 기록을 시작해 주세요", Hero.PLAIN)
+    waiting -> DriveStatus("기록 준비됨", if (inPark) "모두 동의했어요. 출발하면 자동으로 기록해요" else "곧 자동으로 기록을 시작해요", Hero.PLAIN)
     else -> DriveStatus("동의 대기", if (waitingFor.isEmpty()) "동승자를 확인해 주세요" else "${waitingFor.joinToString(", ")} · 녹음 동의가 필요해요", Hero.PLAIN)
 }
 
@@ -79,17 +84,16 @@ internal enum class Press { STOP, GO, OFF }
 internal data class DriveButton(val label: String, val press: Press, val enabled: Boolean)
 
 /**
- * The one big control (C17 '기록 중지', C17p '기록 재개', ended '새 여행 시작'). Otherwise it runs the same action the old status card did
- * (MainActivity.recordingAction): pause and resume keep consent, starting needs park and everyone's consent, and without consent it opens
- * passenger setup while parked. An ended trip never records again (Session.withTrip); a new trip is started while parked.
+ * The one big control (C17 '기록 중지', C17p '기록 재개', ended '새 여행 시작'). Recording starts by itself once the trip turns to driving with
+ * everyone's consent (Session.autoStart, C03·C13), so there is no start button: before that the button only says so. Pause and resume keep
+ * consent; without consent it opens passenger setup while parked. An ended trip never records again; a new trip is started while parked.
  */
-internal fun driveButton(recording: Boolean, muted: Boolean, agreed: Boolean, restricted: Boolean, canStart: Boolean, ended: Boolean = false): DriveButton = when {
+internal fun driveButton(recording: Boolean, muted: Boolean, agreed: Boolean, restricted: Boolean, ended: Boolean = false): DriveButton = when {
     ended && restricted -> DriveButton("주차한 뒤 새 여행을 시작해요", Press.OFF, false)
     ended -> DriveButton("새 여행 시작", Press.GO, true)
     recording && !muted -> DriveButton("기록 중지", Press.STOP, true)
     recording -> DriveButton("기록 재개", Press.GO, true)
-    agreed && restricted -> DriveButton("주차한 뒤 기록을 시작해요", Press.OFF, false)
-    agreed -> DriveButton("기록 시작", if (canStart) Press.GO else Press.OFF, canStart)
+    agreed -> DriveButton("출발하면 자동으로 기록해요", Press.OFF, false)
     restricted -> DriveButton("주차한 뒤 동의할 수 있어요", Press.OFF, false)
     else -> DriveButton("동승자 설정", Press.GO, true)
 }
@@ -109,19 +113,72 @@ internal fun heardMeta(name: String?, seat: String?, zone: Int?): String =
 /** Character index used everywhere in the car app: guests have no character value yet, so it follows seat order (Theme.kt). */
 internal fun seatCharacter(p: Person): Int = Seat.entries.indexOfFirst { it.name == p.seat }.coerceAtLeast(0)
 
+/** Pre-arrival brief (C19, finalNear 2043:1835): the next place from the navigation and whole minutes left, rounded up. final: no waypoint left. */
+internal data class Approach(val trip: String, val place: String, val minutes: Int, val seconds: Int, val final: Boolean = false)
+
+internal const val APPROACH_SECONDS = 300
+
+/** Approaching when the navigation reports 0 < remaining time <= 5 minutes for a named place. 0 means the navigation has no estimate. */
+internal fun approach(trip: String, name: String?, remainSeconds: Int?, final: Boolean = false): Approach? {
+    val place = name?.trim().orEmpty()
+    if (place.isEmpty() || remainSeconds == null || remainSeconds !in 1..APPROACH_SECONDS) return null
+    return Approach(trip, place, maxOf(1, (remainSeconds + 59) / 60), remainSeconds, final)
+}
+
+/** Open server todos whose place word is in the navigation name, the same rule as the server's arrival match ('마트' in '하나로마트 강릉점'). */
+internal fun placeAsks(place: String, items: List<SharedTodo>): List<SharedTodo> = items.filter { it.pending && arrivedAt(it.place, place) }
+
+/** First confirmed speaker of an ask: the server's requestedBy first, else the earliest source with a trip participant. Unknown stays null. */
+internal fun askSpeaker(item: SharedTodo, people: List<Person>): Person? =
+    item.requestedBy.firstNotNullOfOrNull { id -> people.find { it.id == id } }
+        ?: item.sources.sortedBy { it.at }.firstNotNullOfOrNull { s -> people.find { it.id == s.participantId } }
+
+/** '고기와 과일', '삼겹살과 귤', three or more '고기, 과일과 음료' (와/과 by the final consonant). */
+internal fun andWords(names: List<String>): String = when (names.size) {
+    0 -> ""
+    1 -> names[0]
+    else -> names.dropLast(1).joinToString(", ") + (if (hasBatchim(names[names.size - 2])) "과 " else "와 ") + names.last()
+}
+
+internal fun hasBatchim(word: String): Boolean = word.trim().lastOrNull()?.let { it in '가'..'힣' && (it - '가') % 28 != 0 } ?: false
+
+/**
+ * One short phrase per ask for the narrow card. C19 '하은 화장실 / 고기와 과일 / 간식과 음료', finalNear '하은 화장실 / 엄마 냉장 보관 /
+ * 아빠 체크인과 가방 챙기기': things to buy as a list of goods, anything else with the confirmed requester's name in front, things to bring
+ * end with '챙기기'. Older servers without action items give the ask text.
+ */
+internal fun nearPhrase(item: SharedTodo, people: List<Person>): String {
+    val names = item.items.map { it.name }
+    val who = askSpeaker(item, people)?.name
+    return when (item.category) {
+        "buy" -> andWords(names).ifEmpty { item.title ?: item.text }
+        "first", "remember" -> listOfNotNull(who, names.firstOrNull() ?: item.title ?: item.text).joinToString(" ")
+        "bring" -> listOfNotNull(who, if (names.isEmpty()) item.title ?: item.text else "${andWords(names)} 챙기기").joinToString(" ")
+        else -> item.text
+    }
+}
+
+internal fun nearLine(asks: List<SharedTodo>, people: List<Person>): String = asks.joinToString(" / ") { nearPhrase(it, people) }
+
 // ---- UI ----
 
-/** Header row (C17: mascot, '가치타', '연결됨' pill; C20: '주차 중  P'). The window-size button (T112) goes in [extra] while parked. */
+/** What the header shows on the right: the narrow window always has the connection chip (C17·C17p·C21·C44); '주차 중  P' is the wide parked layout (C13·C20). */
+internal fun headerParkLabel(wide: Boolean, parked: Boolean): Boolean = wide && parked
+
+/**
+ * Header row (C17: mascot, '가치타', '● 연결됨'; C13·C20: '주차 중  P'). In the narrow window every state uses the chip like the design;
+ * the window-size button (T112, [extra]) sits next to '주차 중  P' in the wide window and moves to 여행 관리 in the narrow one.
+ */
 @Composable
 internal fun TripHeader(parked: Boolean, gear: String?, online: Boolean, listening: Boolean, extra: @Composable () -> Unit = {}) {
     val c = MaterialTheme.colorScheme
+    val park = headerParkLabel(LocalConfiguration.current.screenWidthDp >= 1000, parked)
     Row(Modifier.fillMaxWidth().height(64.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         Mascot(listening, 48.dp)
         Text("가치타", fontSize = 32.sp, lineHeight = 42.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.weight(1f))
-        if (!online) Pill("연결 대기", ok = false) else if (!parked) Pill("연결됨")
-        if (parked) Text(if (gear == "P") "주차 중  P" else "정차 중", color = c.onSurfaceVariant, fontSize = 24.sp, maxLines = 1)
-        extra()
+        if (!online) Pill("연결 대기", ok = false) else if (!park) Pill("연결됨")
+        if (park) { Text(if (gear == "P") "주차 중  P" else "정차 중", color = c.onSurfaceVariant, fontSize = 24.sp, maxLines = 1); extra() }
     }
 }
 
@@ -199,10 +256,15 @@ internal fun StatusCard(status: DriveStatus, note: String, actions: @Composable 
 /** One heard line: speaker character (empty circle when unknown), '{name} / {seat}', the words. */
 internal data class HeardRow(val meta: String, val text: String, val character: Int?)
 
-/** C17 '방금 받아 적은 말 N건' / C17p '멈추기 전 마지막 대화' (dimmed). Newest first, two lines, no auto scroll. */
+/**
+ * C17 '방금 받아 적은 말 N건' / C17p '멈추기 전 마지막 대화' (dimmed). Newest first, no auto scroll. Each row is the speaker's round avatar,
+ * '{name} / {seat}' and the sentence, wrapping to two lines like the design. The slot fits one wrapped sentence plus one more line, so when
+ * the newest sentence wraps the older row is left out instead of being cut off.
+ */
 @Composable
 internal fun HeardCard(title: String, counts: String, rows: List<HeardRow>, dim: Boolean, modifier: Modifier) {
     val c = MaterialTheme.colorScheme
+    var newestWraps by remember(rows.firstOrNull()?.text) { mutableStateOf(false) }
     Surface(modifier, RoundedCornerShape(32.dp), color = c.surface) {
         Column(Modifier.padding(horizontal = 24.dp, vertical = 16.dp).then(if (dim) Modifier.alpha(0.6f) else Modifier), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -210,15 +272,30 @@ internal fun HeardCard(title: String, counts: String, rows: List<HeardRow>, dim:
                 if (counts.isNotEmpty()) Text(counts, color = c.onSurfaceVariant, fontSize = 24.sp, maxLines = 1)
             }
             if (rows.isEmpty()) Text("아직 받아 적은 말이 없어요", color = c.onSurfaceVariant, fontSize = 28.sp)
-            rows.forEach { r ->
+            rows.take(if (newestWraps) 1 else 2).forEachIndexed { i, r ->
                 Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    if (r.character != null) Character(r.character, 48.dp) else Box(Modifier.size(48.dp).clip(CircleShape).background(c.surfaceVariant))
+                    if (r.character != null) Avatar(r.character, 48.dp) else Box(Modifier.size(48.dp).clip(CircleShape).background(c.surfaceVariant))
                     Column(Modifier.weight(1f)) {
                         Text(r.meta, color = c.onSurfaceVariant, fontSize = 24.sp, lineHeight = 32.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(r.text, fontSize = 28.sp, lineHeight = 40.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(r.text, fontSize = 28.sp, lineHeight = 40.sp, maxLines = if (i == 0) 2 else 1, overflow = TextOverflow.Ellipsis,
+                            onTextLayout = { if (i == 0) newestWraps = it.lineCount > 1 })
                     }
                 }
             }
+        }
+    }
+}
+
+/** C19·finalNear '{place} 도착까지 약 N분' card in the middle slot. Details are shown after parking (C20, finalBrief). */
+@Composable
+internal fun NearCard(a: Approach, line: String, modifier: Modifier) {
+    val c = MaterialTheme.colorScheme
+    Surface(modifier, RoundedCornerShape(32.dp), color = c.primaryContainer) {
+        Column(Modifier.padding(horizontal = 24.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("${a.place} 도착까지 약 ${a.minutes}분", color = c.primary, fontSize = 24.sp, lineHeight = 32.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("내리기 전, 기억할 부탁", color = c.onSurface, fontSize = 32.sp, lineHeight = 42.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+            Text(line, Modifier.weight(1f, fill = false), color = c.onSurface, fontSize = 28.sp, lineHeight = 40.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text("주차 후 자세히 보여드릴게요.", color = c.onSurfaceVariant, fontSize = 24.sp, lineHeight = 32.sp, maxLines = 1)
         }
     }
 }
@@ -259,8 +336,7 @@ internal fun SeatCard(
                             Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                 when {
                                     p == null -> Box(Modifier.alpha(0.6f)) { EmptySeat(80.dp) }
-                                    talking -> Box(Modifier.size(80.dp).border(6.dp, c.onPrimaryContainer, CircleShape), contentAlignment = Alignment.Center) { Character(seatCharacter(p), 64.dp) }
-                                    else -> Character(seatCharacter(p), 80.dp)
+                                    else -> Avatar(seatCharacter(p), 80.dp, ring = talking)
                                 }
                                 Text(
                                     when { p == null -> if (seat.name in car.occupied) "앉아 있어요" else "빈자리"; talking -> "${p.name} · 말하는 중"; else -> p.name },

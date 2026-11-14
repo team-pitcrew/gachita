@@ -41,3 +41,14 @@ test("녹음은 15초, '녹음 완료'는 5초부터(서버는 1~20초)", () => 
   assert.equal(VOICE_SECONDS, 15);
   assert.ok(MIN_SECONDS >= 1 && MIN_SECONDS < VOICE_SECONDS);
 });
+
+test("초대 링크로 들어온 이메일 계정은 동의·직접 정한 이름·목소리를 마쳐야 그룹에 참여한다", async () => {
+  const { accountReady, provisionalOnly } = await import("./onboarding.js");
+  const p = { email: "demo-mom-1115@example.com", name: "demo-mom-1115", consent: true, hasVoice: true };
+  assert.equal(provisionalOnly(p), true, "가입 때의 임시 이름(이메일 앞부분)");
+  assert.equal(accountReady(p), false);
+  assert.equal(accountReady({ ...p, name: "엄마" }), true);
+  assert.equal(accountReady({ ...p, name: "엄마", hasVoice: false }), false, "첫 프로필은 목소리 필수");
+  assert.equal(accountReady({ ...p, name: "엄마", consent: false }), false);
+  assert.equal(provisionalOnly({ email: null, name: "기기 프로필" }), false, "이메일 없는 기기 프로필은 해당 없음");
+});

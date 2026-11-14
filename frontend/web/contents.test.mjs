@@ -1,7 +1,7 @@
 // 콘텐츠 기록(F6) 화면이 서버 값으로 고르는 규칙. 실행: make check-fast
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { clock, contentGroups, headline, lineAt, pinLabel, placeChain, projector, styleLabel, tripLine } from "./contents.js";
+import { clock, contentGroups, headline, lineAt, pinLabel, placeChain, projector, styleLabel, tripLine, wayLabel } from "./contents.js";
 
 const at = (h, m) => new Date(2026, 10, 14, h, m).getTime();
 const places = [
@@ -45,7 +45,9 @@ test("목업 글(머리글·형식 이름)과 핀 글, 시각", () => {
   assert.equal(headline({ cast: [{ name: "아빠" }, { name: "서준" }] }), "아빠와 서준의 이야기");
   assert.equal(headline({ title: "제목", cast: [] }), "제목");
   assert.deepEqual([styleLabel({ kind: "device" }), styleLabel({ kind: "generated" })], ["캐릭터 자막형", "가족 대화형"]);
-  assert.equal(pinLabel("아빠보다 빠른 서준의 정답"), "아빠보다 빠른 서…");
+  assert.equal(pinLabel("아빠보다 빠른 서준의 정답", ["서준"]), "아빠보다 빠른 정답", "시안 P35 핀 글");
+  assert.equal(pinLabel("아빠보다 빠른 서준의 정답"), "아빠보다 빠른…", "이름을 모르면 낱말 경계에서 줄인다");
+  assert.equal(pinLabel("내일도 같이 타면 안 돼?", ["하은"]), "내일도 같이 타면…");
   assert.equal(pinLabel("내일도 같이 타?"), "내일도 같이 타?");
   assert.equal(clock(72.4), "01:12");
 });
@@ -57,4 +59,22 @@ test("좌표 투영은 상자 안, 북쪽이 위, 좌표가 없으면 null", () 
   assert.ok(b[1] < a[1], "북쪽(위도 큰 쪽)이 위");
   assert.ok(b[0] > a[0], "동쪽이 오른쪽");
   assert.equal(projector([], 318, 204), null);
+});
+
+test("장면 자리 글: 들른 곳을 떠난 뒤와 곧 도착 중에는 다음 곳 가는 길(시안 P34·player2)", () => {
+  const min = 60_000, t0 = Date.UTC(2026, 10, 14, 0, 20);
+  const log = [
+    { kind: "start", name: "집", at: t0 },
+    { kind: "stop", name: "하나로마트", at: t0 },
+    { kind: "destination", name: "강릉 숙소", at: t0 },
+    { kind: "approaching", name: "하나로마트", at: t0 + 35 * min },
+    { kind: "arrived", name: "하나로마트", at: t0 + 40 * min },
+  ];
+  assert.equal(wayLabel({ at: t0 + 12 * min, place: "동해고속도로" }, log), "동해고속도로", "첫 구간은 서버 글");
+  assert.equal(wayLabel({ at: t0 + 37 * min, place: "하나로마트" }, log), "하나로마트 가는 길");
+  assert.equal(wayLabel({ at: t0 + 62 * min, place: "하나로마트" }, log), "강릉 숙소 가는 길", "아직 숙소에 닿기 전");
+  const done = [...log, { kind: "arrived", name: "강릉 숙소", at: t0 + 68 * min }];
+  assert.equal(wayLabel({ at: t0 + 62 * min, place: "하나로마트" }, done), "강릉 숙소 가는 길");
+  assert.equal(wayLabel({ at: t0 + 70 * min, place: "강릉 숙소" }, done), "강릉 숙소", "마지막 도착 뒤에는 서버 글");
+  assert.equal(wayLabel({ at: t0, place: null }, []), null);
 });

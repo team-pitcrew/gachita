@@ -42,4 +42,27 @@ class TodosTest {
         assertEquals(4L, again.add("마트", "마트에서 빵 사자")!!.id)
         assertEquals("마트에 도착했어요. 할 일 1건. 마트에서 물도 사야 돼", briefingLine("마트", box.open("마트")))
     }
+
+    // 서버 시험(backend/api/arrival-vectors.test.js)이 만든 파일. 도착 판정을 한쪽만 고치면 여기서 걸린다(T144).
+    @Test fun sameArrivalAsServer() {
+        val cases = org.json.JSONObject(java.io.File("../../../backend/api/arrival-vectors.json").readText()).getJSONArray("cases")
+        assertEquals(7, cases.length())
+        for (k in 0 until cases.length()) {
+            val c = cases.getJSONObject(k)
+            val i = c.getJSONObject("input")
+            val p = i.getJSONObject("place").let { Place(it.getDouble("lat"), it.getDouble("lng"), it.getString("name")) }
+            val at = i.getJSONObject("position")
+            val arrival = VehicleArrival(p, at.getDouble("lat"), at.getDouble("lng"), i.getLong("observedAt"))
+            val items = c.getJSONArray("items").let { a -> (0 until a.length()).map { a.getJSONObject(it) } }
+                .map { SharedTodo(it.getString("id"), it.getString("place"), "", it.getString("status"), 0, emptyList()) }
+            val e = c.getJSONObject("expected")
+            val got = pickArrival(arrival, i.getBoolean("parked"), items, 1, c.getLong("now"))
+            val name = c.getString("name")
+            assertEquals(name, e.getBoolean("eligible"), got.eligible)
+            assertEquals(name, if (e.isNull("reason")) null else e.getString("reason"), got.reason)
+            assertEquals(name, e.getInt("distanceMeters"), Math.round(arrivalMeters(p, arrival.lat, arrival.lng)).toInt())
+            assertEquals(name, e.getJSONArray("items").let { a -> (0 until a.length()).map(a::getString) }, got.items.map { it.id })
+        }
+    }
 }
+

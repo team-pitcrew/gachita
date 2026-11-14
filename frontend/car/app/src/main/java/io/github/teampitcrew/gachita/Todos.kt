@@ -72,7 +72,17 @@ fun briefingLine(place: String?, open: List<Todo>): String =
 
 // T113: 서버 응답만 현재 화면의 정본입니다. 위의 이전 판 파일과 추출 함수는 호환을 위해 남기며 새 목록에 합치지 않습니다.
 data class SharedTodoSource(val device: String, val seq: Long, val at: Long, val text: String, val displayText: String, val participantId: String?)
-data class SharedTodo(val id: String, val place: String, val text: String, val status: String, val version: Int, val sources: List<SharedTodoSource>) {
+/** One thing inside an ask ('삼겹살 600g이랑 귤 한 봉지' → 삼겹살·600g, 귤·1봉지). qty is null when the words gave no amount. */
+data class TodoItem(val name: String, val qty: String?)
+
+/**
+ * category, items, requestedBy come from the v2 rules (A5, `place-rules-v2`): first·buy·remember·bring, the things asked for,
+ * and confirmed requesters. An older server (`place-rules-v1`) leaves them null/empty and the brief shows the ask as one row.
+ */
+data class SharedTodo(
+    val id: String, val place: String, val text: String, val status: String, val version: Int, val sources: List<SharedTodoSource>,
+    val category: String? = null, val items: List<TodoItem> = emptyList(), val requestedBy: List<String> = emptyList(), val title: String? = null,
+) {
     val pending get() = status == "pending"
 }
 data class SharedTodos(val generation: Int, val method: String, val items: List<SharedTodo>)
@@ -83,11 +93,18 @@ fun sharedTodo(o: JSONObject): SharedTodo {
     val status = o.getString("status"); require(status in setOf("pending", "done", "cancelled"))
     val version = o.getInt("version"); require(version >= 0)
     val sources = o.getJSONArray("sources")
+    val items = o.optJSONArray("items")
+    val by = o.optJSONArray("requestedBy")
     return SharedTodo(o.getString("id"), o.getString("place"), o.getString("text"), status, version,
         List(sources.length()) { i -> sources.getJSONObject(i).let { s ->
             SharedTodoSource(s.getString("device"), s.getLong("seq"), s.getLong("at"), s.getString("text"), s.getString("displayText"),
                 if (s.isNull("participantId")) null else s.getString("participantId"))
-        } })
+        } },
+        category = o.optString("category").takeIf { !o.isNull("category") && it.isNotBlank() },
+        items = (0 until (items?.length() ?: 0)).mapNotNull { i -> items!!.getJSONObject(i).let { it.optString("name").trim().takeIf(String::isNotEmpty)?.let { n -> TodoItem(n, it.optString("qty").takeIf { q -> !it.isNull("qty") && q.isNotBlank() }) } } },
+        requestedBy = (0 until (by?.length() ?: 0)).map { by!!.getString(it) }.distinct(),
+        title = o.optString("title").takeIf { !o.isNull("title") && it.isNotBlank() },
+    )
 }
 fun sharedTodos(json: String): SharedTodos = JSONObject(json).let { o ->
     val a = o.getJSONArray("items")
@@ -150,3 +167,29 @@ fun canReadArrival(result: SharedArrival, request: VehicleArrival, scope: TodoSc
     scope == current && parked && result.eligible && result.generation == scope.generation && result.observedAt == request.observedAt && result.place == request.place &&
         now - request.observedAt in 0L..60_000L && result.items.all { it.pending }
 fun sharedBriefingLine(place: String, items: List<SharedTodo>) = "${place}에 도착했어요. 할 일 ${items.size}건. " + items.joinToString(". ") { it.text }
+
+/** 하버사인 거리(m). 서버 todos.js의 meters와 같은 식(지구 반지름 6,371 km). */
+fun arrivalMeters(place: Place, lat: Double, lng: Double): Double {
+    val rad = Math.PI / 180
+    val h = Math.sin((place.lat - lat) * rad / 2).let { it * it } +
+        Math.cos(lat * rad) * Math.cos(place.lat * rad) * Math.sin((place.lng - lng) * rad / 2).let { it * it }
+    return 6_371_000 * 2 * Math.asin(Math.sqrt(minOf(1.0, h)))
+}
+
+/**
+ * 도착 브리핑 선정을 차 안에서(T144). 서버 todos.js의 arrivalBriefing과 같은 규칙이고 두 구현은 backend/api/arrival-vectors.json으로 맞춘다
+ * (TodosTest.kt): 주차가 아니면 not_parked, 위치가 60초보다 오래면 stale_position, 장소에서 250 m 밖이면 outside_place, 아니면 그 장소
+ * 낱말(띄어쓰기 무시)의 대기 할 일. 서버 응답과 같은 모양(SharedArrival)이다. parked는 실제 P이고 여행이 parked·ended일 때만 true로 넘긴다
+ * (서버도 여행 상태를 함께 본다). 폰이 읽는 도착 기록은 서버 POST /arrival-briefing이 남긴다.
+ */
+fun pickArrival(arrival: VehicleArrival, parked: Boolean, items: List<SharedTodo>, generation: Int, now: Long): SharedArrival {
+    val reason = when {
+        !parked -> "not_parked"
+        now - arrival.observedAt > 60_000 -> "stale_position"
+        arrivalMeters(arrival.place, arrival.lat, arrival.lng) > 250 -> "outside_place"
+        else -> null
+    }
+    val name = arrival.place.name.filterNot(Char::isWhitespace)
+    return SharedArrival(generation, reason == null, reason, arrival.observedAt, arrival.place,
+        if (reason == null) items.filter { it.pending && it.place in name } else emptyList())
+}

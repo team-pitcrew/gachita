@@ -18,18 +18,17 @@ class DriveTest {
         assertEquals(Hero.PAUSED, status(mic = Mic.BLOCKED).hero)
         assertEquals(Hero.PLAIN, status(mic = Mic.STARTING).hero)
         assertEquals("동의 철회", status(recording = false, offPending = true).title)
-        assertEquals("주차(P)한 뒤 기록을 시작해 주세요", status(recording = false, waiting = true, inPark = false).sub)
+        assertEquals("모두 동의했어요. 출발하면 자동으로 기록해요", status(recording = false, waiting = true, inPark = true).sub)
         assertEquals("서준, 하은 · 녹음 동의가 필요해요", status(recording = false, waitingFor = listOf("서준", "하은")).sub)
     }
 
-    @Test fun bigButtonKeepsTheOldActionRules() {
-        assertEquals(DriveButton("기록 중지", Press.STOP, true), driveButton(recording = true, muted = false, agreed = true, restricted = true, canStart = false))
-        assertEquals(DriveButton("기록 재개", Press.GO, true), driveButton(recording = true, muted = true, agreed = true, restricted = true, canStart = false))
-        assertFalse(driveButton(recording = false, muted = false, agreed = true, restricted = true, canStart = true).enabled) // 시작은 주차 중에만
-        assertEquals(DriveButton("기록 시작", Press.GO, true), driveButton(recording = false, muted = false, agreed = true, restricted = false, canStart = true))
-        assertEquals(Press.OFF, driveButton(recording = false, muted = false, agreed = true, restricted = false, canStart = false).press) // 처리 중·끊김
-        assertEquals("동승자 설정", driveButton(recording = false, muted = false, agreed = false, restricted = false, canStart = false).label)
-        assertFalse(driveButton(recording = false, muted = false, agreed = false, restricted = true, canStart = false).enabled)
+    @Test fun bigButtonHasNoStartButton() {
+        assertEquals(DriveButton("기록 중지", Press.STOP, true), driveButton(recording = true, muted = false, agreed = true, restricted = true))
+        assertEquals(DriveButton("기록 재개", Press.GO, true), driveButton(recording = true, muted = true, agreed = true, restricted = true))
+        assertEquals(DriveButton("출발하면 자동으로 기록해요", Press.OFF, false), driveButton(recording = false, muted = false, agreed = true, restricted = false)) // C03·C13
+        assertFalse(driveButton(recording = false, muted = false, agreed = true, restricted = true).enabled)
+        assertEquals("동승자 설정", driveButton(recording = false, muted = false, agreed = false, restricted = false).label)
+        assertFalse(driveButton(recording = false, muted = false, agreed = false, restricted = true).enabled)
     }
 
     @Test fun heardMetaNeverNamesFromSeat() {
@@ -44,8 +43,8 @@ class DriveTest {
         assertEquals("아래 버튼으로 언제든 멈출 수 있어요", status(resumed = false).sub)
         assertEquals(DriveStatus("여행 기록 완료", "오늘의 대화를 오래 간직해 보세요", Hero.PAUSED), status(recording = false, ended = true)) // 2026:2410
         assertEquals("동의 철회", status(recording = false, offPending = true, ended = true).title) // 철회 중이면 그 안내가 먼저
-        assertEquals(DriveButton("새 여행 시작", Press.GO, true), driveButton(recording = false, muted = false, agreed = true, restricted = false, canStart = false, ended = true))
-        assertFalse(driveButton(recording = false, muted = false, agreed = true, restricted = true, canStart = false, ended = true).enabled)
+        assertEquals(DriveButton("새 여행 시작", Press.GO, true), driveButton(recording = false, muted = false, agreed = true, restricted = false, ended = true))
+        assertFalse(driveButton(recording = false, muted = false, agreed = true, restricted = true, ended = true).enabled)
         assertEquals("현재 주행 / 대화 기록 중", liveChip(true)) // 2026:2308
         assertEquals("현재 주행 / 대화 기록 멈춤", liveChip(false)) // 2026:2358
     }
@@ -59,6 +58,13 @@ class DriveTest {
         assertFalse(ended.recording) // 폰에서 '여행 끝내기'를 누르면 차도 녹음을 멈춘다. 동의는 그대로
         assertTrue(ended.agreed)
         assertEquals("끝난 여행이에요. 새 여행에서 녹음을 시작해 주세요", ended.blockStart())
+    }
+
+    @Test fun narrowHeaderAlwaysShowsConnection() {
+        assertFalse(headerParkLabel(wide = false, parked = true)) // C17p·C44: 좁은 창은 주차 중에도 '연결됨'
+        assertFalse(headerParkLabel(wide = false, parked = false))
+        assertTrue(headerParkLabel(wide = true, parked = true)) // C13·C20: 넓은 창 주차 중 '주차 중  P'
+        assertFalse(headerParkLabel(wide = true, parked = false))
     }
 
     @Test fun seatCharacterFollowsSeatOrder() {

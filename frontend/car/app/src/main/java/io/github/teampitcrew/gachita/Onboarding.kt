@@ -2,6 +2,7 @@ package io.github.teampitcrew.gachita
 
 import android.Manifest
 import android.content.ActivityNotFoundException
+import android.view.View
 import android.content.Context
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
@@ -53,7 +54,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -297,6 +300,7 @@ fun OnboardingScreen(o: Onboarding, gear: String?, onFamily: () -> Unit) {
                         ObCard(title = "차와 폰에서 이어지는 한 계정", detail = "가입부터 콘텐츠 보기까지 두 기기에서")
                     }
                     OnboardStep.SIGNUP -> {
+                        NoAutofill()
                         Field("이메일", o.email, { o.email = it }, KeyboardType.Email, placeholder = "minjun@example.com")
                         Field("비밀번호", o.password, { o.password = it }, KeyboardType.Password, secret = true, placeholder = "8자 이상")
                         ObCard(title = if (o.login) "처음이신가요?" else "이미 계정이 있나요?", detail = if (o.login) "새 계정을 만들어 시작해요." else "같은 계정으로 로그인해 기록을 불러와요.", onClick = o::toggleLogin)
@@ -410,6 +414,18 @@ private fun ObCard(title: String, detail: String, soft: Boolean = false, face: I
                 Text(detail, color = c.onSurfaceVariant, fontSize = 24.sp, lineHeight = 32.sp)
             }
         }
+    }
+}
+
+// 가입·로그인 칸을 자동 완성에서 뺀다: 기기에 저장된 실제 이메일·비밀번호가 채워져 시연 영상에 보이지 않게.
+// 이 화면이 떠 있는 동안만 앱 화면 전체(Compose 뷰와 그 안의 칸)를 자동 완성 대상에서 빼고, 닫히면 되돌린다.
+@Composable
+private fun NoAutofill() {
+    val view = LocalView.current
+    DisposableEffect(view) {
+        val before = view.importantForAutofill
+        view.importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
+        onDispose { view.importantForAutofill = before }
     }
 }
 

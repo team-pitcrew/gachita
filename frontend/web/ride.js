@@ -160,7 +160,7 @@ export function rideHeading(state, { title, waiting = [], asks = null } = {}) {
     case "continue": {
       const left = todos && asksAt(todos, state.place).length;
       const done = todos == null ? `${state.place}에서 다시 출발` : left ? `${state.place}의 부탁 ${left}건 남음` : `${state.place}의 부탁은 완료`;
-      return { title: "다시, 우리의 여행", sub: [done, state.target && `${ro(state.target)} 이동`].filter(Boolean).join(" / ") };
+      return { title: "다시, 우리 가족의 여행", sub: [done, state.target && `${ro(state.target)} 이동`].filter(Boolean).join(" / ") };
     }
     case "parked": return { title: "주차했어요", sub: "이번 주행의 기록을 마감했어요." };
     case "ended": return { title: "여행을 마쳤어요", sub: "함께한 대화와 남긴 장면을 다시 볼 수 있어요." };

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { audioStep, axisLabel, clip, clock, dayRange, densityBars, durationLabel, generationStages, itemProgress, mockUpload, offsetPct, sceneTitle, spanLabel, strongestLine, topScenes, tripClock } from "./after-trip.js";
+import { audioStep, axisLabel, clip, clock, dayRange, densityBars, durationLabel, generationStages, itemProgress, offsetPct, sceneTitle, spanLabel, strongestLine, topScenes, tripClock } from "./after-trip.js";
 
 // 시각은 이 컴퓨터의 시간대로 만든다(표시도 같은 시간대라 어디서 돌려도 같다).
 const at = (h, m, s = 0, day = 14) => new Date(2026, 10, day, h, m, s).getTime();
@@ -74,12 +74,9 @@ test("올리기 진행률은 서버가 준 바이트로만, 경로가 없거나 
   assert.deepEqual(audioStep({ state: "ready", seconds: 4104 }), { kind: "ready", percent: 100, label: "전체 음성 업로드 완료" });
 });
 
-test("mock: 실제 업로드가 꺼진 동안 P22 진행률은 연 때부터 시간으로 흉내 내고 mock 표시를 단다", () => {
-  assert.equal(audioStep(mockUpload(0, 0, 10_000)).label, "전체 음성 업로드 중  0%");
-  assert.equal(audioStep(mockUpload(0, 8_200, 10_000)).label, "전체 음성 업로드 중  82%");
-  assert.deepEqual(mockUpload(0, 10_000, 10_000), { state: "ready", mock: true });
-  assert.equal(mockUpload(0, 4_000, 10_000).mock, true);
-  assert.equal(mockUpload(5_000, 0, 10_000).receivedBytes, 0, "시계가 거꾸로 가도 0 아래로 내려가지 않는다");
+test("올리고 2일이 지나 서버가 지운 전체 음성은 다 끝난 것으로 보이고 다시 묻지 않는다", () => {
+  assert.deepEqual(audioStep({ state: "expired", seconds: 4104, startedAt: 1 }), { kind: "expired", percent: 100, label: "전체 음성 보관 기간(2일)이 지났어요" });
+  assert.equal(audioStep({ state: "uploading", receivedBytes: 10, expectedBytes: 1000 }).percent, 1, "실제 받은 바이트로만");
 });
 
 test("제목은 장면에서 가장 힘 있는 한 줄, 너무 짧으면 '이름의 한마디', 모르는 화자에게 이름을 붙이지 않는다", () => {
