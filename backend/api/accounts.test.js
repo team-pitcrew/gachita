@@ -76,6 +76,12 @@ test("가입하면 프로필과 토큰을 주고, 이메일은 본인 응답에�
 
 test("입력 검사: 이메일 모양, 비밀번호 8~72자, 이름", async () => {
   for (const email of ["", "jiwoo", "a@b", "a b@c.d", 3, `${"a".repeat(250)}@b.cd`]) assert.equal((await signup(email)).status, 400, String(email));
+  // NUL·짝 없는 서로게이트는 DB에 묻기 전에 400(그대로 보내면 Postgres가 받지 않아 500이 된다) — 가입과 로그인 모두
+  for (const email of ["a\0b@example.com", "\ud800@example.com", "a@exam\udfffple.com"]) {
+    assert.equal((await signup(email)).status, 400, JSON.stringify(email));
+    const login = await call("POST", "/sessions", { email, password: "바다보러가자1234" });
+    assert.deepEqual([login.status, login.data.type], [400, "invalid"], JSON.stringify(email));
+  }
   for (const password of ["1234567", "가".repeat(73), 12345678, "\0abcdefgh"]) assert.equal((await signup("p@example.com", { password })).status, 400, String(password));
   assert.equal((await signup("p@example.com", { password: "가".repeat(72) })).status, 201, "72자까지 됨(바이트가 아니라 글자)");
   assert.equal((await signup("q@example.com", { password: "12345678" })).status, 201, "8자부터 됨");

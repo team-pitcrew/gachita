@@ -195,7 +195,9 @@ class MainActivity : ComponentActivity() {
     private var speakers: Speakers? = null // 지금 여행의 발화별 말한 사람(T37)
     private var prints: VoicePrints? = null // 지금 여행 탑승자의 목소리 대조 값 사본(ADR-0023)
     private var printsFor = "" // 사본을 받을 때의 탑승자와 동의
-    private var consentSeenAt = 0L // 서버에서 여행(동의)을 마지막으로 확인한 시각
+    // 서버에서 여행(동의)을 마지막으로 확인한 시각.
+    // ponytail: 앱을 켠 때부터 센다(저장하지 않음). 끊긴 채 앱을 다시 켜면 5분을 새로 얻는다 — 그게 문제가 되면 prefs에 둔다
+    private var consentSeenAt = System.currentTimeMillis()
     private var matching = false // 대조·고침 보내기가 clipIo에 있음
     private var heardTick by mutableStateOf(0) // 말한 사람이 바뀌면 받아 적은 말 카드를 다시 그린다
     /** 이 차에서 목소리를 등록한 참가자. 그 사람의 동의가 꺼지면 서버가 등록값을 지우므로 여기서도 뺀다(#65). */
@@ -488,6 +490,8 @@ class MainActivity : ComponentActivity() {
             }
                 .onFailure {
                     if (it is Gone) forget(t.code) else s = s.pollFailed(it) // 조회를 못 하면 이번에는 올리지 않는다
+                    // 끊김이든 서버 오류든 최신 동의를 5분 넘게 확인하지 못하면 녹음을 멈춘다(조회는 녹음 중에는 화면 뒤에서도 돈다)
+                    if (it !is Gone && s.trip?.code == t.code) s = s.consentUnseen(System.currentTimeMillis() - consentSeenAt)
                     // 서버에 닿지 않아도(끊김) 차 안 대조는 잇는다: 마지막으로 동의를 확인한 지 5분 안이고 그때 모두 동의였을 때만.
                     // 서버가 거절한 것(ApiError)은 동의·권한이 달라졌을 수 있어 잇지 않는다
                     if (it !is ApiError && it !is Gone && System.currentTimeMillis() - consentSeenAt < CONSENT_FRESH_MS && s.trip?.code == t.code) speakers(t)
