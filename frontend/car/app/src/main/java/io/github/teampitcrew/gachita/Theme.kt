@@ -28,18 +28,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.StrokeJoin
-import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -85,6 +79,15 @@ fun GachitaTheme(content: @Composable () -> Unit) =
         ProvideTextStyle(TextStyle(fontSize = 24.sp), content)
     }
 
+/**
+ * 여행 화면의 두 껍데기(최종 시안). RIDE: 함께 타는 중·대화 기록(C17·C44, 여백 좌우 32·위아래 28, 머리 줄 64·간격 12, 칸 간격 16).
+ * PARKED: 도착 브리핑·콘텐츠 기록(C20·D19·C22–C38, 여백 40, 머리 줄 80·간격 18, 칸 간격 24).
+ */
+enum class Shell(val padH: Dp, val padV: Dp, val head: Dp, val headGap: Dp, val gap: Dp) {
+    RIDE(32.dp, 28.dp, 64.dp, 12.dp, 16.dp),
+    PARKED(40.dp, 40.dp, 80.dp, 18.dp, 24.dp),
+}
+
 /** 카드의 바탕. 기록 상태 머리만 색을 바꾸고 나머지는 Plain이다. */
 enum class Tone { Plain, Rec, Wait, Accent }
 
@@ -95,27 +98,6 @@ fun CarCard(tone: Tone = Tone.Plain, modifier: Modifier = Modifier, pad: Dp = 28
     val bg = when (tone) { Tone.Plain, Tone.Accent -> c.surface; Tone.Rec -> c.errorContainer; Tone.Wait -> c.secondaryContainer }
     Surface(modifier.fillMaxWidth(), RoundedCornerShape(32.dp), color = bg, border = if (tone == Tone.Accent) BorderStroke(3.dp, c.onPrimaryContainer) else null) {
         Column(Modifier.padding(pad), verticalArrangement = Arrangement.spacedBy(gap), content = content)
-    }
-}
-
-private const val INK = 0xFF28221B
-
-/** 64 단위 좌표로 그린다(피그마·웹의 SVG와 같은 좌표). */
-private fun DrawScope.in64(block: DrawScope.() -> Unit) = scale(size.minDimension / 64f, Offset.Zero, block)
-
-private val carPath = Path().apply {
-    moveTo(14f, 22f); cubicTo(14f, 16.5f, 18.5f, 12f, 24f, 12f); lineTo(40f, 12f); cubicTo(45.5f, 12f, 50f, 16.5f, 50f, 22f); lineTo(50f, 24f); lineTo(54f, 24f)
-    cubicTo(56.2f, 24f, 58f, 25.8f, 58f, 28f); lineTo(58f, 44f); cubicTo(58f, 48.4f, 54.4f, 52f, 50f, 52f); lineTo(14f, 52f)
-    cubicTo(9.6f, 52f, 6f, 48.4f, 6f, 44f); lineTo(6f, 28f); cubicTo(6f, 25.8f, 7.8f, 24f, 10f, 24f); lineTo(14f, 24f); close()
-}
-
-private fun DrawScope.face(y: Float, closed: Boolean) {
-    val ink = Color(INK)
-    if (closed) {
-        for (x in listOf(24f, 40f)) drawPath(Path().apply { moveTo(x - 4, y); quadraticTo(x, y + 3, x + 4, y) }, ink, style = Stroke(2.6f, cap = StrokeCap.Round))
-    } else {
-        drawCircle(ink, 2.8f, Offset(24.5f, y)); drawCircle(ink, 2.8f, Offset(39.5f, y))
-        drawPath(Path().apply { moveTo(28.5f, y + 6.5f); quadraticTo(32f, y + 9.5f, 35.5f, y + 6.5f) }, ink, style = Stroke(2.4f, cap = StrokeCap.Round))
     }
 }
 
@@ -132,10 +114,14 @@ fun Character(index: Int, size: Dp, ring: Boolean = false) {
  * ring은 말하는 사람 테두리(6dp, 시안 accent-text). 전신이 필요한 곳(가족 고르기, 쇼츠 무대)은 Character를 쓴다.
  */
 @Composable
-fun Avatar(index: Int, size: Dp, shape: Shape = CircleShape, ring: Boolean = false) {
+fun Avatar(index: Int, size: Dp, shape: Shape = CircleShape, ring: Boolean = false) = CharAvatar(SEAT_CHARS.getOrElse(index) { SEAT_CHARS[0] }, size, shape, ring)
+
+/** Avatar와 같은 잘라 채우기를 캐릭터 그림(res/drawable-nodpi/char_*)으로. 온보딩·가족의 프로필 캐릭터(시안 'Character / 원본', 모서리 48). */
+@Composable
+fun CharAvatar(res: Int, size: Dp, shape: Shape = CircleShape, ring: Boolean = false) {
     val c = MaterialTheme.colorScheme
     Box(Modifier.size(size).then(if (ring) Modifier.border(6.dp, c.onPrimaryContainer, shape) else Modifier).clip(shape).background(c.onSurface)) {
-        Image(painterResource(SEAT_CHARS.getOrElse(index) { SEAT_CHARS[0] }), null,
+        Image(painterResource(res), null,
             Modifier.fillMaxSize().graphicsLayer { scaleX = 1.45f; scaleY = 1.45f; transformOrigin = TransformOrigin(0.5f, 0.32f) },
             contentScale = ContentScale.Fit)
     }
@@ -148,13 +134,13 @@ fun EmptySeat(size: Dp) {
     Canvas(Modifier.size(size)) { drawCircle(line, this.size.minDimension / 2 - 2.dp.toPx(), style = Stroke(3.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(14f, 12f)))) }
 }
 
-/** 웹과 설치 아이콘에 쓰는 같은 대표 캐릭터. 녹음 상태는 옆 상태 표시에서 안내합니다. */
+/** 가치타 마스코트(최종 시안 Mascot 7:544, res/drawable/mascot.xml). 정지 그림이고 녹음 상태는 옆 상태 표시에서 안내한다. 설치 아이콘은 따로(launcher art). */
 @Composable
 fun Mascot(listening: Boolean, size: Dp = 56.dp) {
     Image(
-        painter = painterResource(R.drawable.gachita_launcher_art),
+        painter = painterResource(R.drawable.mascot),
         contentDescription = if (listening) "가치타 · 대화 기록 중" else "가치타",
-        modifier = Modifier.size(size).clip(RoundedCornerShape(14.dp)),
+        modifier = Modifier.size(size),
         contentScale = ContentScale.Fit,
     )
 }
@@ -175,8 +161,8 @@ fun AppBar(title: String, listening: Boolean, vararg pills: Pair<String, Boolean
 fun Pill(text: String, ok: Boolean = true) {
     val c = MaterialTheme.colorScheme
     val (bg, fg) = if (ok) c.primaryContainer to c.onPrimaryContainer else c.errorContainer to c.error
-    Row(Modifier.clip(CircleShape).background(bg).padding(horizontal = 20.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        Canvas(Modifier.size(12.dp)) { drawCircle(fg) }
+    Row(Modifier.clip(CircleShape).background(bg).padding(horizontal = 20.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Canvas(Modifier.size(14.dp)) { drawCircle(fg) } // 시안 pill(2014:940): 점 14, 위아래 8
         Text(text, color = fg, maxLines = 1)
     }
 }

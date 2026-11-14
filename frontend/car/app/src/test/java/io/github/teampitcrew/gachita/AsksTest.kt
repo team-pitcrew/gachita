@@ -22,6 +22,24 @@ class AsksTest {
         assertFalse(isRestRequest("바다는 왜 짜?"))
     }
 
+    @Test fun placeBoundAsksAreArrivalTodosNotRestStops() {
+        // 어느 곳에 가서 할 일로 묶인 말은 도착 할 일(F4)이라 휴게소를 제안하지 않는다(리허설 22단계)
+        assertFalse(isRestRequest("하나로마트 가면 화장실 먼저 가야 돼"))
+        assertFalse(isRestRequest("하나로마트에 가면 화장실부터 가자"))
+        assertFalse(isRestRequest("마트에서 화장실 들르자"))
+        assertFalse(isRestRequest("숙소 도착하면 화장실부터 가자"))
+        assertFalse(isRestRequest("하나로마트 들르면 화장실 가자"))
+        assertFalse(isRestRequest("하나로마트 화장실 깨끗하대", nextPlace = "하나로마트 강릉점")) // 내비의 다음 도착지 이름
+        // 장소에 묶이지 않은 말과 휴게소에 묶인 말은 전처럼 쉬어 가자는 부탁
+        assertTrue(isRestRequest("화장실 가고 싶어"))
+        assertTrue(isRestRequest("화장실 가고 싶어", nextPlace = "하나로마트 강릉점"))
+        assertTrue(isRestRequest("화장실 먼저 가면 좋겠어"))
+        assertTrue(isRestRequest("휴게소에서 화장실 가자"))
+        assertTrue(isRestRequest("다음 휴게소 가면 밥 먹자 배고파"))
+        assertTrue(isRestRequest("조금 쉬었다 가자", nextPlace = "용인휴게소 강릉방향"))
+        assertFalse(isRestRequest("휴게소 들르자")) // 쉬어 가자는 낱말이 없는 말은 전과 같이 부탁이 아니다
+    }
+
     @Test fun answers() {
         assertEquals(Answer.YES, answerOf("응, 다음 휴게소 가자"))
         assertEquals(Answer.YES, answerOf("그래 들르자"))
