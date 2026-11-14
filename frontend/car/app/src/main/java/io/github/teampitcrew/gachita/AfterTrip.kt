@@ -144,6 +144,13 @@ internal fun afterError(e: Throwable): String = when (e) {
     else -> e.message?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName
 }
 
+/** 서버 보관함 목록에서 이 장면·세대·원음으로 만든 같은 파일(sha256)이 보관 완료됐는지. 같은 요청 키를 다시 보내 409가 났을 때 성공으로 본다. */
+internal fun storedShort(items: org.json.JSONArray, source: SharedShortSource, sha256: String): org.json.JSONObject? =
+    (0 until items.length()).map { items.getJSONObject(it) }.firstOrNull {
+        it.optString("origin") == "local-render" && it.optString("state") == "completed" && it.optString("momentId") == source.moment &&
+            it.optInt("generation") == source.generation && it.optString("sourceHash") == source.hash && it.optJSONObject("result")?.optString("sha256") == sha256
+    }
+
 private class AfterSourceChanged : IllegalStateException("원음·자막·화자가 바뀌었어요. 다시 만들어 주세요")
 private class AfterStopped(message: String) : IllegalStateException(message)
 
@@ -189,12 +196,15 @@ internal object AfterRuns {
                 Thread.sleep(1000)
             }
         }
-        // 통신 실패(IOException)는 세 번까지 다시 한다. 서버 거절(ApiError)은 그대로 던진다.
+        // 통신 실패(IOException)·앞단의 잠깐 실패(502–504)는 세 번까지 다시 한다. 그 밖의 서버 거절은 그대로 던진다.
         fun <T> net(work: () -> T): T {
             var n = 0
             while (true) {
                 gate()
-                try { return work() } catch (e: java.io.IOException) { if (++n >= 4) throw e; Log.i("GachitaAfter", "다시 보냄 ${e.javaClass.simpleName}"); Thread.sleep(2000L * n) }
+                try { return work() } catch (e: Exception) {
+                    if (e !is java.io.IOException && !(e is ApiError && e.transient) || ++n >= 4) throw e
+                    Log.i("GachitaAfter", "다시 보냄 ${e.javaClass.simpleName} ${e.message}"); Thread.sleep(2000L * n)
+                }
             }
         }
         gate()
@@ -229,7 +239,21 @@ internal object AfterRuns {
                 verify()
                 item.phase = Phase.SAVE
                 val hash = shortFileHash(file)
-                net { shared.upload(run.code, token, source, file, key, hash) {} }
+                fun stored() = storedShort(net { shared.list(run.code, token, run.generation) }, source, hash) != null
+                var busy = 0
+                while (true) {
+                    try { net { shared.upload(run.code, token, source, file, key, hash) {} }; break }
+                    catch (e: ApiError) {
+                        // 리허설 run2: 올리기 IOException → 다시 보냄(서버 재시작) → 409. 처음 보낸 것이 보관됐으면 성공.
+                        if (e.status != 409) throw e
+                        if (stored()) { Log.i("GachitaAfter", "장면 ${item.pick.number}: 409지만 같은 영상이 이미 보관됨"); break }
+                        // 같은 요청 키가 아직 '보관 중'(서버가 3분 잡아 둠)이면 목록을 보며 기다렸다 다시 보낸다. 다른 키·다른 영상·원음 바뀜은 실패.
+                        if (!e.message.orEmpty().contains("이미 보관하고") || ++busy > 2) throw e // ponytail: 서버가 409 종류를 글로만 구분
+                        var found = false
+                        for (i in 1..20) { delay(10_000); gate(); if (stored()) { found = true; break } }
+                        if (found) break
+                    }
+                }
                 item.phase = Phase.DONE
                 return
             } catch (e: AfterSourceChanged) {
