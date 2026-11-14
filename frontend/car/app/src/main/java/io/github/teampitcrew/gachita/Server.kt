@@ -101,10 +101,15 @@ class Server(base: String) {
         call("PATCH", "/api/trips/$code/requests/$id", JSONObject().put("status", status))
     }
 
-    /** 동승 연결(T46, #195): 탑승자 폰 QR의 code와 고른 자리로 참가시킨다. 새 참가자의 이름. 자리가 찼거나 이미 쓴 QR은 409, 만료·없는 QR은 404. 동의는 폰에서만 켠다. */
-    fun rideLink(code: String, qr: String, seat: Seat): Person =
-        JSONObject(call("POST", "/api/trips/$code/ride-links", JSONObject().put("code", qr).put("seat", seat.name))!!).getJSONObject("participant")
-            .let { Person(it.getString("id"), it.getString("name"), it.getString("seat"), it.getBoolean("consent"), true) }
+    /** 차량 운전석 참가자가 5분 초대를 발급합니다. 프로필·참가자 토큰은 QR에 포함하지 않습니다. */
+    internal fun boardingInvite(code: String, token: String): BoardingInvite =
+        JSONObject(call("POST", "/api/trips/$code/boarding-invites", JSONObject(), token)!!).let {
+            BoardingInvite(it.getString("id"), boardingInviteUrl(base, it.getString("url")), it.getLong("expiresAt"))
+        }
+
+    internal fun revokeBoardingInvite(code: String, token: String, id: String) {
+        call("DELETE", "/api/trips/$code/boarding-invites/" + java.net.URLEncoder.encode(id, "UTF-8"), null, token)
+    }
 
     /** 최신 여행. 보낸 version에서 바뀐 것이 없으면(304) null. 서버에서 여행이 삭제됐거나 없으면 Gone. */
     fun trip(code: String, version: Int? = null): Got? = call("GET", "/api/trips/$code" + (version?.let { "?v=$it" } ?: ""), null)?.let(::got)

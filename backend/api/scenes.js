@@ -70,20 +70,24 @@ const firstAt = (lines, at) => {
 };
 
 // 클립 구간(startAt부터 seconds초) 안의 발화를 자막 큐로. 시각은 클립 첫 표본에서 잰 초.
-// 발화의 at을 말 시작으로 본다. 끝 시각은 서버에 없어서 글자 수로 어림하고(글자당 0.15초, 1~6초) 다음 발화에서 자르되
+// 발화의 at을 말 시작으로 본다. endAt가 있으면 실제 구간을 쓰고 겹침을 보존한다. 없으면 글자 수로 어림하고(글자당 0.15초, 1~6초) 다음 발화에서 자르되
 // 1초는 남긴다 — 두 자리에서 같이 말하면 자막이 겹쳐 보이게(0초짜리 자막이 사라지지 않게). 클립 끝은 넘지 않는다.
-// ponytail: 차가 발화 끝 시각을 올리면 그것으로 바꾼다.
 export function cues(lines, startAt, seconds) {
   const end = startAt + seconds * 1000;
   const inside = [];
-  for (let k = firstAt(lines, startAt); k < lines.length && lines[k].at < end; k++) inside.push(lines[k]);
+  // 명시한 발화 길이는 API에서 10초까지 받는다. 클립보다 먼저 시작했지만 겹치는 실제 구간도 포함한다.
+  for (let k = firstAt(lines, startAt - 10_000); k < lines.length && lines[k].at < end; k++) {
+    if (lines[k].at >= startAt || lines[k].endAt > startAt) inside.push(lines[k]);
+  }
   const sec = (ms) => Math.round(ms) / 1000;
   return inside.map((u, i) => {
     const guess = u.at + Math.min(6000, Math.max(1000, [...u.text].length * 150));
-    const stop = Math.min(end, Math.max(u.at + 1000, Math.min(guess, inside[i + 1]?.at ?? end)));
+    const stop = u.endAt != null ? Math.min(end, u.endAt) : Math.min(end, Math.max(u.at + 1000, Math.min(guess, inside[i + 1]?.at ?? end)));
     // text는 수동 수정→재전사→Pleos 원문. raw는 늘 Pleos 원문이며 편집 키·버전은 충돌 확인에 쓴다.
     return {
-      start: sec(u.at - startAt), end: sec(stop - startAt), text: u.displayText ?? u.asrText ?? u.text, raw: u.text,
+      start: sec(Math.max(0, u.at - startAt)), end: sec(stop - startAt), text: u.displayText ?? u.asrText ?? u.text, raw: u.text,
+      ...(u.endAt != null ? { endAt: u.endAt } : {}),
+      ...(u.speakerLabel && u.speakerScope ? { speakerLabel: u.speakerLabel, speakerScope: u.speakerScope } : {}),
       device: u.device, seq: u.seq, editedText: u.editedText ?? null, editVersion: u.editVersion ?? 0,
       ...(u.asrText ? { asrText: u.asrText } : {}),
       ...(u.editedBy ? { editedBy: u.editedBy, editedAt: u.editedAt } : {}),

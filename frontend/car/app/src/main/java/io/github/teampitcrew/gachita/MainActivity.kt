@@ -6,9 +6,6 @@ import android.content.ClipData
 import android.content.SharedPreferences
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
-import android.graphics.SurfaceTexture
-import android.view.Surface
-import android.view.TextureView
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
@@ -75,7 +72,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.unit.sp
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -128,6 +124,10 @@ class MainActivity : ComponentActivity() {
             if (v.offPending != state.offPending || v.started != state.started || v.withdrawn != state.withdrawn)
                 prefs.edit().putBoolean("offPending", v.offPending).putBoolean("started", v.started).putStringSet("withdrawn", v.withdrawn).commit()
             state = v
+            boardingCall?.let { request ->
+                if (v.trip?.code != request.attempt.trip || v.trip?.status !in setOf("boarding", "parked") ||
+                    v.trip?.people?.none { it.id == request.attempt.driver && it.seat == Seat.ROW_1_LEFT.name } != false) closeBoarding()
+            }
             clipsAllowed = v.consented && !v.offPending // 끄면 남은 클립을 더 올리지 않는다
             if (transcriptOf != contentScope()) clearTranscript()
             checkShortExportState()
@@ -191,18 +191,9 @@ class MainActivity : ComponentActivity() {
     private lateinit var handoff: Handoff // Gleo와 마이크 주고받기(T41). 프로세스에 하나(Handoff.of)
     /** Gleo로 '기록 멈추기'를 부름(T41). 동의는 그대로 두고 수음만 멈춘다. 앱이 다시 켜져도 멋대로 다시 기록하지 않게 저장한다. */
     private var muted by mutableStateOf(false)
-    // 동승 연결(T46): 주차 중 탑승자 폰의 QR을 읽고(scanning) 고른 자리에 넣는다(rideQr = 읽은 QR 글자)
-    private var scanning by mutableStateOf(false)
-    private var rideQr by mutableStateOf<String?>(null)
-    private var qrCam: QrCamera? = null // 열린 카메라. 주행 제한·화면 뒤에서는 composition을 기다리지 않고 바로 닫는다
-    private val askCamera = registerForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
-        if (boarding.page == BoardingPage.SCAN && !carStatus.restricted) {
-            if (ok) { boarding = boarding.copy(note = ""); scanning = true }
-            else boarding = boarding.copy(note = "카메라 권한이 없어 QR을 읽을 수 없어요. 카메라를 허용하거나 이름으로 추가해 주세요.")
-        }
-    }
-
-    private fun closeCamera() { qrCam?.stop(); qrCam = null; scanning = false }
+    private val boardingIo = Executors.newSingleThreadExecutor()
+    private data class BoardingRequest(val attempt: BoardingInviteAttempt, val token: String, val call: BoardingInviteCall = BoardingInviteCall())
+    private var boardingCall: BoardingRequest? = null
     // 숏폼 그 자리 재생(T43). 장면 클립을 차례로 틀고 자막과 말한 사람을 보인다. 주차 중에만
     private var short by mutableStateOf<Short?>(null)
     private var shortAt by mutableStateOf(-1) // 재생 중인 장면. -1이면 틀지 않음
@@ -252,6 +243,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var device: String // 보관함의 기기 값. 설치 단위(ADR-0014의 device)
     /** 이 차가 참가시킨 사람의 참가자 토큰(id → 토큰). 그 사람의 동의 켜기와 발화 올리기에 쓴다(T68). 참가할 때 한 번만 온다. */
     private var tokens: Map<String, String> = emptyMap()
+    private var refreshing = false
     private var uploading = false // 올리기가 통신 줄에 있음. 느린 길에서 조회마다 쌓여 동의 확인을 밀어내지 않게
 
     /** 화면이 보이는 동안, 그리고 수음 중이면 화면 뒤에서도 조회해 폰에서 끈 동의를 반영한다. */
@@ -262,7 +254,7 @@ class MainActivity : ComponentActivity() {
             if (every && retentionMs != null) expire()
             refresh(resync = every || !s.online, prune = every); locate()
             if (destination == Destination.CONVERSATION && !carStatus.restricted) loadTranscript()
-            if (appVisible || s.recording) main.postDelayed(this, POLL_MS)
+            if (appVisible || s.recording) main.postDelayed(this, if (boarding.page == BoardingPage.QR) 2_000L else POLL_MS)
         }
     }
 
@@ -331,7 +323,7 @@ class MainActivity : ComponentActivity() {
             carStatus = it
             if (it.restricted) cancelShortExport("주행 중에는 영상 만들기를 멈춰요")
             if (it.restricted) { managing = false; conversationOpen = false; destination = Destination.RIDE; clearTranscript() }
-            if (it.restricted) closeBoarding() // 주행 중에는 카메라를 닫는다(T11). 카드도 그리지 않는다
+            if (it.restricted || it.gear != "P") closeBoarding() // 주행 제한·기어 변경은 QR을 즉시 가리고 초대를 폐기한다
             if (it.restricted && shortOf != null) stopShort() // 주행 중에는 숏폼을 틀지 않는다(T11)
             val was = s.gear
             s = s.withGear(it.gear)
@@ -354,7 +346,7 @@ class MainActivity : ComponentActivity() {
                         carStatus.restricted -> SetupLocked()
                         destination == Destination.SHORTS && appVisible -> ShortStudio(server, "", 0, null, "",
                             canRead = { false }, canPlay = { appVisible && !isDestroyed && !carStatus.restricted },
-                            onClose = { destination = Destination.RIDE }, onLocal = { destination = Destination.RIDE },
+                            onClose = { destination = Destination.RIDE },
                             onActiveChange = ::shortStudioActiveChanged, modifier = Modifier.fillMaxSize())
                         else -> Setup()
                     }
@@ -378,7 +370,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onStart() { super.onStart(); appVisible = true; main.removeCallbacks(tick); main.post(tick) }
-    override fun onStop() { appVisible = false; closeCamera(); stopShort(); super.onStop() }
+    override fun onStop() { appVisible = false; closeBoarding(); stopShort(); super.onStop() }
 
     override fun onResume() {
         super.onResume()
@@ -390,6 +382,8 @@ class MainActivity : ComponentActivity() {
     override fun onPause() { resumed = false; super.onPause() }
 
     override fun onDestroy() {
+        closeBoarding()
+        boardingIo.shutdown() // 발급 중 닫힌 요청은 같은 실행기에서 초대를 폐기하고 끝난다
         cancelRecordingStart?.invoke()
         recordingIo.shutdownNow()
         stopShort()
@@ -434,7 +428,9 @@ class MainActivity : ComponentActivity() {
      * prune이면 이어서 참가자가 서버에서 지운 글을 차 사본에서도 지운다(T69). ponytail: 이 기기 발화 전체 목록을 받음. 순번만 주는 길이 생기면 바꾼다
      */
     private fun refresh(resync: Boolean = false, prune: Boolean = false) {
+        if (refreshing) return
         val t = s.trip ?: return
+        refreshing = true
         val off = s.offTargets
         val v = s.pollVersion
         val url = server
@@ -443,6 +439,7 @@ class MainActivity : ComponentActivity() {
             off.forEach { api.consent(t.code, it, false) }
             api.trip(t.code, v)
         }) { r ->
+            refreshing = false
             r.onSuccess { got ->
                 if (s.trip?.code != t.code) return@onSuccess // 그사이 삭제된 여행이나 새 여행: 늦게 온 응답으로 되살리지 않는다
                 val wasWithdrawing = s.offPending
@@ -972,17 +969,28 @@ class MainActivity : ComponentActivity() {
         reply(fn, ok, message, data)
     }
 
-    // ---- 동승 연결(T46, #195 계약) ----
+    // ---- 차량 참석 QR(T106). 폰 카메라가 URL을 읽어 참여한다 ----
+
+    private fun revokeInvite() {
+        val request = boardingCall
+        boardingCall = null
+        boardingRequest++
+        val invite = request?.call?.cancel()
+        if (request != null && invite != null && !boardingIo.isShutdown) boardingIo.execute {
+            runCatching { Server(request.attempt.server).revokeBoardingInvite(request.attempt.trip, request.token, invite.id) }
+                .onFailure { Log.i(TAG, "참석 QR 폐기 확인 못함 · 서버 만료까지 유지") }
+        }
+    }
 
     private fun openBoarding() {
         if (carStatus.restricted) return
-        closeCamera(); rideQr = null; boardingRequest++
+        revokeInvite()
         boarding = BoardingState(BoardingPage.PEOPLE)
         managing = false
     }
 
     private fun closeBoarding() {
-        closeCamera(); rideQr = null; boardingRequest++
+        revokeInvite()
         boarding = BoardingState()
     }
 
@@ -990,29 +998,59 @@ class MainActivity : ComponentActivity() {
         when (action) {
             BoardingAction.Close -> closeBoarding()
             BoardingAction.Back -> openBoarding()
-            BoardingAction.Scan -> scan()
+            BoardingAction.Invite -> invitePassengers()
+            BoardingAction.ExpireInvite -> {
+                revokeInvite()
+                boarding = boarding.copy(invite = null, issuing = false, note = "참석 QR 시간이 끝났어요. 새 QR을 만들어 주세요.")
+            }
             BoardingAction.AddName -> if (!carStatus.restricted && !s.busy) {
-                closeCamera(); rideQr = null; boardingRequest++
+                revokeInvite()
                 boarding = BoardingState(BoardingPage.NAME)
             }
             is BoardingAction.Name -> if (!s.busy) boarding = boarding.copy(name = action.value)
             is BoardingAction.PickSeat -> if (!s.busy) boarding = boarding.copy(seat = action.seat, note = "")
             is BoardingAction.Move -> if (!carStatus.restricted && !s.busy) {
-                rideQr = null; boardingRequest++
+                revokeInvite()
                 boarding = BoardingState(BoardingPage.SEAT, personId = action.person.id, seat = Seat.entries.firstOrNull { it.name == action.person.seat })
             }
-            is BoardingAction.Consent -> if (!carStatus.restricted) boarding = BoardingState(BoardingPage.CONSENT, personId = action.person.id)
+            is BoardingAction.Consent -> if (!carStatus.restricted) {
+                revokeInvite()
+                boarding = BoardingState(BoardingPage.CONSENT, personId = action.person.id)
+            }
             BoardingAction.Connect -> connectPassenger()
             BoardingAction.Agree -> boarding.personId?.let(::agreePerson)
             BoardingAction.Withdraw -> boarding.personId?.takeIf { it in tokens }?.let(::turnOff)
         }
     }
 
-    private fun scan() {
-        if (carStatus.restricted || s.gear != "P" || s.busy || !s.online || s.trip?.let { freeSeats(it, carStatus.seats).isEmpty() } != false) return
-        closeCamera(); rideQr = null; boardingRequest++
-        boarding = BoardingState(BoardingPage.SCAN)
-        if (checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) scanning = true else askCamera.launch(Manifest.permission.CAMERA)
+    private fun invitePassengers() {
+        val trip = s.trip ?: return
+        if (carStatus.restricted || s.gear != "P" || s.busy || !s.online || boarding.issuing || freeSeats(trip, carStatus.seats).isEmpty()) return
+        val driver = trip.people.firstOrNull { it.seat == Seat.ROW_1_LEFT.name && it.id in tokens } ?: return
+        revokeInvite()
+        val request = BoardingRequest(BoardingInviteAttempt(boardingRequest, trip.code, server, driver.id), tokens.getValue(driver.id))
+        boardingCall = request
+        boarding = BoardingState(BoardingPage.QR, issuing = true, joinedBefore = trip.people.map { it.id }.toSet())
+        main.removeCallbacks(tick); main.post(tick)
+        boardingIo.execute {
+            val api = Server(request.attempt.server)
+            val result = runCatching { api.boardingInvite(trip.code, request.token) }
+            val issued = result.getOrNull()
+            if (issued != null && !request.call.issued(issued)) {
+                runCatching { api.revokeBoardingInvite(trip.code, request.token, issued.id) }
+                return@execute
+            }
+            main.post {
+                val current = boardingCall === request && boarding.page == BoardingPage.QR && !isDestroyed &&
+                    request.attempt.accepts(boardingRequest, s.trip, server, tokens.keys, !carStatus.restricted && s.gear == "P", appVisible)
+                if (!current) {
+                    if (boardingCall === request) { revokeInvite(); boarding = BoardingState(BoardingPage.PEOPLE) }
+                    return@post
+                }
+                result.onSuccess { boarding = boarding.copy(invite = it, issuing = false, note = "") }
+                    .onFailure { boarding = boarding.copy(invite = null, issuing = false, note = boardingFailure(it)) }
+            }
+        }
     }
 
     /** 참가·자리 변경은 현재 빈자리와 주차 상태를 다시 확인한다. 늦은 결과는 다른 화면의 입력을 덮지 않는다. */
@@ -1021,8 +1059,7 @@ class MainActivity : ComponentActivity() {
         val form = boarding
         val seat = form.seat ?: return
         if (carStatus.restricted || s.gear != "P" || s.busy || !s.online || !selectableSeat(trip, carStatus.seats, seat, form.personId)) return
-        val qr = rideQr?.let(::rideCode)
-        if (form.personId == null && form.page != BoardingPage.NAME && qr == null) return
+        if (form.personId == null && form.page != BoardingPage.NAME) return
         if (form.page == BoardingPage.NAME && form.name.isBlank()) return
         val url = server
         val request = ++boardingRequest
@@ -1036,7 +1073,7 @@ class MainActivity : ComponentActivity() {
             when {
                 form.personId != null -> { api.seat(trip.code, form.personId, seat); joined = null; person = trip.people.first { it.id == form.personId }.copy(seat = seat.name) }
                 form.page == BoardingPage.NAME -> { joined = api.join(trip.code, Member(form.name.trim(), seat)); person = Person(joined.first, form.name.trim(), seat.name, false) }
-                else -> { joined = null; person = api.rideLink(trip.code, qr!!, seat) }
+                else -> error("참가 입력이 없어요")
             }
             Triple(person, joined, runCatching { api.trip(trip.code)!! }.getOrNull())
         }) { result ->
@@ -1051,7 +1088,6 @@ class MainActivity : ComponentActivity() {
                 if (got != null) s = s.withTrip(keep(got))
                 else if (form.personId == null) s = s.copy(started = false, note = "연결 후 동의 상태를 확인하고 있어요")
                 if (request == boardingRequest && !carStatus.restricted) {
-                    rideQr = null
                     boarding = if (form.personId != null) BoardingState(BoardingPage.PEOPLE)
                         else BoardingState(BoardingPage.RESULT, name = person!!.name, personId = person.id, seat = seat,
                             note = if (got == null) "연결됐어요. 최신 동의 상태를 다시 불러오고 있어요" else "")
@@ -1059,9 +1095,7 @@ class MainActivity : ComponentActivity() {
                 refresh()
             }.onFailure { error ->
                 if (request == boardingRequest) {
-                    val stale = error is ApiError && (error.status == 404 || error.message.orEmpty().contains("이미 사용"))
-                    if (stale) rideQr = null
-                    boarding = form.copy(seat = null, note = boardingFailure(error), qrReady = form.qrReady && !stale)
+                    boarding = form.copy(seat = null, note = boardingFailure(error))
                 }
                 refresh()
             }
@@ -1429,6 +1463,10 @@ class MainActivity : ComponentActivity() {
         }
         val c = MaterialTheme.colorScheme
         val parked = !carStatus.restricted
+        if (boarding.page == BoardingPage.QR && parked && s.gear == "P") {
+            BoardingQrScreen(boarding, s, ::boardingAction)
+            return
+        }
         val scope = contentScope()
         LaunchedEffect(destination, scope) {
             if (destination == Destination.CONVERSATION && parked) loadTranscript()
@@ -1459,7 +1497,7 @@ class MainActivity : ComponentActivity() {
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 when {
                     takeover() -> Takeover(t, Modifier.fillMaxSize())
-                    boarding.page != BoardingPage.HIDDEN && parked -> BoardingPanel(boarding, s, carStatus.seats, scanning, Modifier.fillMaxSize(), ::boardingAction) { Scanner(it) }
+                    boarding.page != BoardingPage.HIDDEN && parked -> BoardingPanel(boarding, s, carStatus.seats, Modifier.fillMaxSize(), ::boardingAction)
                     managing && parked -> ManageTrip(t, Modifier.fillMaxSize())
                     destination == Destination.CONVERSATION && parked -> Conversations(t, Modifier.fillMaxSize())
                     destination == Destination.SHORTS && parked -> ShortsLibrary(t, Modifier.fillMaxSize())
@@ -1595,7 +1633,7 @@ class MainActivity : ComponentActivity() {
                     canRead = { appVisible && !isDestroyed && s.online && !carStatus.restricted && scope != null && contentScope() == scope && server == url && s.trip?.people?.all { it.consent } == true && s.trip?.status != "driving" && handoff.state == Handoff.State.OFF },
                     canPlay = { appVisible && !isDestroyed && !carStatus.restricted && s.trip?.status != "driving" && handoff.state == Handoff.State.OFF },
                     onClose = { destination = Destination.RIDE },
-                    onLocal = ::showShort, onActiveChange = ::shortStudioActiveChanged, modifier = Modifier.weight(1f).fillMaxWidth())
+                    onActiveChange = ::shortStudioActiveChanged, participantId = tokens.entries.singleOrNull { it.value == scope?.token }?.key, modifier = Modifier.weight(1f).fillMaxWidth())
             }
         }
     }
@@ -1871,26 +1909,6 @@ class MainActivity : ComponentActivity() {
         s.recording && Live.mic == Mic.ON -> Tone.Rec
         s.recording && (Live.mic == Mic.BLOCKED || Live.mic == Mic.FAILED) || s.waiting -> Tone.Wait
         else -> Tone.Plain
-    }
-
-    /** 카메라 미리보기와 QR 읽기. 화면에서 빠지면(닫기, 주행 제한, 읽음) 카메라를 놓는다. */
-    @Composable
-    private fun Scanner(modifier: Modifier) {
-        val cam = remember {
-            QrCamera(this, onCode = { if (!carStatus.restricted && boarding.page == BoardingPage.SCAN) { rideQr = it; boarding = BoardingState(BoardingPage.SEAT, qrReady = true) }; closeCamera() },
-                onFail = { boarding = boarding.copy(note = it); closeCamera() }).also { qrCam = it }
-        }
-        DisposableEffect(cam) { onDispose { cam.stop(); if (qrCam === cam) qrCam = null } }
-        AndroidView({ ctx ->
-            TextureView(ctx).apply {
-                surfaceTextureListener = object : TextureView.SurfaceTextureListener {
-                    override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) { cam.size()?.let { st.setDefaultBufferSize(it.width, it.height) }; cam.start(Surface(st)) }
-                    override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {}
-                    override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean { cam.stop(); return true } // 표면을 놓기 전에 세션부터 닫는다
-                    override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
-                }
-            }
-        }, modifier)
     }
 
     @Composable
