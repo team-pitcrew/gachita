@@ -222,10 +222,14 @@ export const askKeys = (todos) => new Set((Array.isArray(todos) ? todos : []).fl
 
 const button = (text, onclick, className = "") => h("button", { type: "button", className, onclick }, text);
 
-// 머리: 가치타(누르면 처음 화면)와 서버 연결 상태.
+// 머리: 가치타(누르면 처음 화면), 서버 연결 상태, 오른쪽 끝 내 얼굴 단추(app.js가 setAppBarEnd로 정함, docs/design.md §5).
+let appBarEnd = () => null;
+export const setAppBarEnd = (fn) => { appBarEnd = fn; };
 export const appBar = ({ online, onHome }) => h("div", { className: "top app-bar" },
   h("button", { type: "button", className: "brand brand-home", "aria-label": "가치타 처음 화면으로", onclick: onHome }, "가치타"),
-  h("span", { className: `link-state${online ? "" : " is-offline"}` }, online ? "연결됨" : "연결 끊김"),
+  h("span", { className: "app-bar-end" },
+    h("span", { className: `link-state${online ? "" : " is-offline"}` }, online ? "연결됨" : "연결 끊김"),
+    appBarEnd()),
 );
 
 // 세 탭. 지금 탭은 단추가 아닌 표시로 둔다.
