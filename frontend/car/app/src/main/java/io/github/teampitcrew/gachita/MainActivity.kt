@@ -22,6 +22,8 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.size
@@ -168,6 +170,7 @@ class MainActivity : ComponentActivity() {
     private var transcriptAsks by mutableStateOf(emptySet<Pair<String, Int>>()) // 서버 할 일이 나온 줄(C44 '○○의 부탁')
     private var transcriptPlaces by mutableStateOf(emptyList<TripPlace>()) // 기록본에 실린 여행 장소(A3). 없으면 머리에 시각만
     private var shortsCreate = false // 대화 기록의 '추천 장면 고르기'로 콘텐츠 기록 탭을 열면 만들기 화면부터
+    private var justResumed by mutableStateOf(false) // 기록 재개 뒤 새 말을 받기 전(시안 2026:1969 '중지한 지점부터 이어서 기록해요')
     private var transcriptLoading by mutableStateOf(false)
     private var transcriptNote by mutableStateOf("")
     private var transcriptRequest = 0
@@ -205,7 +208,6 @@ class MainActivity : ComponentActivity() {
     /** 보이고 있는 도착 브리핑. place가 null이면 모든 장소(Gleo로 부름). 주차해 주행 제한이 풀렸을 때만 그린다. */
     private data class Brief(val place: String?, val arrivalItems: List<SharedTodo>? = null)
     private var brief by mutableStateOf<Brief?>(null)
-    private var near by mutableStateOf<Approach?>(null) // 도착 전 브리핑(C19). 주행 중 조회마다 내비 남은 시간으로 바꾸고 주차하면 지운다
     private var appVisible by mutableStateOf(false) // onStart ~ onStop
     private var resumed = false // 우리 화면이 앞: 마이크 서비스는 이때만 시작할 수 있다(T10)
     private var askedMic = false
@@ -273,8 +275,8 @@ class MainActivity : ComponentActivity() {
         override fun run() {
             val every = ++n % RESYNC_EVERY == 0
             if (every && retentionMs != null) expire()
-            refresh(resync = every || !s.online, prune = every); locate(); approaching()
-            if (destination == Destination.CONVERSATION && !carStatus.restricted) loadTranscript()
+            refresh(resync = every || !s.online, prune = every); locate()
+            if (destination == Destination.CONVERSATION) loadTranscript()
             if (appVisible || s.recording) main.postDelayed(this, if (boarding.page == BoardingPage.QR) 2_000L else POLL_MS)
         }
     }
@@ -349,7 +351,8 @@ class MainActivity : ComponentActivity() {
                 if (it.gear != "P" || it.restricted) brief = null
             }
             if (it.restricted) cancelShortExport("주행 중에는 영상 만들기를 멈춰요")
-            if (it.restricted) { managing = false; destination = Destination.RIDE; clearTranscript() } else near = null
+            // 주행 중에도 대화 기록은 읽기만으로 보인다(시안 2026:2308·2358, T11 완화). 콘텐츠 기록과 여행 관리는 주차 중에만
+            if (it.restricted) { managing = false; if (destination == Destination.SHORTS) destination = Destination.RIDE }
             if (it.restricted || it.gear != "P") closeBoarding() // 주행 제한·기어 변경은 QR을 즉시 가리고 초대를 폐기한다
             if (it.restricted && shortOf != null) stopShort() // 주행 중에는 숏폼을 틀지 않는다(T11)
             s = s.withGear(it.gear)
@@ -697,16 +700,6 @@ class MainActivity : ComponentActivity() {
         if (current) error = "서버에 없는 여행이라 이 차에 남은 기록도 지웠어요"
     }
 
-    /**
-     * 도착 전 브리핑(C19, 계획 결정 6): 주행 중 조회마다 내비의 다음 도착지 이름과 남은 시간을 읽어 둔다. 5분 이하이고 그 장소의 서버 할 일이 있을 때
-     * 함께 타는 중이 카드로 보인다. 서버에는 보내지 않는다(장소 기록 API가 develop에 없음). 휴게소를 찾는 중이면 그 물음을 끊지 않게 묻지 않는다.
-     */
-    private fun approaching() {
-        val code = s.trip?.code
-        if (code == null || !carStatus.restricted || !s.agreed || offer?.stage == Offer.Stage.FINDING) { if (!carStatus.restricted) near = null; return }
-        car.nextPlaceEta { name, sec -> if (s.trip?.code == code && carStatus.restricted) near = approach(code, name, sec) }
-    }
-
     /** 기록 중이면 내비에 지금 위치를 물어 둔다. 발화에 붙인다(FIX_MS). 휴게소를 찾는 중이면 그 물음을 끊지 않게 묻지 않는다. */
     private fun locate() {
         if (!s.recording || offer?.stage == Offer.Stage.FINDING || arrivalLoading) return
@@ -791,7 +784,7 @@ class MainActivity : ComponentActivity() {
         when {
             s.recording -> {
                 if (muted && Live.mic == Mic.FAILED) { Live.set(Mic.OFF); askedMic = false }
-                s = s.copy(note = ""); mute(!muted); syncCapture()
+                s = s.copy(note = ""); mute(!muted); justResumed = !muted; syncCapture()
             }
             s.agreed -> startRecording()
             !carStatus.restricted -> openBoarding()
@@ -813,6 +806,7 @@ class MainActivity : ComponentActivity() {
     /** 받아 적은 말 한 건(메인 스레드). Gleo 호출어(T41), 열린 제안에 대한 답, 쉬어 가자는 부탁, 모호한 답 순서로 봅니다. 장소별 할 일은 서버 전사에서 읽습니다. */
     private fun heard(u: Utterance) {
         val t = s.trip?.takeIf { it.code == u.trip } ?: return
+        justResumed = false // 다시 받아 적기 시작함
         if (isWake(u.text)) { if (Live.mic == Mic.ON) handoff.give(wake = true); return }
         val o = offer?.takeIf { it.stage == Offer.Stage.ASKING }
         val a = answerOf(u.text)
@@ -1108,7 +1102,7 @@ class MainActivity : ComponentActivity() {
                         recordingReply(fn, false, "Microphone permission is required before recording can resume.")
                     else -> {
                         destination = Destination.RIDE; stopShort(); closeBoarding()
-                        mute(false); syncCapture()
+                        mute(false); justResumed = true; syncCapture()
                         recordingReply(fn, true, "Recording is enabled again. Audio capture resumes when the microphone is available after this voice command.")
                     }
                 }
@@ -1396,12 +1390,12 @@ class MainActivity : ComponentActivity() {
 
     private fun loadTranscript() {
         val scope = contentScope() ?: run { clearTranscript(); return }
-        if (carStatus.restricted || transcriptLoading) return
+        if (transcriptLoading) return
         val request = ++transcriptRequest
         transcriptOf = scope; transcriptLoading = true; transcriptNote = ""
         val url = server
         bg({ parseTranscript(Server(url).transcript(scope.code, scope.token)) }) { result ->
-            if (isDestroyed || request != transcriptRequest || contentScope() != scope || carStatus.restricted) return@bg
+            if (isDestroyed || request != transcriptRequest || contentScope() != scope) return@bg
             transcriptLoading = false
             result.onSuccess { data ->
                 if (data.generation != scope.generation) { clearTranscript(); refresh(); return@onSuccess }
@@ -1647,11 +1641,11 @@ class MainActivity : ComponentActivity() {
         }
         val scope = contentScope()
         LaunchedEffect(destination, scope) {
-            if (destination == Destination.CONVERSATION && parked) loadTranscript()
+            if (destination == Destination.CONVERSATION) loadTranscript()
         }
         Column(Modifier.fillMaxSize().padding(horizontal = 32.dp, vertical = 28.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             TripHeader(parked, carStatus.gear, s.online, listening = s.recording && Live.mic == Mic.ON && !muted && handoff.state == Handoff.State.OFF) { WindowSize() }
-            TripTabs(Destination.entries.map { it.label }, destination.ordinal, { parked || it == Destination.RIDE.ordinal }) { i ->
+            TripTabs(Destination.entries.map { it.label }, destination.ordinal, { parked || it != Destination.SHORTS.ordinal }) { i ->
                 val tab = Destination.entries[i]
                 if (destination != tab) { stopShort(); closeBoarding(); managing = false; shortsCreate = false; destination = tab }
             }
@@ -1661,7 +1655,7 @@ class MainActivity : ComponentActivity() {
                     takeover() -> Takeover(t, Modifier.fillMaxSize())
                     boarding.page != BoardingPage.HIDDEN && parked -> BoardingPanel(boarding, s, carStatus.seats, Modifier.fillMaxSize(), ::boardingAction)
                     managing && parked -> ManageTrip(t, Modifier.fillMaxSize())
-                    destination == Destination.CONVERSATION && parked -> Conversations(t, Modifier.fillMaxSize())
+                    destination == Destination.CONVERSATION -> Conversations(t, Modifier.fillMaxSize())
                     destination == Destination.SHORTS && parked -> ShortsLibrary(t, Modifier.fillMaxSize())
                     b != null -> BriefCard(b, Modifier.fillMaxSize())
                     else -> RideOverview(t, Modifier.fillMaxSize())
@@ -1672,7 +1666,7 @@ class MainActivity : ComponentActivity() {
 
     /**
      * 함께 타는 중(C17·C17p·C19·C19p·C21·C21p). 칸: 기록 상태 → 가운데 칸 → 일행 → 큰 단추(기록 중지·재개·시작).
-     * 가운데 칸은 휴게소 제안 > (주차 중) 목소리 등록 > 도착 전 부탁 > 방금 받아 적은 말 두 줄. 시안에 없는 Gleo에게 말하기·여행 관리는
+     * 가운데 칸은 휴게소 제안 > (주차 중) 목소리 등록 > 방금 받아 적은 말 두 줄. 도착 전·도착 브리핑의 시안은 흐름 F4. 시안에 없는 Gleo에게 말하기·여행 관리는
      * 기록 상태 칸 오른쪽, 주행 중 동의 철회·주차 중 동승자 설정은 일행 칸 머리에 둔다.
      */
     @Composable
@@ -1682,7 +1676,9 @@ class MainActivity : ComponentActivity() {
         heardTick // 말한 사람이 바뀌면 다시 그린다
         val sp = speakers?.takeIf { it.trip == t.code }
         val talking = Live.recent.lastOrNull()?.takeIf { s.recording && !muted } // 방금 받아 적은 말의 좌석 구역(T37)과 말한 사람
-        val st = driveStatus(s.recording, muted, shortAt >= 0, handoff.state, Live.mic, Live.why, s.offPending, s.waiting, s.gear == "P", t.people.filterNot { it.consent }.map { it.name })
+        val ended = t.status == "ended" // 폰의 '여행 끝내기'나 최종 목적지에서 마친 여행(시안 2026:2410). 녹음은 하지 않는다(Session.withTrip)
+        val st = driveStatus(s.recording, muted, shortAt >= 0, handoff.state, Live.mic, Live.why, s.offPending, s.waiting, s.gear == "P",
+            t.people.filterNot { it.consent }.map { it.name }, ended = ended, resumed = justResumed)
         DriveLayout(
             status = {
                 StatusCard(st, s.note) {
@@ -1692,20 +1688,18 @@ class MainActivity : ComponentActivity() {
             },
             middle = { m ->
                 val o = offer?.takeIf { it.stage != Offer.Stage.FINDING }
-                val asks = near?.takeIf { it.trip == t.code && !parked }?.let { a -> placeAsks(a.place, todoList).takeIf { it.isNotEmpty() }?.let { a to it } }
                 when {
                     o != null -> OfferCard(o, m)
                     enrolling != null && parked -> EnrollCard(t, m)
-                    asks != null -> NearCard(asks.first, nearLine(asks.second, t.people), m)
                     else -> HeardCard(
-                        if (s.recording && muted) "멈추기 전 마지막 대화" else "방금 받아 적은 말 ${Live.count}건",
+                        if (s.recording && muted || ended) "멈추기 전 마지막 대화" else "방금 받아 적은 말 ${Live.count}건",
                         listOfNotNull("부탁 ${t.heldRequests}".takeIf { t.heldRequests > 0 }, "할 일 ${todoList.count { it.pending }}".takeIf { todoList.any { it.pending } },
                             "미전송 ${Live.pending}".takeIf { parked && Live.pending > 0 }).joinToString(" · "),
                         Live.recent.asReversed().map { u ->
                             val who = sp?.get(u.seq)?.who?.let { id -> t.people.firstOrNull { it.id == id } }
                             HeardRow(heardMeta(who?.name, who?.seat, u.seatZone), u.text, who?.let(::seatCharacter))
                         },
-                        dim = s.recording && muted, modifier = m,
+                        dim = s.recording && muted || ended, modifier = m,
                     )
                 }
             },
@@ -1717,8 +1711,9 @@ class MainActivity : ComponentActivity() {
                     if (parked) CardAction("동승자 설정", onClick = ::openBoarding)
                 }
             },
-            button = driveButton(s.recording, muted, s.agreed, carStatus.restricted, s.blockStart() == null),
-            onButton = ::recordingAction, modifier = modifier,
+            button = driveButton(s.recording, muted, s.agreed, carStatus.restricted, s.blockStart() == null, ended = ended),
+            // 새 여행은 지금처럼 동의를 끈 뒤에만(#239). 그 전이면 여행 관리의 '새 여행 만들기'와 그 안내를 연다
+            onButton = { if (!ended) recordingAction() else if (!s.agreed && !s.switchOn && !s.busy) newTrip() else managing = true }, modifier = modifier,
         )
     }
 
@@ -1746,15 +1741,27 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** 대화 기록(C44). 지금 여행의 서버 기록을 바로 보인다. 말한 사람 고치기(T37)는 여행 관리, 추천 장면 고르기는 콘텐츠 기록의 만들기 화면(K2 전까지). */
+    /**
+     * 대화 기록(C44). 지금 여행의 서버 기록을 바로 보인다. 말한 사람 고치기(T37)는 여행 관리, 추천 장면 고르기는 콘텐츠 기록의 만들기 화면(F5 전까지).
+     * 주행 중(시안 2026:2308·2358)은 읽기만: 고치기·새로고침·장면 고르기 없이 가장 새 줄을 보이고 '함께 타는 중으로'만 둔다.
+     */
     @Composable
     private fun Conversations(t: Trip, modifier: Modifier) {
         val scope = contentScope()
+        val live = carStatus.restricted
         TranscriptScreen(t, transcript, transcriptAsks, transcriptPlaces, transcriptLoading,
-            when { scope == null -> "대화 기록에 동의한 참가자만 볼 수 있어요"; transcriptLoading -> "대화를 불러오고 있어요"; else -> transcriptNote.ifEmpty { "서버에 저장된 대화 · ${transcript.size}개" } },
+            when {
+                scope == null -> "대화 기록에 동의한 참가자만 볼 수 있어요"
+                transcriptNote.isNotEmpty() -> transcriptNote
+                live -> ""
+                transcriptLoading -> "대화를 불러오고 있어요"
+                else -> "서버에 저장된 대화 · ${transcript.size}개"
+            },
             canPick = scope != null && s.online,
             onRefresh = ::loadTranscript, onFixSpeakers = { managing = true },
-            onPick = { stopShort(); closeBoarding(); shortsCreate = true; destination = Destination.SHORTS }, modifier = modifier)
+            onPick = { stopShort(); closeBoarding(); shortsCreate = true; destination = Destination.SHORTS }, modifier = modifier,
+            live = if (live) liveChip(s.recording && !muted && handoff.state == Handoff.State.OFF && Live.mic == Mic.ON) else null,
+            onBack = { destination = Destination.RIDE })
     }
 
     @Composable
@@ -1881,15 +1888,75 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * 도착 브리핑(C20). 서버 목록과 서버가 선정한 도착 항목만 표시하고, 상태 변경은 응답을 받은 뒤 반영합니다(T113).
-     * 겉모습은 Arrival.kt(말한 사람별 카드). 시안에 없는 동기화 줄·원문·취소·다시 열기·새로고침·도착 확인은 T113에 필요해 남깁니다.
+     * 서버 목록과 서버가 선정한 도착 항목만 표시합니다. 상태 변경은 응답을 받은 뒤 반영합니다.
+     * 겉모습은 시안 C3(알약 → 제목 → 부제 → 할 일 줄 → 닫기). 시안에 없는 동기화 줄·원문·취소·다시 열기·도착 확인은 T113에 필요해 남깁니다.
      */
     @Composable
     private fun BriefCard(b: Brief, modifier: Modifier) {
-        ArrivalBrief(b.place, b.arrivalItems ?: todoList, s.trip?.people.orEmpty(), todoState, arrivalNote,
-            canChange = !todoState.loading && s.online && vehicleParked() && todoState.scope == todoScope(),
-            canArrive = vehicleParked() && todoScope() != null, arriving = arrivalLoading,
-            onStatus = ::changeTodo, onRefresh = { loadTodos(force = true) }, onArrive = ::arrive, onClose = { brief = null }, modifier = modifier)
+        val items = b.arrivalItems ?: todoList
+        val c = MaterialTheme.colorScheme
+        val ctl = RoundedCornerShape(24.dp)
+        // 시안 C3의 크기는 넓은 창의 큰 칸 기준입니다. 기본인 반쪽 창의 낮은 초점 칸에서는 제목이 목록을 밀어내지 않게 기존 크기를 씁니다(시안에 좁은 도착 프레임 없음).
+        BoxWithConstraints(modifier) {
+        val roomy = maxHeight >= 600.dp
+        CarCard(Tone.Accent, Modifier.fillMaxSize(), pad = if (roomy) 40.dp else 28.dp, gap = if (roomy) 20.dp else 10.dp) {
+            Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(if (roomy) 20.dp else 12.dp)) {
+                if (b.place != null) Pill("도착 브리핑")
+                Text(if (b.place != null) "${b.place}에 도착했어요" else "장소별 할 일", fontSize = if (roomy) 56.sp else 32.sp, lineHeight = if (roomy) 64.sp else 40.sp, fontWeight = FontWeight.Bold)
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("${if (b.place != null) "여기서 " else ""}할 일 ${items.count { it.pending }}건 · 오는 길에 나온 말로 모았어요", color = c.onSurfaceVariant, fontSize = if (roomy) 28.sp else 22.sp, lineHeight = if (roomy) 40.sp else 30.sp)
+                    val synced = todoState.syncedAt?.let { java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.KOREA).format(java.util.Date(it)) }
+                    Text(when {
+                        todoState.scope == null -> "탑승자 모두의 기록 동의와 참가자 연결이 필요해요"
+                        todoState.loading -> "서버 목록을 갱신하고 있어요"
+                        synced != null -> "마지막 동기화 $synced · 서버 기록"
+                        else -> "아직 서버 목록을 확인하지 못했어요"
+                    }, color = c.onSurfaceVariant, fontSize = 18.sp)
+                    if (todoState.note.isNotEmpty()) Text(todoState.note, color = c.error, fontSize = 18.sp)
+                    if (arrivalNote.isNotEmpty()) Text(arrivalNote, color = c.onSurfaceVariant, fontSize = 18.sp)
+                }
+                if (items.isEmpty() && todoState.data != null && !todoState.loading) Text("이 목록에 할 일이 없어요", color = c.onSurfaceVariant)
+                val enabled = !todoState.loading && s.online && vehicleParked() && todoState.scope == todoScope()
+                items.forEach { item ->
+                    // 서버가 화자를 확인한 원발화만 이름과 캐릭터로 보입니다. 확인되지 않았으면 빈 동그라미와 '말한 사람 미확인'.
+                    val speakers = item.sources.mapNotNull { src -> s.trip?.people?.find { it.id == src.participantId } }.distinct()
+                    val who = speakers.singleOrNull()
+                    var sourceOpen by remember(item.id) { mutableStateOf(false) }
+                    Surface(Modifier.fillMaxWidth(), ctl, color = c.surfaceVariant) {
+                        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+                                if (who != null) Character(runCatching { Seat.valueOf(who.seat).ordinal }.getOrDefault(0), 56.dp)
+                                else Box(Modifier.size(56.dp).clip(CircleShape).background(c.surface))
+                                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Text(if (b.place != null) item.text else "${item.place} · ${item.text}", fontSize = 28.sp, lineHeight = 40.sp, fontWeight = FontWeight.Medium)
+                                    Text((if (speakers.isEmpty()) "말한 사람 미확인" else speakers.joinToString("·") { it.name } + "의 말") +
+                                        when (item.status) { "done" -> " · 완료"; "cancelled" -> " · 취소"; else -> "" }, color = c.onSurfaceVariant)
+                                }
+                                OutlinedButton({ changeTodo(item, if (item.pending) "done" else "pending") }, enabled = enabled, modifier = Modifier.height(72.dp), shape = ctl,
+                                    contentPadding = PaddingValues(horizontal = 36.dp)) { Text(if (item.pending) "완료" else "다시 열기") }
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                TextButton({ sourceOpen = !sourceOpen }, Modifier.heightIn(min = 56.dp)) { Text(if (sourceOpen) "원문 접기" else "원문 ${item.sources.size}개 보기") }
+                                if (item.pending) TextButton({ changeTodo(item, "cancelled") }, Modifier.heightIn(min = 56.dp), enabled = enabled) { Text("취소") }
+                            }
+                            if (sourceOpen) item.sources.forEach { source ->
+                                val at = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.KOREA).format(java.util.Date(source.at))
+                                val speaker = s.trip?.people?.find { it.id == source.participantId }?.name ?: "화자 미확인"
+                                Text("$at · $speaker", color = c.onSurfaceVariant, fontSize = 16.sp)
+                                Text(source.text, fontSize = 18.sp)
+                                if (source.displayText != source.text) Text("보정 · ${source.displayText}", color = c.onSurfaceVariant, fontSize = 18.sp)
+                            }
+                        }
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedButton({ loadTodos(force = true) }, enabled = !todoState.loading, modifier = Modifier.weight(1f).heightIn(min = 56.dp), shape = ctl) { Text("새로고침") }
+                    OutlinedButton(::arrive, enabled = vehicleParked() && !arrivalLoading && todoScope() != null, modifier = Modifier.weight(1f).heightIn(min = 56.dp), shape = ctl) { Text("도착 확인") }
+                }
+            }
+            OutlinedButton({ brief = null }, Modifier.fillMaxWidth().height(if (roomy) 80.dp else 56.dp), shape = ctl) { Text("닫기", fontSize = if (roomy) 32.sp else 24.sp, fontWeight = FontWeight.Bold) }
+        }
+        }
     }
 
     /** 경유지 제안(T9, C2). 주행 중에도 한 번 누르는 큰 단추 둘만. 거리·시간은 그곳까지이고 들르면 늘어나는 시간이 아니다. */

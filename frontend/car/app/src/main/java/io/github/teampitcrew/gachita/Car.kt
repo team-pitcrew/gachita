@@ -284,16 +284,6 @@ class Car(ctx: Context, private val onChange: (CarStatus) -> Unit) {
         destinationInfo { d -> done(d?.let { arrivalPlace(it.name, it.latitude, it.longitude) }) }
     }) { navi.getWaypointInfo() }
 
-    /**
-     * 도착 전 브리핑(C19): 다음 도착지(첫 경유지, 없으면 목적지)의 이름과 남은 시간(초, `remainTime`). 모르면 null. 화면은 넘어가지 않는다.
-     * 좌표는 보지 않는다(에뮬레이터는 경유지 좌표를 0.0으로 준다). 같은 경유지 조회(wps)를 쓰므로 주차 중 도착 확인과 겹치지 않게 주행 중에만 부른다.
-     */
-    fun nextPlaceEta(done: (String?, Int?) -> Unit) = wps.start({ waypoints ->
-        if (waypoints == null) return@start done(null, null)
-        waypoints.firstOrNull()?.let { return@start done(it.name, it.remainTime) }
-        destinationInfo { d -> done(d?.name, d?.remainTime) }
-    }) { navi.getWaypointInfo() }
-
     /** 지금 경로에 들를 곳을 더한다. 내비가 앞으로 나오고, 반영 알림(onWaypointChanged ADD)이 오면 true. 경로 오류나 30초 넘으면 false. */
     fun addStop(p: Place, done: (Boolean) -> Unit) = stop.start({ done(it == true) }) {
         navi.addWaypoint(RequestWaypointInfo(latitude = p.lat, longitude = p.lng, poiName = p.name, waypointIndex = WaypointIndex.FIRST, poiId = "", address = p.address, poiSubId = "0"))

@@ -20,6 +20,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -80,28 +82,38 @@ internal fun tripRange(createdAt: Long, lines: List<TranscriptLine>, zone: TimeZ
 
 private fun clock(at: Long) = SimpleDateFormat("HH:mm", Locale.KOREA).format(Date(at))
 
+/** Chip while driving (2026:2308 liveTranscript / 2026:2358 pausedTranscript). */
+internal fun liveChip(capturing: Boolean) = "현재 주행 / 대화 기록 ${if (capturing) "중" else "멈춤"}"
+
 /**
  * C44 body. [status] is the loading/consent/error line under the list. [canPick] gates '추천 장면 고르기'
- * (until K2 it opens the existing scene creation of the 콘텐츠 기록 tab). '말한 사람 고치기' opens trip tools (T37 fixes).
+ * (until F5 it opens the existing scene creation of the 콘텐츠 기록 tab). '말한 사람 고치기' opens trip tools (T37 fixes).
+ * [live] non-null = driving (liveTranscript·pausedTranscript): read only, the chip shows [live], the newest line is kept in view,
+ * and the only control is '함께 타는 중으로' ([onBack]). Fixing speakers, refreshing by hand and picking scenes stay parked-only.
  */
 @Composable
 internal fun TranscriptScreen(
     trip: Trip, lines: List<TranscriptLine>, asks: Set<Pair<String, Int>>, places: List<TripPlace>, loading: Boolean, status: String, canPick: Boolean,
-    onRefresh: () -> Unit, onFixSpeakers: () -> Unit, onPick: () -> Unit, modifier: Modifier = Modifier,
+    onRefresh: () -> Unit, onFixSpeakers: () -> Unit, onPick: () -> Unit, modifier: Modifier = Modifier, live: String? = null, onBack: () -> Unit = {},
 ) {
     val c = MaterialTheme.colorScheme
+    val scroll = rememberScrollState()
+    // 주행 중에는 손으로 넘기지 않아도 가장 새 줄이 보이게, 내용이 늘 때만 끝으로 옮긴다(움직이는 효과 없이 바로).
+    if (live != null) LaunchedEffect(Unit) { snapshotFlow { scroll.maxValue }.collect { scroll.scrollTo(it) } }
     Column(modifier, verticalArrangement = Arrangement.spacedBy(20.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("대화 기록", fontSize = 40.sp, lineHeight = 50.sp, fontWeight = FontWeight.Bold)
                 Text(trip.title.ifBlank { "함께하는 여행" }, color = c.onSurfaceVariant, fontSize = 28.sp, lineHeight = 40.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            TextButton(onFixSpeakers, Modifier.heightIn(min = 56.dp)) { Text("말한 사람 고치기", fontSize = 24.sp) }
-            OutlinedButton(onRefresh, Modifier.heightIn(min = 56.dp), enabled = !loading, shape = RoundedCornerShape(24.dp)) { Text("새로고침", fontSize = 24.sp) }
+            if (live == null) {
+                TextButton(onFixSpeakers, Modifier.heightIn(min = 56.dp)) { Text("말한 사람 고치기", fontSize = 24.sp) }
+                OutlinedButton(onRefresh, Modifier.heightIn(min = 56.dp), enabled = !loading, shape = RoundedCornerShape(24.dp)) { Text("새로고침", fontSize = 24.sp) }
+            }
         }
-        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(Modifier.weight(1f).verticalScroll(scroll), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Surface(Modifier.fillMaxWidth(), RoundedCornerShape(28.dp), color = c.primaryContainer) {
-                Text(tripRange(trip.createdAt, lines), Modifier.padding(20.dp), color = c.onSurface, fontSize = 24.sp, lineHeight = 32.sp)
+                Text(live ?: tripRange(trip.createdAt, lines), Modifier.padding(20.dp), color = c.onSurface, fontSize = 24.sp, lineHeight = 32.sp)
             }
             transcriptItems(lines, asks, places).forEach { item ->
                 when (item) {
@@ -119,8 +131,9 @@ internal fun TranscriptScreen(
             }
             if (lines.isEmpty() && !loading) Text("아직 대화 기록이 없어요. 모두 동의한 뒤 함께 타는 중에서 기록을 시작해 주세요.", color = c.onSurfaceVariant)
         }
-        Text(status, color = c.onSurfaceVariant, fontSize = 22.sp, maxLines = 2)
-        BigButton(DriveButton("추천 장면 고르기", if (canPick) Press.GO else Press.OFF, canPick), onPick, Modifier.fillMaxWidth().height(96.dp))
+        if (status.isNotEmpty()) Text(status, color = c.onSurfaceVariant, fontSize = 22.sp, maxLines = 2)
+        if (live != null) BigButton(DriveButton("함께 타는 중으로", Press.GO, true), onBack, Modifier.fillMaxWidth().height(96.dp))
+        else BigButton(DriveButton("추천 장면 고르기", if (canPick) Press.GO else Press.OFF, canPick), onPick, Modifier.fillMaxWidth().height(96.dp))
     }
 }
 

@@ -38,7 +38,8 @@ import androidx.compose.ui.unit.sp
 
 /*
  * Ride tab of the final design (Figma fJmxFDb3TrpycwDjGJNP62, page 2004:57): C17/C17p recording and paused,
- * C19/C19p approaching the next place, C21/C21p driving on after an arrival, plus the header and tab bar (C13 look).
+ * C21/C21p driving on after an arrival, the resumed and ended states, plus the header and tab bar (C13 look).
+ * Pre-arrival and arrival briefs belong to flow F4.
  * Slots keep fixed sizes so cards appearing or disappearing never shift the other slots while driving (T11, T83).
  * The pure functions here are covered by DriveTest.
  */
@@ -48,17 +49,21 @@ internal enum class Hero { REC, PAUSED, PLAIN }
 
 internal data class DriveStatus(val title: String, val sub: String, val hero: Hero)
 
-/** Status card text for the current recording state. Mirrors the old StatusHero order, with the design's '기록' wording. */
+/**
+ * Status card text for the current recording state. Mirrors the old StatusHero order, with the design's '기록' wording.
+ * ended: the trip's server status is 'ended' (2026:2410). resumed: recording came back from a pause and nothing new was heard yet (2026:1969).
+ */
 internal fun driveStatus(
     recording: Boolean, muted: Boolean, playingShort: Boolean, handoff: Handoff.State, mic: Mic, why: String,
-    offPending: Boolean, waiting: Boolean, inPark: Boolean, waitingFor: List<String>,
+    offPending: Boolean, waiting: Boolean, inPark: Boolean, waitingFor: List<String>, ended: Boolean = false, resumed: Boolean = false,
 ): DriveStatus = when {
+    ended && !offPending -> DriveStatus("여행 기록 완료", "오늘의 대화를 오래 간직해 보세요", Hero.PAUSED)
     recording && muted -> DriveStatus("기록 멈춤", "같은 버튼을 누르면 다시 기록해요", Hero.PAUSED)
     recording && playingShort -> DriveStatus("기록 잠시 멈춤", "쇼츠를 듣는 동안은 기록하지 않아요", Hero.PAUSED)
     recording && handoff != Handoff.State.OFF ->
         DriveStatus("기록 잠시 멈춤", if (handoff == Handoff.State.WAITING) "운전대 버튼을 누르세요" else "Gleo가 끝나면 기록을 이어 가요", Hero.PAUSED)
     recording -> when (mic) {
-        Mic.ON -> DriveStatus("기록 중", "아래 버튼으로 언제든 멈출 수 있어요", Hero.REC)
+        Mic.ON -> DriveStatus("기록 중", if (resumed) "중지한 지점부터 이어서 기록해요" else "아래 버튼으로 언제든 멈출 수 있어요", Hero.REC)
         Mic.BLOCKED -> DriveStatus("기록 잠시 멈춤", "마이크를 쓸 수 있으면 다시 기록해요", Hero.PAUSED)
         Mic.FAILED -> DriveStatus("기록 못 함", why.ifBlank { "마이크를 열지 못했어요" }, Hero.PAUSED)
         else -> DriveStatus("기록 준비 중", "마이크를 켜고 있어요", Hero.PLAIN)
@@ -74,10 +79,13 @@ internal enum class Press { STOP, GO, OFF }
 internal data class DriveButton(val label: String, val press: Press, val enabled: Boolean)
 
 /**
- * The one big control (C17 '기록 중지', C17p '기록 재개'). It runs the same action the old status card did (MainActivity.recordingAction):
- * pause and resume keep consent, starting needs park and everyone's consent, and without consent it opens passenger setup while parked.
+ * The one big control (C17 '기록 중지', C17p '기록 재개', ended '새 여행 시작'). Otherwise it runs the same action the old status card did
+ * (MainActivity.recordingAction): pause and resume keep consent, starting needs park and everyone's consent, and without consent it opens
+ * passenger setup while parked. An ended trip never records again (Session.withTrip); a new trip is started while parked.
  */
-internal fun driveButton(recording: Boolean, muted: Boolean, agreed: Boolean, restricted: Boolean, canStart: Boolean): DriveButton = when {
+internal fun driveButton(recording: Boolean, muted: Boolean, agreed: Boolean, restricted: Boolean, canStart: Boolean, ended: Boolean = false): DriveButton = when {
+    ended && restricted -> DriveButton("주차한 뒤 새 여행을 시작해요", Press.OFF, false)
+    ended -> DriveButton("새 여행 시작", Press.GO, true)
     recording && !muted -> DriveButton("기록 중지", Press.STOP, true)
     recording -> DriveButton("기록 재개", Press.GO, true)
     agreed && restricted -> DriveButton("주차한 뒤 기록을 시작해요", Press.OFF, false)
@@ -100,35 +108,6 @@ internal fun heardMeta(name: String?, seat: String?, zone: Int?): String =
 
 /** Character index used everywhere in the car app: guests have no character value yet, so it follows seat order (Theme.kt). */
 internal fun seatCharacter(p: Person): Int = Seat.entries.indexOfFirst { it.name == p.seat }.coerceAtLeast(0)
-
-/** Pre-arrival brief (decision 6): the next place from the navigation and whole minutes left, rounded up. */
-internal data class Approach(val trip: String, val place: String, val minutes: Int)
-
-internal const val APPROACH_SECONDS = 300
-
-/** Approaching when the navigation reports 0 < remaining time <= 5 minutes for a named place. 0 means the navigation has no estimate. */
-internal fun approach(trip: String, name: String?, remainSeconds: Int?): Approach? {
-    val place = name?.trim().orEmpty()
-    if (place.isEmpty() || remainSeconds == null || remainSeconds !in 1..APPROACH_SECONDS) return null
-    return Approach(trip, place, maxOf(1, (remainSeconds + 59) / 60))
-}
-
-/** Open server todos whose place word is in the navigation name, the same rule as the server's arrival match ('마트' in '하나로마트 강릉점'). */
-internal fun placeAsks(place: String, items: List<SharedTodo>): List<SharedTodo> = items.filter { it.pending && arrivedAt(it.place, place) }
-
-/** The ask without its place phrase: '마트에서 고기랑 과일도 사 가자' → '고기랑 과일도 사 가자'. Falls back to the whole text. */
-internal fun shortAsk(item: SharedTodo): String {
-    val head = Regex(Regex.escape(item.place) + "에서(?:는|도)?\\s*").findAll(item.text).lastOrNull() ?: return item.text
-    return item.text.substring(head.range.last + 1).trim().ifEmpty { item.text }
-}
-
-/** First confirmed speaker of an ask (earliest source with a trip participant). Unknown speakers stay null. */
-internal fun askSpeaker(item: SharedTodo, people: List<Person>): Person? =
-    item.sources.sortedBy { it.at }.firstNotNullOfOrNull { s -> people.find { it.id == s.participantId } }
-
-/** One line for the narrow card: '하은 화장실 / 엄마 고기랑 과일도 사 가자'. */
-internal fun nearLine(asks: List<SharedTodo>, people: List<Person>): String =
-    asks.joinToString(" / ") { a -> listOfNotNull(askSpeaker(a, people)?.name, shortAsk(a)).joinToString(" ") }
 
 // ---- UI ----
 
@@ -240,20 +219,6 @@ internal fun HeardCard(title: String, counts: String, rows: List<HeardRow>, dim:
                     }
                 }
             }
-        }
-    }
-}
-
-/** C19 '{place} 도착까지 약 N분' card in the middle slot. Details are shown after parking (C20). */
-@Composable
-internal fun NearCard(a: Approach, line: String, modifier: Modifier) {
-    val c = MaterialTheme.colorScheme
-    Surface(modifier, RoundedCornerShape(32.dp), color = c.primaryContainer) {
-        Column(Modifier.padding(horizontal = 24.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("${a.place} 도착까지 약 ${a.minutes}분", color = c.primary, fontSize = 24.sp, lineHeight = 32.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text("내리기 전, 기억할 부탁", color = c.onSurface, fontSize = 32.sp, lineHeight = 42.sp, fontWeight = FontWeight.Bold, maxLines = 1)
-            Text(line, Modifier.weight(1f, fill = false), color = c.onSurface, fontSize = 28.sp, lineHeight = 40.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            Text("주차 후 자세히 보여드릴게요.", color = c.onSurfaceVariant, fontSize = 24.sp, lineHeight = 32.sp, maxLines = 1)
         }
     }
 }

@@ -2,14 +2,14 @@ package io.github.teampitcrew.gachita
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DriveTest {
     private fun status(recording: Boolean = true, muted: Boolean = false, handoff: Handoff.State = Handoff.State.OFF, mic: Mic = Mic.ON,
-                       offPending: Boolean = false, waiting: Boolean = false, inPark: Boolean = true, waitingFor: List<String> = emptyList()) =
-        driveStatus(recording, muted, false, handoff, mic, "", offPending, waiting, inPark, waitingFor)
+                       offPending: Boolean = false, waiting: Boolean = false, inPark: Boolean = true, waitingFor: List<String> = emptyList(),
+                       ended: Boolean = false, resumed: Boolean = false) =
+        driveStatus(recording, muted, false, handoff, mic, "", offPending, waiting, inPark, waitingFor, ended, resumed)
 
     @Test fun statusFollowsDesignWording() {
         assertEquals(DriveStatus("기록 중", "아래 버튼으로 언제든 멈출 수 있어요", Hero.REC), status())
@@ -39,37 +39,26 @@ class DriveTest {
         assertEquals("말한 사람 미확인", heardMeta(null, null, null))
     }
 
-    @Test fun approachingWithinFiveMinutes() {
-        assertEquals(Approach("T1", "하나로마트 강릉점", 3), approach("T1", " 하나로마트 강릉점 ", 150))
-        assertEquals(5, approach("T1", "마트", APPROACH_SECONDS)!!.minutes)
-        assertEquals(1, approach("T1", "마트", 20)!!.minutes)
-        assertNull(approach("T1", "마트", APPROACH_SECONDS + 1))
-        assertNull(approach("T1", "마트", 0)) // 내비가 남은 시간을 모름(안내 중 아님)
-        assertNull(approach("T1", "", 120))
-        assertNull(approach("T1", null, 120))
-        assertNull(approach("T1", "마트", null))
+    @Test fun resumedAndEndedStates() {
+        assertEquals("중지한 지점부터 이어서 기록해요", status(resumed = true).sub) // 2026:1969
+        assertEquals("아래 버튼으로 언제든 멈출 수 있어요", status(resumed = false).sub)
+        assertEquals(DriveStatus("여행 기록 완료", "오늘의 대화를 오래 간직해 보세요", Hero.PAUSED), status(recording = false, ended = true)) // 2026:2410
+        assertEquals("동의 철회", status(recording = false, offPending = true, ended = true).title) // 철회 중이면 그 안내가 먼저
+        assertEquals(DriveButton("새 여행 시작", Press.GO, true), driveButton(recording = false, muted = false, agreed = true, restricted = false, canStart = false, ended = true))
+        assertFalse(driveButton(recording = false, muted = false, agreed = true, restricted = true, canStart = false, ended = true).enabled)
+        assertEquals("현재 주행 / 대화 기록 중", liveChip(true)) // 2026:2308
+        assertEquals("현재 주행 / 대화 기록 멈춤", liveChip(false)) // 2026:2358
     }
 
-    private fun todo(id: String, place: String, text: String, status: String = "pending", who: String? = null, at: Long = 1) =
-        SharedTodo(id, place, text, status, 0, listOf(SharedTodoSource("car", at, at, text, text, who)))
-
-    @Test fun placeAsksUseTheServerPlaceRule() {
-        val items = listOf(todo("a", "마트", "마트에서 고기랑 과일도 사 가자"), todo("b", "숙소", "숙소에서는 가방부터 꺼내자"), todo("c", "마트", "마트에서 물도 사자", "done"))
-        assertEquals(listOf("a"), placeAsks("하나로마트 강릉점", items).map { it.id })
-        assertTrue(placeAsks("용인휴게소 강릉방향", items).isEmpty())
-    }
-
-    @Test fun shortAskDropsThePlacePhrase() {
-        assertEquals("고기랑 과일도 사 가자", shortAsk(todo("a", "마트", "마트에서 고기랑 과일도 사 가자")))
-        assertEquals("가방부터 꺼내자", shortAsk(todo("b", "숙소", "숙소에서는 가방부터 꺼내자")))
-        assertEquals("사자", shortAsk(todo("c", "마트", "집에서 나오기 전에 마트에서 사자")))
-        assertEquals("마트 들러서 사자", shortAsk(todo("d", "마트", "마트 들러서 사자")))
-    }
-
-    @Test fun nearLineNamesConfirmedSpeakersOnly() {
-        val people = listOf(Person("p1", "엄마", "ROW_1_RIGHT", true), Person("p2", "하은", "ROW_2_RIGHT", true))
-        val asks = listOf(todo("a", "마트", "마트에서 고기랑 과일도 사 가자", who = "p1"), todo("b", "마트", "마트에서 젤리도 사자", who = "x"))
-        assertEquals("엄마 고기랑 과일도 사 가자 / 젤리도 사자", nearLine(asks, people))
+    @Test fun endedTripNeverRecords() {
+        val people = listOf(Person("a", "아빠", "ROW_1_LEFT", true))
+        val live = Trip("T1", "t", "driving", people, 0, 1)
+        val rec = Session(gear = "P", ours = setOf("a")).withTrip(live).startRecording()
+        assertTrue(rec.recording)
+        val ended = rec.withTrip(live.copy(status = "ended", version = 2))
+        assertFalse(ended.recording) // 폰에서 '여행 끝내기'를 누르면 차도 녹음을 멈춘다. 동의는 그대로
+        assertTrue(ended.agreed)
+        assertEquals("끝난 여행이에요. 새 여행에서 녹음을 시작해 주세요", ended.blockStart())
     }
 
     @Test fun seatCharacterFollowsSeatOrder() {
