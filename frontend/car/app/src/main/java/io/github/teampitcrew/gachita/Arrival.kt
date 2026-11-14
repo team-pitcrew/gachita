@@ -215,4 +215,10 @@ internal object F4Mock {
     )
     // finalBrief의 부가 설명 줄(frames-text.md). 규칙으로 만들 수 없는 시연 글이라 목업에서만 쓴다
     val lodgeDetails = mapOf("l1" to "하은이와 함께 1층 화장실", "l2" to "엄마가 부탁한 장본 짐 정리", "l3" to "예약자 민준 / 트렁크의 가족 가방")
+    // 주행 시연(T150, --es f4 drive|drivePaused|driveResumed|driveContinue)의 받아 적은 말 두 줄(시안 17–19·22, 새것이 위)과 말하는 사람
+    fun heard(state: String): List<HeardRow> =
+        (if (state == "driveContinue") listOf(people[3] to "우리 내일도 같이 타면 안 돼?", people[1] to "숙소에 가서 맛있게 먹자")
+        else listOf(people[2] to "아빠, 바다는 왜 짜?", people[1] to "마트에서 고기랑 과일도 사 가자"))
+            .map { (p, text) -> HeardRow(heardMeta(p.name, p.seat, null), text, seatCharacter(p)) }
+    fun talking(state: String): String? = when { state.endsWith("Paused") -> null; state == "driveContinue" -> "haeun"; else -> "seojun" }
 }
