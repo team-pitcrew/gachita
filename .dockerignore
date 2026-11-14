@@ -20,6 +20,7 @@
 !backend/api/short-assets.js
 !backend/api/short-templates.js
 !backend/api/short-render.js
+!backend/api/trip-audio.js
 !backend/api/providers
 !backend/api/*.sql
 !frontend/web
