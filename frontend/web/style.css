@@ -1020,8 +1020,10 @@ main:has(.bar .big) { padding-bottom: calc(196px + env(safe-area-inset-bottom));
 .content-map-art .map-water { fill: var(--map-water); stroke: none; }
 .content-map-art .map-route { fill: none; stroke: var(--accent-fill); stroke-width: 5; stroke-linecap: round; stroke-linejoin: round; }
 .content-map-empty { position: absolute; inset: auto 12px 12px; margin: 0; font-size: 13px; color: var(--ink-2); }
-.content-pin { position: absolute; display: grid; justify-items: start; gap: 4px; width: 112px; padding: 8px; border-radius: 16px; color: var(--ink); font-size: 13px; text-align: left; transform: translate(-50%, -50%); box-shadow: 0 1px 0 #0000000d; }
-.content-pin .avatar { width: 36px; height: 36px; }
+.content-pin { position: absolute; display: grid; justify-items: start; gap: 4px; width: 116px; min-height: 0; padding: 8px; border-radius: 16px; color: var(--ink); font-size: 13px; text-align: left; transform: translate(-50%, calc(-100% - 10px)); box-shadow: 0 1px 0 #0000000d; }
+.content-pin::after { content: ""; position: absolute; left: calc(50% - 5px); bottom: -15px; width: 10px; height: 10px; border-radius: 50%; background: var(--accent-fill); border: 2px solid var(--surface); }
+.content-pin .content-face, .content-pin .content-face .avatar { display: block; width: 36px; height: 36px; }
+.content-face { display: block; }
 .content-pin.selected { outline: 3px solid var(--accent-fill); }
 .content-player { display: grid; gap: 18px; padding: 20px; border-radius: var(--r-phone-card); background: var(--surface); }
 .content-player h2 { margin: 0; font-size: 28px; line-height: 38px; letter-spacing: -0.02em; word-break: keep-all; }

@@ -23,7 +23,10 @@ const wa = (word) => {
 export function contentGroups(trips) {
   return (Array.isArray(trips) ? trips : [])
     .filter((t) => Array.isArray(t.contents) && t.contents.length)
-    .map((t) => ({ trip: t, title: `${monthDay(t.startedAt ?? t.createdAt)}  ${t.title || "함께 탄 여행"}`, items: [...t.contents].sort((a, b) => a.at - b.at) }));
+    .map((t) => {
+      const items = [...t.contents].sort((a, b) => a.at - b.at);
+      return { trip: t, title: `${monthDay(items[0].at ?? t.createdAt)}  ${t.title || "함께 탄 여행"}`, items };
+    });
 }
 
 // 타임라인 머리 '09:20 출발 → 하나로마트 → 10:28 숙소': 출발 시각, 들른 곳, 마지막 도착 시각과 이름. 장소가 없으면 빈 글.
@@ -64,7 +67,8 @@ export function lineAt(content, seconds) {
   return lines.findLast((l) => (l.at - from) / 1000 <= seconds) ?? lines[0];
 }
 
-// 좌표를 w×h 상자에 투영한다(위가 북쪽, 가로·세로 같은 축척, 여백 pad). 좌표가 하나도 없으면 null.
+// 좌표를 w×h 상자에 투영한다(위가 북쪽, 여백 pad). 시안처럼 도식 지도라 가로·세로를 따로 늘려 상자를 채운다
+// (한쪽이 다른 쪽의 3배를 넘으면 그만큼만 늘림). 좌표가 하나도 없으면 null.
 export function projector(points, w, hgt, pad = 24) {
   const ok = points.filter((p) => Number.isFinite(p?.[0]) && Number.isFinite(p?.[1]));
   if (!ok.length) return null;
@@ -72,9 +76,10 @@ export function projector(points, w, hgt, pad = 24) {
   const [minLat, maxLat, minLng, maxLng] = [Math.min(...lats), Math.max(...lats), Math.min(...lngs), Math.max(...lngs)];
   const kx = Math.cos(((minLat + maxLat) / 2) * Math.PI / 180); // 경도 1도의 길이는 위도에 따라 줄어든다
   const spanX = Math.max((maxLng - minLng) * kx, 1e-6), spanY = Math.max(maxLat - minLat, 1e-6);
-  const scale = Math.min((w - 2 * pad) / spanX, (hgt - 2 * pad) / spanY);
-  const ox = (w - spanX * scale) / 2, oy = (hgt - spanY * scale) / 2;
-  return ([lat, lng]) => [ox + (lng - minLng) * kx * scale, oy + (maxLat - lat) * scale];
+  const base = Math.min((w - 2 * pad) / spanX, (hgt - 2 * pad) / spanY);
+  const sx = Math.min((w - 2 * pad) / spanX, base * 3), sy = Math.min((hgt - 2 * pad) / spanY, base * 3);
+  const ox = (w - spanX * sx) / 2, oy = (hgt - spanY * sy) / 2;
+  return ([lat, lng]) => [ox + (lng - minLng) * kx * sx, oy + (maxLat - lat) * sy];
 }
 
 export function createContents({ getProfileToken, getTrip, getParticipant, getParticipantToken, tokenFor, avatar, isOnline = () => true, onHome, onRide, onTalk, onProfile, onStudio }) {
@@ -131,7 +136,9 @@ export function createContents({ getProfileToken, getTrip, getParticipant, getPa
     const items = all(s).filter(({ item }) => Number.isFinite(item.lat) && Number.isFinite(item.lng));
     const trip = items[0]?.trip ?? contentGroups(s.trips)[0]?.trip;
     const route = (trip?.route ?? []).map((p) => [p[0], p[1]]);
-    const project = projector([...route, ...items.filter((x) => x.trip === trip).map(({ item }) => [item.lat, item.lng])], W, H, 36);
+    // 핀은 점 위에 서므로 위쪽 여백을 더 둔다.
+    const fit = projector([...route, ...items.filter((x) => x.trip === trip).map(({ item }) => [item.lat, item.lng])], W, H - 70, 24);
+    const project = fit && ((p) => { const [x, y] = fit(p); return [x, y + 70]; });
     const ns = "http://www.w3.org/2000/svg";
     const svg = document.createElementNS(ns, "svg");
     svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.setAttribute("class", "content-map-art"); svg.setAttribute("aria-hidden", "true");
