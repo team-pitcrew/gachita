@@ -159,6 +159,9 @@ class MainActivity : ComponentActivity() {
         }
     private enum class Destination(val label: String) { RIDE("함께 타는 중"), CONVERSATION("대화 기록"), SHORTS("콘텐츠 기록") } // 콘텐츠 기록은 K3 전까지 쇼츠 화면
     private var destination by mutableStateOf(Destination.RIDE)
+    // 가족·동승 그룹(흐름 F2, Family.kt). mock: 차 로그인(흐름 F1) 전에는 디버그 실행 인자(--es profileToken)로만 토큰을 받는다.
+    private var familyOpen by mutableStateOf(false)
+    private var profileToken by mutableStateOf<String?>(null)
     private var shortStudioActive = false
     private var retentionMs: Long? = null // null은 무기한. 디버그 keepMs 인자가 있을 때만 만료 시험을 한다.
     private var managing by mutableStateOf(false)
@@ -330,6 +333,7 @@ class MainActivity : ComponentActivity() {
         // 실행 인자(--es server, --ei widthDp, --es route)는 디버그 빌드에서만 받는다. 밖에서 연 화면이 서버 주소를 바꾸지 못하게
         debug = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
         if (debug) intent.getStringExtra("server")?.let { prefs.edit().putString("server", it).apply() }
+        if (debug) { profileToken = intent.getStringExtra("profileToken"); familyOpen = intent.getBooleanExtra("family", false) }
         server = prefs.getString("server", null) ?: DEFAULT_SERVER
         device = prefs.getString("device", null) ?: UUID.randomUUID().toString().also { prefs.edit().putString("device", it).apply() }
         // 기본값은 무기한. --el keepMs를 명시한 디버그 빌드에서만 시간에 따른 정리를 시험한다.
@@ -382,6 +386,7 @@ class MainActivity : ComponentActivity() {
                             canRead = { false }, canPlay = { appVisible && !isDestroyed && !carStatus.restricted },
                             onClose = { destination = Destination.RIDE },
                             onActiveChange = ::shortStudioActiveChanged, modifier = Modifier.fillMaxSize())
+                        familyOpen -> FamilyFlow(server, profileToken, onClose = { familyOpen = false }, onStart = ::startGroupTrip)
                         else -> Setup()
                     }
                 }
@@ -454,6 +459,26 @@ class MainActivity : ComponentActivity() {
             r.onSuccess { (got, mine) ->
                 tokens = mine
                 prefs.edit().putString("tokens", Live.seal(this).line(JSONObject(mine).toString())).commit() // 다시 받을 수 없는 값이라 디스크에 쓰고 돌아온다
+                s = Session(gear = s.gear, ours = mine.keys).withTrip(keep(got))
+            }
+                .onFailure { s = s.copy(busy = false); error = "여행을 만들지 못했어요 · ${reason(it)}" }
+        }
+    }
+
+    /** '이 가족과 출발'(C13): 그룹의 저장된 자리·각자 동의로 여행을 만들고, 이 차가 맡을 참가자 토큰(나와 내 아이)을 받는다(T133). */
+    private fun startGroupTrip(groupId: String) {
+        val token = profileToken ?: return
+        val url = server
+        s = s.copy(busy = true); error = ""
+        bg({
+            val api = Server(url)
+            val (code, mine) = api.groupTrip(token, groupId, TITLE)
+            api.trip(code)!! to mine
+        }) { r ->
+            r.onSuccess { (got, mine) ->
+                tokens = mine
+                prefs.edit().putString("tokens", Live.seal(this).line(JSONObject(mine).toString())).commit() // 다시 받을 수 없는 값이라 디스크에 쓰고 돌아온다
+                familyOpen = false
                 s = Session(gear = s.gear, ours = mine.keys).withTrip(keep(got))
             }
                 .onFailure { s = s.copy(busy = false); error = "여행을 만들지 못했어요 · ${reason(it)}" }
@@ -1557,6 +1582,7 @@ class MainActivity : ComponentActivity() {
             AppBar(TITLE, listening = false, *pills(online = null))
             Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 OutlinedButton(onClick = { destination = Destination.SHORTS }, shape = RoundedCornerShape(10.dp)) { Text("저장한 쇼츠", fontSize = 24.sp) }
+                OutlinedButton(onClick = { familyOpen = true }, shape = RoundedCornerShape(10.dp)) { Text("우리 가족", fontSize = 24.sp) }
                 WindowSize()
             }
             Spacer(Modifier.height(8.dp))
