@@ -86,13 +86,18 @@ class DriveTest {
         assertEquals("00:00", recordClock(-5))
     }
 
-    @Test fun waveBarsScrollNewestRight() {
-        // 막대 하나 = 0.1초 조각 하나. 새 것이 오른쪽 끝, 모자란 왼쪽은 0(가장 낮은 막대), 범위 밖 값은 0..1로
-        assertEquals(List(WAVE_BARS - 3) { 0f } + listOf(0.2f, 0.5f, 1f), waveBars(listOf(0.2f, 0.5f, 1.4f)))
-        val long = List(75) { it / 100f } // 6초(60조각)보다 길면 마지막 60개만
-        assertEquals(long.takeLast(WAVE_BARS), waveBars(long))
-        assertEquals(List(WAVE_BARS) { 0f }, waveBars(emptyList()))
-        assertEquals(listOf(0f, 0f, 0.3f), waveBars(listOf(-1f, 0.3f), 3))
+    @Test fun waveFollowsVoiceMemosLevels() {
+        // 0.1초 조각마다 첨두(가장 큰 |표본|)를 dBFS로: 16384 = 반 = −6.02 dB, −32768도 0 dB, 무음은 −120
+        fun le(vararg v: Int) = ByteArray(v.size * 2).also { b -> v.forEachIndexed { i, x -> b[2 * i] = x.toByte(); b[2 * i + 1] = (x shr 8).toByte() } }
+        assertEquals(-6.02f, chunkPeakDb(le(100, -16384, 200)), 0.01f)
+        assertEquals(0f, chunkPeakDb(le(5, -32768)), 0.001f)
+        assertEquals(-120f, chunkPeakDb(le(0, 0, 0)))
+        // 막대 높이 = 10^(dB/24), −72 dB 밑은 버림
+        assertEquals(1f, waveAmp(0f), 1e-6f)
+        assertEquals(0.1f, waveAmp(-24f), 1e-6f)
+        assertEquals(0.001f, waveAmp(-72f), 1e-6f)
+        assertEquals(0f, waveAmp(-73f))
+        assertEquals(1f, waveAmp(6f)) // 넘쳐도 1
     }
 
     @Test fun briefFoldsAsksIntoShortActions() {

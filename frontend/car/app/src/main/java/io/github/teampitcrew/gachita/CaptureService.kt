@@ -39,8 +39,8 @@ object Live {
     var count by mutableStateOf(0)
     var pending by mutableStateOf(0)
     /**
-     * 최근 [WAVE_BARS]개 0.1초 조각의 소리 크기(0..1, 새 것이 끝, meterLevel의 −55~−5 dBFS 눈금). 조각마다 메인 스레드가 민다.
-     * 녹음 화면 A안의 파형(Drive.kt Wave)이 이것을 0.1초마다 그린다 — 새 막대가 오른쪽에 붙고 왼쪽으로 흐른다(11/15 오너 지시, 실시간 파형).
+     * 최근 [WAVE_BARS]개 0.1초 조각의 최댓값(dBFS, 새 것이 끝, 무음 −120; Drive.kt chunkPeakDb — 애플 음성 메모처럼 조각의 첨두). 조각마다 메인 스레드가 민다.
+     * C17 녹음 막대의 파형(Drive.kt Wave)이 이것을 그린다 — 새 막대가 가운데 커서에 붙고 왼쪽으로 흐른다(11/15 오너 지시, 실시간 파형).
      */
     var levels by mutableStateOf(emptyList<Float>())
     /**
@@ -280,7 +280,7 @@ class CaptureService : Service() {
     private fun chunk(c: Chunk, now: Long) {
         if (stopping) return
         block.chunk(c.allZero, now)
-        Live.levels = (Live.levels + meterLevel(chunkRms(c, c.mono.size)).toFloat()).takeLast(WAVE_BARS) // 목소리 등록 막대(T142)와 같은 눈금. mono 바이트 수 = 2채널 값의 수
+        Live.levels = (Live.levels + chunkPeakDb(c.mono)).takeLast(WAVE_BARS) // 0.1초 조각의 첨두(voice-memos-waveform.md 1절)
         if (sttReady) runCatching { stt?.sendAudio(c.mono) }.onFailure { Log.w(TAG, "sendAudio 실패", it) }
         judge()
     }

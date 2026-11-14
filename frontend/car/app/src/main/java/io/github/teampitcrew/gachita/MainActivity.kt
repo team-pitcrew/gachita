@@ -1866,7 +1866,8 @@ class MainActivity : ComponentActivity() {
         }
         DisposableEffect(mock, mockPaused, Live.mic) {
             val meter = if (mock != null && !mockPaused && Live.mic != Mic.ON)
-                MicLevels { v -> main.post { Live.levels = (Live.levels + v).takeLast(WAVE_BARS) } }.also { it.start() } else null
+                // MicLevels는 meterLevel(−55~−5 dBFS를 0..1) 값을 준다: dB로 되돌려 넣는다(시연 목업만 첨두가 아닌 RMS)
+                MicLevels { v -> main.post { Live.levels = (Live.levels + (v * 50f - 55f)).takeLast(WAVE_BARS) } }.also { it.start() } else null
             onDispose { meter?.stop() }
         }
         val st = if (mock != null) driveStatus(true, mockPaused, false, Handoff.State.OFF, Mic.ON, "", false, false, false, emptyList(), resumed = mock == "driveResumed")

@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -42,7 +43,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -63,6 +63,13 @@ import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.res.painterResource
 import java.util.Locale
+import kotlin.math.pow
+import kotlin.math.log10
+import kotlin.math.abs
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.Animatable
 
 /*
  * Ride tab of the design 'Y7zFqGUEAFDWTumG30MsOs' (page 2004:57). While recording (paused included) it is the C17 family — C17 2005:3267,
@@ -189,14 +196,25 @@ internal fun recordClock(ms: Long): String = (ms.coerceAtLeast(0) / 1000).let { 
     if (s < 3600) String.format(Locale.ROOT, "%02d:%02d", s / 60, s % 60) else String.format(Locale.ROOT, "%d:%02d:%02d", s / 3600, s / 60 % 60, s % 60)
 }
 
-/** Bars of the waveform: 6 s of 0.1 s chunk levels. */
+/** Levels kept for the waveform (Live.levels): 6 s of 0.1 s chunks, more than the 24 bars left of the cursor. */
 internal const val WAVE_BARS = 60
 
+/** Below this the bar is dropped (Voice Memos `minimumDecibelDisplayRange` −72 dB, production/car-port-20261115/voice-memos-waveform.md). */
+internal const val WAVE_FLOOR_DB = -72f
+
 /**
- * The [n] bar heights (0..1) of a scrolling recorder waveform, oldest left and newest right: each bar is one 0.1 s chunk's level
- * (Live.levels, RMS on meterLevel's dB scale). Slots older than the captured history are 0 (drawn at the minimum height).
+ * Level of one 0.1 s chunk the way Voice Memos meters it: the peak of the chunk (largest |sample| of the 16-bit little-endian mono), in
+ * dBFS, −120 for digital silence. One value per bar, so no further decimation is needed.
  */
-internal fun waveBars(levels: List<Float>, n: Int = WAVE_BARS): List<Float> = List(n) { i -> levels.getOrNull(levels.size - n + i)?.coerceIn(0f, 1f) ?: 0f }
+internal fun chunkPeakDb(mono: ByteArray): Float {
+    var peak = 0
+    var i = 0
+    while (i + 1 < mono.size) { peak = maxOf(peak, abs((mono[i].toInt() and 0xFF) or (mono[i + 1].toInt() shl 8))); i += 2 }
+    return if (peak == 0) -120f else (20 * log10(peak / 32768.0)).toFloat()
+}
+
+/** Bar height (0..1 of half the box) from a peak level: `10^(dB/24)` like Voice Memos (quiet speech stays visible, peaks do not slam), 0 below −72 dB. */
+internal fun waveAmp(db: Float): Float = if (db < WAVE_FLOOR_DB) 0f else 10f.pow(db / 24f).coerceIn(0f, 1f)
 
 internal data class NearRow(val icon: BriefIcon, val text: String)
 
@@ -303,9 +321,10 @@ internal fun RecordBar(control: DriveButton, live: Boolean, time: String, levels
     val paused = control.press == Press.GO
     Box(modifier.fillMaxWidth().height(136.dp).border(1.dp, CarRecord.Edge, CarShape.Card)) {
         Row(Modifier.align(Alignment.CenterStart).padding(start = 7.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Box(Modifier.size(68.dp).clip(RoundedCornerShape(18.dp)).clickable(enabled = control.enabled, role = Role.Button, onClick = onControl)
+            Box(Modifier.size(68.dp).clickable(enabled = control.enabled, role = Role.Button, onClick = onControl)
                 .semantics { contentDescription = control.label }) {
-                if (paused) Image(painterResource(R.drawable.ic_rec_resume), null, Modifier.offset(3.5.dp, (-1.5).dp).size(61.dp, 77.dp))
+                // 시안 'image 1'(61×77)은 68 칸 밖으로 위아래가 넘친다(자르지 않음): 칸 안 (3.5, −1.5)에. requiredSize가 넘친 만큼 위로 4.5 올려 두므로 3을 더 내린다
+                if (paused) Image(painterResource(R.drawable.ic_rec_resume), null, Modifier.offset(3.5.dp, 3.dp).requiredSize(61.dp, 77.dp))
                 else listOf(23.dp, 39.dp).forEach { x -> Box(Modifier.offset(x, 21.dp).size(6.dp, 26.dp).clip(RoundedCornerShape(2.dp)).background(c.onSurface)) }
             }
             Text(time, color = if (live) CarRecord.Timer else c.onSurface, style = CarText.Status, maxLines = 1)
@@ -319,20 +338,30 @@ internal fun RecordBar(control: DriveButton, live: Boolean, time: String, levels
 }
 
 /**
- * '녹화 파형' (2196:5878, 292×84): one thin bar per 0.1 s level, newest right, ink while recording and dimmed when stopped. Read in the
- * draw phase, so only this box redraws as levels come in (11/15 owner: the waveform and time move while driving).
+ * '녹화 파형' (2196:5878): the C17 picture's look — a 292×84 box on #231D1F, bars 3.5 wide every 6, symmetric about the middle, the cursor
+ * at the centre with the recorded bars in ink to its left and dim (45%) ones to its right, tallest 59 (padding 12.5), shortest 4.5 — drawn with
+ * the Voice Memos logic (voice-memos-waveform.md): one bar per 0.1 s peak ([chunkPeakDb]), height `10^(dB/24)` dropping below −72 dB,
+ * newest at the cursor and scrolling left by one pitch over each 0.1 s, frozen in place while paused. Right of the cursor nothing is
+ * recorded yet, so it shows the shortest dim bars. 11/15 owner: the waveform and time move while driving.
  */
 @Composable
 internal fun Wave(levels: () -> List<Float>, live: Boolean, modifier: Modifier) {
     val c = MaterialTheme.colorScheme
-    Canvas(modifier) {
-        val bars = waveBars(levels())
-        val pitch = size.width / WAVE_BARS
-        val w = 2.dp.toPx()
-        for (i in 0 until WAVE_BARS) {
-            val h = maxOf(6.dp.toPx(), bars[i] * size.height)
-            drawRoundRect(if (live) c.onSurface else c.onSurfaceVariant.copy(alpha = 0.5f), Offset(i * pitch + (pitch - w) / 2, (size.height - h) / 2), Size(w, h), CornerRadius(w / 2))
+    val now = levels() // 새 조각이 들어올 때마다 한 칸 밀기를 다시 시작한다
+    val step = remember { Animatable(1f) }
+    LaunchedEffect(now, live) { if (live) { step.snapTo(0f); step.animateTo(1f, tween(100, easing = LinearEasing)) } } // 멈추면 그 자리에 선다
+    Canvas(modifier.clipToBounds().background(CarRecord.WaveBg)) {
+        val pitch = 6.dp.toPx(); val barW = 3.5.dp.toPx()
+        val half = size.height / 2; val maxHalf = half - 12.5.dp.toPx(); val minHalf = 2.25.dp.toPx()
+        val cursor = size.width / 2; val shift = step.value * pitch
+        for (k in now.indices.reversed()) { // 녹음한 것: 새 것이 커서, 오래된 것이 왼쪽
+            val x = cursor - (now.size - 1 - k) * pitch - shift
+            if (x < -barW) break
+            val h = (waveAmp(now[k]) * half).coerceIn(minHalf, maxHalf)
+            drawRect(c.onSurface, Offset(x - barW / 2, half - h), Size(barW, 2 * h))
         }
+        var x = cursor + pitch - shift // 아직 녹음하지 않은 오른쪽
+        while (x < size.width + barW) { drawRect(c.onSurface.copy(alpha = 0.45f), Offset(x - barW / 2, half - minHalf), Size(barW, 2 * minHalf)); x += pitch }
     }
 }
 

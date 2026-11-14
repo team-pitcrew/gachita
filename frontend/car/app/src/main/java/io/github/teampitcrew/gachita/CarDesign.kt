@@ -95,6 +95,7 @@ object CarPaper {
  */
 object CarRecord {
     val Timer = Color(0xFFF23424) // 기록 중 경과 시간 '19:11'
+    val WaveBg = Color(0xFF231D1F) // '녹화 파형' 292×84 칸 바탕(시안 그림 2196:5878)
     val Edge = Color.Black // 막대 테두리 1
     val StopRing = Color.White // ■ 정지 단추 테두리 2
     val Ring = listOf(0f to Color(0xFFE8FFF5), 0.33f to Color(0xFF7DFFC9), 0.72f to Color(0xFF30E094), 1f to Color(0xFF1A8563)) // 고리 4.5 그러데이션
