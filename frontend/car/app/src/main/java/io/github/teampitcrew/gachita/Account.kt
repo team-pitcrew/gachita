@@ -53,11 +53,10 @@ private val EMAIL = Regex("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$")
 fun validEmail(email: String) = EMAIL.matches(email.trim())
 fun validPassword(password: String) = password.codePointCount(0, password.length) in 8..72
 
-/** 서버 오류를 화면 문장으로. 로그인 실패는 이메일과 비밀번호 중 무엇이 틀렸는지 말하지 않는다(서버와 같음). */
-fun accountError(e: Throwable, login: Boolean): String = when {
+/** 서버 오류를 화면 문장으로. 로그인 실패(401)는 이메일과 비밀번호 중 무엇이 틀렸는지 말하지 않는다(서버와 같음). 가입한 이메일(409)은 enter가 로그인으로 잇는다. */
+fun accountError(e: Throwable): String = when {
     e !is ApiError -> "연결이 끊겨서 보내지 못했어요"
-    e.status == 409 -> "이미 가입한 이메일이에요. 로그인해 주세요"
-    e.status == 401 && login -> "이메일 또는 비밀번호가 맞지 않아요"
+    e.status == 401 -> "이메일 또는 비밀번호가 맞지 않아요"
     e.status == 400 && "password" in (e.message ?: "") -> "비밀번호는 8~72자로 적어 주세요"
     e.status == 400 && "email" in (e.message ?: "") -> "이메일 주소를 확인해 주세요"
     else -> failureText(e)
@@ -70,6 +69,13 @@ class AccountApi(base: String, private val open: (URL) -> HttpURLConnection = { 
     /** 새 계정과 이 차의 토큰(201). */
     fun signup(email: String, password: String): Pair<AccountProfile, String> =
         withToken(call("POST", "/api/accounts", JSONObject().put("email", email.trim()).put("password", password).put("name", provisionalName(email.trim())).put("device", DEVICE))!!)
+
+    /**
+     * 시안 C02 '가입하고 계속': 새 이메일이면 가입하고, 이미 가입한 이메일(409)이면 같은 이메일·비밀번호로 로그인한다
+     * (시안 카드 '이미 계정이 있나요? 같은 계정으로 로그인해 기록을 불러와요' — 폰에서 만든 계정을 차에서 이어 씀). 둘째 값은 원래 있던 계정인지.
+     */
+    fun enter(email: String, password: String): Pair<Pair<AccountProfile, String>, Boolean> =
+        try { signup(email, password) to false } catch (e: ApiError) { if (e.status == 409) login(email, password) to true else throw e }
 
     /** 같은 계정으로 이 차에 들어오기(새 기기 토큰). */
     fun login(email: String, password: String): Pair<AccountProfile, String> =

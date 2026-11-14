@@ -6,6 +6,10 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
+import java.io.OutputStream
+import java.net.HttpURLConnection
 import java.net.InetAddress
 import java.net.ServerSocket
 import kotlin.concurrent.thread
@@ -39,9 +43,53 @@ class OnboardingTest {
     }
 
     @Test fun `서버 오류 문장 - 로그인 실패는 어느 칸인지 말하지 않음`() {
-        assertEquals("이메일 또는 비밀번호가 맞지 않아요", accountError(ApiError(401, "이메일 또는 비밀번호가 맞지 않아요"), login = true))
-        assertEquals("이미 가입한 이메일이에요. 로그인해 주세요", accountError(ApiError(409, "이미 가입한 이메일"), login = false))
-        assertEquals("연결이 끊겨서 보내지 못했어요", accountError(java.io.IOException("x"), login = false))
+        assertEquals("이메일 또는 비밀번호가 맞지 않아요", accountError(ApiError(401, "이메일 또는 비밀번호가 맞지 않아요")))
+        assertEquals("비밀번호는 8~72자로 적어 주세요", accountError(ApiError(400, "password must be 8-72 characters")))
+        assertEquals("연결이 끊겨서 보내지 못했어요", accountError(java.io.IOException("x")))
+    }
+
+    /** 요청마다 정해 둔 응답을 돌려주는 가짜 연결(경로 → 상태·본문). 보낸 경로를 차례로 남긴다. */
+    private fun fakeApi(paths: MutableList<String>, reply: (String) -> Pair<Int, String>) = AccountApi("http://car.test") { url ->
+        paths += url.path
+        val (code, body) = reply(url.path)
+        object : HttpURLConnection(url) {
+            override fun connect() {}
+            override fun disconnect() {}
+            override fun usingProxy() = false
+            override fun getResponseCode() = code
+            override fun getOutputStream(): OutputStream = ByteArrayOutputStream()
+            override fun getInputStream(): InputStream = body.byteInputStream()
+            override fun getErrorStream(): InputStream = body.byteInputStream()
+        }
+    }
+
+    private val tokenBody = """{"id":"p1","name":"민준","email":"a@b.co","consent":true,"hasVoice":true,"token":"tok"}"""
+
+    @Test fun `C02 가입하고 계속 - 새 이메일은 가입만, 원래 있던 계정이 아님`() {
+        val paths = mutableListOf<String>()
+        val (got, existed) = fakeApi(paths) { 201 to tokenBody }.enter("a@b.co", "12345678")
+        assertEquals(listOf("/api/accounts"), paths)
+        assertFalse(existed)
+        assertEquals("tok", got.second)
+    }
+
+    @Test fun `C02 가입하고 계속 - 가입한 이메일(409)이면 같은 칸으로 로그인`() {
+        val paths = mutableListOf<String>()
+        val (got, existed) = fakeApi(paths) { if (it == "/api/accounts") 409 to """{"error":"이미 가입한 이메일"}""" else 201 to tokenBody }.enter("a@b.co", "12345678")
+        assertEquals(listOf("/api/accounts", "/api/sessions"), paths)
+        assertTrue(existed)
+        assertEquals("p1", got.first.id)
+        assertNull(nextAfterAccount(got.first, existed)) // 동의·목소리까지 있는 계정은 온보딩을 마친다
+    }
+
+    @Test fun `C02 가입하고 계속 - 가입한 이메일인데 비밀번호가 틀리면 401 문장, 다른 오류는 로그인하지 않음`() {
+        val paths = mutableListOf<String>()
+        val e = runCatching { fakeApi(paths) { if (it == "/api/accounts") 409 to "{}" else 401 to """{"error":"x"}""" }.enter("a@b.co", "12345678") }.exceptionOrNull()!!
+        assertEquals("이메일 또는 비밀번호가 맞지 않아요", accountError(e))
+        val other = mutableListOf<String>()
+        val bad = runCatching { fakeApi(other) { 400 to """{"error":"email is invalid"}""" }.enter("a@b.co", "12345678") }.exceptionOrNull()!!
+        assertEquals(listOf("/api/accounts"), other)
+        assertEquals("이메일 주소를 확인해 주세요", accountError(bad))
     }
 
     @Test fun `프로필 모양 - 이메일 null과 목소리·동의`() {

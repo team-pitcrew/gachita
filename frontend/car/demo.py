@@ -519,9 +519,8 @@ def onboarding():
     st.setdefault("dad", {}).setdefault("email", os.environ.get("DEMO_DAD_EMAIL", f"minjun+{os.urandom(3).hex()}@example.com"))
     st["dad"].setdefault("password", "demo-" + os.urandom(6).hex()); save()
     typed = type_into(0, st["dad"]["email"]) and type_into(1, st["dad"]["password"])
-    step(2, ["가입하고 계속", "로그인하고 계속"], note_="" if typed else "이메일·비밀번호 칸을 찾지 못함")
-    tap("가입하고 계속", "로그인하고 계속")
-    if seen("로그인하고 계속"): tap("로그인하고 계속")  # 같은 이메일이 이미 있으면(409) 앱이 로그인으로 바꾼다
+    step(2, ["가입하고 계속", "내 계정 만들기"], note_="" if typed else "이메일·비밀번호 칸을 찾지 못함")
+    tap("가입하고 계속")  # 같은 이메일이 이미 있으면(409) 앱이 같은 칸으로 로그인한다(AccountApi.enter)
     # 차는 가입 때 이메일 앞부분을 임시 이름으로 둔다. 한글은 adb로 넣지 못하니 같은 계정에 로그인해 이름을 민준으로 정한다(실제 API)
     if step(3, ["동의하고 계속", "우리의 대화를 남기기 전에"]):
         account("dad", "아빠"); api("PATCH", "/profiles/me", {"name": PEOPLE["아빠"][3], "character": PEOPLE["아빠"][1]}, st["dad"]["token"])
@@ -534,7 +533,7 @@ def onboarding():
         t = threading.Thread(target=lambda: said.append(say("enroll-아빠")), daemon=True); t.start()
         step(6, ["목소리를 듣고 있어요", "녹음 중"], 5)  # 누른 바로 뒤에 본다(15초 녹음 중에만 있는 글)
         t.join(30)  # 다 넣은 뒤에 멈춘다(녹음이 닫힌 채 넣으면 에뮬레이터가 멈춘 적이 있음)
-        wait(["녹음을 마쳤어요", "녹음 끝"], 25); tap("녹음 완료")
+        wait(["15 / 15초"], 25); tap("녹음 완료")  # 15초 녹음이 닫힐 때까지(시안 C07 글 '녹음 중  15 / 15초')
     step(7, ["목소리 등록 완료"], 20)
     account("dad", "아빠")
     if not any(said):  # 차가 아빠 목소리 대신 빈 소리를 등록했으면 화자 식별이 안 되므로 같은 합성 음성의 값으로 바꾼다(실제 API)
