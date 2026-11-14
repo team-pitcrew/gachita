@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: 가치타 API
-  version: 0.14.0
+  version: 0.17.0
   summary: 여행 세션, 기기 프로필과 이메일 계정, 동승 연결, 부탁, 장면, 기록본, 화자 대조
   description: |
     웹앱(frontend/web)과 차량 앱(frontend/car)이 부르는 API입니다. 구현은 backend/api/server.js입니다.
@@ -13,7 +13,7 @@ info:
     - 여행·발화·영상은 생성 시각을 이유로 48시간 뒤 만료시키지 않습니다(T90). 참가자의 삭제·동의 철회는 해당 자료 접근을 차단하고 정리합니다.
     - 음성 경로(발화·기록본)와 녹음 동의 켜기의 인증은 참가할 때 받는 **참가자 토큰**입니다(프로필 토큰과 별개). 동의는 본인 토큰으로만 켜고, 끄기는 누구나 합니다(T68).
     - 프로필 토큰은 기기마다 하나씩입니다 — 한 프로필을 차량과 폰에서 함께 쓸 수 있습니다(ADR-0009).
-    - 옛 그룹·초대 API(`/api/groups`, `/api/j`와 모든 하위 경로)와 웹 주소 `/j`는 종료됐으며 410과 새 동승 QR 안내를 반환합니다. 데이터와 토큰은 반환하지 않습니다.
+    - 옛 QR 초대 API(`/api/j`와 모든 하위 경로)와 웹 주소 `/j`는 종료됐으며 410과 새 동승 QR 안내를 반환합니다. 데이터와 토큰은 반환하지 않습니다. 가족·동승 그룹(`/api/groups`, `/api/group-invites`)은 새 모양으로 되살렸습니다(T133, docs/api/groups.md).
     - 목소리 등록·발화 대조(ADR-0019)의 음성은 WAV(16 kHz PCM) 이진 본문입니다. 등록 음성 원본은 어디에도 저장하지 않고 대조용 값만 남습니다.
 
     - 녹음 클립(`/recordings`)은 사람이 장면으로 고른 구간의 원음입니다. WAV(16 kHz·16비트·모노) 이진 본문을 5 MB까지 받아 클립 버킷(S3)에 두고, 받아 적은 글과 같은 참가자 토큰으로 듣고 지웁니다(T76).
@@ -35,6 +35,7 @@ tags:
   - name: 장면
   - name: 기록본
   - name: 클립
+  - name: 그룹
   - name: 상태 확인
 paths:
   /api/short-templates:
@@ -623,7 +624,7 @@ paths:
         본인 프로필 앨범의 장면만 공유합니다. 기록에 동의한 프로필 참가자가 같은 여행의 다른 프로필 참가자를 고릅니다.
         옛 그룹의 관리 대상 프로필은 자기 프로필 토큰으로 수신·회수할 수 없어 보내기와 받기 모두 제외합니다(403).
         녹음 동의와 별도로 내용·대상을 미리 본 뒤 명시적으로 실행해야 합니다. 원음·클립·참가 토큰은 복사하지 않습니다.
-        위치는 includeLocation=true일 때만 포함합니다. 공유는 여행 생성 후 48시간까지 유효합니다.
+        위치는 includeLocation=true일 때만 포함합니다. 공유에는 시간 만료가 없습니다(T90). 보낸 사람의 회수, 원본 앨범 장면·프로필·여행의 삭제로 사라집니다.
         동의 세대 변경 시 공유 행을 지우고, 원본 앨범·프로필이 삭제되면 조회에서 제외합니다.
         HTTP 응답은 공유 생성 확인이며 상대방의 수신·열람을 증명하지 않습니다.
       security: [{ participantToken: [] }]
@@ -656,7 +657,7 @@ paths:
                   lat: { type: number }
                   lng: { type: number }
                   createdAt: { type: integer, description: epoch ms }
-                  expiresAt: { type: integer, description: 여행 생성 시각 + 48시간의 epoch ms }
+                  expiresAt: { type: [integer, "null"], description: "예정된 만료가 없으면 null(T90). 옛 48시간 기한도 null로 옮겼습니다" }
                   recipientCount: { type: integer }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
@@ -764,7 +765,7 @@ paths:
       description: |
         맞으면 그 프로필과 이 기기에 쓸 토큰을 새로 줍니다(다른 기기의 토큰은 그대로, ADR-0009).
         이메일이 없거나 비밀번호가 틀리면 같은 401입니다 — 어느 쪽이 틀렸는지 말하지 않고, 없는 이메일에도 같은 계산을 해 응답 시간으로도 가리지 않습니다.
-        로그인 시도 횟수 제한은 아직 없습니다.
+        이메일에 NUL이나 짝 없는 서로게이트가 있으면 계정이 있는지와 관계없이 400입니다(T136). 로그인 시도 횟수 제한은 아직 없습니다.
       requestBody:
         required: true
         content:
@@ -879,7 +880,13 @@ paths:
     post:
       tags: [여행]
       summary: 여행 만들기
-      description: "그룹 여행은 종료됐습니다. 옛 `groupId` 필드를 보내면 410으로 거절합니다."
+      description: |
+        본문 없이(또는 `title`만) 부르면 빈 여행을 만들고 참가는 따로 합니다.
+        `groupId`를 보내면 **그룹으로 여행을 만듭니다**(T133, docs/api/groups.md). 프로필 토큰이 필요하고 부른 사람이 그 그룹의 구성원이어야 합니다(아니면 없는 그룹과 같은 404).
+        자리가 정해진 구성원을 그 자리로 넣고(자리 없는 구성원은 빠짐, 아무도 없으면 409), 동의는 각자 계정 동의가 지금 문구 판으로 켜져 있는지(아이는 보호자 동의)입니다.
+        **모든 참가자에 `profileId`**가 붙어(토큰 없는 아이 포함) 차 안 화자 식별이 `/voice-prints`에서 프로필 목소리 값을 받아 갑니다(ADR-0023).
+        응답의 `tokens`는 부른 사람과 그가 보호자인 아이의 참가자 토큰입니다(`{참가자 id: 토큰}`, 이때 한 번만). 다른 성인은 자기 폰에서 프로필 토큰으로 `POST /trips/{code}/participants`를 불러 있던 참가자와 새 토큰을 받습니다.
+        그룹 id·이름은 이 응답에만 있고 토큰 없이 읽는 여행 문서에는 싣지 않습니다.
       security: [{}, { profileToken: [] }]
       requestBody:
         content:
@@ -888,12 +895,25 @@ paths:
               type: object
               properties:
                 title: { type: string, minLength: 1, maxLength: 40 }
+                groupId: { type: string, description: 그룹으로 만들 때(T133) }
       responses:
-        "201": { description: 만들어짐, content: { application/json: { schema: { $ref: "#/components/schemas/Trip" } } } }
+        "201":
+          description: 만들어짐. 그룹으로 만들었으면 groupId·groupName·tokens가 더 있음
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Trip"
+                  - type: object
+                    properties:
+                      groupId: { type: string }
+                      groupName: { type: string }
+                      tokens: { type: object, additionalProperties: { type: string }, description: "참가자 id → 참가자 토큰(43자). 부른 사람과 그가 보호자인 아이 몫" }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
-        "410": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /api/trips/{code}:
     parameters: [{ $ref: "#/components/parameters/code" }]
     get:
@@ -1025,7 +1045,7 @@ paths:
         `Content-Type: application/json`이면 기기가 같은 임베더로 계산한 값만 받습니다(ADR-0023) — 소리는 기기를 떠나지 않습니다. 권한과 지우는 규칙은 같습니다.
         **그 참가자 본인의 참가자 토큰**으로만 합니다(없거나 틀리면 401, 다른 참가자의 토큰이면 403). 그 참가자의 녹음 동의가 꺼져 있으면 409입니다.
         본문을 받는 사이 동의 세대가 바뀌었으면(누군가 동의를 끔) 저장하지 않고 409입니다. 동의를 다시 확인한 뒤 다시 등록합니다.
-        원본 음성은 저장하지 않고 대조용 값만 여행 저장소에 둡니다. 다시 등록하면 값을 바꿉니다. 그 참가자의 동의가 꺼지면(누가 끄든) 바로 지우고, 꺼져 있던 동의가 다시 켜질 때도 지웁니다(다시 등록). 여행을 만든 뒤 48시간이 지나면 쓰이지 않고, 여행을 치울 때 함께 지웁니다.
+        원본 음성은 저장하지 않고 대조용 값만 여행 저장소에 둡니다. 다시 등록하면 값을 바꿉니다. 그 참가자의 동의가 꺼지면(누가 끄든) 바로 지우고, 꺼져 있던 동의가 다시 켜질 때도 지웁니다(다시 등록). 시간이 지났다는 이유로는 지우지 않고(T90), 참가자가 빠지거나 여행이 지워질 때 함께 지웁니다.
       security: [{ participantToken: [] }]
       requestBody:
         required: true
@@ -1114,17 +1134,56 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+  /api/trips/{code}/contents:
+    parameters: [{ $ref: "#/components/parameters/code" }]
+    get:
+      tags: [장면]
+      summary: 이 여행의 콘텐츠 기록(프로필 없는 기기)
+      description: |
+        `GET /profiles/me/trips`의 항목 하나와 같은 모양(`MyTrip`)으로 이 여행의 구성원·장소·경로·콘텐츠를 줍니다(F6, docs/api/places.md). 프로필 토큰이 없는 차량이 콘텐츠 기록(갤러리·타임라인·지도·플레이어)을 그릴 때 씁니다.
+        기록본과 같은 규칙으로 **녹음에 동의한 참가자의 토큰**으로만 읽습니다(없거나 다른 여행의 토큰이면 401, 동의하지 않은 참가자면 403). 영상 파일(`url`)은 지금처럼 전원 동의 규칙을 따릅니다.
+      security: [{ participantToken: [] }]
+      responses:
+        "200":
+          description: 이 여행의 콘텐츠 기록
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MyTrip" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /api/trips/{code}/places:
     parameters: [{ $ref: "#/components/parameters/code" }]
+    get:
+      tags: [장면]
+      summary: 장소 기록 읽기
+      description: |
+        차가 남긴 장소를 `at` 순서(같으면 받은 순서)로 줍니다(T136). **지금 상태는 `at`이 가장 큰 장소(마지막)**이고, 폰은 그것이 `approaching`이면 '곧 도착'을 보여 줍니다.
+        도착 장소(`GET /todos`의 `arrival`, T119)와 같은 규칙으로 **녹음에 동의한 참가자의 토큰**으로만 읽습니다(없거나 다른 여행의 토큰이면 401, 동의하지 않은 참가자면 403).
+        토큰 없이 읽는 여행 문서(`GET /trips/{code}`)에는 장소를 싣지 않습니다 — 가족이 어디로 가고 어디에 닿았는지를 여행 코드만 아는 사람과 캐시에 내주지 않게. 기록본(`GET /transcript`)에도 같은 `places`가 있습니다.
+      security: [{ participantToken: [] }]
+      responses:
+        "200":
+          description: 장소 기록
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, maxItems: 200, items: { $ref: "#/components/schemas/Place" } }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
     post:
       tags: [장면]
       summary: 장소 남기기(출발·경유·곧 도착·도착·목적지)
       description: |
-        차가 내비에서 읽은 장소 이름을 여행 문서의 `places`에 쌓습니다(T131, docs/api/places.md). 콘텐츠 기록의 지도·타임라인과 폰의 '곧 도착'이 읽습니다.
+        차가 내비에서 읽은 장소 이름을 쌓습니다(T131, docs/api/places.md). 콘텐츠 기록의 지도·타임라인과 폰의 '곧 도착'이 `GET`으로 읽습니다.
         그 여행의 참가자 토큰이 있어야 합니다(없거나 다른 여행의 토큰이면 401). 녹음 동의와 관계없습니다 — 음성이 아니라 내비의 장소입니다.
         `at`을 안 보내면 서버 시각을 씁니다. 늦게 올릴 때는 그때의 시각을 보내되 여행을 만들기 1분 전 ~ 지금+1분 안이어야 합니다. 좌표는 둘 다 있거나 둘 다 없음만 받습니다.
         `places`는 늘 `at` 순서(같으면 받은 순서)라, 늦게 도착한 장소도 제 시각 자리에 들어갑니다. **지금 상태는 `at`이 가장 큰 장소(마지막)**입니다.
-        여행 하나에 200개까지 두고, 넘으면 `at`이 가장 이른 것부터 버립니다. 차는 상태가 바뀔 때만 올립니다. 장소는 장면처럼 여행 코드로 읽는 여행 문서에 실립니다.
+        여행 하나에 200개까지 두고, 넘으면 `at`이 가장 이른 것부터 버립니다. 차는 상태가 바뀔 때만 올립니다. 쓰기는 녹음 동의와 관계없지만 읽기는 동의한 참가자만입니다(T136).
       security: [{ participantToken: [] }]
       requestBody:
         required: true
@@ -1326,7 +1385,7 @@ paths:
       summary: 내 피드
       description: |
         한 프로필의 발화와 장면을 여행을 가로질러 최신순으로 돌려줍니다.
-        발화는 여행이 살아 있는 동안(만든 뒤 48시간)만 나오고, 장면은 앨범에 복사된 것이라 여행이 닫힌 뒤에도 나옵니다(ADR-0014).
+        발화는 여행이 지워지지 않은 동안 나오고(시간 만료 없음, T90), 장면은 앨범에 복사된 것이라 여행이 지워진 뒤에도 나옵니다(ADR-0014).
       security: [{ profileToken: [] }]
       responses:
         "200":
@@ -1345,7 +1404,7 @@ paths:
       summary: 내 여행과 콘텐츠 목록
       description: |
         내 프로필이 참가자로 있는 여행을 최신 순으로 50개까지 줍니다(T131, docs/api/places.md). 콘텐츠 기록 화면(갤러리·타임라인·지도)이 읽습니다.
-        `route`와 `contents`는 기록본과 같은 규칙으로 **그 여행에서 내 참가자가 녹음에 동의했을 때만** 채우고, 지금 동의 세대의 것만 담습니다(철회로 세대가 오르면 빠짐).
+        `places`·`route`·`contents`는 기록본과 같은 규칙으로 **그 여행에서 내 참가자가 녹음에 동의했을 때만** 채웁니다(T136, 아니면 빈 목록). 경로와 콘텐츠는 지금 동의 세대의 것만 담습니다(철회로 세대가 오르면 빠짐).
         `route`는 좌표가 있는 발화를 시간순으로 골고루 줄인 `[lat, lng, at]`이고 200점까지입니다(첫 점·끝 점은 남김). 지도 제공자는 쓰지 않습니다.
         `contents`는 서버 보관을 마친 기본 영상(`kind: device`, short-assets)과 생성을 마친 영상(`kind: generated`, short-generations)입니다. 제목·시각·좌표는 그 장면(제목이 없으면 여행 제목), `place`는 그 시각 전에 남은 마지막 장소 이름입니다.
         파일(`url`)은 지금처럼 그 여행의 **참가자 토큰**으로 받고 전원 동의 규칙을 따릅니다(docs/api/short-assets.md). 이 기기에 토큰이 없으면 프로필 토큰으로 다시 참가(`POST /trips/{code}/participants`)해 받습니다.
@@ -1456,13 +1515,218 @@ paths:
       responses:
         "204": { description: 지움 }
         "401": { $ref: "#/components/responses/Error" }
+  /api/groups:
+    get:
+      tags: [그룹]
+      summary: 내 그룹
+      description: 내가 구성원인 가족·동승 그룹(T133, docs/api/groups.md). 만든 차례대로.
+      security: [{ profileToken: [] }]
+      responses:
+        "200":
+          description: 내 그룹
+          content: { application/json: { schema: { type: object, required: [items], properties: { items: { type: array, items: { $ref: "#/components/schemas/Group" } } } } } }
+        "401": { $ref: "#/components/responses/Error" }
+    post:
+      tags: [그룹]
+      summary: 그룹 만들기
+      description: 만든 사람이 대표(owner)입니다. 가족(`family`)이면 대표 자리를 운전석(`ROW_1_LEFT`)에 두고, 동승(`guest`)이면 자리 없이 시작합니다. 한 사람은 그룹 20개까지 속합니다(넘으면 409).
+      security: [{ profileToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, kind]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 20 }
+                kind: { type: string, enum: [family, guest] }
+      responses:
+        "201": { description: 만든 그룹, content: { application/json: { schema: { $ref: "#/components/schemas/Group" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/groups/{id}/invites:
+    parameters: [{ $ref: "#/components/parameters/id" }]
+    post:
+      tags: [그룹]
+      summary: 초대 코드 만들기
+      description: |
+        `FAMILY-1234`(가족)·`TRIP-1234`(동승) 모양의 코드를 24시간 줍니다. 그룹당 하나라 새로 만들면 이전 코드는 바로 못 씁니다(410). 대표와 성인 구성원이 만듭니다.
+        `url`은 같은 출처의 앱 주소(`/?group=<코드>`)입니다. QR은 이 주소를 담고, 코드 입력·QR·링크는 모두 `POST /group-invites/{code}`로 같은 초대에 들어갑니다.
+        구성원이 아니면 없는 그룹과 같은 404입니다.
+      security: [{ profileToken: [] }]
+      responses:
+        "201": { description: 초대, content: { application/json: { schema: { $ref: "#/components/schemas/GroupInvite" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /api/group-invites/{code}:
+    parameters: [{ name: code, in: path, required: true, schema: { type: string, pattern: "^(FAMILY|TRIP)-[0-9]{4}$" }, description: 초대 코드. 대소문자를 가리지 않음 }]
+    get:
+      tags: [그룹]
+      summary: 초대 미리보기(토큰 없이)
+      description: 없는 코드는 404, 만료됐거나 새 코드로 바뀐 코드는 410입니다. 틀린 코드 시도는 프로세스마다 10분에 60번까지(넘으면 429) — 코드가 숫자 4자리라 짐작을 막습니다.
+      responses:
+        "200":
+          description: 미리보기
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [groupName, kind, ownerName, expiresAt]
+                properties:
+                  groupName: { type: string }
+                  kind: { type: string, enum: [family, guest] }
+                  ownerName: { type: string }
+                  expiresAt: { type: integer }
+        "404": { $ref: "#/components/responses/Error" }
+        "410": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+    post:
+      tags: [그룹]
+      summary: 초대 코드로 들어가기
+      description: |
+        프로필 토큰으로 성인 구성원(`adult`)이 되어 그룹을 돌려줍니다. 이미 구성원이면 그대로 200입니다. 코드는 24시간 동안 여러 사람이 씁니다(그룹은 10명까지, 넘으면 409).
+        구성원의 `consent`는 그 사람의 계정 동의(지금 문구 판)를 따라갑니다. 꺼져 있으면 `consent: false`로 들어가고 화면이 동의(`PATCH /profiles/me`)를 받습니다.
+        틀린 코드 시도는 프로필마다 10분에 10번, 프로세스마다 60번까지입니다(넘으면 429, 맞는 코드도 잠시 막힘).
+      security: [{ profileToken: [] }]
+      responses:
+        "200": { description: 들어간 그룹, content: { application/json: { schema: { $ref: "#/components/schemas/Group" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "410": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+  /api/groups/{id}/children:
+    parameters: [{ $ref: "#/components/parameters/id" }]
+    post:
+      tags: [그룹]
+      summary: 아이 프로필 만들기
+      description: |
+        계정 없는 아이 프로필을 만들어 그룹에 넣습니다(role `child`). 만든 사람(대표나 성인)이 보호자(`guardianId`)이고, 아이의 동의는 보호자 동의(`guardianConsent`)입니다.
+        아이에게는 토큰이 없습니다. 여행 참가자 토큰은 그룹으로 여행을 만들 때 보호자 기기가 받습니다. 그룹은 10명까지(넘으면 409).
+      security: [{ profileToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, guardianConsent]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 20 }
+                character: { type: string, maxLength: 20 }
+                guardianConsent: { type: boolean }
+                consentVersion: { type: string, maxLength: 40, description: 보호자가 동의한 문구의 판. 보내지 않으면 서버의 지금 판 }
+      responses:
+        "201": { description: 아이가 들어간 그룹, content: { application/json: { schema: { $ref: "#/components/schemas/Group" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/groups/{id}/seats:
+    parameters: [{ $ref: "#/components/parameters/id" }]
+    put:
+      tags: [그룹]
+      summary: 자리 바꾸기(한 번에)
+      description: |
+        `{seats: {<profileId>: 좌석|null}}`. 적은 구성원만 바꾸고 나머지는 그대로입니다. 한 트랜잭션에서 바꾸므로 맞바꾸기가 됩니다.
+        바꾼 뒤 같은 자리에 두 사람이면 409이고 아무것도 바뀌지 않습니다(동시에 보내도 하나만 성공). 구성원이 아닌 id·모르는 좌석은 400. 대표와 성인이 바꿉니다.
+      security: [{ profileToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [seats]
+              properties:
+                seats: { type: object, additionalProperties: { anyOf: [{ $ref: "#/components/schemas/Seat" }, { type: "null" }] } }
+      responses:
+        "200": { description: 바뀐 그룹, content: { application/json: { schema: { $ref: "#/components/schemas/Group" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/groups/{id}/members/{profileId}:
+    parameters: [{ $ref: "#/components/parameters/id" }, { name: profileId, in: path, required: true, schema: { type: string, format: uuid } }]
+    patch:
+      tags: [그룹]
+      summary: 아이의 이름·캐릭터·보호자 동의 고치기
+      description: 그 아이의 보호자만(아니면 403). 성인은 자기 프로필(`PATCH /profiles/me`)에서 고칩니다.
+      security: [{ profileToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string, minLength: 1, maxLength: 20 }
+                character: { type: string, maxLength: 20 }
+                guardianConsent: { type: boolean }
+                consentVersion: { type: string, maxLength: 40 }
+      responses:
+        "200": { description: 바뀐 그룹, content: { application/json: { schema: { $ref: "#/components/schemas/Group" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [그룹]
+      summary: 빼기·나가기
+      description: |
+        대표는 남을 빼고, 성인은 자기만 나가고, 아이는 대표나 그 보호자가 뺍니다(아니면 403).
+        **아이를 빼면 아이 프로필을 지웁니다**(프로필 지우기와 같은 정리 — 아이가 탔던 여행은 동의 세대가 올라 그 여행의 기록이 지워집니다). 성인이 나가면 그가 보호자인 아이도 함께 지웁니다.
+        대표가 자기를 빼면 그룹이 없어지고 그룹의 아이를 모두 지웁니다.
+      security: [{ profileToken: [] }]
+      responses:
+        "204": { description: 뺌 }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/groups/{id}/members/{profileId}/voice:
+    parameters: [{ $ref: "#/components/parameters/id" }, { name: profileId, in: path, required: true, schema: { type: string, format: uuid } }]
+    post:
+      tags: [그룹]
+      summary: 아이 목소리 등록
+      description: |
+        보호자가 아이의 목소리를 등록합니다(본인 것도 되지만 보통은 `/profiles/me/voice`). 본문과 검사는 `/profiles/me/voice`와 같습니다 — 기기가 계산한 값(`Content-Type: application/json`, ADR-0023) 또는 WAV.
+        보호자가 아니면 403, 아이의 보호자 동의가 지금 문구 판으로 켜져 있지 않으면 409입니다. 값은 아이 프로필에 남고, 그룹으로 만든 여행에서 차가 `/voice-prints`로 받아 갑니다.
+      security: [{ profileToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: "#/components/schemas/VoicePrintInput" } }
+          application/octet-stream: { schema: { type: string, format: binary } }
+      responses:
+        "200":
+          description: 등록함
+          content: { application/json: { schema: { type: object, required: [seconds, dims], properties: { seconds: { type: number }, dims: { type: integer } } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [그룹]
+      summary: 아이 목소리 지우기
+      description: 보호자(또는 본인)가 대조 값을 바로 지웁니다.
+      security: [{ profileToken: [] }]
+      responses:
+        "204": { description: 지움 }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /api/profiles/{id}/photo:
     parameters: [{ $ref: "#/components/parameters/id" }]
     get:
       tags: [프로필]
       summary: 프로필 사진 보기(id로)
       description: |
-        지금은 본인 것만 줍니다(T128). 같은 그룹 구성원의 사진으로 넓히는 것은 그룹 티켓(T133)에서 합니다.
+        본인 것과 같은 그룹 구성원(아이 포함)의 것을 줍니다(T128·T133).
         볼 수 없는 프로필은 없는 프로필·사진 없음과 같은 404입니다(있는 id인지 알려 주지 않음). 응답은 `/profiles/me/photo`와 같습니다(`private, no-store`, `nosniff`).
       security: [{ profileToken: [] }]
       responses:
@@ -1818,7 +2082,7 @@ paths:
       description: |
         이 여행의 참가자라면 누구나 지웁니다(동의 끄기처럼 지우는 쪽은 넓게). 버킷에서 바로 지우고(버전 관리를 끈 버킷이라 남는 버전 없음) `204`.
         지운 클립은 표시를 남겨 차가 다시 올려도 받지 않습니다(`409`, 동의를 철회했다 다시 켜도 여행이 닫힐 때까지). 받아 적은 글과 장면은 그대로입니다.
-        녹음 동의를 철회하면(켜져 있던 동의를 끔) 그 여행의 클립이 모두, 여행을 만든 뒤 48시간이 지나면 여행과 함께 지워집니다(커밋 뒤 버킷에서, 실패하면 10분마다 다시).
+        녹음 동의를 철회하면(켜져 있던 동의를 끔) 그 여행의 클립이 모두 지워집니다(커밋 뒤 버킷에서, 실패하면 10분마다 다시). 시간이 지났다는 이유로는 API가 지우지 않습니다(T90).
         버킷을 기다리는 사이 같은 장면의 클립이 새로 올라왔으면(철회 → 다시 동의 → 다시 올림) 그 새 클립은 건드리지 않고 `409` — 다시 지우면 됩니다.
       security: [{ participantToken: [] }]
       responses:
@@ -1833,7 +2097,7 @@ paths:
       tags: [기록본]
       summary: 원발화가 연결된 장소별 할 일
       description: |
-        현재 세대의 살아 있는 전사에서 차량 Todos.kt와 같은 장소·권유/의무형 규칙으로 추출합니다(place-rules-v1, LLM 없음).
+        현재 세대의 살아 있는 전사에서 장소·권유/의무형 규칙으로 추출합니다(place-rules-v2, LLM 없음). v1(차량 Todos.kt와 같은 '…에서 …자')에 '…가면/가서 …'와 '요'·'급해' 끝을 더했고, 항목마다 분류(`category`)·제목(`title`)·물건(`items`)·요청한 사람(`requestedBy`)을 줍니다(T141, v2 도착 브리핑). v1이 뽑던 문장의 id는 그대로입니다.
         수동 교정본 → 자동 교정본 → 원문 순으로 읽으며, 같은 장소·문장은 하나로 묶고 모든 원발화를 sources에 남깁니다.
         id는 장소·문장의 해시이므로 내용이 바뀌면 바뀝니다. 상태만 따로 저장하며 원문을 지우면 목록에서 사라집니다.
       security: [{ participantToken: [] }]
@@ -1931,7 +2195,7 @@ paths:
                   observedAt: { type: integer }
                   place: { type: object }
                   distanceMeters: { type: integer }
-                  method: { type: string, const: place-rules-v1 }
+                  method: { type: string, const: place-rules-v2 }
                   items: { type: array, items: { $ref: "#/components/schemas/Todo" } }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
@@ -1965,7 +2229,7 @@ components:
               type:
                 type: string
                 enum: [invalid, unauthenticated, forbidden, not_found, method_not_allowed, conflict, gone, too_large, rate_limited, unavailable, internal]
-                description: "오류 종류(T71). 클라이언트는 문장이 아니라 이것으로 가른다. unavailable(503)은 DB에 닿지 않거나 질의 시간 제한 — 잠시 뒤 다시 해도 된다. gone(410)은 종료한 옛 그룹 초대·대리 참가 경로"
+                description: "오류 종류(T71). 클라이언트는 문장이 아니라 이것으로 가른다. unavailable(503)은 DB에 닿지 않거나 질의 시간 제한 — 잠시 뒤 다시 해도 된다. gone(410)은 종료한 옛 QR 초대(/j)·대리 참가 경로와 만료·바뀐 그룹 초대 코드. rate_limited(429)는 틀린 그룹 초대 코드를 너무 많이 시도함"
       headers:
         x-request-id: { schema: { type: string }, description: "요청 id(로그와 맞춰 볼 때). 성공 응답에도 같은 머리말이 있다(경로마다 적지 않음)" }
   schemas:
@@ -1996,12 +2260,28 @@ components:
               text: { type: string, description: 원전사 }
               displayText: { type: string, description: 교정 우선순위를 적용한 전사 }
               participantId: { type: string, description: 확인된 화자가 있을 때만 }
+        category:
+          type: string
+          enum: [first, buy, remember, bring]
+          description: "도착 브리핑의 묶음(T141). first = 먼저 할 일(화장실·먼저·급해), buy = 잊지 말고 살 것(사다·사 가자·사 오자), bring = 챙길 것(챙기다·가져가다·내리다·꺼내다, 물건이 있을 때), remember = 잊지 말기(나머지). 앞의 것이 먼저"
+        title: { type: string, description: "행동 이름. 끝(자·야지·야 돼)을 떼고 마지막 동사를 '…하기'꼴로. 예: '화장실 먼저 다녀오기', '고기는 바로 냉장 보관', '가방 챙기기'" }
+        items:
+          type: array
+          description: "한 부탁 안의 물건. 살 것·챙길 것은 동사 앞 말을 랑·이랑·하고·와·과·쉼표·그리고로 나눔(예: '삼겹살 600g이랑 귤 한 봉지 사 가자' → 삼겹살 600g, 귤 1봉지). 먼저 할 일·잊지 말기는 동사를 뺀 말 하나. 물건을 말하지 않았으면 빈 배열"
+          items:
+            type: object
+            required: [name, qty]
+            properties:
+              name: { type: string }
+              qty: { type: [string, "null"], description: "숫자+단위(g·kg·개·병·봉지·팩·캔·마리) 또는 한·두·세…+단위를 '600g'·'1봉지'·'2병'으로. 그 밖의 단위는 이름에 남기고 null" }
+        requestedBy: { type: array, items: { type: string }, description: 출처 발화의 확인된 화자(participantId), 중복 없이 처음 말한 순서. 화자가 없으면 빈 배열 }
+        method: { type: string, const: place-rules-v2 }
     TodoList:
       type: object
       required: [generation, method, items]
       properties:
         generation: { type: integer }
-        method: { type: string, const: place-rules-v1 }
+        method: { type: string, const: place-rules-v2 }
         items: { type: array, items: { $ref: "#/components/schemas/Todo" } }
         arrival:
           description: 마지막으로 도착 판정(eligible=true)을 받은 장소(T119). 없거나 다시 출발했으면 null. 좌표는 없습니다. 클라이언트가 보낸 관측에 대한 판정이며 서버가 차량 센서를 확인했다는 뜻이 아닙니다.
@@ -2200,6 +2480,37 @@ components:
             consent: { type: boolean, description: 계정의 녹음 동의(T128) }
             consentAt: { type: [integer, "null"], description: 동의한 시각(epoch ms). 동의가 꺼져 있으면 null }
             consentVersion: { type: [string, "null"], description: 동의한 문구의 판. 동의가 꺼져 있으면 null }
+    GroupInvite:
+      type: object
+      required: [code, expiresAt, url]
+      properties:
+        code: { type: string, pattern: "^(FAMILY|TRIP)-[0-9]{4}$" }
+        expiresAt: { type: integer, description: epoch ms(만든 뒤 24시간) }
+        url: { type: string, description: "같은 출처의 앱 주소 /?group=<코드>. QR이 담는 값" }
+    GroupMember:
+      type: object
+      required: [profileId, name, character, hasPhoto, hasVoice, consent, role, seat, pending]
+      properties:
+        profileId: { type: string, format: uuid }
+        name: { type: string }
+        character: { type: string }
+        hasPhoto: { type: boolean, description: "사진은 GET /profiles/{id}/photo(같은 그룹 구성원)" }
+        hasVoice: { type: boolean, description: 지금 임베더 길이의 목소리 값이 있는지 }
+        consent: { type: boolean, description: 계정 동의(아이는 보호자 동의)가 지금 문구 판으로 켜져 있는지 }
+        role: { type: string, enum: [owner, adult, child] }
+        seat: { anyOf: [{ $ref: "#/components/schemas/Seat" }, { type: "null" }] }
+        pending: { type: boolean, const: false }
+        guardianId: { type: string, format: uuid, description: 아이일 때만. 보호자의 profileId }
+    Group:
+      type: object
+      required: [id, name, kind, ownerId, members, invite]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        kind: { type: string, enum: [family, guest] }
+        ownerId: { type: string, format: uuid }
+        members: { type: array, items: { $ref: "#/components/schemas/GroupMember" }, description: 대표, 성인, 아이 차례 }
+        invite: { anyOf: [{ $ref: "#/components/schemas/GroupInvite" }, { type: "null" }], description: 지금 쓸 수 있는 초대. 없거나 만료면 null }
     ProfileWithToken:
       allOf:
         - $ref: "#/components/schemas/Profile"
@@ -2298,12 +2609,13 @@ components:
             asrText: { type: string, description: "고른 장면 클립의 소리로 다시 받아 적은 글(T75). 있을 때만 — 기록본과 장면 후보의 발화에. text(Pleos 원문)는 그대로" }
     Transcript:
       type: object
-      required: [generation, utterances, requests, todos]
+      required: [generation, utterances, requests, todos, places]
       properties:
         generation: { type: integer }
         utterances: { type: array, items: { $ref: "#/components/schemas/Utterance" } }
         requests: { type: array, items: { $ref: "#/components/schemas/Request" } }
-        todos: { type: array, items: { $ref: "#/components/schemas/Todo" }, description: 실제 전사의 장소별 할 일과 사용자 상태(place-rules-v1) }
+        todos: { type: array, items: { $ref: "#/components/schemas/Todo" }, description: 실제 전사의 장소별 할 일과 사용자 상태(place-rules-v2) }
+        places: { type: array, items: { $ref: "#/components/schemas/Place" }, description: "차가 남긴 장소, at 순서(T136). GET /places와 같음" }
     FeedItem:
       type: object
       required: [kind, tripCode, at]
@@ -2355,7 +2667,7 @@ components:
               character: { type: string, description: 프로필의 지금 캐릭터, 없으면 참가할 때의 것, 손님은 빈 글 }
               seat: { $ref: "#/components/schemas/Seat" }
               profileId: { type: string, format: uuid, description: 프로필로 참가했을 때만 }
-        places: { type: array, items: { $ref: "#/components/schemas/Place" } }
+        places: { type: array, items: { $ref: "#/components/schemas/Place" }, description: at 순서. 그 여행에서 내가 녹음에 동의했을 때만(T136) }
         route:
           type: array
           maxItems: 200
@@ -2364,13 +2676,37 @@ components:
           type: array
           items:
             type: object
-            required: [id, momentId, title, seconds, at, lat, lng, place, kind, url]
+            required: [id, momentId, title, seconds, at, from, to, lat, lng, place, kind, cast, lines, url]
             properties:
               id: { type: string, format: uuid }
               momentId: { type: string }
               title: { type: string }
               seconds: { type: number }
               at: { type: integer, description: 장면 시각(epoch ms) }
+              from: { type: [integer, "null"], description: 장면 구간 시작(epoch ms). 구간이 없으면 at 앞 20초(F6) }
+              to: { type: [integer, "null"], description: 장면 구간 끝(epoch ms). 구간이 없으면 at 뒤 10초 }
+              cast:
+                type: array
+                description: 장면 구간에서 말한 사람(화자를 확인한 줄만), 처음 말한 순서. 갤러리 타일·플레이어의 캐릭터(F6)
+                items:
+                  type: object
+                  required: [participantId, name, character]
+                  properties:
+                    participantId: { type: string }
+                    name: { type: string }
+                    character: { type: string }
+              lines:
+                type: array
+                maxItems: 30
+                description: 장면 구간의 발화(지금 동의 세대, 시각 순, 30줄까지). 플레이어 자막 줄(F6). 화자를 모르면 participantId·name이 null
+                items:
+                  type: object
+                  required: [at, participantId, name, text]
+                  properties:
+                    at: { type: integer }
+                    participantId: { type: [string, "null"] }
+                    name: { type: [string, "null"] }
+                    text: { type: string, description: 고친 글 → 다시 받아 적은 글 → 원래 글 순 }
               lat: { type: [number, "null"] }
               lng: { type: [number, "null"] }
               place: { type: [string, "null"], description: 그 시각 전에 남은 마지막 장소 이름 }
@@ -2378,7 +2714,7 @@ components:
               url: { type: string, description: 그 여행의 참가자 토큰으로 받는 파일 주소 }
     Trip:
       type: object
-      required: [code, title, status, recording, participants, requests, moments, places, version, createdAt]
+      required: [code, title, status, recording, participants, requests, moments, version, createdAt]
       properties:
         code: { type: string }
         title: { type: string }
@@ -2388,7 +2724,6 @@ components:
         participants: { type: array, items: { $ref: "#/components/schemas/Participant" } }
         requests: { type: array, items: { $ref: "#/components/schemas/Request" } }
         moments: { type: array, items: { $ref: "#/components/schemas/Moment" } }
-        places: { type: array, maxItems: 200, items: { $ref: "#/components/schemas/Place" }, description: "차가 남긴 장소(T131), at 순서(같으면 받은 순서). 지금 상태는 마지막(at이 가장 큰) 장소. 그 전에 만든 여행은 빈 목록" }
         startedAt: { type: integer, description: 처음 주행을 시작한 시각(T131). 그 전에는 없음 }
         endedAt: { type: integer, description: 끝낸 시각. 끝낸 여행에만 }
         version: { type: integer, description: 바뀔 때마다 1씩 늘어남 }

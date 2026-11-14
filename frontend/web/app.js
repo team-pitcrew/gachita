@@ -14,7 +14,8 @@ import { CHARACTER_OPTIONS, characterKey, characterImage, createShortFilm, expor
 import { createShortStudio } from "/short-studio.js";
 import { createScenePicker } from "/short-scenes.js";
 import { createBoarding } from "/boarding.js";
-import { appBar, arrivalCards, askState, driveState, journeyTabs, nearCard, recordingLine, rideHeading, seatMap, statusMoves } from "/ride.js";
+import { createOnboarding } from "/onboarding.js";
+import { appBar, arrivalCards, askState, createPlaces, driveState, journeyTabs, nearCard, recordingLine, rideHeading, seatMap, statusMoves } from "/ride.js";
 
 // 여행 상태 이름. 상태별 제목·부제·운전석 단추는 ride.js가 고른다.
 const TRIP = { boarding: "탑승 중", driving: "주행 중", parked: "주차 완료", ended: "여행 종료" };
@@ -30,7 +31,10 @@ const CONSENT = [
   "장면을 고를 수 있게 소리는 차 안에 암호화해 보관합니다. 차에서 원음을 직접 지우거나 기록 동의를 끄면 지웁니다.",
   "장면으로 남기면 그 구간의 소리가 서버로 올라갑니다.",
   "자막을 바로잡으려고 그 구간의 소리와 받아 적은 글, 참가자 이름을 외부 음성 인식 서버로 보내 다시 받아 적습니다.",
-  "누가 말했는지 가리려고 말소리가 잠시 서버로 갔다가 저장되지 않고 지워집니다.",
+  // 화자 식별은 새 차량 앱이 차 안에서 한다(ADR-0023 8절의 전환기 글). 구버전 차량 앱과 웹 입력이 소리를 보내는 동안에는 가운데 문장을 빼지 않는다.
+  "누가 말했는지는 차 안에서 가립니다.",
+  "이전 버전의 차량 앱과 웹 입력에서는 이를 위해 말소리가 잠시 서버로 갔다가 저장되지 않고 지워집니다.",
+  "등록한 목소리는 화자를 가리는 값으로만 바뀌어 서버에 저장되고, 동의를 끄면 지워집니다.",
   "프로필로 참가한 사람은 자기 이름이 붙은 글을, 참가자 누구나 장면으로 남긴 소리를 바로 지울 수 있습니다.",
   "동의는 여행 중 언제든 끌 수 있고, 끄면 이 여행에서 그때까지 받아 적은 글과 올라간 소리가 모두 지워집니다.",
 ];
@@ -47,7 +51,8 @@ const QUICK = [
 
 const app = document.getElementById("app");
 const sheet = document.getElementById("sheet");
-const code = () => (location.hash === "#me" ? "" : location.hash.slice(1).toUpperCase());
+// /#start는 계정·온보딩(T142). 여행 코드가 아니다.
+const code = () => (location.hash === "#me" || location.hash === "#start" ? "" : location.hash.slice(1).toUpperCase());
 // 이 폰이 기억하는 것. store(키)는 읽기, store(키, 값)은 쓰기, store(키, null)은 지우기.
 const vehicleView = new URLSearchParams(location.search).get("vehicle-view") === "1";
 const identityStorage = vehicleView ? sessionStorage : localStorage;
@@ -125,6 +130,14 @@ const todos = createTodos({
   request: (method, path, body) => asMe(trip.participants.find((p) => p.id === myId()), (c, token) => api(method, `/trips/${c}${path}`, body, token)),
   onChange: () => { if (typing()) stale = true; else render(); },
 });
+// 장소 기록(#370)은 녹음에 동의한 참가자만 GET /places로 읽는다. 여행 문서의 places는 읽지 않는다.
+const places = createPlaces({
+  getTrip: () => trip,
+  getParticipant: () => trip?.participants.find((p) => p.id === myId()),
+  getToken: myToken,
+  request: (method, path) => asMe(trip.participants.find((p) => p.id === myId()), (c, token) => api(method, `/trips/${c}${path}`, null, token)),
+  onChange: () => { if (typing()) stale = true; else render(); },
+});
 const launchLocalShort = (momentId) => {
   const me = trip?.participants.find((p) => p.id === myId());
   if (me) openShort(me, momentId).catch((e) => toast(e.status === 0 ? "연결이 끊겨서 열지 못했어요." : e.message));
@@ -139,6 +152,22 @@ const boarding = createBoarding({ getProfile: () => profile, getToken: () => sto
   onLinked: ({ code, participant, token }) => { store(code, participant.id); store(`${code}:token`, token); store(`${code}:asked`, null); store("trip", code); },
   onDecision: ({ code }) => { store(`${code}:asked`, "1"); reading = false; },
   onLeave: ({ code: joinedCode }) => { store(`${joinedCode}:asked`, "1"); reading = false; if (code() === joinedCode) refresh(true); else location.hash = joinedCode; } });
+// 계정·온보딩(T142, P01–P08). 프로필 토큰이 없는 첫 화면과 /#start에서 보인다. 동의 문구는 여행 기록 동의와 같은 CONSENT를 넘긴다(T138과 한 배열).
+const onboarding = createOnboarding({
+  getProfile: () => profile,
+  getToken: () => store("profile"),
+  setToken: (token) => store("profile", token),
+  loadProfile,
+  getPhoto: () => photo,
+  consentText: CONSENT,
+  render: () => render(),
+  onBegin: () => { if (location.hash !== "#start") location.hash = "start"; },
+  onDone: () => { location.hash = ""; },
+  // mock: F2(가족 그룹, T133 #372)가 병합되면 그 입구로 잇는다. 그 전에는 처음 화면으로 간다.
+  onFamily: () => { location.hash = ""; },
+  onOther: () => { location.hash = "me"; },
+  isOnline: () => !offline && navigator.onLine !== false,
+});
 const startRide = () => boarding.open();
 const launchShort = () => studio.open();
 const openConversations = () => {
@@ -241,18 +270,23 @@ async function refresh(force) {
     if (profile && location.hash === "#me") fillDraft();
   }
   if (code()) {
+    // 머리의 '연결됨·연결 끊김'과 기록 단추 잠금은 offline을 따른다. 값이 바뀌었으면 304·끊김이어도 다시 그린다(입력 중이면 끝난 뒤).
+    const redraw = (was) => { if (was !== offline) { if (typing()) stale = true; else render(); } };
     try {
       const next = await call("GET", `/${code()}${trip && !force ? `?v=${trip.version}` : ""}`);
+      const was = offline;
       offline = false;
       if (next) (trip = next), (failed = "");
       // 못 받았으면 다음 폴링에서 다시 한다. 그동안은 참가 화면이 보이고, 거기서 참가해도 같은 참가자로 들어간다.
       const claimed = await claim().catch(() => false);
-      if (!next && !claimed) { conversations.sync(); return; }
+      if (!next && !claimed) { conversations.sync(); redraw(was); return; }
     } catch (e) {
       if (e.status === 0) {
         // 터널 같은 곳에서는 마지막 화면을 그대로 두고 계속 다시 묻는다
         if (!offline) toast("연결이 끊겼어요. 다시 이어지면 새로 보여 드려요.");
+        const was = offline;
         offline = true;
+        redraw(was);
         return;
       }
       trip = null;
@@ -451,6 +485,10 @@ function profileView() {
         h("p", { className: "meta" }, "다른 폰에서 구글로 계속하면 이 프로필로 들어와요."),
         button("구글 연결 끊기", () => act(async () => (await mine("DELETE", "/profiles/me/links/google"), await loadProfile(), toast("구글 연결을 끊었어요."))), "plain"),
       ),
+    profile && h("section", { className: "card" },
+      h("p", { className: "what" }, profile.email ? (profile.hasVoice ? "목소리 다시 등록" : "15초 목소리 등록") : "이메일 계정과 목소리 등록"),
+      h("p", { className: "meta" }, profile.email ? `${profile.email} 계정 · 차에서 말한 사람을 알아보는 데 써요.` : "같은 계정으로 차에서도 로그인하고, 15초 목소리로 말한 사람을 알아봐요."),
+      button(profile.email ? "목소리 등록하기" : "계정 만들기", () => { onboarding.open(); location.hash = "start"; })),
     form(saveProfile, ...profileFields(true), bar(h("button", { id: "profile-save", className: "primary", disabled: savingProfile }, savingProfile ? "저장 중" : "저장"))),
     profile &&
       h(
@@ -480,6 +518,7 @@ function home() {
       profile ? h("div", { className: "home-profile" }, editPortrait(), h("div", {}, h("p", { className: "meta" }, "오늘도 함께해요"), h("h1", {}, `${profile.name} 님`))) : h("h1", {}, "같이 탄 오늘,", h("br"), "함께 남겨요."),
       h("p", { className: "sub" }, profile ? "차 안에서 나눈 이야기가 우리만의 기록이 돼요." : "이름과 얼굴을 정하고, 차 화면의 QR을 스캔해 주세요."),
     ),
+    profile?.email && !profile.hasVoice && entry("record", "15초 목소리 등록", "차에서 말한 사람을 알아보는 데 써요", () => { onboarding.open(); location.hash = "start"; }),
     profile ? entry("qr", "차량 QR로 참여", "차 화면의 QR을 휴대폰으로 스캔해요", startRide, "ride-entry") : store("profile") ? profileConnection() : entry("pencil", "내 프로필 만들기", "사진 또는 캐릭터로 나를 소개해요", () => { location.hash = "me"; }, "ride-entry"),
     h("section", { className: "home-section" }, h("div", { className: "between" }, h("h2", {}, "다시 만나는 우리 이야기"), button("보관함", () => studio.open({ view: "library" }), "plain")), entry("play", "우리 쇼츠", "원래 목소리로 남긴 짧은 여행", launchShort)),
     last && h("section", { className: "home-section" },
@@ -545,7 +584,7 @@ const consentOn = (me) =>
 
 // '함께 타는 중'(최종 시안 P17–P21). 위는 지금 상태(제목·좌석 지도·기록 상태 또는 곧 도착·도착 부탁),
 // 아래는 그대로 둔 기능(할 일, 챙길 부탁, 내 동의, 장면·자막·공유)이다. 도착과 '확인'은 이 탭에서만 기억한다(여행·동의 세대별, 저장하지 않음).
-const ride = { seen: { key: "", place: "" }, near: { key: "", place: "" } };
+const ride = { seen: { key: "", place: "", at: null }, near: { key: "", id: "" } };
 function tripView(me) {
   const t = `/${trip.code}`;
   const driver = me.seat === "ROW_1_LEFT";
@@ -577,13 +616,14 @@ function tripView(me) {
   const scope = `${trip.code}:${trip.generation ?? 1}`;
   const list = todos.snapshot();
   const asks = askState(list);
-  if (trip.status === "parked" && list?.arrival?.place) ride.seen = { key: scope, place: list.arrival.place };
-  const state = driveState(trip, { arrival: list?.arrival, seenArrival: ride.seen.key === scope ? ride.seen.place : "", nearSeen: ride.near.key === scope ? ride.near.place : "" });
+  if (trip.status === "parked" && list?.arrival?.place) ride.seen = { key: scope, place: list.arrival.place, at: list.arrival.at };
+  const state = driveState(trip, { places: places.items(), arrival: list?.arrival, seenArrival: ride.seen.key === scope ? ride.seen : null, nearSeen: ride.near.key === scope ? ride.near.id : "" });
   const heading = rideHeading(state, { title: trip.title, waiting, asks });
   const [recordText, recordOn] = recordingLine(trip, waiting);
 
   // 아래 단추: 기록 중지·재개(주행 중, 누구나), 곧 도착 '확인', 그 밖에는 운전석의 다음 여행 상태. 부탁 남기기는 늘 함께.
-  const moves = driver ? statusMoves(trip, state) : [];
+  const moves = driver ? statusMoves(trip) : [];
+  const move = ([label, status, ask], className) => button(label, () => (!ask || confirm(ask)) && patch("", { status })(), className);
   const toggleRecording = async (e) => {
     const control = e.currentTarget;
     control.disabled = true;
@@ -591,9 +631,9 @@ function tripView(me) {
   };
   const recordButton = (className) => h("button", { type: "button", className, disabled: offline || (!trip.recording && waiting.length > 0), onclick: toggleRecording }, trip.recording ? "기록 중지" : "기록 재개");
   let main = null;
-  if (state.kind === "near") main = button("확인", () => { ride.near = { key: scope, place: state.place }; render(); }, "primary");
+  if (state.kind === "near") main = button("확인", () => { ride.near = { key: scope, id: state.id }; render(); }, "primary");
   else if (trip.status === "driving") main = recordButton("primary big");
-  else if (moves.length) { const [label, status] = moves.shift(); main = button(label, patch("", { status }), "primary"); }
+  else if (moves.length) main = move(moves.shift(), "primary");
   const ask = trip.status !== "ended" && button("부탁 남기기", () => (sheet.showModal(), sheet.querySelector("#sheet-text").focus()), main ? "secondary" : "primary");
 
   // 운전자가 제안하고 수락한다. 반영 확인은 차량 앱이 내비 결과를 받은 뒤 누르는 자리다.
@@ -641,7 +681,7 @@ function tripView(me) {
       { className: "card" },
       h("div", { className: "between" }, h("div", {}, h("p", { className: "what" }, "내 자리"), h("p", { className: "meta" }, `${SEAT[me.seat]} · ${TRIP[trip.status]}`)),
         // 운전석의 나머지 여행 상태 단추(첫째는 아래 주 단추 자리). 시안 위쪽을 가리지 않게 여기 둔다.
-        moves.length > 0 && h("div", { className: "row ride-moves" }, moves.map(([label, status]) => button(label, patch("", { status }))))),
+        moves.length > 0 && h("div", { className: "row ride-moves" }, moves.map((m) => move(m)))),
       h(
         "div",
         { className: "between" },
@@ -949,6 +989,7 @@ function render() {
   records.sync();
   conversations.sync();
   todos.sync();
+  places.sync();
   stale = false;
   const me = trip?.participants.find((p) => p.id === myId());
   if (me) store("trip", trip.code); // 처음 화면의 '지난 여행 열기'
@@ -957,9 +998,11 @@ function render() {
   const gone = short && (failed || trip?.code !== short.code ? "여행을 더 볼 수 없어 숏폼을 닫았어요." : !me?.consent || trip.generation !== short.generation ? "기록 동의가 바뀌어 숏폼을 닫았어요." : "");
   if (gone) return closeShort(gone);
   const ownProfile = profile && me?.profileId === profile.id;
-  const page = short ? "short" : location.hash === "#me" ? "profile" : !code() ? "home" : failed ? "missing" : !trip ? "loading" : !me ? "notHere" : (asking(me) || reading) && !ownProfile ? "consent" : "trip";
-  const view = { short: shortView, profile: profileView, home, missing, loading, notHere, consent: () => consentView(me), trip: () => tripView(me) }[page]();
+  const firstVisit = !location.hash && !store("profile") && !vehicleView && !boarding.pending();
+  const page = short ? "short" : location.hash === "#me" ? "profile" : location.hash === "#start" || firstVisit ? "onboarding" : !code() ? "home" : failed ? "missing" : !trip ? "loading" : !me ? "notHere" : (asking(me) || reading) && !ownProfile ? "consent" : "trip";
+  const view = { short: shortView, profile: profileView, onboarding: () => onboarding.view(), home, missing, loading, notHere, consent: () => consentView(me), trip: () => tripView(me) }[page]();
   app.classList.toggle("home-view", page === "home");
+  app.classList.toggle("onboarding-view", page === "onboarding");
   app.classList.toggle("ride-view", page === "trip");
   app.replaceChildren(...view.flat().filter(Boolean));
   if (!short && me && ownProfile && myToken() && (asking(me) || reading)) boarding.openConsent(trip, me, myToken());
@@ -998,7 +1041,7 @@ function render() {
   };
 }
 
-addEventListener("hashchange", () => (boarding.close(), openingShort?.abort(), (reading = false), short && closeShort(), location.hash === "#me" && fillDraft(), (trip = null), (failed = ""), refresh(true)));
+addEventListener("hashchange", () => (boarding.close(), location.hash !== "#start" && onboarding.close(), openingShort?.abort(), (reading = false), short && closeShort(), location.hash === "#me" && fillDraft(), (trip = null), (failed = ""), refresh(true)));
 app.addEventListener("focusout", () => setTimeout(() => stale && !typing() && render())); // 입력이 끝나면 밀린 변경을 그린다
 setInterval(refresh, 2000); // ponytail: 2초마다 묻는다(바뀐 게 없으면 304). 지연이 문제가 되면 SSE로 바꾼다.
 render();
