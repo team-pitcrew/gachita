@@ -55,92 +55,110 @@ class TripTest {
         assertEquals(1, trip(true).generation) // 세대가 없는 옛 응답은 1
     }
 
-    @Test fun `폰으로 들어온 사람은 동의 대기이고, 스위치는 차가 참가시킨 사람의 동의를 보인다`() {
-        val s = Session(gear = "P", ours = setOf("p0")).turnedOn(trip(true, false)) // p0은 차, p1은 폰
+    @Test fun `동의가 모두 모여도 녹음 시작 전에는 준비 상태다`() {
+        val s = Session(gear = "P", ours = setOf("p0")).turnedOn(trip(true, false))
         assertFalse(s.recording)
-        assertTrue(s.switchOn) // 폰을 기다리는 동안에도 켜짐으로 보여 끌 수 있다
-        assertFalse(s.waitsFor(s.trip!!.people[0]))
+        assertTrue(s.switchOn)
         assertTrue(s.waitsFor(s.trip!!.people[1]))
-        val all = s.withTrip(trip(true, true)) // 폰에서 켬
-        assertTrue(all.recording)
-        assertFalse(all.waitsFor(all.trip!!.people[1]))
-        assertFalse(all.turnOff().switchOn)
-        assertFalse(Session(ours = setOf("p0")).withTrip(trip(false, true)).switchOn) // 폰만 켰고 차는 아직
-        assertTrue(Session(gear = "P").turnedOn(trip(true, true)).switchOn) // 토큰이 없어도(앞 빌드) 기록 중이면 끌 수 있게 켜짐
+        val all = s.withTrip(trip(true, true))
+        assertTrue(all.waiting)
+        assertFalse(all.recording)
+        assertTrue(all.startRecording().recording)
     }
 
-    @Test fun `서버가 모두의 동의를 저장하면 기록 중`() {
-        val s = Session(gear = "P").withTrip(trip(false, false)).turnedOn(trip(true, true))
-        assertTrue(s.recording)
+    @Test fun `처음과 재동의 후에는 명시적으로 시작해야 한다`() {
+        val ready = Session(gear = "P").withTrip(trip(true, true))
+        assertFalse(ready.recording)
+        val recording = ready.startRecording()
+        assertTrue(recording.recording)
+        val again = recording.withTrip(trip(true, false)).withTrip(trip(true, true))
+        assertFalse(again.started)
+        assertFalse(again.recording)
+        assertTrue(again.startRecording().recording)
     }
 
-    @Test fun `참가자가 없으면 기록하지 않는다`() {
-        assertFalse(Session(gear = "P").withTrip(trip()).recording)
+    @Test fun `시작 버튼은 주차 온라인 전원 동의 유휴 상태가 필요하다`() {
+        val ready = Session(gear = "P").withTrip(trip(true, true))
+        assertTrue(ready.startRecording().recording)
+        assertFalse(ready.withGear("D").startRecording().recording)
+        assertFalse(ready.withGear(null).startRecording().recording)
+        assertFalse(ready.copy(online = false).startRecording().recording)
+        assertFalse(ready.copy(busy = true).startRecording().recording)
+        assertFalse(ready.withTrip(trip(true, false)).startRecording().recording)
+        assertFalse(ready.turnOff().startRecording().recording)
+        assertFalse(Session(gear = "P").startRecording().recording)
+        assertFalse(Session(gear = "P").withTrip(trip()).startRecording().recording)
     }
 
-    @Test fun `끄면 서버 응답 전에 바로 멈추고, 서버가 따라오면 대기를 푼다`() {
-        val on = Session(gear = "P").turnedOn(trip(true, true))
+    @Test fun `전원 철회는 서버 응답 전에 멈추고 재시작을 취소한다`() {
+        val on = Session(gear = "P").withTrip(trip(true, true)).startRecording()
         val off = on.turnOff()
         assertFalse(off.recording)
-        assertFalse(off.withTrip(trip(true, true)).recording) // 서버가 아직 켜짐이어도 다시 켜지지 않는다
+        assertFalse(off.started)
         assertTrue(off.withTrip(trip(true, true)).offPending)
         assertFalse(off.withTrip(trip(false, false)).offPending)
+        // 앞선 동의 켜기 응답이 늦게 와도 철회를 취소하지 않는다.
+        assertTrue(off.turnedOn(trip(true, true)).offPending)
+        assertFalse(off.turnedOn(trip(true, true)).recording)
     }
 
-    @Test fun `끄기 대기 중에 다시 켜면 대기를 지운다`() {
-        val s = Session(gear = "P").turnedOn(trip(true, true)).turnOff().turnedOn(trip(true, true))
+    @Test fun `개인 동의 철회는 그 사람에게만 전송하고 다른 동의는 유지한다`() {
+        val off = Session(gear = "P").withTrip(trip(true, true)).startRecording().turnOff("p1")
+        assertEquals(listOf("p1"), off.offTargets)
+        assertFalse(off.recording)
+        val synced = off.withTrip(trip(true, false))
+        assertFalse(synced.offPending)
+        assertTrue(synced.trip!!.people[0].consent)
+        assertFalse(synced.withTrip(trip(true, true)).recording)
+    }
+
+    @Test fun `여러 사람의 오프라인 철회와 전원 철회 대상을 누적한다`() {
+        val s = Session(gear = "P").withTrip(trip(true, true)).startRecording()
+        assertEquals(listOf("p0", "p1"), s.turnOff("p0").turnOff("p1").offTargets)
+        assertEquals(listOf("p0", "p1"), s.turnOff().turnOff("p1").offTargets)
+        assertEquals(listOf("p0", "p1"), s.turnOff("p0").turnOff().offTargets)
+    }
+
+    @Test fun `개인 철회 전송 대기는 앱을 다시 켜도 유지된다`() {
+        val back = Session.restore(json(true, true), offPending = true, started = true, withdrawn = setOf("p1"))
+        assertFalse(back.recording)
+        assertEquals(listOf("p1"), back.offTargets)
+        assertNull(back.pollVersion)
+        assertFalse(back.withTrip(trip(true, false)).offPending)
+        assertTrue(back.withTrip(trip(true, false)).withdrawn.isEmpty())
+    }
+
+    @Test fun `연결이 끊겨도 이미 시작한 녹음은 유지하며 철회는 즉시 멈춘다`() {
+        val s = Session(gear = "P").withTrip(trip(true, true)).startRecording().withGear("D").copy(online = false)
         assertTrue(s.recording)
-    }
-
-    @Test fun `폰에서 한 명이라도 동의를 끄면 멈춘다`() {
-        val s = Session(gear = "P").turnedOn(trip(true, true)).withTrip(trip(true, false))
-        assertFalse(s.recording)
-    }
-
-    @Test fun `연결이 끊겨도 마지막 여행과 기록 상태를 그대로 둔다`() {
-        val s = Session(gear = "P").turnedOn(trip(true, true)).withGear("D").copy(online = false)
-        assertTrue(s.recording)
+        assertFalse(s.turnOff().recording)
         assertEquals("AB23CD", s.trip?.code)
     }
 
-    @Test fun `끊긴 채 끄고 앱을 다시 켜도 멈춘 채이고, 연결되면 서버에 끄기를 다시 보낸다`() {
-        val off = Session(gear = "P").turnedOn(trip(true, true)).copy(online = false).turnOff()
-        // 앱은 마지막 여행 원문(모두 동의)과 두 표시를 저장해 두었다가 이것으로 되살린다
-        val back = Session.restore(json(true, true), off.offPending, off.started)
-        assertFalse(back.recording)
-        assertFalse(back.agreed)
-        assertEquals(listOf("p0", "p1"), back.offTargets) // 모두에게 동의 끄기를 다시 보냄
-        assertNull(back.pollVersion) // 304로 놓치지 않게 version 없이 전체를 받음
-        val synced = back.withTrip(trip(false, false))
-        assertFalse(synced.offPending)
-        assertTrue(synced.offTargets.isEmpty())
-        assertEquals(3, synced.pollVersion)
+    @Test fun `이전 판의 전원 철회 저장값과 시작된 세션을 복원한다`() {
+        val off = Session.restore(json(true, true), offPending = true, started = false)
+        assertFalse(off.recording)
+        assertEquals(listOf("p0", "p1"), off.offTargets)
+        val on = Session.restore(json(true, true), offPending = false, started = true)
+        assertTrue(on.recording)
+        assertTrue(on.withGear("D").recording)
+        assertFalse(Session.restore(json(true, true), false, false).withGear("P").recording)
     }
 
-    @Test fun `기록 중에 앱이 다시 켜지면 저장한 시작 표시로 이어 간다`() {
-        val on = Session(gear = "P").turnedOn(trip(true, true)).withGear("D")
-        assertTrue(Session.restore(json(true, true), on.offPending, on.started).recording)
-        assertFalse(Session.restore(json(true, true), false, false).recording) // 시작 표시가 없으면 주차할 때까지 대기
-        assertTrue(Session.restore(json(true, true), false, false).waiting)
-    }
-
-    @Test fun `주행 중에 동의가 다시 채워지면 기록 대기, 주차하면 기록 중`() {
-        val driving = Session(gear = "P").turnedOn(trip(true, true)).withGear("D")
-        val revoked = driving.withTrip(trip(true, false)) // 폰에서 한 명이 끔
-        assertFalse(revoked.recording)
-        val again = revoked.withTrip(trip(true, true)) // 폰에서 다시 켬
-        assertFalse(again.recording)
+    @Test fun `주행 중 재동의 뒤 주차해도 자동으로 시작하지 않는다`() {
+        val driving = Session(gear = "P").withTrip(trip(true, true)).startRecording().withGear("D")
+        val again = driving.withTrip(trip(true, false)).withTrip(trip(true, true))
         assertTrue(again.waiting)
-        assertTrue(again.withGear("P").recording)
-        assertTrue(again.withGear("P").withGear("D").recording) // 한 번 시작하면 주행 중에도 이어 감
+        assertFalse(again.startRecording().recording)
+        assertFalse(again.withGear("P").recording)
+        assertTrue(again.withGear("P").startRecording().withGear("D").recording)
     }
 
-    @Test fun `주차 중에 동의가 다시 채워지면 바로 기록 중`() {
-        val s = Session(gear = "P").turnedOn(trip(true, true)).withTrip(trip(true, false)).withTrip(trip(true, true))
-        assertTrue(s.recording)
-    }
-
-    @Test fun `기어를 모르면 동의가 채워져도 시작하지 않는다`() {
-        assertTrue(Session().withTrip(trip(true, true)).waiting)
+    @Test fun `조회 사이 철회 후 재동의했어도 세대가 바뀌면 명시 시작을 취소한다`() {
+        val on = Session(gear = "P").withTrip(trip(true, true)).startRecording()
+        val next = on.withTrip(trip(true, true).copy(generation = 2))
+        assertFalse(next.recording)
+        assertFalse(next.started)
+        assertTrue(next.startRecording().recording)
     }
 }

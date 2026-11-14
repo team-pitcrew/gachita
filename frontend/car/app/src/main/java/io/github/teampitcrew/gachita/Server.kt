@@ -32,6 +32,10 @@ class Server(base: String) {
         call("PATCH", "/api/trips/$code/participants/$id", JSONObject().put("consent", on), token)
     }
 
+    fun seat(code: String, id: String, seat: Seat) {
+        call("PATCH", "/api/trips/$code/participants/$id", JSONObject().put("seat", seat.name))
+    }
+
     /** 발화 묶음 올리기(ADR-0014). 서버가 빠짐없이 받은 마지막 순번. 동의하지 않은 사람이 있으면 403 ApiError. */
     fun utterances(code: String, token: String, device: String, items: JSONArray): Long =
         JSONObject(call("POST", "/api/trips/$code/utterances", JSONObject().put("device", device).put("items", items), token)!!).getLong("lastSeq")
@@ -98,8 +102,9 @@ class Server(base: String) {
     }
 
     /** 동승 연결(T46, #195): 탑승자 폰 QR의 code와 고른 자리로 참가시킨다. 새 참가자의 이름. 자리가 찼거나 이미 쓴 QR은 409, 만료·없는 QR은 404. 동의는 폰에서만 켠다. */
-    fun rideLink(code: String, qr: String, seat: Seat): String =
-        JSONObject(call("POST", "/api/trips/$code/ride-links", JSONObject().put("code", qr).put("seat", seat.name))!!).getJSONObject("participant").getString("name")
+    fun rideLink(code: String, qr: String, seat: Seat): Person =
+        JSONObject(call("POST", "/api/trips/$code/ride-links", JSONObject().put("code", qr).put("seat", seat.name))!!).getJSONObject("participant")
+            .let { Person(it.getString("id"), it.getString("name"), it.getString("seat"), it.getBoolean("consent"), true) }
 
     /** 최신 여행. 보낸 version에서 바뀐 것이 없으면(304) null. 서버에서 여행이 삭제됐거나 없으면 Gone. */
     fun trip(code: String, version: Int? = null): Got? = call("GET", "/api/trips/$code" + (version?.let { "?v=$it" } ?: ""), null)?.let(::got)
