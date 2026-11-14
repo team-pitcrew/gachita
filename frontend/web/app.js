@@ -15,7 +15,7 @@ import { createShortStudio } from "/short-studio.js";
 import { createContents } from "/contents.js";
 import { createScenePicker } from "/short-scenes.js";
 import { createBoarding } from "/boarding.js";
-import { createOnboarding } from "/onboarding.js";
+import { accountReady, createOnboarding } from "/onboarding.js";
 import { createGroups } from "/groups.js";
 import { createAfterTrip } from "/after-trip.js";
 import { appBar, askState, CONTINUE_ASK, createPlaces, driveState, END_ASK, journeyTabs, recordingLine, rideHeading, seatMap, statusMoves } from "/ride.js";
@@ -189,8 +189,10 @@ const onboarding = createOnboarding({
   onBegin: () => { if (location.hash !== "#start") location.hash = "start"; },
   onDone: () => { location.hash = ""; },
   // F2(가족 그룹, groups.js): 온보딩을 마치면 가족 추가(P09)로 잇는다.
-  onFamily: () => { location.hash = ""; groups.open(); },
+  // 초대 링크로 들어온 사람은 처음 화면으로 돌아가 render의 groups.resume()이 참여 화면(phoneJoin)을 연다
+  onFamily: () => { location.hash = ""; if (!groups.pending()) groups.open(); },
   onOther: () => { location.hash = "me"; },
+  hasInvite: () => Boolean(groups.pending()),
   isOnline: () => !offline && navigator.onLine !== false,
 });
 // 가족·동승 그룹(흐름 F2, groups.js). 초대 링크(/?group=코드)는 프로필을 읽은 뒤 연다.
@@ -1083,8 +1085,12 @@ function render() {
   if (conversationPending && me && !asking(me) && !reading) { conversationPending = false; conversations.open(); }
   if (failed || (trip && !me)) conversationPending = false;
   if (location.hash !== "#me" && !savingProfile && boarding.pending()) boarding.resume();
-  // 온보딩 중에는 초대 참여를 띄우지 않고 마친 뒤(처음 화면) 연다.
-  if (location.hash !== "#me" && page !== "onboarding" && !savingProfile && profile) groups.resume();
+  // 온보딩 중에는 초대 참여를 띄우지 않고 마친 뒤(처음 화면) 연다. 초대 링크로 새로 만든 이메일 계정이 동의·이름·목소리를
+  // 마치지 않았으면(P03→P04→P06–P08) 참여 대신 빠진 온보딩 단계로 보낸다 — 이메일 앞부분 이름으로 그룹에 들어가지 않게.
+  if (location.hash !== "#me" && page !== "onboarding" && !savingProfile && profile) {
+    if (groups.pending() && profile.email && !accountReady(profile)) { onboarding.open(); location.hash = "start"; }
+    else groups.resume();
+  }
 }
 
 // 부탁 남기기 시트는 한 번만 채운다
