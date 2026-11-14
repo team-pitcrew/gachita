@@ -2102,7 +2102,7 @@ paths:
       summary: 전체 음성 올리기 상태와 진행률
       description: |
         여행 전체 음성(ADR-0024)의 상태입니다. 차가 올리는 동안 폰(P22)과 차(C22)가 진행률을 읽습니다. 소리가 아니라 이 여행의 참가자라면 녹음 동의와 관계없이 읽습니다.
-        `none`은 아직 없음(사람이 지웠으면 `deleted: true`), `uploading`은 받는 중(`expectedBytes`는 `start` 뒤에), `ready`는 다 올라와 장면을 자를 수 있음, `expired`는 보관 기간(다 올린 뒤 2일, `expiresAt`)이 지났거나 버킷 수명 규칙으로 이미 지워져 장면을 자를 수 없음입니다(11/15 보관 결정). 다시 출발해 새로 올리는 동안에는 `uploading`이고 앞서 올린 것이 `previous`에 남습니다.
+        `none`은 아직 없음(사람이 지웠으면 `deleted: true`), `uploading`은 받는 중(`expectedBytes`는 `start` 뒤에), `ready`는 다 올라와 장면을 자를 수 있음, `expired`는 보관 기간(다 올린 뒤 2일, `expiresAt`)이 지나 서버의 치우기(10분마다)가 지웠거나 버킷에 없어 장면을 자를 수 없음입니다(11/15 보관 결정). 이미 자른 장면 클립은 남습니다. 다시 출발해 새로 올리는 동안에는 `uploading`이고 앞서 올린 것이 `previous`에 남습니다.
       security: [{ participantToken: [] }]
       responses:
         "200": { description: 상태, content: { application/json: { schema: { $ref: "#/components/schemas/TripAudio" } } } }
@@ -2703,7 +2703,7 @@ components:
       type: object
       required: [state, receivedParts, receivedBytes, progress]
       properties:
-        state: { type: string, enum: [none, uploading, ready, expired], description: "expired = 다 올린 뒤 2일이 지났거나 버킷 수명 규칙으로 이미 지워짐(11/15 보관 결정). 장면을 새로 자르지 않는다" }
+        state: { type: string, enum: [none, uploading, ready, expired], description: "expired = 다 올린 뒤 2일이 지나 서버의 치우기가 지웠거나 버킷에 없음(11/15 보관 결정). 장면을 새로 자르지 않는다. 장면 클립은 시간으로 지우지 않는다" }
         receivedParts: { type: integer, description: 받은 조각 수(ready면 이은 조각 수) }
         receivedBytes: { type: integer }
         expectedBytes: { type: integer, description: start에서 알린 전체 크기. ready면 저장한 크기 }

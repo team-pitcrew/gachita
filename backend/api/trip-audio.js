@@ -26,7 +26,9 @@ const PART_NUMBER = /^(0|[1-9][0-9]{0,3})$/; // n: 0~9999
 const CHUNK = 8 * 1024 * 1024; // 합칠 때 멀티파트 한 조각(S3는 마지막 빼고 5 MiB 이상)
 const LEASE_MINUTES = 10; // 합치는 동안 다른 완료를 받지 않는 시간. 8시간 음성도 넉넉히 끝나는 값
 const SCENES_PER_CALL = 20;
-// 보관(11/15 오너 결정 '2일 뒤 만료'): 다 올린 뒤 2일. 지우는 것은 클립 버킷의 수명 규칙(올린 뒤 2일)이고, API는 그때부터 만료로 본다.
+// 보관(11/15 오너 결정 "Expire after 2 days"): 다 올린 뒤 2일에 서버의 치우기(10분마다, expire)가 버킷에서 지운다.
+// 버킷에는 시간 규칙이 없다(T145) — 고른 장면 클립은 사람이 지울 때까지 남아야 해서 버킷 전체 규칙을 두지 않는다.
+// 전체 음성은 '<여행>/trip-audio/' 아래에 따로 두어, 나중에 그 접두어에만 수명 규칙을 걸 수도 있게 한다(지금은 두지 않음).
 export const AUDIO_KEEP_MS = 2 * 86_400_000;
 const KEEP = "interval '2 days'";
 // ponytail: 파드마다 동시에 받는 조각과 합치기 수. 메모리는 조각 4 MiB, 합치기 약 16 MiB씩이다.
@@ -76,7 +78,7 @@ function overlap(span, audio) {
 // 상태 응답. 계약(최종 개편 계획 A4)의 칸에 generation·startedAt·partNumbers·previous·deleted를 더했다.
 function view(r, parts = []) {
   if (!r || r.deleted_at) return { state: "none", receivedParts: 0, receivedBytes: 0, progress: 0, ...(r?.deleted_at ? { deleted: true } : {}) };
-  // 만료(r.expired): 다 올린 뒤 2일이 지났거나 버킷에서 사라짐. 장면을 자르지 않는다(차가 올린 장면 클립은 그대로)
+  // 만료(r.expired): 다 올린 뒤 2일이 지나 치우기가 지웠거나(지울 차례) 버킷에서 사라짐. 장면을 새로 자르지 않는다(자른 장면 클립은 그대로)
   const ready = r.object_key && !r.expired ? { bytes: Number(r.bytes), seconds: r.seconds, startedAt: Number(r.started_at), expiresAt: new Date(r.ready_at).getTime() + AUDIO_KEEP_MS } : null;
   if (!r.upload_id && r.object_key && r.expired)
     return { state: "expired", generation: r.generation, receivedParts: r.part_count, receivedBytes: Number(r.bytes), expectedBytes: Number(r.bytes), seconds: r.seconds, startedAt: Number(r.started_at), progress: 1, expiresAt: new Date(r.ready_at).getTime() + AUDIO_KEEP_MS };
@@ -197,7 +199,7 @@ export function tripAudio({ withTrip, participantOf, sweepClips, queueRetranscri
     try {
       const body = await readRaw(req, PART_MAX);
       if (!body.length || body.length % 2) fail(400, "조각은 비어 있지 않은 16비트 PCM(짝수 바이트)");
-      const key = `${before.tripCode}/audio/part-${n}-${randomUUID()}.pcm`;
+      const key = `${before.tripCode}/trip-audio/part-${n}-${randomUUID()}.pcm`;
       try {
         await s3.put(key, body); // 늦게 실패해도(제한 시간 뒤에 저장됨) 아래에서 키를 버린다
         const result = await withTrip(code, true, async (trip, client) => {
@@ -321,7 +323,7 @@ export function tripAudio({ withTrip, participantOf, sweepClips, queueRetranscri
       fail(429, "다른 여행의 음성을 합치는 중 — 잠시 뒤 다시 완료해 주세요");
     }
     assembling++;
-    const key = `${plan.tripCode}/audio/${plan.uploadId}-${randomUUID().slice(0, 8)}.pcm`;
+    const key = `${plan.tripCode}/trip-audio/${plan.uploadId}-${randomUUID().slice(0, 8)}.pcm`;
     let kept = false;
     const started = Date.now();
     try {
@@ -429,7 +431,7 @@ export function tripAudio({ withTrip, participantOf, sweepClips, queueRetranscri
       const start = (span.from - startedAt) * BYTES_PER_MS;
       const pcm = await s3.range(plan.audio.object_key, start, Math.min(Number(plan.audio.bytes), (span.to - startedAt) * BYTES_PER_MS));
       if (!pcm?.length) {
-        // 버킷에서 사라짐(수명 규칙 2일): 만료로 적고 자르기를 멈춘다. 클립 경로는 차가 올린 클립이 있으면 그것을, 없으면 404
+        // 버킷에서 이미 사라짐(치우기가 지움 등): 만료로 적고 자르기를 멈춘다. 클립 경로는 차가 올린 클립이 있으면 그것을, 없으면 404
         await tripsDb().query("UPDATE trip_audio SET expired_at = now() WHERE trip_code = $1 AND object_key = $2 AND expired_at IS NULL", [plan.tripCode, plan.audio.object_key]);
         log("info", "trip_audio_expired", {});
         return;
@@ -481,5 +483,16 @@ export function tripAudio({ withTrip, participantOf, sweepClips, queueRetranscri
     fail(404, "없는 경로");
   }
 
-  return { request, cutScenes, audible };
+  // 치우기(server.js sweep, 10분마다): 다 올린 뒤 2일이 지난 전체 음성을 지울 목록(clip_trash)에 넣고 만료로 적는다.
+  // 버킷에서는 이어서 도는 sweepClips가 지운다. 장면 클립(recordings)은 건드리지 않는다. 줄은 남겨 GET /audio가 'expired'를 준다.
+  async function expire() {
+    const { rowCount } = await tripsDb().query(
+      `WITH e AS (UPDATE trip_audio SET expired_at = now(), updated_at = now()
+                  WHERE object_key IS NOT NULL AND expired_at IS NULL AND ready_at < now() - ${KEEP} RETURNING object_key)
+       INSERT INTO clip_trash (object_key) SELECT object_key FROM e ON CONFLICT DO NOTHING`
+    );
+    if (rowCount) log("info", "trip_audio_expired", { count: rowCount });
+  }
+
+  return { request, cutScenes, audible, expire };
 }

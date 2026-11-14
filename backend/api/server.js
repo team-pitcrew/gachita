@@ -1117,6 +1117,7 @@ async function groupTrip(req, b, trip) {
 
 // 직접 삭제·동의 철회로 적어 둔 원음만 정리합니다. 여행의 나이로 데이터를 지우지 않습니다.
 export async function sweep() {
+  await tripAudioService.expire(); // 다 올린 뒤 2일이 지난 여행 전체 음성(ADR-0024)을 지울 목록에 넣는다
   await sweepClips();
   await shortAssetService.sweep();
 }
