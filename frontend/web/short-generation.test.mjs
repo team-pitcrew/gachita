@@ -86,3 +86,11 @@ test("응답을 잃은 요청은 새 장면 선택으로 바꾸지 않고 원래
   await model.submit(true);
   assert.deepEqual(requests, [pending]);
 });
+
+test("차량과 웹의 공용 보관함은 같은 API와 출처별 인증 파일 주소를 쓴다", async () => {
+  const requests = [];
+  const { model } = fixture(async (_method, path) => { requests.push(path); return { generation: 1, items: [{ id: 'local', origin: 'local-render', state: 'completed' }] }; });
+  await model.refresh(); assert.deepEqual(requests, ['/trips/TEST12/short-assets']);
+  assert.equal(model.filePath({ id: 'local', origin: 'local-render', state: 'completed', result: { url: '/api/trips/TEST12/short-assets/local/file' } }), '/api/trips/TEST12/short-assets/local/file');
+  assert.throws(() => model.filePath({ id: 'local', origin: 'local-render', state: 'completed', result: { url: '/api/trips/OTHER/short-assets/local/file' } }));
+});

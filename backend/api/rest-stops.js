@@ -1,13 +1,14 @@
 // 경로 위 휴게소 추천(T97). 순정 내비(NaviHelper)는 경로 좌표도 장소 검색도 주지 않고, 지금 위치·진행 방향과
-// 목적지·남은 거리만 준다(SDK 3.0.5). 그 셋과 한국도로공사 휴게소 위치정보(rest-stops.json, 203곳)로 앞으로 들를 수 있는 곳을 고른다.
+// 목적지·남은 거리만 준다(SDK 3.0.5). 그 셋과 한국도로공사 휴게소 위치정보(rest-stops.json, 202곳)로 앞으로 들를 수 있는 곳을 고른다.
 // 키·비용·바깥 호출이 없다. DB도 네트워크도 모른다.
 //
 // 규칙(모두 직선 거리):
 // 1. 길 위의 점은 '여기→그곳→목적지'가 남은 길보다 길 수 없다. 그래서 그 합이 남은 거리(+2 km, 휴게소는 길 옆)를 넘으면 뺀다.
 //    남은 거리를 모르면 직선의 1.25배로 본다.
 // 2. 목적지까지가 지금보다 가까워야 앞쪽이다(지나친 곳은 뺀다).
-// 3. 방향: 이름의 괄호(예 '용인(강릉)휴게소')가 가는 쪽이다. 우리나라는 오른쪽으로 다니므로, 짝이 있는 휴게소(같은 노선·같은 이름)는
-//    목적지 쪽으로 볼 때 오른쪽에 있는 것이 내 쪽이다. 노선마다 짝들의 표를 모아 내 쪽 괄호를 정하고 반대쪽은 뺀다.
+// 3. 방향: 휴게소마다 가는 쪽 행선지(이름의 괄호, 예 '용인(강릉)휴게소'의 강릉)가 있다. 그 휴게소에서 행선지 쪽과 목적지 쪽이
+//    같은 편(사잇각 90도 미만)이어야 내 쪽이다. 짝이 있든 없든, 한 노선에 행선지 표기가 여럿이든(순천완주선의 광양·순천) 휴게소마다 본다.
+//    행선지가 없는 곳(덕평·행담도처럼 양방향)은 거르지 않는다.
 // 4. 지금 달리는 고속도로(여기서 3 km 안을 지나는 노선의 선)의 휴게소를 먼저, 그다음 '여기까지 거리 + 3 × 직선에서 벗어난
 //    정도'가 작은 순. 노선의 선은 같은 노선 휴게소(짝은 한 점)를 가장 먼 두 곳을 잇는 축 위 순서로 이은 꺾은선이다.
 // ponytail: 직선 근사라 길이 크게 도는 곳(나란한 고속도로)에서는 다른 노선을 고를 수 있다. 경로 좌표를 주는 길찾기
@@ -17,14 +18,24 @@ import { readFileSync } from "node:fs";
 const data = JSON.parse(readFileSync(new URL("rest-stops.json", import.meta.url), "utf8"));
 export const SOURCE = `${data.source}, ${data.fetched} 받음`;
 
-// '용인(강릉)휴게소' → 이름 '용인휴게소 강릉방향', 짝 열쇠 '용인휴게소', 방향 '강릉'. 괄호가 없으면 양방향(방향 없음).
-const parse = ([raw, route, lat, lng]) => {
-  const m = raw.match(/^(.*?)\((.+?)\)(.*)$/);
-  const base = m ? m[1] + m[3] : raw;
-  const dir = m?.[2] ?? null;
-  return { name: dir ? `${base} ${dir}${dir.length === 1 ? "행" : "방향"}` : base, base, dir, route, lat, lng };
+// 행선지 도시의 어림 좌표(시청 근처, 방향만 보므로 수 km 틀려도 된다). 남이·청원은 분기점 근처.
+const TOWARD = {
+  강릉: [37.75, 128.88], 공주: [36.45, 127.12], 광양: [34.94, 127.7], 광주: [35.16, 126.85], 남이: [36.56, 127.42], 논산: [36.19, 127.1],
+  당진: [36.89, 126.63], 대구: [35.87, 128.6], 대전: [36.35, 127.38], 동해: [37.52, 129.11], 목포: [34.81, 126.39], 무안: [34.99, 126.48],
+  부산: [35.18, 129.08], 삼척: [37.45, 129.17], 상주: [36.41, 128.16], 서부산: [35.15, 128.98], 서울: [37.57, 126.98], 서천: [36.08, 126.69],
+  속초: [38.21, 128.59], 순천: [34.95, 127.49], 양양: [38.08, 128.62], 양평: [37.49, 127.49], 영덕: [36.42, 129.37], 영암: [34.8, 126.7],
+  완주: [35.9, 127.16], 인천: [37.46, 126.71], 일산: [37.66, 126.77], 전주: [35.82, 127.15], 제천: [37.13, 128.19], 창원: [35.23, 128.68],
+  천안: [36.82, 127.11], 청원: [36.6, 127.48], 청주: [36.64, 127.49], 춘천: [37.88, 127.73], 통영: [34.85, 128.43], 평택: [36.99, 127.11],
+  포항: [36.02, 129.34], 하남: [37.54, 127.21],
 };
-const STOPS = data.stops.map(parse);
+
+// ['용인(강릉)휴게소', 노선, 위도, 경도, '강릉'] → 이름 '용인휴게소 강릉방향', 짝 열쇠 '용인휴게소', 행선지 좌표. 행선지가 없으면 양방향.
+const parse = ([raw, route, lat, lng, dir]) => {
+  const base = raw.replace(/\(.+?\)/, "");
+  const [tlat, tlng] = dir ? TOWARD[dir] : [];
+  return { name: dir ? `${base} ${dir}방향` : base, base, dir, toward: dir ? { lat: tlat, lng: tlng } : null, route, lat, lng };
+};
+export const STOPS = data.stops.map(parse);
 
 const KM_LAT = 110_574;
 // 평면 근사(m). 수백 km에서 1% 안쪽이라 앞뒤·옆을 가리기에 충분하다.
@@ -73,28 +84,12 @@ const ahead = (from, heading, m = 30_000) => {
   return { lat: from.lat + (m * Math.cos(r)) / KM_LAT, lng: from.lng + (m * Math.sin(r)) / (111_320 * Math.cos((from.lat * Math.PI) / 180)) };
 };
 
-// 노선마다 내 쪽 방향 괄호. 짝마다 '목적지 쪽으로 볼 때 A가 B의 오른쪽인가'를 사인값(엇갈려 선 짝은 작음)으로 더한다.
-function myDirections(stops, to) {
-  const score = new Map(); // "노선\t방향" → 점수
-  const add = (k, v) => score.set(k, (score.get(k) ?? 0) + v);
-  for (const a of stops) {
-    for (const b of stops) {
-      if (a === b || a.route !== b.route || a.base !== b.base || !a.dir || !b.dir || a.dir === b.dir) continue;
-      const mid = { lat: (a.lat + b.lat) / 2, lng: (a.lng + b.lng) / 2 };
-      const [m, pa, pb, t] = [mid, a, b, to].map((p) => xy(p, mid.lat));
-      const d = { x: t.x - m.x, y: t.y - m.y };
-      const v = { x: pa.x - pb.x, y: pa.y - pb.y };
-      const sin = (d.x * v.y - d.y * v.x) / (Math.hypot(d.x, d.y) * Math.hypot(v.x, v.y) || 1);
-      add(`${a.route}\t${a.dir}`, -sin); // 오른쪽이면 사인이 음수
-    }
-  }
-  const mine = new Map();
-  for (const [k, v] of score) {
-    const [route, dir] = k.split("\t");
-    if (v > 0 && v > (mine.get(route)?.v ?? 0)) mine.set(route, { dir, v });
-  }
-  return mine;
-}
+// 그 휴게소에서 행선지 쪽과 목적지 쪽이 같은 편인가(사잇각 90도 미만). 행선지가 없으면(양방향) 그렇다.
+const myWay = (s, end) => {
+  if (!s.toward) return true;
+  const [p, c, t] = [s, s.toward, end].map((x) => xy(x, s.lat));
+  return (c.x - p.x) * (t.x - p.x) + (c.y - p.y) * (t.y - p.y) > 0;
+};
 
 /**
  * 앞으로 들를 수 있는 휴게소, 좋은 순으로 limit곳.
@@ -107,10 +102,9 @@ export function restStops({ from, heading = null, to = null, remain = null, limi
   const straight = dist(from, end);
   const left = remain && remain > straight ? remain : straight * 1.25;
   const onWay = STOPS.filter((s) => dist(from, s) + dist(s, end) <= left + 2_000);
-  const mine = myDirections(onWay, end);
   const road = roadOf(from);
   return onWay
-    .filter((s) => dist(s, end) < straight && (!s.dir || !mine.has(s.route) || mine.get(s.route).dir === s.dir))
+    .filter((s) => dist(s, end) < straight && myWay(s, end))
     .map((s) => {
       const meters = dist(from, s);
       return { s, meters, score: (s.route === road ? 0 : 1e9) + meters + 3 * (meters + dist(s, end) - straight) };
