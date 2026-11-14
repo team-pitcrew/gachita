@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { audioStep, binIn, clip, clock, dayRange, densityBars, durationLabel, generationStages, itemProgress, sceneTitle, spanLabel, strongestLine, topScenes, tripClock } from "./after-trip.js";
+import { audioStep, axisLabel, clip, clock, dayRange, densityBars, durationLabel, generationStages, itemProgress, mockUpload, offsetPct, sceneTitle, spanLabel, strongestLine, topScenes, tripClock } from "./after-trip.js";
 
 // 시각은 이 컴퓨터의 시간대로 만든다(표시도 같은 시간대라 어디서 돌려도 같다).
 const at = (h, m, s = 0, day = 14) => new Date(2026, 10, day, h, m, s).getTime();
@@ -33,6 +33,8 @@ test("장면 시각은 여행 시작 기준 HH:MM:SS, 시작 전은 0", () => {
   assert.equal(clock(NaN), "00:00:00");
   const start = at(9, 20);
   assert.equal(spanLabel(at(9, 32, 4), at(9, 32, 36), start), "00:12:04–00:12:36");
+  assert.equal(axisLabel(((34 * 60) + 12) * 1000), "34:12", "파형 눈금은 시간이 없으면 분:초");
+  assert.equal(axisLabel(4104_000), "1:08:24");
 });
 
 test("주행 시간과 날짜 범위", () => {
@@ -55,6 +57,8 @@ test("여행 시간축: 전체 음성의 시작·길이가 먼저, 없으면 발
   const fromLines = tripClock(trip, null, lines);
   assert.deepEqual([fromLines.origin, fromLines.seconds, fromLines.fromAudio], [at(9, 21), 67 * 60, false], "경로가 없으면(404) 첫·끝 발화");
   assert.equal(tripClock(trip, { state: "none" }, []).origin, at(9, 0), "아무것도 없으면 여행을 만든 때");
+  assert.equal(tripClock({ ...trip, startedAt: at(9, 18) }, null, lines).origin, at(9, 18), "처음 출발한 때가 첫 발화보다 이르면 그때부터");
+  assert.equal(tripClock({ ...trip, startedAt: at(9, 30) }, null, lines).origin, at(9, 21), "출발 전에 받아 적은 말이 있으면 그 말부터");
   assert.equal(tripClock(trip, { state: "uploading", previous: { startedAt: at(9, 19), seconds: 60 } }, []).origin, at(9, 19), "다시 올리는 중이면 앞의 전체 음성");
   assert.equal(tripClock(trip, null, lines, [{ from: at(10, 28), to: at(10, 29) }]).end, at(10, 29), "장면이 축 밖이면 축을 늘린다");
   assert.equal(tripClock(trip, null, [line(at(9, 21), "가"), { ...line(at(9, 22), "나"), endAt: at(9, 23) }]).end, at(9, 23), "발화 끝(endAt)까지");
@@ -68,6 +72,14 @@ test("올리기 진행률은 서버가 준 바이트로만, 경로가 없거나 
   assert.equal(audioStep({ state: "uploading", receivedBytes: 1000, expectedBytes: 1000 }).percent, 99, "합치기 전에는 100%라 하지 않는다");
   assert.deepEqual(audioStep({ state: "uploading", receivedParts: 3, receivedBytes: 300, progress: 0 }), { kind: "uploading", percent: null, label: "전체 음성 업로드 중 · 조각 3개 받음" }, "전체 크기를 모르면 퍼센트를 지어내지 않는다");
   assert.deepEqual(audioStep({ state: "ready", seconds: 4104 }), { kind: "ready", percent: 100, label: "전체 음성 업로드 완료" });
+});
+
+test("mock: 실제 업로드가 꺼진 동안 P22 진행률은 연 때부터 시간으로 흉내 내고 mock 표시를 단다", () => {
+  assert.equal(audioStep(mockUpload(0, 0, 10_000)).label, "전체 음성 업로드 중  0%");
+  assert.equal(audioStep(mockUpload(0, 8_200, 10_000)).label, "전체 음성 업로드 중  82%");
+  assert.deepEqual(mockUpload(0, 10_000, 10_000), { state: "ready", mock: true });
+  assert.equal(mockUpload(0, 4_000, 10_000).mock, true);
+  assert.equal(mockUpload(5_000, 0, 10_000).receivedBytes, 0, "시계가 거꾸로 가도 0 아래로 내려가지 않는다");
 });
 
 test("제목은 장면에서 가장 힘 있는 한 줄, 너무 짧으면 '이름의 한마디', 모르는 화자에게 이름을 붙이지 않는다", () => {
@@ -87,8 +99,10 @@ test("시간축 막대는 말한 양으로만, 말이 없던 칸은 0", () => {
   assert.deepEqual(bars, [0.58, 1, 0.58, 0], "칸당 1·3·1·0, 최대 대비 제곱근");
   assert.deepEqual(densityBars([], 0, 40, 4), [0, 0, 0, 0]);
   assert.deepEqual(densityBars([line(5, "a")], 10, 10, 3), [0, 0, 0], "길이 0이면 빈 막대");
-  assert.equal(binIn(1, 4, 0, 40, 15, 16), true);
-  assert.equal(binIn(2, 4, 0, 40, 15, 20), false, "끝은 열린 구간");
+  assert.equal(offsetPct(15, 0, 40), 37.5, "파형 위 장면 표식 자리(%)");
+  assert.equal(offsetPct(-5, 0, 40), 0);
+  assert.equal(offsetPct(99, 0, 40), 100);
+  assert.equal(offsetPct(5, 10, 10), 0, "길이 0");
 });
 
 test("생성 진행률은 장면별 실제 단계의 평균, 세 줄은 단계에 맞춘다", () => {
@@ -109,4 +123,13 @@ test("생성 진행률은 장면별 실제 단계의 평균, 세 줄은 단계�
   assert.equal(generationStages([{ phase: "done", assetId: "a" }]).step, "모두 만들었어요");
   assert.equal(generationStages([{ phase: "failed", momentId: "m" }, { phase: "done", assetId: "a" }]).step, "1개를 만들지 못했어요");
   assert.equal(generationStages(items, "앱을 나가 만들기를 멈췄어요.").step, "앱을 나가 만들기를 멈췄어요.", "멈췄으면 까닭을 그대로");
+});
+
+// 차 이식(F5)과 같은 결과를 맞추는 시험 벡터: 서버 추천 후보(scenes.js) → 번호·시각·제목·대사.
+test("scene-vectors.json: 추천 후보에서 고른 3개의 번호·시각·제목·대사가 벡터와 같다", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const v = JSON.parse(await readFile(new URL("./scene-vectors.json", import.meta.url), "utf8"));
+  const got = topScenes(v.items).map((p, i) => ({ number: i + 1, from: p.from, to: p.to, time: spanLabel(p.from, p.to, v.origin), ...sceneTitle(p, v.participants) }));
+  assert.deepEqual(got, v.expected);
+  assert.equal(v.items.length, 5, "서버는 5개까지 주고 폰은 점수 상위 3개만 보인다");
 });

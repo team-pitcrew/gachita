@@ -998,22 +998,26 @@ main:has(.bar .big) { padding-bottom: calc(196px + env(safe-area-inset-bottom));
 .after-label { font-size: 15px; font-weight: 500; line-height: 22px; white-space: pre-wrap; }
 .after-note { font-size: 13px; line-height: 18px; color: var(--ink-2); }
 .trip-wave { display: flex; align-items: center; justify-content: space-between; gap: 2px; height: 64px; }
-.trip-wave i { flex: 0 1 4px; min-width: 2px; height: max(2px, calc(var(--v, 0) * 100%)); border-radius: 2px; background: var(--line); }
-.trip-wave i.mark { background: var(--ink-2); opacity: .45; }
+.trip-wave i { flex: 0 1 4px; min-width: 2px; height: max(2px, calc(var(--v, 0) * 100%)); border-radius: 2px; background: var(--ink-2); opacity: .28; }
+.trip-wave i.mark { opacity: .45; }
 .trip-wave i.on { background: var(--accent-fill); opacity: 1; }
 .wave-axis { display: flex; justify-content: space-between; font-size: 13px; line-height: 18px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
-.scene-pick { display: grid; gap: 6px; padding: 16px; border-radius: var(--r-phone-card); background: var(--surface); }
+.scene-pick { display: grid; gap: 2px; padding: 14px 16px; border-radius: var(--r-phone-card); background: var(--surface); }
 .scene-pick.on { background: var(--accent-soft); }
 .scene-pick label { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
 .scene-pick input { flex: none; width: 22px; height: 22px; margin: 3px 0 0; accent-color: var(--accent); }
 .pick-copy { display: grid; gap: 2px; min-width: 0; text-align: left; }
 .pick-copy strong { font-size: 18px; line-height: 26px; overflow-wrap: anywhere; }
 .pick-time { font-size: 15px; font-weight: 500; line-height: 22px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
-.pick-quote { padding-left: 32px; font-size: 15px; line-height: 22px; overflow-wrap: anywhere; }
 .scene-pick details { padding-left: 32px; }
-.scene-pick summary { min-height: 32px; display: flex; align-items: center; font-size: 13px; color: var(--ink-2); cursor: pointer; }
+.scene-pick summary { min-height: 32px; display: flex; align-items: center; gap: 6px; cursor: pointer; list-style: none; }
+.scene-pick summary::-webkit-details-marker { display: none; }
+.scene-pick summary::after { content: "대화 보기"; flex: none; margin-left: auto; font-size: 13px; color: var(--ink-2); text-decoration: underline; text-underline-offset: 3px; }
+.scene-pick details[open] summary::after { content: "접기"; }
+.pick-quote { min-width: 0; font-size: 15px; line-height: 22px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pick-lines { gap: 6px; padding: 4px 0 8px; font-size: 15px; line-height: 22px; }
 .pick-lines li + li { padding-top: 0; border-top: 0; }
+.make-items, .pick-lines { margin: 0; padding: 0; list-style: none; }
 .make-items { gap: 6px; font-size: 15px; line-height: 22px; }
 .make-items li { display: flex; justify-content: space-between; gap: 12px; }
 .make-items li + li { padding-top: 6px; }
@@ -1029,3 +1033,10 @@ button.after-pick { justify-self: center; min-height: 44px; color: var(--ink-2);
 .after-bottom button.plain { min-height: 44px; background: none; font-size: 15px; font-weight: 500; color: var(--ink-2); }
 .after-entry h2 { font-size: 19px; line-height: 28px; }
 .after-entry button { border-radius: var(--r-phone-ctl); }
+/* 고르기(P23–P30, 시안 v2): 파형 위 번호 표식 1·2·3과 장면 구간 선. 표식과 목록이 같은 선택을 바꾼다. */
+.wave-pick { position: relative; padding-top: 34px; }
+.wave-span { position: absolute; top: 30px; bottom: 0; min-width: 3px; transform: translateX(-1px); border-inline: 1.5px solid var(--ink-2); pointer-events: none; }
+.wave-span.on { border-color: var(--accent-fill); background: var(--accent-fill); min-width: 6px; }
+.wave-mark { position: absolute; top: 0; min-width: 34px; min-height: 26px; padding: 0 10px; transform: translateX(-50%); border-radius: 8px; background: var(--surface-2); color: var(--ink); font-size: 13px; font-weight: 500; line-height: 26px; }
+.wave-mark.on { background: var(--accent-fill); color: var(--on-accent); }
+.wave-mark::after { content: ""; position: absolute; inset: -9px -5px; } /* 손가락 크기(44px) */

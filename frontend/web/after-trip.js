@@ -1,6 +1,8 @@
 // 여행 마무리 → 추천 장면 고르기 → 생성 → 완성(최종 시안 P22–P32). 화면은 대화상자 하나이고 머리와 세 탭은 ride.js를 쓴다.
 // 값은 서버가 준 것만 쓰고 지어내지 않는다. 장소(도착한 곳)는 기록본(GET /transcript)의 places에서 읽는다(공개 여행 문서에는 없음).
-// - 전체 음성 올리기 진행률: GET /trips/{code}/audio(묶음 A4). 경로가 없거나(404) 아직 시작 전이면 기다린다고만 말한다.
+// - 전체 음성 올리기 진행률: GET /trips/{code}/audio(T132). 차가 실제로 올리는 중·다 올렸으면 그 값을 쓴다.
+//   mock: 전체 음성의 실제 업로드는 오너의 보관 결정 전까지 꺼 둔다(계획 '속도 우선' ③ — 차는 /audio를 부르지 않음).
+//   그동안 경로가 없거나(404) 차가 시작하지 않았으면(state none) P22는 시안대로 진행률을 흉내 낸다(mockUpload).
 // - 추천 장면: GET /scene-suggestions의 점수 상위 3개(서버 규칙, 전체 음성이 있으면 소리가 있는 구간만). 제목은 장면의 발화에서 규칙으로 뽑는다(LLM 없음).
 // - 생성: 고른 장면마다 POST /moments → 장면 소리가 생기면(차가 올리거나, A4가 붙으면 서버가 전체 음성에서 자름) → 기존 기본 영상
 //   (short-film.js exportShortFilm, 장면 길이만큼 실제로 재생하며 녹화) → POST /short-assets 보관. 서버가 만들어 주는 길은 없다.
@@ -24,6 +26,13 @@ export function clock(ms) {
   return `${pad(Math.floor(s / 3600))}:${pad(Math.floor((s % 3600) / 60))}:${pad(s % 60)}`;
 }
 export const spanLabel = (from, to, origin) => `${clock(from - origin)}–${clock(to - origin)}`;
+// 파형 아래 눈금: '34:12', 시간이 넘으면 '1:08:24'(시안 v2)
+export function axisLabel(ms) {
+  const s = Math.max(0, Math.floor((Number.isFinite(ms) ? ms : 0) / 1000)), hours = Math.floor(s / 3600);
+  return `${hours ? `${hours}:` : ""}${pad(Math.floor((s % 3600) / 60))}:${pad(s % 60)}`;
+}
+// 시간축 위 자리(0~100%)
+export const offsetPct = (at, origin, end) => (end > origin ? Math.max(0, Math.min(100, ((at - origin) / (end - origin)) * 100)) : 0);
 
 // 주행 시간: '1시간 8분', '8분', '40초'. 모르면 빈 글.
 export function durationLabel(seconds) {
@@ -42,13 +51,15 @@ export function dayRange(from, to) {
   return `${day(from)} ${hhmm(from)}${hhmm(to) !== hhmm(from) ? `–${hhmm(to)}` : ""}`;
 }
 
-// 여행의 시간축. 시작은 전체 음성의 첫 표본 시각 → 첫 발화 → 여행을 만든 때. 길이는 전체 음성 길이 → 첫·끝 발화 사이.
+// 여행의 시간축. 시작은 전체 음성의 첫 표본 시각, 없으면 처음 출발한 때(trip.startedAt)와 첫 발화 중 이른 것, 둘 다 없으면 여행을 만든 때.
+// 길이는 전체 음성 길이, 없으면 마지막 발화까지.
 // 그 밖의 구간(추천 장면)이 축을 넘으면 축을 늘린다(장면이 막대 밖에 그려지지 않게).
 export function tripClock(trip, audio, lines = [], spans = []) {
   // 다시 출발해 새로 올리는 중이면 시작 시각을 아직 모를 수 있다 — 그때는 앞서 다 올린 전체 음성(previous)을 쓴다.
   const sound = [["ready", "uploading"].includes(audio?.state) ? audio : null, audio?.previous].find((a) => Number.isFinite(a?.startedAt)) ?? null;
   const first = lines.find((l) => Number.isFinite(l.at))?.at;
-  const origin = Number.isFinite(sound?.startedAt) ? sound.startedAt : Number.isFinite(first) ? first : trip?.createdAt ?? 0;
+  const known = [trip?.startedAt, first].filter(Number.isFinite);
+  const origin = Number.isFinite(sound?.startedAt) ? sound.startedAt : known.length ? Math.min(...known) : trip?.createdAt ?? 0;
   const last = Math.max(-Infinity, ...lines.map((l) => (Number.isFinite(l.endAt) ? l.endAt : l.at)).filter(Number.isFinite));
   let end = sound?.seconds > 0 ? origin + sound.seconds * 1000 : Number.isFinite(last) ? last : origin;
   for (const s of spans) if (Number.isFinite(s.to)) end = Math.max(end, s.to);
@@ -65,6 +76,14 @@ export function audioStep(audio) {
   const total = Number(audio.expectedBytes), got = Number(audio.receivedBytes) || 0;
   const percent = total > 0 ? Math.max(0, Math.min(99, Math.floor((got / total) * 100))) : null;
   return { kind: "uploading", percent, label: percent == null ? `전체 음성 업로드 중 · 조각 ${Number(audio.receivedParts) || 0}개 받음` : `전체 음성 업로드 중  ${percent}%` };
+}
+
+// mock: 실제 업로드가 꺼진 동안 P22에 보일 진행(시안 '전체 음성 업로드 중 82%'). 화면을 처음 연 때부터 ms 동안 0→100%,
+// 끝나면 '다 올림'. 받은 바이트는 퍼센트만 맞춘 가짜 값이라 mock 표시를 붙인다(자동으로 고르기로 넘어가지 않게).
+export const MOCK_UPLOAD_MS = 12_000;
+export function mockUpload(openedAt, now, ms = MOCK_UPLOAD_MS) {
+  const done = Math.max(0, Math.min(1, (now - openedAt) / ms));
+  return done >= 1 ? { state: "ready", mock: true } : { state: "uploading", mock: true, receivedParts: 0, receivedBytes: Math.round(done * 1000), expectedBytes: 1000 };
 }
 
 // 추천 장면: 서버 점수 상위 n개를 시각 순으로. 같은 점수면 앞선 장면.
@@ -106,8 +125,6 @@ export function densityBars(lines, origin, end, count = 36) {
   const max = Math.max(...bins);
   return bins.map((n) => (max ? Math.round(Math.sqrt(n / max) * 100) / 100 : 0));
 }
-// i번째 칸이 [from, to) 구간과 겹치는가
-export const binIn = (i, count, origin, end, from, to) => { const w = (end - origin) / count, a = origin + i * w; return a < to && from < a + w; };
 
 // 장면 하나의 진행: 장면 남김 0.1 → 소리 준비 0.25 → 녹화 0.25~0.85 → 보관 0.9 → 완성 1.
 export function itemProgress(item) {
@@ -153,6 +170,7 @@ export function createAfterTrip({ getTrip, getParticipant, getToken, request, re
   let view = null; // 보고 있는 화면 { code, generation, participantId, step: upload|select|make|done, audio, audioMissing, lines, picks, chosen, error }
   let run = null; // 만드는 일 { code, generation, participantId, items, active, paused, hidden, controller }
   let timer = null, poll = null;
+  const mockSince = new Map(); // mock: 여행·동의 세대별로 P22를 처음 연 때(다시 열어도 처음부터 다시 세지 않게)
 
   const parkedNow = (t) => t && ["parked", "ended"].includes(t.status);
   // 이 화면과 일이 아직 유효한가: 같은 여행·동의 세대·참가자, 주차·종료 상태, 이 폰의 토큰이 있음.
@@ -200,9 +218,9 @@ export function createAfterTrip({ getTrip, getParticipant, getToken, request, re
       }
     } finally { clearTimeout(timeout); }
     if (view !== s) return;
-    if (s.step === "upload" && s.audio?.state === "ready" && s.picks) s.step = "select";
+    if (s.step === "upload" && s.audio?.state === "ready" && s.picks) s.step = "select"; // 실제로 다 올렸을 때만(mock은 넘기지 않음)
     paint();
-    if (view === s && s.step === "upload") timer = setTimeout(() => tick(s), 3000);
+    if (view === s && s.step === "upload") timer = setTimeout(() => tick(s), shown(s)?.mock && shown(s).state !== "ready" ? 1000 : 3000);
   }
 
   // ---- 그리기 ----
@@ -211,9 +229,18 @@ export function createAfterTrip({ getTrip, getParticipant, getToken, request, re
   const axis = (total) => h("div", { className: "wave-axis", "aria-hidden": "true" }, h("span", {}, "00:00"), h("span", {}, clock(total * 1000)));
   const people = () => getTrip()?.participants ?? [];
   const timeline = (s) => tripClock(getTrip(), s.audio, s.lines ?? [], s.picks ?? []);
+  // 보일 올리기 상태: 차가 실제로 올리는 중이거나 다 올렸으면 그 값, 아니면(404·none) mock.
+  const shown = (s) => {
+    if (s.audio && s.audio.state !== "none") return s.audio;
+    if (s.audio === undefined && !s.audioMissing) return undefined; // 아직 묻는 중
+    if (s.audio?.deleted) return s.audio;
+    const key = `${s.code}:${s.generation}`;
+    if (!mockSince.has(key)) mockSince.set(key, Date.now());
+    return mockUpload(mockSince.get(key), Date.now());
+  };
 
   function uploadView(s) {
-    const trip = getTrip(), time = timeline(s), step = audioStep(s.audio);
+    const trip = getTrip(), time = timeline(s), audio = shown(s), step = audioStep(audio);
     const arrived = [...placesOf({ places: s.places })].reverse().find((p) => p.kind === "arrived")?.name;
     const bars = densityBars(s.lines ?? [], time.origin, time.end);
     const ratio = step.kind === "ready" ? 1 : (step.percent ?? 0) / 100;
@@ -226,7 +253,7 @@ export function createAfterTrip({ getTrip, getParticipant, getToken, request, re
           h("strong", {}, [`${crew()} 일행 ${trip.participants.length}명`, durationLabel(time.seconds)].filter(Boolean).join(" / ")),
           s.lines?.length ? h("p", {}, dayRange(time.origin, time.end)) : h("p", {}, s.lines ? "받아 적은 대화가 아직 없어요" : getParticipant()?.consent ? "대화를 불러오고 있어요" : "기록에 동의한 사람만 대화 시간을 볼 수 있어요")),
         h("section", { className: "after-card", role: "status" },
-          h("p", { className: "after-label" }, s.audio === undefined && !s.audioMissing ? "올리기 상태를 확인하고 있어요" : step.label),
+          h("p", { className: "after-label" }, audio === undefined ? "올리기 상태를 확인하고 있어요" : step.label),
           wave(bars, (i) => i < Math.round(ratio * bars.length)), axis(time.seconds),
           s.audioError && h("p", { className: "meta" }, s.audioError)),
         h("p", { className: "after-note" }, step.kind === "ready" ? "전체 음성을 다 올렸어요. 남기고 싶은 장면을 골라 주세요."
@@ -243,18 +270,27 @@ export function createAfterTrip({ getTrip, getParticipant, getToken, request, re
     const trip = getTrip(), time = timeline(s), picks = s.picks ?? [];
     const chosen = picks.filter((p) => s.chosen.has(p.from));
     const bars = densityBars(s.lines ?? [], time.origin, time.end);
-    const inAny = (list) => (i) => list.some((p) => binIn(i, bars.length, time.origin, time.end, p.from, p.to));
     const fromAudio = s.audio?.state === "ready";
-    const card = (pick) => {
+    // 파형 위 번호 표식과 목록이 같은 선택을 바꾼다(시안 v2: 추천 3개는 파형과 목록에서 선택 가능)
+    const flip = (key, on, focus) => { if (on) s.chosen.add(key); else s.chosen.delete(key); paint(focus); };
+    const at = (ms) => offsetPct(ms, time.origin, time.end);
+    const marks = picks.flatMap((p, i) => {
+      const on = s.chosen.has(p.from), left = at(p.from), width = Math.max(0, at(p.to) - left);
+      return [
+        h("span", { className: `wave-span${on ? " on" : ""}`, style: `left:${left}%;width:${width}%`, "aria-hidden": "true" }),
+        keyed(h("button", { type: "button", className: `wave-mark${on ? " on" : ""}`, style: `left:${Math.max(5, Math.min(95, left + width / 2))}%`, "aria-pressed": String(on), "aria-label": `${i + 1}번 장면 ${spanLabel(p.from, p.to, time.origin)}`, onclick: () => flip(p.from, !on, `m${p.from}`) }, String(i + 1)), `m${p.from}`),
+      ];
+    });
+    const card = (pick, i) => {
       const { title, quote } = sceneTitle(pick, people());
       const on = s.chosen.has(pick.from);
-      const toggle = (e) => { if (e.target.checked) s.chosen.add(pick.from); else s.chosen.delete(pick.from); paint(String(pick.from)); };
       return h("section", { className: `scene-pick${on ? " on" : ""}` },
         h("label", {},
-          keyed(h("input", { type: "checkbox", checked: on, onchange: toggle }), pick.from),
-          h("span", { className: "pick-copy" }, h("strong", {}, title), h("span", { className: "pick-time" }, spanLabel(pick.from, pick.to, time.origin)))),
-        quote && h("p", { className: "pick-quote" }, quote),
-        keyed(h("details", { open: s.opened.has(pick.from), ontoggle: (e) => (e.target.open ? s.opened.add(pick.from) : s.opened.delete(pick.from)) }, h("summary", {}, "대화 미리 보기"),
+          keyed(h("input", { type: "checkbox", checked: on, onchange: (e) => flip(pick.from, e.target.checked, String(pick.from)) }), pick.from),
+          h("span", { className: "pick-copy" }, h("strong", {}, `${i + 1}. ${title}`), h("span", { className: "pick-time" }, spanLabel(pick.from, pick.to, time.origin)))),
+        // 대사 한 줄이 미리 보기의 손잡이다(누르면 그 구간의 받아 적은 글)
+        keyed(h("details", { open: s.opened.has(pick.from), ontoggle: (e) => (e.target.open ? s.opened.add(pick.from) : s.opened.delete(pick.from)) },
+          h("summary", { "aria-label": `${i + 1}번 장면 대화 미리 보기` }, h("span", { className: "pick-quote" }, quote || "대화 미리 보기")),
           h("ol", { className: "pick-lines" }, (pick.lines ?? []).slice(0, 8).map((l) => h("li", {}, h("span", { className: "meta" }, people().find((p) => p.id === l.participantId)?.name ?? "말한 사람 미확인"), " ", said(l)))),
           h("p", { className: "meta" }, "소리는 장면으로 남긴 뒤에 받을 수 있어 만든 영상에서 들어요.")), pick.from));
     };
@@ -264,7 +300,8 @@ export function createAfterTrip({ getTrip, getParticipant, getToken, request, re
       body: [
         h("section", { className: "after-card" },
           h("p", { className: "after-label" }, `${trip.title || "함께 탄 여행"} / 전체 ${clock(time.seconds * 1000)}`),
-          wave(bars, inAny(chosen), inAny(picks)), axis(time.seconds)),
+          h("div", { className: "wave-pick" }, wave(bars, () => false, () => true), marks),
+          h("div", { className: "wave-axis", "aria-hidden": "true" }, h("span", {}, "00:00"), h("span", {}, axisLabel(time.seconds * 500)), h("span", {}, axisLabel(time.seconds * 1000)))),
         ...picks.map(card),
         s.picks && !picks.length && h("p", { className: "after-note" }, "대화가 더 쌓이면 다시 찾아요. 대화 기록에서 직접 고를 수도 있어요."),
         s.error && h("p", { className: "after-note", role: "alert" }, s.error),
@@ -331,7 +368,7 @@ export function createAfterTrip({ getTrip, getParticipant, getToken, request, re
       h("footer", { className: "after-bottom" }, page.actions),
     );
     body.scrollTop = old;
-    if (focusKey) dialog.querySelector(`input[data-key="${focusKey}"]`)?.focus();
+    if (focusKey) dialog.querySelector(`[data-key="${focusKey}"]`)?.focus();
   }
 
   // ---- 만들기 ----
@@ -463,7 +500,7 @@ export function createAfterTrip({ getTrip, getParticipant, getToken, request, re
     if (view && !valid(view)) { close(); toast("여행이나 기록 동의가 바뀌어 화면을 닫았어요."); return; }
     if (view && dialog.querySelector(".link-state")?.classList.contains("is-offline") === isOnline()) paint();
   }
-  // 이 폰에 멈춘 생성 계획이 있는가(돌아왔을 때 앱이 이 화면을 다시 연다)
-  const pending = () => { const r = restore(); return !!r && !r.active && r.items.some((i) => !i.assetId); };
+  // 이 여행에 끝나지 않은 만들기가 있는가(멈췄거나 아직 도는 중). 돌아왔을 때 앱이 이 화면을 다시 연다.
+  const pending = () => { const r = restore(); return !!r && r.items.some((i) => !i.assetId && i.phase !== "failed"); };
   return { open, close, sync, pending, isOpen: () => !!view };
 }
