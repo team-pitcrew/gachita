@@ -327,9 +327,18 @@ export function createAfterTrip({ getTrip, getParticipant, getToken, request, re
       title: `${crew()}의 순간이 완성됐어요`,
       sub: made.length ? "선택한 장면을 콘텐츠 기록에 저장했어요." : "콘텐츠를 만들지 못했어요.",
       body: [
-        ...made.map((item, i) => h("button", { type: "button", className: `made-card tone-${i % 2}`, onclick: () => { close(); forget(r); onContents(`asset:${r.code}:${item.assetId}`); } },
-          avatar(people().find((p) => p.id === item.speakerId) ?? {}),
-          h("span", { className: "pick-copy" }, h("strong", {}, item.label), h("span", { className: "pick-time" }, `${Math.round(item.seconds || 0)}초 / 캐릭터 자막형`)))),
+        // 시안 P32(eZ2xs): 두 줄 칸 — 장면 표지(콘텐츠 기록 갤러리와 같은 'Archive / 썸네일', style.css .content-poster) 아래 제목 15/22
+        made.length > 0 && h("div", { className: "content-grid" }, made.map((item, i) => {
+          const d = new Date(item.at), s = Math.round(item.seconds || 0);
+          return h("button", { type: "button", className: "content-tile", "aria-label": `${item.label} 콘텐츠 기록에서 보기`, onclick: () => { close(); forget(r); onContents(`asset:${r.code}:${item.assetId}`); } },
+            h("span", { className: "content-poster", "aria-hidden": "true" }, h("span", { className: `poster-card tone-${i % 2}` },
+              h("span", { className: "poster-top" }, `${d.getMonth() + 1}.${d.getDate()}  ${getTrip()?.title || "함께 탄 여행"}`),
+              h("strong", { className: "poster-title" }, item.label),
+              h("span", { className: "poster-cast" }, h("span", { className: "content-face" }, avatar(people().find((p) => p.id === item.speakerId) ?? {}))),
+              h("span", { className: "poster-caption" }, "캐릭터 자막형"),
+              h("span", { className: "poster-foot" }, h("span", {}, "가치타"), h("span", {}, `▶ ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`)))),
+            h("strong", {}, item.label));
+        })),
         ...missed.map((item) => h("section", { className: "after-card" }, h("strong", {}, item.label), h("p", { className: "meta" }, item.error || "만들지 못했어요."))),
         missed.length > 0 && button("못 만든 장면 다시 만들기", () => { for (const i of missed) Object.assign(i, { phase: i.momentId ? "voice" : "moment", error: "" }); r.paused = ""; if (view) view.step = "make"; go(r); }, "plain after-pick"),
         made.length > 0 && h("p", { className: "after-note" }, "같은 계정의 폰에서도 바로 볼 수 있어요."),

@@ -23,8 +23,8 @@
   --r-ctl: 10px;
   --r-phone-card: 24px; /* 최종 시안(민준 개선안) 폰 카드·컨트롤 반경. 새로 바꾼 여행 화면부터 쓴다 */
   --r-phone-ctl: 16px;
-  --r-phone-char: 48px;
-  --r-phone-panel: 20px; /* 시안 브리핑 카드(P20)·대화 기록 날짜·부탁 칸(P44) 반경 */ /* 시안 Character 조각(사진·캐릭터 틀) 반경 */
+  --r-phone-char: 48px; /* 시안 Character 조각(사진·캐릭터 틀) 반경 */
+  --r-phone-panel: 20px; /* 시안 브리핑 카드(P19·P20) 반경 */
   --pad: 20px;
   --mascot: url("/icons/gachita-192.png");
   --mascot-mark: url("/brand/mascot.svg"); /* 시안 Mascot(7:544) 24px 선 그림, 머리 줄(app bar)에 쓴다 */
@@ -692,25 +692,31 @@ input[type="file"]::file-selector-button {
 /* 대화 기록(최종 시안 P44). 머리·탭·바닥은 고정하고 본문만 스크롤한다. 대화 입력창은 두지 않는다. */
 .conversations-dialog { width: min(100%, 520px); height: 100dvh; max-height: 100dvh; max-width: 520px; margin: 0 auto; padding: 0; border-radius: 0; background: var(--bg); overflow: hidden; }
 .conversations-dialog[open] { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; gap: 12px; animation: none; }
+.conversations-dialog:not(.contents-dialog)[open] { gap: 16px; } /* 시안 P44(eZ2xs): 머리 줄–탭–제목 간격 16 */
 .conversations-dialog .app-bar { padding: max(20px, env(safe-area-inset-top)) var(--pad) 0; } /* 시안 P44: 머리 줄 y 20, 탭 64, 제목 124 */
 .conversations-dialog .journey-tabs { margin: 0 var(--pad); }
 .conversation-body { overflow-y: auto; overscroll-behavior: contain; min-height: 0; scroll-behavior: auto; padding: 0 var(--pad) 20px; display: grid; align-content: start; gap: 12px; }
-.conversation-title { display: grid; gap: 12px; }
-.conversation-range { padding: 12px; border-radius: var(--r-phone-panel); background: var(--accent-soft); font-size: 15px; font-weight: 500; line-height: 22px; }
-.conversation-thread { display: grid; gap: 12px; }
-.conversation-group { display: grid; gap: 12px; }
-.conversation-time { font-size: 13px; font-weight: 400; line-height: 18px; color: var(--ink-2); }
+.conversation-title { display: grid; gap: 6px; }
+.conversation-thread { display: grid; gap: 16px; }
+.conversation-group { display: grid; gap: 16px; }
+.conversation-time { margin: 0; text-align: center; white-space: pre; font-size: 13px; font-weight: 400; line-height: 1.35; color: var(--ink-2); } /* 시안 '09:32  동해고속도로' 가운데 */
+/* 말풍선(시안 P44 'Conversation / Phone'): 얼굴 36·간격 10, 이름 14 Medium, 풍선 여백 12/14·18 Medium, 시각 12 */
 .conversation-message { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
-.message-face { flex: none; width: 32px; }
-.message-face .avatar { display: block; width: 32px; height: 32px; }
-.message-bubble { flex: 1; min-width: 0; display: grid; gap: 4px; padding: 10px 12px; border-radius: 6px 18px 18px 18px; background: var(--surface); }
-.message-name { color: var(--ink-2); font-size: 15px; font-weight: 500; line-height: 22px; }
-.message-text { font-size: 17px; line-height: 26px; white-space: pre-wrap; overflow-wrap: anywhere; }
-.conversation-message.grouped { margin-top: -6px; }
+.conversation-message.me { justify-content: flex-end; }
+.message-face { flex: none; width: 36px; }
+.message-face .avatar { display: block; width: 36px; height: 36px; }
+.message-col { display: grid; gap: 6px; min-width: 0; }
+.conversation-message.me .message-col { justify-items: end; }
+.message-name { margin: 0; color: var(--ink-2); font-size: 14px; font-weight: 500; line-height: 1.35; }
+.message-row { display: flex; align-items: flex-end; gap: 6px; min-width: 0; }
+.conversation-message.me .message-row { flex-direction: row-reverse; }
+.message-bubble { min-width: 0; margin: 0; padding: 12px 14px; border-radius: 6px 18px 18px 18px; background: var(--surface-2); }
+.conversation-message.me .message-bubble { border-radius: 18px 6px 18px 18px; background: var(--accent-soft); }
+.message-text { font-size: 18px; font-weight: 500; line-height: 1.35; white-space: pre-wrap; overflow-wrap: anywhere; }
+.message-time { flex: none; font-size: 12px; line-height: 1.35; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.conversation-message.grouped { margin-top: -10px; }
+.conversation-message.grouped .message-face { visibility: hidden; }
 .conversation-message.grouped .message-bubble { border-radius: 18px; }
-.conversation-ask { display: grid; gap: 6px; padding: 12px; border-radius: var(--r-phone-panel); background: var(--accent-soft); }
-.conversation-ask .meta { font-size: 13px; line-height: 18px; }
-.ask-quote { font-size: 17px; line-height: 26px; overflow-wrap: anywhere; }
 .conversation-empty { min-height: 240px; display: grid; align-content: center; justify-items: center; gap: 18px; padding: 32px; text-align: center; }
 .conversation-empty .what { font-size: 16px; font-weight: 500; }
 .conversation-mark { font-size: 72px; line-height: .8; font-weight: 700; color: var(--accent); }
@@ -950,7 +956,8 @@ button.brand-home { min-height: 44px; margin-block: -6px; padding: 0 4px 0 0; ga
 .link-state::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); }
 .link-state.is-offline::before { background: var(--rec); }
 .ride-title, .conversation-title { display: grid; gap: 8px; }
-.ride-title h1, .conversation-title h1 { margin: 0; font-size: 28px; line-height: 38px; letter-spacing: -0.02em; overflow-wrap: anywhere; }
+.ride-title h1, .conversation-title h1 { margin: 0; font-size: 28px; line-height: 38px; letter-spacing: -0.015em; overflow-wrap: anywhere; } /* 시안 eZ2xs P17–P21: 28/38 자간 -1.5% */
+.conversations-dialog:not(.contents-dialog) .conversation-title h1 { font-size: 26px; line-height: 1.25; } /* 시안 P44: 여행 이름 26 */
 .ride-title .sub, .conversation-title .sub { font-size: 15px; font-weight: 500; line-height: 22px; }
 .seat-map { display: grid; gap: 10px; padding: 16px; border: 2px solid var(--line); border-radius: var(--r-phone-card); background: var(--surface); }
 .seat-front { font-size: 15px; font-weight: 500; line-height: 22px; color: var(--ink-2); }
@@ -968,7 +975,12 @@ button.brand-home { min-height: 44px; margin-block: -6px; padding: 0 4px 0 0; ga
 .ride-status strong { font-size: 19px; line-height: 28px; }
 .ride-status .meta { font-size: 13px; line-height: 18px; }
 .ride-card { display: grid; gap: 14px; padding: 20px; border-radius: var(--r-phone-card); background: var(--surface); }
-.near-card { background: var(--accent-soft); }
+.near-card { gap: 8px; padding: 16px; border-radius: var(--r-phone-panel); background: var(--accent-soft); } /* 시안 P19(eZ2xs) 350×198: 반경 20·여백 16·간격 8 */
+.near-card .brief-label { color: var(--accent); }
+.near-rows { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.near-rows li { display: grid; grid-template-columns: 30px 1fr; align-items: center; gap: 12px; padding: 0; border: 0; }
+.near-rows strong { font-size: 22px; line-height: 30px; font-weight: 700; letter-spacing: -0.01em; overflow-wrap: anywhere; } /* Phone/Title 22 */
+.near-foot { font-size: 15px; line-height: 22px; font-weight: 500; color: var(--ink-2); }
 .near-card h2 { font-size: 19px; line-height: 28px; }
 .near-card > p:not(.meta), .near-asks { font-size: 17px; line-height: 26px; }
 .near-asks { gap: 4px; }
@@ -1132,9 +1144,9 @@ button.ob-other { justify-self: start; min-height: 40px; font-size: 13px; font-w
 .brief-head { display: flex; align-items: center; gap: 8px; }
 .brief-head strong { flex: 1; font-size: 19px; line-height: 28px; }
 .brief-count { font-size: 15px; line-height: 22px; font-weight: 700; }
-.brief-rows { display: grid; gap: 14px; }
+.brief-rows { display: grid; gap: 12px; }
 .brief-rows li { padding: 0; border: 0; }
-.brief-row { display: grid; grid-template-columns: 30px 1fr auto; align-items: center; gap: 12px; min-height: 48px; } /* 시안 행동 항목 318×48, 이모지 30 */
+.brief-row { display: grid; grid-template-columns: 30px 1fr auto; align-items: center; gap: 12px; min-height: 30px; } /* 시안 행동 항목: 이름만 318×30, 요청한 사람까지 318×48 · 이모지 30 */
 .brief-emoji { font-size: 26px; line-height: 30px; text-align: center; }
 .brief-emoji.small { font-size: 24px; line-height: 28px; }
 .brief-copy { display: grid; gap: 2px; min-width: 0; }
@@ -1142,67 +1154,91 @@ button.ob-other { justify-self: start; min-height: 40px; font-size: 13px; font-w
 .brief-copy small { font-size: 13px; line-height: 18px; color: var(--ink-2); }
 .brief-qty { font-size: 19px; line-height: 28px; font-weight: 700; white-space: nowrap; }
 /* ---- 콘텐츠 기록(F6, 최종 시안 P33–P38·D補 emptyContent·player2·3·export2·3) ---- */
-:root { --tint-2: #fcf0d9; --tile-0: #fdf0dc; --tile-1: #fbe5ee; --map-bg: #efebe5; --map-road: #b8b0a3; --map-water: #b7d3d8; }
+:root { --tint-2: #fcf0d9; --tile-0: #fcf0d9; --tile-1: #fbe7ee; /* 시안 color/tint-2·tint-3(P32·P33·P35 카드) */ --map-bg: #efebe5; --map-road: #b8b0a3; --map-water: #b7d3d8; }
 @media (prefers-color-scheme: dark) { :root { --tint-2: #3a3122; --tile-0: #3a3122; --tile-1: #3a2733; --map-bg: #26231f; --map-road: #c9c0b2; --map-water: #5c7a80; } }
-.contents-dialog .contents-body { display: grid; align-content: start; gap: 14px; padding: 0 var(--pad) 12px; overflow-y: auto; }
+.contents-dialog .contents-body { display: grid; align-content: start; gap: 12px; padding: 0 var(--pad) 12px; overflow-y: auto; }
 .contents-title .between { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .contents-studio { min-height: 32px; padding: 0 10px; border-radius: 10px; background: none; color: var(--ink-2); font-size: 13px; font-weight: 500; }
-.contents-seg { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-.contents-seg button { min-height: 56px; border-radius: var(--r-phone-ctl); background: var(--surface-2); color: var(--ink); font-size: 19px; font-weight: 700; }
-.contents-seg button.selected { background: var(--accent-fill); color: var(--on-accent); }
-.content-group { display: grid; gap: 12px; }
-.content-group > h2 { margin: 0; font-size: 19px; font-weight: 700; }
+/* 콘텐츠 기록(시안 eZ2xs P33–P38). 보기 전환 'Archive / 보기 전환 / Phone': 흰 틀 350×44·반경 12·여백 4, 칸 36·반경 8, 고른 칸 surface-2·굵게 */
+.contents-dialog .contents-body { gap: 20px; }
+.contents-dialog .contents-title + .contents-seg { margin-top: -8px; } /* 시안: 제목–보기 전환 12, 그 아래 20 */
+.contents-seg { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; padding: 4px; border-radius: 12px; background: var(--surface); }
+.contents-seg button { min-height: 36px; padding: 0; border-radius: 8px; background: none; color: var(--ink); font-size: 15px; line-height: 22px; font-weight: 500; }
+.contents-seg button.selected { background: var(--surface-2); font-weight: 700; }
+.content-group { display: grid; gap: 20px; }
+/* 여행 머리: '2026년 11월 14일'(15/22) · 여행 이름(Phone/Title 22) · '09:20 — 10:28' */
+.content-trip-head { display: grid; gap: 6px; }
+.content-trip-head h2 { margin: 0; font-size: 22px; line-height: 30px; font-weight: 700; letter-spacing: -0.01em; }
+.content-trip-head p { margin: 0; font-size: 15px; line-height: 22px; font-weight: 500; color: var(--ink-2); }
+/* 장면 표지('Archive / 썸네일' 169×232 · listPhone 62×85 · pin 52×72 · playerPhone 250×444 · exportPhone 180×320 — 한 모양). 속 글·간격은 표지 폭 비례(cqi) */
+.content-poster { display: block; width: 100%; container-type: inline-size; }
+.poster-card { display: flex; flex-direction: column; gap: 5cqi; aspect-ratio: 169 / 232; padding: 7.5cqi; border-radius: 6.25cqi; overflow: hidden; color: var(--ink); text-align: left; }
+.content-poster.tall .poster-card { aspect-ratio: 9 / 16; }
+.poster-card.tone-0 { background: var(--tile-0); }
+.poster-card.tone-1 { background: var(--tile-1); }
+.content-poster .poster-top, .content-poster .poster-foot { font-size: 4.7cqi; line-height: 6.9cqi; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.content-poster .poster-title { font-size: 10cqi; line-height: 13.75cqi; font-weight: 700; letter-spacing: -0.02em; word-break: keep-all; overflow-wrap: anywhere; }
+.content-poster .poster-cast { display: flex; justify-content: center; gap: 3.75cqi; margin-top: auto; }
+.content-poster .poster-cast .content-face, .content-poster .poster-cast .avatar { display: block; width: 35cqi; height: 35cqi; }
+.content-poster .poster-caption { font-size: 4.1cqi; line-height: 5.6cqi; text-align: center; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.content-poster .poster-foot { display: flex; justify-content: space-between; gap: 4px; } /* 칸·줄 글자 규칙(.content-tile strong 등)보다 앞서게 .content-poster로 묶는다 */
+@container (max-width: 100px) { .content-poster .poster-foot { display: none; } } /* 목록·핀의 작은 표지는 끝 줄을 뺀다(시안 listPhone·pin) */
+/* 갤러리 칸: 표지 아래 제목 15/22 Medium, '09:32  장소' 13/18 */
 .content-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-.content-tile { display: grid; align-content: start; justify-items: start; gap: 8px; min-height: 166px; padding: 12px 12px 14px; border-radius: var(--r-phone-card); color: var(--ink); text-align: left; }
-.content-tile.tone-0, .content-pin.tone-0 { background: var(--tile-0); }
-.content-tile.tone-1, .content-pin.tone-1 { background: var(--tile-1); }
-.content-tile strong { font-size: 19px; line-height: 27px; font-weight: 700; word-break: keep-all; }
-.content-tile small, .content-row small { font-size: 13px; color: var(--ink-2); }
-.content-cast { display: flex; gap: 4px; min-height: 52px; }
-.content-face .avatar { width: 52px; height: 52px; }
-.content-cast.big .avatar { width: 120px; height: 120px; }
-.content-cast.big { gap: 28px; }
-.content-trip { display: grid; gap: 6px; padding: 16px; border-radius: var(--r-phone-card); background: var(--accent-soft); }
-.content-trip h2 { margin: 0; font-size: 19px; font-weight: 700; }
-.content-trip p { margin: 0; font-size: 15px; color: var(--ink-2); }
-.content-row { display: grid; grid-template-columns: 52px minmax(0, 1fr); align-items: center; gap: 12px; padding: 16px; border-radius: var(--r-phone-card); background: var(--surface); color: var(--ink); text-align: left; }
-.content-row.picked { background: var(--accent-soft); }
+.content-tile { display: grid; align-content: start; justify-items: stretch; gap: 8px; min-height: 0; padding: 0; border-radius: 0; background: none; color: var(--ink); text-align: left; }
+.content-tile strong { font-size: 15px; line-height: 22px; font-weight: 500; word-break: keep-all; }
+.content-tile small { font-size: 13px; line-height: 18px; font-weight: 400; color: var(--ink-2); white-space: pre; }
+.content-face { display: block; }
+/* 타임라인(P34)·지도 아래 목록(P35·P36): [시각 48] 표지 62 · 제목 17/26 · '장소  0:32' 13/18 */
+.content-steps { display: grid; gap: 16px; }
+.content-step { margin: 0; font-size: 15px; line-height: 22px; font-weight: 500; white-space: pre; }
+.content-row { display: grid; grid-template-columns: 62px minmax(0, 1fr); align-items: center; gap: 12px; min-height: 0; padding: 0; border-radius: 0; background: none; color: var(--ink); text-align: left; }
+.content-row.timed { grid-template-columns: 48px 62px minmax(0, 1fr); }
+.content-at { font-size: 15px; line-height: 22px; font-weight: 500; font-variant-numeric: tabular-nums; }
 .content-row > span:last-child { display: grid; gap: 4px; }
-.content-row strong { font-size: 19px; font-weight: 700; line-height: 26px; }
-.content-map-card { display: grid; gap: 12px; padding: 16px; border-radius: var(--r-phone-card); background: var(--surface); }
-.content-map-card .meta { margin: 0; font-size: 13px; }
-.content-map { position: relative; aspect-ratio: 318 / 204; border-radius: 16px; overflow: hidden; background: var(--map-bg); }
+.content-row strong { font-size: 17px; line-height: 26px; font-weight: 400; }
+.content-row small { font-size: 13px; line-height: 18px; font-weight: 400; color: var(--ink-2); white-space: pre; }
+.content-trip-list { display: grid; gap: 12px; }
+.content-trip-list h2 { margin: 0; font-size: 19px; line-height: 28px; font-weight: 700; letter-spacing: -0.01em; }
+.content-trip-list .meta { margin: 0; font-size: 13px; line-height: 18px; white-space: pre; }
+button.content-more { justify-self: start; min-height: 44px; padding: 0; background: none; color: var(--accent); font-size: 15px; line-height: 22px; font-weight: 500; }
+/* 지도(P35·P36): 350×300·반경 16 틀 안의 그린 지도, 핀은 바탕색 틀(60·반경 12·여백 4)에 작은 표지 */
+.content-map-card { display: grid; gap: 12px; }
+.content-map { position: relative; aspect-ratio: 350 / 300; border-radius: 16px; overflow: hidden; background: var(--map-bg); }
 .content-map-art { position: absolute; inset: 0; width: 100%; height: 100%; }
 .content-map-art .map-road { fill: none; stroke: var(--map-road); stroke-width: 2; }
 .content-map-art .map-water { fill: var(--map-water); stroke: none; }
-.content-map-art .map-route { fill: none; stroke: var(--accent-fill); stroke-width: 5; stroke-linecap: round; stroke-linejoin: round; }
+.content-map-art .map-route { fill: none; stroke: var(--accent); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
 .content-map-empty { position: absolute; inset: auto 12px 12px; margin: 0; font-size: 13px; color: var(--ink-2); }
-.content-pin { position: absolute; display: grid; justify-items: start; gap: 4px; width: 116px; min-height: 0; padding: 8px; border-radius: 16px; color: var(--ink); font-size: 13px; text-align: left; transform: translate(-50%, calc(-100% - 10px)); box-shadow: 0 1px 0 #0000000d; }
-.content-pin::after { content: ""; position: absolute; left: calc(50% - 5px); bottom: -15px; width: 10px; height: 10px; border-radius: 50%; background: var(--accent-fill); border: 2px solid var(--surface); }
-.content-pin .content-face, .content-pin .content-face .avatar { display: block; width: 36px; height: 36px; }
-.content-face { display: block; }
-.content-pin.selected { outline: 3px solid var(--accent-fill); }
-.content-player { display: grid; gap: 18px; padding: 20px; border-radius: var(--r-phone-card); background: var(--surface); }
-.content-player h2 { margin: 0; font-size: 28px; line-height: 38px; letter-spacing: -0.02em; word-break: keep-all; }
-.content-line { margin: 0; font-size: 19px; font-weight: 700; line-height: 27px; }
-.content-play { justify-self: start; min-height: 36px; padding: 0; background: none; color: var(--ink-2); font-size: 15px; font-weight: 500; }
+.content-pin { position: absolute; display: block; width: 60px; min-height: 0; padding: 4px; border-radius: 12px; background: var(--bg); transform: translate(-50%, -100%); }
+.content-pin.selected { outline: 3px solid var(--accent); }
+/* 재생(P37): 큰 표지 250 가운데, 그 아래 재생·위치 */
+.content-player { display: grid; justify-items: center; gap: 12px; padding-top: 22px; }
+.content-player .content-poster { width: 250px; }
+.content-play { min-height: 36px; padding: 0; background: none; color: var(--ink-2); font-size: 15px; font-weight: 500; }
 .content-seek { width: 100%; accent-color: var(--accent-fill); }
-.content-save { display: grid; justify-items: start; gap: 4px; padding: 18px 16px; border-radius: var(--r-phone-card); background: var(--surface); color: var(--ink); text-align: left; }
-.content-save strong { font-size: 19px; font-weight: 700; }
-.content-save small { font-size: 15px; color: var(--ink-2); }
-.content-row.static { cursor: default; }
+/* 내보내기(P38): 표지 180 가운데, 아래 제목 19/28 · 'MP4 / 9:16 / 32초' 15/22 · 본문 17/26 · 안내 15/22 */
+.content-export { display: grid; gap: 12px; padding-top: 28px; }
+.content-export .content-poster { width: 180px; justify-self: center; margin-bottom: 8px; }
+.content-export h2 { margin: 0; font-size: 19px; line-height: 28px; font-weight: 700; letter-spacing: -0.01em; }
+.content-export p { margin: 0; font-size: 17px; line-height: 26px; }
+.content-export .meta { font-size: 15px; line-height: 22px; font-weight: 500; color: var(--ink-2); white-space: pre-wrap; }
+.content-save { display: grid; justify-items: start; gap: 5px; padding: 16px; border-radius: var(--r-phone-card); background: var(--surface); color: var(--ink); text-align: left; }
+.content-save strong { font-size: 19px; line-height: 28px; font-weight: 700; letter-spacing: -0.01em; }
+.content-save small { font-size: 15px; line-height: 22px; font-weight: 500; color: var(--ink-2); }
 .content-empty { margin: 0; font-size: 19px; font-weight: 700; line-height: 28px; color: var(--ink-2); }
 /* 여행 마무리·추천 장면 고르기·생성·완성(최종 시안 P22–P32). 대화 기록과 같은 틀: 머리·탭·바닥은 고정하고 본문만 스크롤한다.
    시안의 완성 카드 바탕(크림·분홍)은 토큰에 없어 민트 연한 바탕과 surface-2를 번갈아 쓴다. */
 .after-dialog { width: min(100%, 520px); height: 100dvh; max-height: 100dvh; max-width: 520px; margin: 0 auto; padding: 0; border-radius: 0; background: var(--bg); overflow: hidden; }
 .after-dialog[open] { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; gap: 12px; animation: none; }
-.after-dialog .app-bar { padding: max(8px, env(safe-area-inset-top)) var(--pad) 0; }
+.after-dialog .app-bar { padding: max(20px, env(safe-area-inset-top)) var(--pad) 0; } /* 시안 P22–P32: 머리 줄 y 20, 탭 64, 제목 124 */
 .after-dialog .journey-tabs { margin: 0 var(--pad); }
 .after-body { overflow-y: auto; overscroll-behavior: contain; min-height: 0; padding: 0 var(--pad) 20px; display: grid; align-content: start; gap: 12px; }
 .after-summary { display: grid; gap: 4px; padding: 16px; border-radius: var(--r-phone-card); background: var(--accent-soft); }
 .after-summary strong { font-size: 19px; line-height: 28px; }
 .after-summary p { font-size: 15px; font-weight: 500; line-height: 22px; color: var(--ink-2); }
 .after-card { display: grid; gap: 12px; padding: 18px; border-radius: var(--r-phone-card); background: var(--surface); }
+.after-card:has(.wave-pick) { gap: 8px; padding: 14px; } /* 시안 P23–P30 파형 카드: 여백 14, 간격 8 */
 .after-label { font-size: 15px; font-weight: 500; line-height: 22px; white-space: pre-wrap; }
 .after-note { font-size: 13px; line-height: 18px; color: var(--ink-2); }
 .trip-wave { display: flex; align-items: center; justify-content: space-between; gap: 2px; height: 64px; }
@@ -1210,12 +1246,12 @@ button.ob-other { justify-self: start; min-height: 40px; font-size: 13px; font-w
 .trip-wave i.mark { opacity: .45; }
 .trip-wave i.on { background: var(--accent-fill); opacity: 1; }
 .wave-axis { display: flex; justify-content: space-between; font-size: 13px; line-height: 18px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
-.scene-pick { display: grid; gap: 2px; padding: 14px 16px; border-radius: var(--r-phone-card); background: var(--surface); }
+.scene-pick { display: grid; gap: 4px; padding: 12px; border-radius: var(--r-phone-card); background: var(--surface); }
 .scene-pick.on { background: var(--accent-soft); }
 .scene-pick label { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
 .scene-pick input { flex: none; width: 22px; height: 22px; margin: 3px 0 0; accent-color: var(--accent); }
-.pick-copy { display: grid; gap: 2px; min-width: 0; text-align: left; }
-.pick-copy strong { font-size: 18px; line-height: 26px; overflow-wrap: anywhere; }
+.pick-copy { display: grid; gap: 4px; min-width: 0; text-align: left; } /* 시안 장면 카드 350×78: 여백 12, 19/28 · 15/22, 간격 4 */
+.pick-copy strong { font-size: 19px; line-height: 28px; letter-spacing: -0.01em; overflow-wrap: anywhere; }
 .pick-time { font-size: 15px; font-weight: 500; line-height: 22px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
 .scene-pick details { padding-left: 32px; }
 .scene-pick summary { min-height: 32px; display: flex; align-items: center; gap: 6px; cursor: pointer; list-style: none; }
@@ -1230,11 +1266,8 @@ button.ob-other { justify-self: start; min-height: 40px; font-size: 13px; font-w
 .make-items li { display: flex; justify-content: space-between; gap: 12px; }
 .make-items li + li { padding-top: 6px; }
 .make-items .meta { flex: none; font-size: 13px; text-align: right; max-width: 55%; }
-.made-card { display: flex; align-items: center; gap: 14px; min-height: 84px; padding: 16px; border-radius: var(--r-phone-card); background: var(--accent-soft); color: var(--ink); font-weight: 400; text-align: left; }
-.made-card.tone-1 { background: var(--surface-2); }
-.made-card .avatar { flex: none; width: 52px; height: 52px; }
 button.after-pick { justify-self: center; min-height: 44px; color: var(--ink-2); text-decoration: underline; text-underline-offset: 3px; }
-.after-bottom { display: grid; gap: 8px; padding: 0 var(--pad) max(16px, env(safe-area-inset-bottom)); }
+.after-bottom { display: grid; gap: 8px; padding: 0 var(--pad) max(20px, env(safe-area-inset-bottom)); } /* 시안 하단 작업: 아래 20 */
 .after-bottom button { min-height: 56px; border-radius: var(--r-phone-ctl); font-size: 19px; font-weight: 700; background: var(--surface-2); color: var(--ink); }
 .after-bottom button.primary { background: var(--accent-fill); color: var(--on-accent); }
 .after-bottom button.primary:disabled { background: var(--accent-soft); color: var(--ink-2); }
@@ -1245,7 +1278,7 @@ button.after-pick { justify-self: center; min-height: 44px; color: var(--ink-2);
 .wave-pick { position: relative; padding-top: 34px; }
 .wave-span { position: absolute; top: 30px; bottom: 0; min-width: 3px; transform: translateX(-1px); border-inline: 1.5px solid var(--ink-2); pointer-events: none; }
 .wave-span.on { border-color: var(--accent-fill); background: var(--accent-fill); min-width: 6px; }
-.wave-mark { position: absolute; top: 0; min-width: 34px; min-height: 26px; padding: 0 10px; transform: translateX(-50%); border-radius: 8px; background: var(--surface-2); color: var(--ink); font-size: 13px; font-weight: 500; line-height: 26px; }
+.wave-mark { position: absolute; top: 0; min-width: 34px; min-height: 28px; padding: 0 10px; transform: translateX(-50%); border-radius: 8px; background: var(--surface-2); color: var(--ink); font-size: 13px; font-weight: 400; line-height: 28px; } /* 시안 번호 34×28·반경 8·13/18 */
 .wave-mark.on { background: var(--accent-fill); color: var(--on-accent); }
 .wave-mark::after { content: ""; position: absolute; inset: -9px -5px; } /* 손가락 크기(44px) */
 .ob-face img[src*="/chars/"], .ob-avatar img[src*="/chars/"], .ob-portrait img[src*="/chars/"] { object-fit: contain; } /* 캐릭터 전신은 자르지 않는다(사진만 꽉 채움) */

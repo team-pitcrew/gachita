@@ -46,8 +46,8 @@ test("경유지 도착(P20): 먼저 할 일 하나, 잊지 말고 살 것은 물
   const text = fakeDom();
   const shown = text(arrivalBrief({ kind: "arrived", place: "하나로마트 강릉점" }, fresh(mart), people));
   assert.match(shown, /먼저 할 일\|🚻\|화장실 먼저 다녀오기\|하은이 요청/);
-  assert.match(shown, /🛒\|잊지 말고 살 것\|4개\|🥩\|삼겹살\|엄마 요청\|600g/);
-  assert.deepEqual(arrivalMove({ final: false }), ["장보고 여행 계속", "driving"]);
+  assert.match(shown, /🛒\|잊지 말고 살 것\|4개\|🥩\|삼겹살\|600g/); // 시안 P20: 살 것 줄에는 요청한 사람을 쓰지 않는다
+  assert.deepEqual(arrivalMove({ final: false }), ["계속", "driving"]);
   delete globalThis.document;
 });
 
@@ -70,12 +70,13 @@ test("최종 목적지인지는 차가 남긴 목적지 기록과 이름이 같�
   assert.deepEqual(rideHeading(atLodge), { title: "강릉 숙소 도착", sub: "내리기 전, 이 세 가지만 기억하세요" });
 });
 
-test("곧 도착(P19): '내리기 전에 기억할 N가지'와 한 줄 요약, 못 읽으면 수를 말하지 않는다", () => {
+test("곧 도착(P19): '도착하면 할 일' 목록(먼저 할 일 한 줄씩, 살 것은 '장보기' 한 줄), 못 읽으면 받은 시각을 밝힌다", () => {
   const items = [mart[0], todo("마트", "buy", "고기랑 과일도 사 가기", [{ name: "고기", qty: null }, { name: "과일", qty: null }], ["mom"]), todo("마트", "buy", "간식하고 음료 사자", [{ name: "간식", qty: null }, { name: "음료", qty: null }], ["seojun"])];
   assert.deepEqual(items.map((t) => nearLine(t, people)), ["하은 화장실", "고기와 과일", "간식과 음료"]);
   const text = fakeDom();
   const shown = text(nearBrief({ kind: "near", place: "하나로마트" }, fresh(items), people));
-  assert.match(shown, /내리기 전에 기억할 3가지\|하은 화장실 \/ 고기와 과일 \/ 간식과 음료\|주차하면 가족별로 자세히 보여드릴게요/);
+  assert.match(shown, /도착하면 할 일\|🚻\|화장실 먼저 다녀오기\|🛒\|장보기\|정차하면 자세히 보여드릴게요/);
+  assert.equal(shown.match(/장보기/g).length, 1); // 살 것 둘이어도 한 줄
   assert.doesNotMatch(text(nearBrief({ kind: "near", place: "하나로마트" }, askState({ ready: true, items, error: "연결이 끊겼어요." }), people)), /3가지/);
   assert.match(text(nearBrief({ kind: "near", place: "하나로마트" }, askState(null), people)), /동의하고 이 폰에서 연결한 사람만/);
   delete globalThis.document;

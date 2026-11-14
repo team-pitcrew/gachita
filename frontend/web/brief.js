@@ -1,4 +1,4 @@
-// 도착 전·도착 브리핑(최종 시안 v2: P19·P20, 최종 목적지 finalBrief, Figma GISs0yf3c1KCjXwuFmF4ij).
+// 도착 전·도착 브리핑(최종 시안: P19·P20, 최종 목적지 finalBrief. 11/15 최신 복제본 Figma eZ2xsOXkrszqdP489kduCs).
 // 사람별이 아니라 분류별 행동 항목: '먼저 할 일', '잊지 말고 살 것 N개'(이모지·이름·'{누구} 요청'·수량),
 // 최종 목적지는 '먼저 할 일 / 잊지 말기 / 챙길 것'. 분류·물건·수량·요청한 사람은 서버 할 일(GET /todos,
 // place-rules-v2, T141)이 준 값이고 여기서 지어내지 않는다. 옛 서버(분류 없음)면 그 할 일 글을 '잊지 말기'로 보인다.
@@ -65,15 +65,17 @@ const row = (r, phone = true) => h("li", { className: "brief-row" },
 const card = (label, rows, className = "") => rows.length > 0 && h("section", { className: `ride-card brief-card ${className}` },
   h("p", { className: "brief-label" }, label), h("ul", { className: "brief-rows" }, rows.map((r) => row(r))));
 
-// 곧 도착(P19): '내리기 전에 기억할 N가지' + 한 줄 요약. asks는 askState(). 목록을 못 믿으면 수를 말하지 않는다.
+// 곧 도착(P19): '도착하면 할 일' 목록 — 먼저 할 일·잊지 말기·챙길 것은 할 일마다 한 줄, 살 것은 모아 '장보기' 한 줄
+// (이모지 30 + 22/30 굵게, 시안 'Briefing / action item / Phone'). asks는 askState(). 못 믿는 목록이면 받은 시각을 밝힌다.
 export function nearBrief(state, asks, participants = []) {
-  const list = asksAt(asks.items, state.place);
   const note = ASK_NOTE[asks.kind];
+  const g = briefGroups(asks.items, state.place, participants);
+  const rows = [...g.first, ...(g.buy.length ? [{ emoji: emojiOf("장보기", "buy"), name: "장보기" }] : []), ...g.remember, ...g.bring];
   return h("section", { className: "ride-card near-card", role: "status" },
-    h("h2", {}, note ? "내리기 전에 기억할 부탁" : asks.kind === "stale" ? (list.length ? "내리기 전에 기억할 부탁" : "받은 목록에는 이곳 부탁이 없어요") : list.length ? `내리기 전에 기억할 ${list.length}가지` : "이곳에서 챙길 부탁은 아직 없어요"),
-    note ? h("p", {}, note) : list.length > 0 && h("p", { className: "near-line" }, list.map((t) => nearLine(t, participants)).join(" / ")),
+    h("p", { className: "brief-label" }, note ? "내리기 전, 가족이 말한 부탁" : rows.length ? "도착하면 할 일" : asks.kind === "stale" ? "받은 목록에는 이곳 부탁이 없어요" : "이곳에서 챙길 부탁은 아직 없어요"),
+    note ? h("p", {}, note) : rows.length > 0 && h("ul", { className: "near-rows" }, rows.map((r) => h("li", {}, h("span", { className: "brief-emoji", "aria-hidden": "true" }, r.emoji), h("strong", {}, r.name)))),
     asks.kind === "stale" && h("p", { className: "meta" }, staleNote(asks)),
-    h("p", { className: "meta" }, "주차하면 가족별로 자세히 보여드릴게요."),
+    h("p", { className: "near-foot" }, "정차하면 자세히 보여드릴게요"),
   );
 }
 
@@ -87,11 +89,11 @@ export function arrivalBrief(state, asks, participants = []) {
     return [h("section", { className: "ride-card brief-card" }, h("p", { className: "brief-label" }, note ? "내리기 전, 가족이 말한 부탁" : asks.kind === "stale" ? "받은 목록에는 이곳 부탁이 없어요" : "여기서 챙길 부탁은 없어요"), note && h("p", { className: "ride-note" }, note)), footer];
   const buy = g.buy.length > 0 && h("section", { className: "ride-card brief-card" },
     h("div", { className: "brief-head" }, h("span", { className: "brief-emoji small", "aria-hidden": "true" }, "🛒"), h("strong", {}, "잊지 말고 살 것"), h("span", { className: "brief-count" }, `${g.buy.length}개`)),
-    h("ul", { className: "brief-rows" }, g.buy.map((r) => row(r))));
+    h("ul", { className: "brief-rows" }, g.buy.map((r) => row({ ...r, who: "" })))); // 시안 P20: 살 것 줄은 이름·수량만(요청한 사람은 빼고)
   const first = card("먼저 할 일", g.first, "brief-first");
   const remember = card("잊지 말기", g.remember), bring = card("챙길 것", g.bring);
   return [...(state.final ? [first, remember, bring, buy] : [first, buy, remember, bring]), footer];
 }
 
-// 도착 화면의 주 단추(운전석): 경유지는 '장보고 여행 계속', 최종 목적지는 '여행 마치고 기록 보기'.
-export const arrivalMove = (state) => (state.final ? ["여행 마치고 기록 보기", "ended"] : ["장보고 여행 계속", "driving"]);
+// 도착 화면의 주 단추(운전석): 경유지는 '계속'(시안 P20), 최종 목적지는 '여행 마치고 기록 보기'.
+export const arrivalMove = (state) => (state.final ? ["여행 마치고 기록 보기", "ended"] : ["계속", "driving"]);

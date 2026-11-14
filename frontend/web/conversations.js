@@ -63,18 +63,18 @@ export function createConversations({ getTrip, getParticipant, getToken, request
     h("p", { className: "what" }, message),
     retry && button("다시 불러오기", retry),
   );
+  // 말풍선(시안 P44 'Conversation / Phone', eZ2xs): 남은 왼쪽(얼굴·이름·회색 풍선, 시각은 풍선 오른쪽 아래),
+  // 이 폰의 참가자가 한 말은 오른쪽('이름 (나)', 민트 옅은 풍선, 시각은 왼쪽). 1분 안에 같은 사람이 이어 말하면 이름·얼굴을 한 번만.
   const message = (line, previous) => {
     const grouped = previous && identity(previous) === identity(line) && line.at - previous.at < 60000;
-    return h("article", { className: `conversation-message${grouped ? " grouped" : ""}` },
-      h("span", { className: "message-face", "aria-hidden": "true" }, !grouped && avatar(who(line))),
-      h("div", { className: "message-bubble" }, !grouped && h("p", { className: "message-name" }, speaker(line)), h("p", { className: "message-text", title: hhmm(line.at) }, line.shown)),
+    const mine = Boolean(line.participantId) && line.participantId === getParticipant()?.id;
+    return h("article", { className: `conversation-message${mine ? " me" : ""}${grouped ? " grouped" : ""}` },
+      !mine && h("span", { className: "message-face", "aria-hidden": "true" }, !grouped && avatar(who(line))),
+      h("div", { className: "message-col" },
+        !grouped && h("p", { className: "message-name" }, mine ? `${speaker(line)} (나)` : speaker(line)),
+        h("div", { className: "message-row" }, h("p", { className: "message-bubble message-text" }, line.shown), h("span", { className: "message-time" }, hhmm(line.at)))),
     );
   };
-  // 부탁 카드: '10:05 / 엄마의 부탁'. 화자를 모르면 이름을 지어내지 않는다.
-  const ask = (line) => h("article", { className: "conversation-ask" },
-    h("p", { className: "meta" }, `${hhmm(line.at)} / ${who(line) ? `${who(line).name}의 부탁` : "부탁"}`),
-    h("p", { className: "ask-quote" }, `“${line.shown}”`),
-  );
 
   function paint(s) {
     if (state !== s) return;
@@ -88,16 +88,16 @@ export function createConversations({ getTrip, getParticipant, getToken, request
     else if (!s.ready) body = bodyStatus("대화를 불러오고 있어요");
     else if (!s.lines.length) body = bodyStatus("아직 받아 적은 대화가 없어요");
     else {
-      const sections = transcriptSections(s.lines, { places: s.places, asks: s.asks });
-      body = h("div", { className: "conversation-thread" }, sections.map((part) => part.kind === "ask" ? ask(part.line)
-        : h("section", { className: "conversation-group" },
-          h("h2", { className: "conversation-time" }, [hhmm(part.at), part.place].filter(Boolean).join(" / ")),
-          part.lines.map((line, i) => message(line, part.lines[i - 1])))));
+      // 시안 P44(eZ2xs)는 부탁도 따로 카드로 떼지 않고 대화 흐름 안의 말풍선으로 둔다(부탁 목록은 함께 타는 중·도착 화면).
+      const sections = transcriptSections(s.lines, { places: s.places });
+      body = h("div", { className: "conversation-thread" }, sections.map((part) => h("section", { className: "conversation-group" },
+        h("h2", { className: "conversation-time" }, [hhmm(part.at), part.place].filter(Boolean).join("  ")),
+        part.lines.map((line, i) => message(line, part.lines[i - 1])))));
     }
     const range = !s.unavailable && s.lines.length ? dateRange(s.lines[0].at, s.lines.at(-1).at) : "";
+    // 제목은 여행 이름, 부제는 날짜와 시간(시안 P44 '강릉 가족 여행 / 11월 14일 09:20–10:28'). 탭이 이미 '대화 기록'이다.
     const scroll = h("div", { className: "conversation-body" },
-      h("div", { className: "conversation-title" }, h("h1", { id: "conversation-title" }, "대화 기록"), h("p", { className: "sub" }, s.title)),
-      range && h("p", { className: "conversation-range" }, range),
+      h("div", { className: "conversation-title" }, h("h1", { id: "conversation-title" }, s.title || "대화 기록"), range && h("p", { className: "sub" }, range.replace(" / ", "  "))),
       body,
     );
     const ready = !s.unavailable && s.ready && s.lines.length > 0;

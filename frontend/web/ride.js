@@ -154,7 +154,7 @@ export function rideHeading(state, { title, waiting = [], asks = null } = {}) {
   switch (state.kind) {
     case "drive": return { title: "지금은 운전에 집중하세요", sub: [trip, going].filter(Boolean).join(" / ") };
     case "paused": return { title: "기록을 잠시 멈췄어요", sub: waiting.length ? `${waiting.join(", ")} 님의 기록 동의를 기다리고 있어요.` : "대화가 더 이상 기록되지 않아요." };
-    case "near": return { title: `곧 ${state.place}에 도착해요`, sub: [state.eta != null && `도착 약 ${Math.max(1, Math.round(state.eta / 60))}분 전`, "가족이 말한 부탁"].filter(Boolean).join(" / ") };
+    case "near": return { title: `곧 ${state.place} 도착`, sub: state.eta != null ? `도착까지 약 ${Math.max(1, Math.round(state.eta / 60))}분` : "" }; // 시안 P19(eZ2xs)
     // v2 도착 브리핑(P20·finalBrief, T141): 경유지는 먼저 할 일과 살 것, 최종 목적지는 세 가지
     case "arrived": return { title: `${state.place} 도착`, sub: state.final ? "내리기 전, 이 세 가지만 기억하세요" : "먼저 할 일과 살 것을 모았어요" };
     case "continue": {
