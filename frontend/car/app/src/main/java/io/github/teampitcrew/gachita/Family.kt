@@ -246,8 +246,7 @@ fun FamilyFlow(server: String, token: String?, onClose: () -> Unit, onStart: (St
                         FamilyView.GROUP, FamilyView.SEAT -> {
                             val list = if (view == FamilyView.SEAT) seats else g?.members.orEmpty()
                             Heading(if (view == FamilyView.SEAT) "가족 좌석 바꾸기" else if (g?.kind == "guest") g.name else "우리 가족",
-                                if (view == FamilyView.SEAT) swapped?.let { sw -> val rear = seats.filter { it.name == sw.first || it.name == sw.second }.all { it.seat?.startsWith("ROW_2_") == true }
-                                    "${sw.first}${if (batchim(sw.first)) "과" else "와"} ${sw.second}의 ${if (rear) "뒷자리" else "자리"} 위치를 바꿨어요." } ?: "바꿀 두 사람을 차례로 눌러 주세요."
+                                if (view == FamilyView.SEAT) swapped?.let { "${it.first}${if (batchim(it.first)) "과" else "와"} ${it.second}의 자리 위치를 바꿨어요." } ?: "바꿀 두 사람을 차례로 눌러 주세요."
                                 else if (saved) "새 좌석을 저장했어요." else "${list.size}명 / ${if (g?.kind == "guest") "동승 그룹" else "기본 그룹"} / 좌석을 눌러 변경")
                             SeatGrid(list, picked) { m ->
                                 if (view == FamilyView.GROUP) { seats = list; picked = m.profileId; swapped = null; saved = false; view = FamilyView.SEAT; return@SeatGrid }
