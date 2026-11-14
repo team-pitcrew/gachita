@@ -21,6 +21,8 @@
   --warn: #8c6400;
   --r-card: 14px;
   --r-ctl: 10px;
+  --r-phone-card: 24px; /* 최종 시안(민준 개선안) 폰 카드·컨트롤 반경. 새로 바꾼 여행 화면부터 쓴다 */
+  --r-phone-ctl: 16px;
   --pad: 20px;
   --mascot: url("/icons/gachita-192.png");
 }
@@ -299,46 +301,6 @@ legend {
 .character-option span { min-height: 32px; display: grid; place-items: center; line-height: 1.3; }
 .chip:has(input:checked) small {
   color: inherit;
-}
-
-/* 좌석 배치: 위가 차 앞쪽 */
-.car {
-  display: grid;
-  gap: 10px;
-  padding: 16px;
-  border-radius: 36px 36px var(--r-card) var(--r-card);
-  background: var(--surface-2);
-}
-.car > .meta {
-  text-align: center;
-}
-.car .front {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px 56px;
-}
-.car .rear {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
-}
-.car .chip {
-  min-height: 76px;
-  align-content: center;
-  gap: 2px;
-}
-.car.readonly .chip {
-  cursor: default;
-}
-.car.readonly .chip.me {
-  border: 3px solid var(--accent);
-  background: var(--accent-soft);
-  color: var(--accent);
-}
-.car.readonly .chip.empty {
-  border-style: dashed;
-  color: var(--ink-2);
-  font-weight: 500;
 }
 
 /* 여행 상태 */
@@ -719,60 +681,44 @@ input[type="file"]::file-selector-button {
 .profile-photo .portrait-edit, .profile-photo .avatar { width: 112px; height: 112px; }
 .profile-photo .portrait-pencil { width: 34px; height: 34px; }
 .visually-hidden { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important; overflow: hidden !important; clip-path: inset(50%); white-space: nowrap; border: 0 !important; }
-.journey-tabs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; padding: 4px; border-radius: 16px; background: var(--surface-2); }
-.journey-tabs button { min-height: 48px; background: none; color: var(--ink-2); border-radius: 12px; }
-.journey-tabs button.selected { background: var(--surface); color: var(--ink); box-shadow: 0 1px 3px rgb(0 0 0 / .05); }
+/* 세 탭(최종 시안 P17–P21·P44): 함께 타는 중 / 대화 기록 / 콘텐츠 기록. 단추 높이는 손가락 크기(44px)를 지켜 시안(40px)보다 조금 크다. */
+.journey-tabs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; padding: 4px; border-radius: 14px; background: var(--surface-2); }
+.journey-tabs button { min-height: 44px; padding: 0 4px; background: none; color: var(--ink-2); border-radius: 10px; font-size: 15px; font-weight: 500; }
+.journey-tabs button.selected { background: var(--accent-soft); color: var(--ink); }
 
-/* 녹취는 고정 머리·메뉴·바닥 안에서만 스크롤한다. 대화 입력창은 두지 않는다. */
+/* 대화 기록(최종 시안 P44). 머리·탭·바닥은 고정하고 본문만 스크롤한다. 대화 입력창은 두지 않는다. */
 .conversations-dialog { width: min(100%, 520px); height: 100dvh; max-height: 100dvh; max-width: 520px; margin: 0 auto; padding: 0; border-radius: 0; background: var(--bg); overflow: hidden; }
-.conversations-dialog[open] { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; animation: none; }
-.conversation-heading { display: flex; align-items: center; gap: 14px; padding: max(12px, env(safe-area-inset-top)) 20px 14px; background: var(--surface); }
-.conversation-heading .grow { min-width: 0; }
-.conversation-heading h1 { margin: 0; font-size: 19px; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.conversation-heading .meta { font-size: 12px; margin-top: 3px; }
-.conversation-heading > .plain { font-size: 14px; min-width: 38px; }
-.record-state { flex: none; font-size: 12px; color: var(--ink-2); display: flex; align-items: center; gap: 6px; }
-.record-state.is-recording { color: var(--rec); }
-.record-state.is-recording::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-.conversations-dialog .journey-tabs { margin: 12px 20px 4px; }
-.conversation-body { overflow-y: auto; overscroll-behavior: contain; min-height: 0; scroll-behavior: auto; }
-.conversation-list { display: grid; gap: 16px; padding: 24px 20px; }
-.section-label { font-size: 13px; color: var(--ink-2); }
-.conversation-session { display: flex; width: 100%; min-height: 116px; align-items: center; gap: 14px; padding: 20px 16px; background: var(--surface); color: var(--ink); text-align: left; border-radius: var(--r-card); }
-.session-faces { display: flex; width: 48px; height: 64px; position: relative; flex: none; }
-.session-faces .avatar { position: absolute; width: 40px; height: 40px; border: 2px solid var(--surface); }
-.session-faces .avatar:nth-child(2) { left: 10px; top: 22px; }
-.session-faces .avatar:nth-child(3) { left: 20px; top: 10px; }
-.session-copy { display: grid; gap: 7px; min-width: 0; flex: 1; }
-.session-copy strong { font-size: 16px; overflow-wrap: anywhere; }
-.session-preview { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; color: var(--ink-2); font-size: 13px; font-weight: 400; }
-.session-copy .meta { font-size: 11px; font-weight: 400; }
-.session-chevron { font-size: 25px; color: var(--ink-2); }
-.conversation-footnote { color: var(--ink-2); font-size: 12px; line-height: 1.7; padding-inline: 4px; }
-.conversation-thread { padding: 20px 20px 24px; display: grid; gap: 16px; }
-.conversation-date { justify-self: center; padding: 5px 14px; margin-bottom: 6px; border-radius: 999px; color: var(--ink-2); background: var(--surface-2); font-size: 12px; }
+.conversations-dialog[open] { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; gap: 12px; animation: none; }
+.conversations-dialog .app-bar { padding: max(8px, env(safe-area-inset-top)) var(--pad) 0; }
+.conversations-dialog .journey-tabs { margin: 0 var(--pad); }
+.conversation-body { overflow-y: auto; overscroll-behavior: contain; min-height: 0; scroll-behavior: auto; padding: 0 var(--pad) 20px; display: grid; align-content: start; gap: 12px; }
+.conversation-title { display: grid; gap: 12px; }
+.conversation-range { padding: 12px; border-radius: 20px; background: var(--accent-soft); font-size: 15px; font-weight: 500; line-height: 22px; }
+.conversation-thread { display: grid; gap: 12px; }
+.conversation-group { display: grid; gap: 12px; }
+.conversation-time { font-size: 13px; font-weight: 400; line-height: 18px; color: var(--ink-2); }
 .conversation-message { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
-.message-face { flex: none; width: 36px; }
-.message-face .avatar { display: block; width: 36px; height: 36px; }
-.message-content { max-width: calc(100% - 72px); min-width: 0; display: grid; justify-items: start; gap: 6px; }
-.message-name { color: var(--ink-2); font-size: 12px; }
-.message-bubble { padding: 13px 16px; border-radius: 4px 18px 18px 18px; background: var(--surface); font-size: 16px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
-.message-time { color: var(--ink-2); font-size: 10px; font-variant-numeric: tabular-nums; padding-inline: 3px; }
-.conversation-message.mine { flex-direction: row-reverse; }
-.conversation-message.mine .message-content { justify-items: end; }
-.conversation-message.mine .message-bubble { background: var(--accent-soft); border-radius: 18px 4px 18px 18px; }
-.conversation-message.grouped { margin-top: -10px; }
+.message-face { flex: none; width: 32px; }
+.message-face .avatar { display: block; width: 32px; height: 32px; }
+.message-bubble { flex: 1; min-width: 0; display: grid; gap: 4px; padding: 10px 12px; border-radius: 6px 18px 18px 18px; background: var(--surface); }
+.message-name { color: var(--ink-2); font-size: 15px; font-weight: 500; line-height: 22px; }
+.message-text { font-size: 17px; line-height: 26px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.conversation-message.grouped { margin-top: -6px; }
 .conversation-message.grouped .message-bubble { border-radius: 18px; }
-.conversation-empty { min-height: 280px; display: grid; align-content: center; justify-items: center; gap: 18px; padding: 32px; text-align: center; }
+.conversation-ask { display: grid; gap: 6px; padding: 12px; border-radius: 20px; background: var(--accent-soft); }
+.conversation-ask .meta { font-size: 13px; line-height: 18px; }
+.ask-quote { font-size: 17px; line-height: 26px; overflow-wrap: anywhere; }
+.conversation-empty { min-height: 240px; display: grid; align-content: center; justify-items: center; gap: 18px; padding: 32px; text-align: center; }
 .conversation-empty .what { font-size: 16px; font-weight: 500; }
 .conversation-mark { font-size: 72px; line-height: .8; font-weight: 700; color: var(--accent); }
-.conversation-bottom { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 64px; padding: 8px 20px max(12px, env(safe-area-inset-bottom)); background: var(--surface); border-top: 1px solid var(--line); }
-.conversation-bottom .meta, .conversation-bottom .plain { font-size: 12px; }
+.conversation-bottom { display: grid; grid-auto-flow: row; gap: 8px; padding: 0 var(--pad) max(16px, env(safe-area-inset-bottom)); }
+.conversation-bottom .meta { font-size: 13px; text-align: center; }
+.conversation-bottom button { min-height: 56px; border-radius: var(--r-phone-ctl); font-size: 19px; font-weight: 700; background: var(--surface-2); color: var(--ink); }
+.conversation-bottom button.primary { background: var(--accent-fill); color: var(--on-accent); }
 @media (max-width: 359px) {
   .home-library { gap: 8px; }
   .home-library .home-entry { padding: 16px; }
-  .conversation-heading { gap: 8px; padding-inline: 14px; }
-  .conversation-thread { padding-inline: 12px; }
+  .conversation-body { padding-inline: 12px; }
   .short-shell { padding-inline: 12px; }
 }
 
@@ -924,9 +870,6 @@ input[type="file"]::file-selector-button {
 .records-list, .shares-list, .captions-list { padding: 0; list-style: none; }
 .candidate-lines { padding-left: 22px; color: var(--ink-2); display: grid; gap: 8px; margin: 16px 0; }
 .records-dialog details summary { cursor: pointer; line-height: 1.6; padding: 8px 0; }
-.conversation-bottom { flex-wrap: wrap; gap: 8px; }
-.conversation-bottom > span { flex: 1 1 100%; }
-.conversation-bottom button { flex: 1; min-height: 44px; }
 .short .short-close { border-radius: 8px; width: auto; padding: 8px 12px; }
 
 /* 참석 QR은 시트가 아니라 화면 전체를 덮는 연결 흐름이다. */
@@ -973,15 +916,6 @@ input[type="file"]::file-selector-button {
 /* 익숙한 미디어 조작은 아이콘으로, 저장·공유의 결과는 글자로 남긴다. */
 .media-button {display: inline-flex; align-items: center; justify-content: center; min-width: 48px; min-height: 48px; padding: 12px;}
 .media-button svg {width: 24px; height: 24px; flex: none;}
-.record-setting {display: flex; align-items: center; gap: 14px; padding: 16px 0;}
-.record-setting-icon {width: 48px; height: 48px; display: grid; place-items: center; background: var(--surface-2); color: var(--ink-2); border-radius: var(--r-ctl);}
-.record-setting-icon svg {width: 24px; height: 24px;}
-.record-setting .meta {margin: 2px 0 0;}
-.record-setting-switch {min-width: 60px; min-height: 48px; padding: 5px; border: 0; background: transparent;}
-.switch-track {width: 44px; height: 28px; display: block; border-radius: 16px; background: var(--ink-2); padding: 3px;}
-.switch-track i {display: block; width: 22px; height: 22px; border-radius: 50%; background: var(--surface); transition: transform .15s;}
-.record-setting-switch[aria-checked="true"] .switch-track {background: var(--accent);}
-.record-setting-switch[aria-checked="true"] .switch-track i {transform: translateX(16px);}
 .audio-timeline {position: relative; height: 60px; color: var(--accent); --wave-muted: var(--ink-2);}
 .audio-waveform {width: 100%; height: 48px; display: block;}
 .audio-seek {position: absolute; inset: 0; width: 100%; height: 60px; margin: 0; padding: 0; border: 0; background: transparent; appearance: none; cursor: pointer;}
@@ -991,10 +925,8 @@ input[type="file"]::file-selector-button {
 .audio-seek::-moz-range-thumb {width: 3px; height: 48px; border: 0; border-radius: 2px; background: var(--accent);}
 .audio-seek:disabled {cursor: default; opacity: .35;}
 .short-transport .short-play {min-width: 64px; min-height: 56px; border-radius: var(--r-ctl);}
-@media (prefers-reduced-motion: reduce) {.switch-track i {transition: none;}}
 
 .short-pages .media-button {min-height: 48px;}
-.record-setting-switch:disabled {background: transparent; opacity: .5;}
 
 /* 장소별 할 일과 도착 안내(T120). 카드·알약·줄은 기존 것을 그대로 쓴다. */
 .todos h3 { margin: 16px 0 0; font-size: 15px; font-weight: 600; color: var(--ink-2); }
@@ -1005,3 +937,49 @@ input[type="file"]::file-selector-button {
 .todo-source li { padding: 4px 0; overflow-wrap: anywhere; }
 .todo-here ul { margin-top: 8px; }
 .todo-here .pill, .todo-here button:not(.plain) { background: var(--surface); }
+
+/* 함께 타는 중(최종 시안 P17–P21). 색은 위의 밝은·어두운 토큰, 반경은 --r-phone-*를 쓴다. 글꼴은 앱의 Pretendard(시안은 Noto Sans KR). */
+.ride-view { gap: 12px; }
+.app-bar { min-height: 44px; }
+button.brand-home { min-height: 44px; padding: 0 4px 0 0; background: none; color: var(--ink); font-size: 19px; font-weight: 700; }
+.app-bar .brand::before { width: 24px; height: 24px; border-radius: 7px; }
+.link-state { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink-2); }
+.link-state::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); }
+.link-state.is-offline::before { background: var(--rec); }
+.ride-title, .conversation-title { display: grid; gap: 8px; }
+.ride-title h1, .conversation-title h1 { margin: 0; font-size: 28px; line-height: 38px; letter-spacing: -0.02em; overflow-wrap: anywhere; }
+.ride-title .sub, .conversation-title .sub { font-size: 15px; font-weight: 500; line-height: 22px; }
+.seat-map { display: grid; gap: 10px; padding: 16px; border: 2px solid var(--line); border-radius: var(--r-phone-card); background: var(--surface); }
+.seat-front { font-size: 15px; font-weight: 500; line-height: 22px; color: var(--ink-2); }
+.seat-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.seat-row.three { grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.seat { min-width: 0; display: grid; justify-items: center; gap: 5px; padding: 12px; border-radius: var(--r-phone-card); background: var(--surface-2); text-align: center; }
+.seat.me { background: var(--accent-soft); }
+.seat .avatar, .seat-blank { width: 52px; height: 52px; }
+.seat strong { font-size: 19px; line-height: 28px; overflow-wrap: anywhere; }
+.seat small { font-size: 13px; line-height: 18px; }
+.seat.empty { background: none; border: 2px dashed var(--line); }
+.seat.empty strong { color: var(--ink-2); font-weight: 500; }
+.ride-status { display: grid; gap: 2px; padding: 14px 16px; border-radius: var(--r-phone-card); background: var(--surface-2); }
+.ride-status.on { background: var(--accent-soft); }
+.ride-status strong { font-size: 19px; line-height: 28px; }
+.ride-status .meta { font-size: 13px; line-height: 18px; }
+.ride-card { display: grid; gap: 14px; padding: 20px; border-radius: var(--r-phone-card); background: var(--surface); }
+.near-card { background: var(--accent-soft); }
+.near-card h2 { font-size: 19px; line-height: 28px; }
+.near-card > p:not(.meta), .near-asks { font-size: 17px; line-height: 26px; }
+.near-asks { gap: 4px; }
+.near-asks li + li { padding-top: 0; border-top: 0; }
+.near-card .meta { font-size: 15px; font-weight: 500; }
+.ask-person { display: flex; align-items: center; gap: 12px; padding: 16px; }
+.ask-person .avatar { width: 44px; height: 44px; }
+.ask-copy { display: grid; gap: 5px; min-width: 0; }
+.ask-title { font-size: 19px; line-height: 28px; font-weight: 700; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ask-detail { font-size: 15px; line-height: 22px; font-weight: 500; color: var(--ink-2); }
+.ride-note { font-size: 13px; line-height: 18px; color: var(--ink-2); }
+.ride-moves button { background: var(--surface-2); color: var(--ink); border-radius: var(--r-phone-ctl); }
+.ride-view .bar button { border-radius: var(--r-phone-ctl); }
+.ride-view .bar button.primary, .bar button.secondary { font-size: 19px; }
+.ride-view .bar button.big { min-height: 76px; }
+.bar button.secondary { min-height: 56px; background: var(--surface-2); color: var(--ink); font-weight: 700; }
+main:has(.bar .big) { padding-bottom: calc(196px + env(safe-area-inset-bottom)); }
