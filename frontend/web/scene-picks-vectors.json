@@ -1,0 +1,387 @@
+{
+ "about": "W2 phone scene picks: server scene-suggestions items in (scenes.js suggest on a scripted 68m24s drive) → top 3 by score in time order, numbered, HH:MM:SS from trip start, rule title and quote. For the car port (F5).",
+ "origin": 1794615600000,
+ "participants": [
+  {
+   "id": "dad",
+   "name": "아빠",
+   "seat": "ROW_1_LEFT"
+  },
+  {
+   "id": "mom",
+   "name": "엄마",
+   "seat": "ROW_1_RIGHT"
+  },
+  {
+   "id": "son",
+   "name": "서준",
+   "seat": "ROW_2_LEFT"
+  },
+  {
+   "id": "kid",
+   "name": "하은",
+   "seat": "ROW_2_RIGHT"
+  }
+ ],
+ "items": [
+  {
+   "at": 1794616325000,
+   "from": 1794616324000,
+   "to": 1794616356000,
+   "why": "30초에 말이 6번, 4명이 말함",
+   "score": 12,
+   "lines": [
+    {
+     "device": "car",
+     "seq": 5,
+     "at": 1794616325000,
+     "text": "바다가 어디쯤 보이려나",
+     "displayText": "바다가 어디쯤 보이려나",
+     "seatArea": "ROW_1_LEFT",
+     "participantId": "dad",
+     "lat": 37.5871,
+     "lng": 127.33565
+    },
+    {
+     "device": "car",
+     "seq": 6,
+     "at": 1794616331000,
+     "text": "아빠, 아까부터 바다 보이는데?",
+     "displayText": "아빠, 아까부터 바다 보이는데?",
+     "seatArea": "ROW_2_LEFT",
+     "participantId": "son",
+     "lat": 37.5874,
+     "lng": 127.33843
+    },
+    {
+     "device": "car",
+     "seq": 7,
+     "at": 1794616337000,
+     "text": "진짜네, 저기 파란 거 바다야",
+     "displayText": "진짜네, 저기 파란 거 바다야",
+     "seatArea": "ROW_1_RIGHT",
+     "participantId": "mom",
+     "lat": 37.58771,
+     "lng": 127.3412
+    },
+    {
+     "device": "car",
+     "seq": 8,
+     "at": 1794616342000,
+     "text": "와 바다다!",
+     "displayText": "와 바다다!",
+     "seatArea": "ROW_2_RIGHT",
+     "participantId": "kid",
+     "lat": 37.58797,
+     "lng": 127.34352
+    },
+    {
+     "device": "car",
+     "seq": 9,
+     "at": 1794616347000,
+     "text": "내비보다 서준이가 빠르네",
+     "displayText": "내비보다 서준이가 빠르네",
+     "seatArea": "ROW_1_LEFT",
+     "participantId": "dad",
+     "lat": 37.58822,
+     "lng": 127.34583
+    },
+    {
+     "device": "car",
+     "seq": 10,
+     "at": 1794616352000,
+     "text": "내가 먼저 봤지!",
+     "displayText": "내가 먼저 봤지!",
+     "seatArea": "ROW_2_LEFT",
+     "participantId": "son",
+     "lat": 37.58848,
+     "lng": 127.34815
+    }
+   ],
+   "lat": 37.5871,
+   "lng": 127.33565
+  },
+  {
+   "at": 1794617110000,
+   "from": 1794617109000,
+   "to": 1794617131000,
+   "why": "30초에 말이 4번, 2명이 말함",
+   "score": 6,
+   "lines": [
+    {
+     "device": "car",
+     "seq": 13,
+     "at": 1794617110000,
+     "text": "휴게소 들를까?",
+     "displayText": "휴게소 들를까?",
+     "seatArea": "ROW_1_RIGHT",
+     "participantId": "mom",
+     "lat": 37.62727,
+     "lng": 127.69907
+    },
+    {
+     "device": "car",
+     "seq": 14,
+     "at": 1794617116000,
+     "text": "다음 휴게소에서 쉬자",
+     "displayText": "다음 휴게소에서 쉬자",
+     "seatArea": "ROW_1_LEFT",
+     "participantId": "dad",
+     "lat": 37.62757,
+     "lng": 127.70185
+    },
+    {
+     "device": "car",
+     "seq": 15,
+     "at": 1794617122000,
+     "text": "커피 사자",
+     "displayText": "커피 사자",
+     "seatArea": "ROW_1_RIGHT",
+     "participantId": "mom",
+     "lat": 37.62788,
+     "lng": 127.70463
+    },
+    {
+     "device": "car",
+     "seq": 16,
+     "at": 1794617127000,
+     "text": "좋아",
+     "displayText": "좋아",
+     "seatArea": "ROW_1_LEFT",
+     "participantId": "dad",
+     "lat": 37.62814,
+     "lng": 127.70694
+    }
+   ],
+   "lat": 37.62727,
+   "lng": 127.69907
+  },
+  {
+   "at": 1794617831000,
+   "from": 1794617830000,
+   "to": 1794617860000,
+   "why": "30초에 말이 6번, 4명이 말함",
+   "score": 12,
+   "lines": [
+    {
+     "device": "car",
+     "seq": 20,
+     "at": 1794617831000,
+     "text": "젤리 한 봉지만 사 주면 안 돼?",
+     "displayText": "젤리 한 봉지만 사 주면 안 돼?",
+     "seatArea": "ROW_2_LEFT",
+     "participantId": "son",
+     "lat": 37.66416,
+     "lng": 128.03287
+    },
+    {
+     "device": "car",
+     "seq": 21,
+     "at": 1794617836000,
+     "text": "밥 먹고 나서 먹기로 약속하면",
+     "displayText": "밥 먹고 나서 먹기로 약속하면",
+     "seatArea": "ROW_1_RIGHT",
+     "participantId": "mom",
+     "lat": 37.66442,
+     "lng": 128.03519
+    },
+    {
+     "device": "car",
+     "seq": 22,
+     "at": 1794617841000,
+     "text": "나도 반 줘!",
+     "displayText": "나도 반 줘!",
+     "seatArea": "ROW_2_RIGHT",
+     "participantId": "kid",
+     "lat": 37.66467,
+     "lng": 128.0375
+    },
+    {
+     "device": "car",
+     "seq": 23,
+     "at": 1794617846000,
+     "text": "그럼 반씩 나눠 먹자",
+     "displayText": "그럼 반씩 나눠 먹자",
+     "seatArea": "ROW_1_LEFT",
+     "participantId": "dad",
+     "lat": 37.66493,
+     "lng": 128.03981
+    },
+    {
+     "device": "car",
+     "seq": 24,
+     "at": 1794617851000,
+     "text": "좋아, 약속!",
+     "displayText": "좋아, 약속!",
+     "seatArea": "ROW_2_LEFT",
+     "participantId": "son",
+     "lat": 37.66518,
+     "lng": 128.04213
+    },
+    {
+     "device": "car",
+     "seq": 25,
+     "at": 1794617856000,
+     "text": "약속 지키는 거다",
+     "displayText": "약속 지키는 거다",
+     "seatArea": "ROW_1_RIGHT",
+     "participantId": "mom",
+     "lat": 37.66544,
+     "lng": 128.04444
+    }
+   ],
+   "lat": 37.66416,
+   "lng": 128.03287
+  },
+  {
+   "at": 1794618605000,
+   "from": 1794618604000,
+   "to": 1794618626000,
+   "why": "30초에 말이 4번, 2명이 말함",
+   "score": 6,
+   "lines": [
+    {
+     "device": "car",
+     "seq": 28,
+     "at": 1794618605000,
+     "text": "심심해",
+     "displayText": "심심해",
+     "seatArea": "ROW_2_LEFT",
+     "participantId": "son",
+     "lat": 37.70376,
+     "lng": 128.3912
+    },
+    {
+     "device": "car",
+     "seq": 29,
+     "at": 1794618611000,
+     "text": "노래 틀어 줘",
+     "displayText": "노래 틀어 줘",
+     "seatArea": "ROW_2_RIGHT",
+     "participantId": "kid",
+     "lat": 37.70407,
+     "lng": 128.39398
+    },
+    {
+     "device": "car",
+     "seq": 30,
+     "at": 1794618617000,
+     "text": "이 노래 말고",
+     "displayText": "이 노래 말고",
+     "seatArea": "ROW_2_LEFT",
+     "participantId": "son",
+     "lat": 37.70438,
+     "lng": 128.39676
+    },
+    {
+     "device": "car",
+     "seq": 31,
+     "at": 1794618622000,
+     "text": "이거 좋아",
+     "displayText": "이거 좋아",
+     "seatArea": "ROW_2_RIGHT",
+     "participantId": "kid",
+     "lat": 37.70463,
+     "lng": 128.39907
+    }
+   ],
+   "lat": 37.70376,
+   "lng": 128.3912
+  },
+  {
+   "at": 1794619339000,
+   "from": 1794619338000,
+   "to": 1794619365000,
+   "why": "30초에 말이 5번, 4명이 말함",
+   "score": 11,
+   "lines": [
+    {
+     "device": "car",
+     "seq": 35,
+     "at": 1794619339000,
+     "text": "숙소 거의 다 왔다",
+     "displayText": "숙소 거의 다 왔다",
+     "seatArea": "ROW_1_LEFT",
+     "participantId": "dad",
+     "lat": 37.74132,
+     "lng": 128.73102
+    },
+    {
+     "device": "car",
+     "seq": 36,
+     "at": 1794619344000,
+     "text": "벌써 도착이야?",
+     "displayText": "벌써 도착이야?",
+     "seatArea": "ROW_2_LEFT",
+     "participantId": "son",
+     "lat": 37.74158,
+     "lng": 128.73333
+    },
+    {
+     "device": "car",
+     "seq": 37,
+     "at": 1794619349000,
+     "text": "내일도 같이 타면 안 돼?",
+     "displayText": "내일도 같이 타면 안 돼?",
+     "seatArea": "ROW_2_RIGHT",
+     "participantId": "kid",
+     "lat": 37.74183,
+     "lng": 128.73565
+    },
+    {
+     "device": "car",
+     "seq": 38,
+     "at": 1794619355000,
+     "text": "내일은 바다 보러 가자",
+     "displayText": "내일은 바다 보러 가자",
+     "seatArea": "ROW_1_RIGHT",
+     "participantId": "mom",
+     "lat": 37.74214,
+     "lng": 128.73843
+    },
+    {
+     "device": "car",
+     "seq": 39,
+     "at": 1794619361000,
+     "text": "좋아!",
+     "displayText": "좋아!",
+     "seatArea": "ROW_2_RIGHT",
+     "participantId": "kid",
+     "lat": 37.74245,
+     "lng": 128.7412
+    }
+   ],
+   "lat": 37.74132,
+   "lng": 128.73102
+  }
+ ],
+ "expected": [
+  {
+   "number": 1,
+   "from": 1794616324000,
+   "to": 1794616356000,
+   "time": "00:12:04–00:12:36",
+   "title": "아빠, 아까부터 바다 보이는데?",
+   "quote": "아빠 “바다가 어디쯤 보이려나”",
+   "speakerId": "son"
+  },
+  {
+   "number": 2,
+   "from": 1794617830000,
+   "to": 1794617860000,
+   "time": "00:37:10–00:37:40",
+   "title": "젤리 한 봉지만 사 주면 안 돼?",
+   "quote": "엄마 “밥 먹고 나서 먹기로 약속하면”",
+   "speakerId": "son"
+  },
+  {
+   "number": 3,
+   "from": 1794619338000,
+   "to": 1794619365000,
+   "time": "01:02:18–01:02:45",
+   "title": "내일도 같이 타면 안 돼?",
+   "quote": "아빠 “숙소 거의 다 왔다”",
+   "speakerId": "kid"
+  }
+ ]
+}
