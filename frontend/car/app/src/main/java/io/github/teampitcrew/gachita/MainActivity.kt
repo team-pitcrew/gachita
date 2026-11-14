@@ -430,7 +430,9 @@ class MainActivity : ComponentActivity() {
     private fun routeIfReady() {
         val (la, ln, name) = pendingRoute?.takeIf { carStatus.navi } ?: return
         pendingRoute = null
-        car.route(Place(la.toDouble(), ln.toDouble(), name), pendingStops).also { pendingStops = emptyList() }
+        val stops = pendingStops.also { pendingStops = emptyList() }
+        val sent = car.route(Place(la.toDouble(), ln.toDouble(), name), stops)
+        Log.i(TAG, "경로 요청 ${name} · 경유 ${stops.size}곳${stops.joinToString("") { " ${it.name}" }} · ${if (sent) "보냄" else "못 보냄"}") // 시연·E2E(디버그 인자)
     }
 
     override fun onStart() { super.onStart(); appVisible = true; main.removeCallbacks(tick); main.post(tick) }

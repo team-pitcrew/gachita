@@ -318,7 +318,9 @@ def launch(*extras, restart=False):
     """앱을 연다(디버그 인자). 이미 나눈 창이면 가치타가 왼쪽 넓은 창으로 옮겨 가니 부른 쪽이 다시 나눈다(T112).
     앱은 singleTop이라 떠 있으면 onNewIntent만 받는다: route·stops는 거기서 읽지만 profileToken·family·onboarding은 onCreate에서만 읽으므로
     그 인자는 restart=True(-S, 앱을 껐다 켬 — 녹음 중에는 쓰지 않음)로 준다."""
-    adb("shell", "am", "start", "--user", "10", *(["-S"] if restart else []), "-n", f"{PKG}/.MainActivity", "--es", "server", CAR_SERVER, *extras); time.sleep(6 if restart else 4)
+    # adb shell은 인자를 이어 붙여 기기의 셸에 넘기므로 값을 따옴표로 감싼다('강릉 숙소'의 띄어쓰기에서 잘려 뒤의 --es stops가 사라졌었음, 리허설 run1)
+    adb("shell", "am", "start", "--user", "10", *(["-S"] if restart else []), "-n", f"{PKG}/.MainActivity", "--es", "server", CAR_SERVER, *map(shlex.quote, extras))
+    time.sleep(6 if restart else 4)
 
 
 def windows():
@@ -477,7 +479,7 @@ def onboarding():
     if step(5, ["녹음 시작", "15초만 들려주세요"]):
         tap("녹음 시작"); time.sleep(1)
         t = threading.Thread(target=lambda: said.append(say("enroll-아빠")), daemon=True); t.start()
-        time.sleep(8); step(6, ["목소리를 듣고 있어요", "녹음 중"], 5)
+        step(6, ["목소리를 듣고 있어요", "녹음 중"], 5)  # 누른 바로 뒤에 본다(15초 녹음 중에만 있는 글)
         t.join(30)  # 다 넣은 뒤에 멈춘다(녹음이 닫힌 채 넣으면 에뮬레이터가 멈춘 적이 있음)
         wait(["녹음을 마쳤어요", "녹음 끝"], 25); tap("녹음 완료")
     step(7, ["목소리 등록 완료"], 20)
