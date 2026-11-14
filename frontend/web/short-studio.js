@@ -20,7 +20,7 @@ export function createShortStudio({ getTrip, getParticipant, getToken, getOwner,
   const remoteValid = (s) => {
     const t = getTrip(), p = getParticipant();
     if (!t || !p) return false;
-    return t?.code === s.code && t.generation === s.generation && t.status !== "driving" && Date.now() < t.createdAt + 48 * 3600 * 1000 && p?.id === s.participant && t.participants.every((x) => x.consent) && getToken() === s.token;
+    return t?.code === s.code && t.generation === s.generation && t.status !== "driving" && p?.id === s.participant && t.participants.every((x) => x.consent) && getToken() === s.token;
   };
   const posterUrl = (s, item) => {
     const old = s.posterUrls.get(item.id); if (old?.blob === item.poster) return old.url;

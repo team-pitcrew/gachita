@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { shareOptions } from "./shares.js";
+import { shareOptions, shareExpired } from "./shares.js";
+
+test("공유의 기한이 null이거나 없으면 만료하지 않고 명시한 유한 기한만 지킨다", () => {
+  const now = Date.now();
+  for (const item of [{}, { expiresAt: null }, { expiresAt: now + 1 }]) assert.equal(shareExpired(item, now), false);
+  for (const expiresAt of [now, now - 1, 0]) assert.equal(shareExpired({ expiresAt }, now), true);
+});
 
 test("공개 여행 장면과 내 앨범의 교집합만 공유 대상으로 보여 준다", () => {
   const trip = { code: "TRIP01", moments: [{ id: "mine" }, { id: "others" }], participants: [] };

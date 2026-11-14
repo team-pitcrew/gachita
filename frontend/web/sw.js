@@ -4,7 +4,6 @@
 // 프로필·기록본 같은 다른 API, 구글 복귀 주소(?code=…), 쓰기 요청은 손대지 않고 네트워크로 보낸다.
 const CACHE = "gachita";
 const TRIP = /^\/api\/trips\/[A-Z0-9]+$/;
-const KEEP_MS = 48 * 3600 * 1000; // 서버가 여행을 지우는 때(만든 뒤 48시간). 그 뒤로는 끊겨도 보이지 않게 한다
 
 // 설치할 때 화면 파일을 받아 둔다. 첫 방문 뒤 바로 끊겨도(이 파일들은 워커가 켜지기 전에 읽혔다) 다시 열 수 있게.
 const SHELL = ["/", "/app.js", "/shared.js", "/captions.js", "/shares.js", "/share-card.js", "/qrcode.js", "/records.js", "/conversations.js", "/short-film.js", "/short-studio.js", "/short-generation.js", "/short-library.js", "/style.css", "/manifest.webmanifest", "/icon.svg"];
@@ -26,12 +25,11 @@ addEventListener("fetch", (e) => {
   };
   // ?v= 폴링은 끊기면 그대로 실패시킨다(앱이 '연결이 끊겼어요'를 보인다). 받은 새 판만 캐시에 둔다.
   if (url.search) return e.respondWith(fetch(req).then(save));
-  e.respondWith(fetch(req).then(save, () => offline(req, key, trip)));
+  e.respondWith(fetch(req).then(save, () => offline(req, key)));
 });
 
 // 끊김: 그 주소의 마지막 응답, 화면 주소(/#코드, /j/<초대>)면 첫 화면. 없으면 끊긴 그대로.
-async function offline(req, key, trip) {
+async function offline(req, key) {
   const hit = (await caches.match(key)) ?? (req.mode === "navigate" ? await caches.match("/") : undefined);
-  if (hit && trip && Date.now() - (await hit.clone().json()).createdAt > KEEP_MS) return (await caches.open(CACHE)).delete(key).then(() => Response.error());
   return hit ?? Response.error();
 }

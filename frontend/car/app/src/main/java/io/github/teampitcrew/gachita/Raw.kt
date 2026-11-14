@@ -12,7 +12,7 @@ import java.nio.ByteOrder
 import javax.crypto.KeyGenerator
 import javax.crypto.spec.SecretKeySpec
 
-// 원음(T63): 사람이 장면을 고를 때까지(여행을 만든 뒤 48시간) 수음한 소리를 차 안에 암호화해 두고, 확정한 장면의 구간만 WAV로 잘라 올린다.
+// 원음(T63): 동의가 유효한 동안 기간 제한 없이 수음한 소리를 차 안에 암호화해 두고, 확정한 장면의 구간만 WAV로 잘라 올린다.
 // 화면·SDK와 무관한 것만 둔다(단위 테스트 RawTest.kt). 쓰기는 CaptureService의 읽기 스레드, 자르기는 화면의 통신 스레드.
 
 const val CLIP_BEFORE_MS = 20_000L // 장면에 구간이 없으면 시각 앞 20초 ~ 뒤 10초(T43 장면 후보의 구간과 같음)

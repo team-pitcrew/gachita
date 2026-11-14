@@ -7,7 +7,7 @@ const person = { id: "person-1", consent: true };
 const session = { code: trip.code, generation: 2, participantId: person.id };
 
 test("녹취는 현재 여행의 동의한 참가자에게만 보이고 동의 세대·여행·참가자가 바뀌면 닫는다", () => {
-  assert.equal(conversationAccess(session, trip, person, "participant-token", 2000), "");
+  assert.equal(conversationAccess(session, trip, person, "participant-token"), "");
   for (const [current, me, token] of [
     [null, person, "token"],
     [{ ...trip, code: "OTHER" }, person, "token"],
@@ -15,13 +15,16 @@ test("녹취는 현재 여행의 동의한 참가자에게만 보이고 동의 �
     [trip, { ...person, consent: false }, "token"],
     [trip, { ...person, id: "another" }, "token"],
     [trip, person, null],
-  ]) assert.notEqual(conversationAccess(session, current, me, token, 2000), "");
+  ]) assert.notEqual(conversationAccess(session, current, me, token), "");
 });
 
-test("오프라인이어도 여행 생성 48시간 경계부터 녹취를 표시하지 않는다", () => {
-  const expiresAt = trip.createdAt + 48 * 3600 * 1000;
-  assert.equal(conversationAccess(session, trip, person, "token", expiresAt - 1), "");
-  assert.match(conversationAccess(session, trip, person, "token", expiresAt), /보관 기간/);
+test("오래된 여행도 녹취를 읽되 동의 철회나 세대 변경 뒤에는 표시하지 않는다", () => {
+  for (const days of [2, 30, 365]) {
+    const old = { ...trip, createdAt: Date.now() - days * 86400_000 };
+    assert.equal(conversationAccess(session, old, person, "token"), "");
+    assert.match(conversationAccess(session, old, { ...person, consent: false }, "token"), /기록 동의/);
+    assert.match(conversationAccess(session, { ...old, generation: 3 }, person, "token"), /기록 동의/);
+  }
 });
 
 test("서버 표시 자막을 우선하고 삭제된 글을 빼며 시간순으로 보여 준다", () => {

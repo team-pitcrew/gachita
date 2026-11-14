@@ -34,7 +34,7 @@ test("다운로드 권한이 사라지면 취소를 무시한 옛 목록 응답�
   t.mock.method(globalThis, "clearTimeout", (id) => timers.delete(id));
   t.mock.method(globalThis, "setInterval", () => 0);
   t.mock.method(globalThis, "clearInterval", () => {});
-  const item = { id: "synthetic-share", direction: "received", sender: { name: "합성 동승자" }, label: "합성 장면", caption: "권한 확인 뒤 숨길 합성 문구", at: Date.now(), expiresAt: Date.now() + 60000 };
+  const item = { id: "synthetic-share", direction: "received", sender: { name: "합성 동승자" }, label: "합성 장면", caption: "권한 확인 뒤 숨길 합성 문구", at: Date.now() - 30 * 86400_000, expiresAt: null };
   const response = () => new Response(JSON.stringify({ items: [item] }));
   let requests = 0, release, oldSignal;
   t.mock.method(globalThis, "fetch", async (_url, { signal }) => {

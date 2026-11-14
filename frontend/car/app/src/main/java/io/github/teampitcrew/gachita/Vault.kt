@@ -14,7 +14,13 @@ import javax.crypto.spec.GCMParameterSpec
 // 차 안에 두는 민감정보(받아 적은 글, 할 일, 저장한 여행, 참가자 토큰, 원음)의 암호화와 보관 기간(T69·T63, 단위 테스트 VaultTest.kt).
 // Pleos 앱 보안 가이드: 기기에 저장하는 민감정보는 저장 위치와 관계없이 암호화하고 키는 Android Keystore에 둔다.
 
-const val KEEP_MS = 48L * 60 * 60 * 1000 // 여행을 만든 뒤 48시간. 보관 시계는 이것 하나뿐(ADR-0007)
+/** 기본 보관 기간은 무기한(null)입니다. 유한한 기간은 디버그 만료 시험에서만 전달합니다. */
+internal fun retentionExpired(createdAt: Long, now: Long, keepMs: Long? = null): Boolean {
+    if (keepMs == null) return false
+    require(keepMs >= 0)
+    // 무기한을 Long.MAX_VALUE로 더하지 않고, 시험 기간도 시각 덧셈이 넘치지 않을 때만 비교합니다.
+    return createdAt <= Long.MAX_VALUE - keepMs && now >= createdAt + keepMs
+}
 
 /**
  * AES-256-GCM. 봉투는 IV 12바이트 + 암호문 + 태그 16바이트.
@@ -39,7 +45,7 @@ class Seal(private val key: SecretKey) {
 
         /**
          * 이 앱의 키: dir/vault.key의 데이터 키를 Keystore 키로 풀어 쓴다(처음이면 둘 다 만든다).
-         * Keystore 키나 파일이 깨졌으면(OEM 업데이트 뒤 등) 둘 다 새로 만든다. 옛 파일은 열리지 않아 지워진다(sweep). 앱이 죽지 않게.
+         * Keystore 키나 파일이 깨졌으면(OEM 업데이트 뒤 등) 둘 다 새로 만든다. 옛 파일은 열리지 않는 것으로 다룬다. 앱이 죽지 않게.
          */
         fun keystore(dir: File): Seal = runCatching { wrapped(dir, Seal(master())) }.getOrElse {
             Log.w("GachitaVault", "키를 다시 만듦", it)
@@ -77,16 +83,19 @@ private val TRIP_FILE = Regex("^(?:utterances|todos|audio|clips|speakers)-([A-Z0
 
 fun tripFiles(dir: File, code: String): List<File> = dir.listFiles().orEmpty().filter { TRIP_FILE.find(it.name)?.groupValues?.get(1) == code }
 
-/** 여행 하나의 차 안 파일을 모두 지운다(서버가 여행을 모름, 48시간). */
+/** 명시적으로 삭제된 여행 하나의 차 안 파일을 모두 지운다. 디버그 만료 시험도 같은 정리를 쓴다. */
 fun dropTrip(dir: File, code: String) = tripFiles(dir, code).forEach { it.delete() }
 
 /**
- * 여행을 만든 뒤 48시간이 지난 여행의 파일을 지운다. 만든 시각은 보관함이 적어 둔 여행의 createdAt이다(통신이 끊겨도 지울 수 있게).
- * 적힌 것이 없거나 열리지 않으면(키가 바뀜, 암호화 전 빌드의 평문) 그 여행 파일은 읽을 수 없으니 바로 지운다. 지운 여행 코드를 돌려준다.
- * 여행을 만들면 첫 조회에서 바로 만든 시각을 적으므로(Outbox.see) 쓰는 중인 여행이 여기 걸리지 않는다. 기기 시계로 잰다.
+ * 기본값은 기간 제한이 없어 어떤 여행 파일도 시간 때문에 지우지 않는다.
+ * 디버그 시험에서 기간을 명시했을 때만 createdAt 기준으로 지우고 지운 여행 코드를 돌려준다.
+ * 시험 중 만든 시각을 읽지 못하는 파일도 정리한다. 기기 시계로 잰다.
  */
-fun sweep(dir: File, seal: Seal, now: Long, keepMs: Long = KEEP_MS): List<String> =
-    dir.listFiles().orEmpty().mapNotNull { TRIP_FILE.find(it.name)?.groupValues?.get(1) }.distinct().filter { code ->
+fun sweep(dir: File, seal: Seal, now: Long, keepMs: Long? = null): List<String> {
+    if (keepMs == null) return emptyList()
+    require(keepMs >= 0)
+    return dir.listFiles().orEmpty().mapNotNull { TRIP_FILE.find(it.name)?.groupValues?.get(1) }.distinct().filter { code ->
         val born = Outbox.createdAtOf(dir, code, seal)
-        (born == null || now - born > keepMs).also { if (it) dropTrip(dir, code) }
+        (born == null || retentionExpired(born, now, keepMs)).also { if (it) dropTrip(dir, code) }
     }
+}

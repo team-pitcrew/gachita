@@ -2,7 +2,8 @@
 import { api, h, toast } from "./shared.js";
 import { shareCardPng } from "./share-card.js";
 
-const KEEP_MS = 48 * 3600 * 1000;
+// 기한 없는 공유는 계속 읽는다. 전환 중 받은 유한 기한은 서버가 정한 별도 만료로 지킨다.
+export const shareExpired = (item, now = Date.now()) => item.expiresAt != null && now >= item.expiresAt;
 const button = (label, onclick, className = "") => h("button", { type: "button", className, onclick }, label);
 const when = (at) => new Date(at).toLocaleString("ko-KR", { month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" });
 const hasLocation = (item) => Number.isFinite(item.lat) && Number.isFinite(item.lng);
@@ -55,14 +56,14 @@ export function createShares({ getProfile, getProfileToken, getTrip, getParticip
     if (s.mode === "list") return true;
     const trip = getTrip();
     const me = getParticipant();
-    return trip?.code === s.code && trip.generation === s.generation && me?.id === s.participantId && me.profileId === s.profileId && me.consent && getParticipantToken() === s.participantToken && Date.now() < trip.createdAt + KEEP_MS;
+    return trip?.code === s.code && trip.generation === s.generation && me?.id === s.participantId && me.profileId === s.profileId && me.consent && getParticipantToken() === s.participantToken;
   };
   const sync = () => {
     if (state && !valid(state)) {
       close();
       toast("프로필이나 기록 동의가 바뀌어 공유 화면을 닫았어요.");
-    } else if (state?.mode === "list" && state.items.some((item) => Date.now() >= item.expiresAt)) {
-      state.items = state.items.filter((item) => Date.now() < item.expiresAt);
+    } else if (state?.mode === "list" && state.items.some((item) => shareExpired(item))) {
+      state.items = state.items.filter((item) => !shareExpired(item));
       state.snapshot = JSON.stringify(state.items);
       listView(state);
     }
@@ -99,7 +100,6 @@ export function createShares({ getProfile, getProfileToken, getTrip, getParticip
     const identity = profileState();
     if (!identity.profileId || !identity.profileToken) return onProfile();
     if (!trip || me?.profileId !== identity.profileId || !me.consent || !getParticipantToken()) return toast("이 폰의 프로필로 참가하고 기록에 동의해야 공유할 수 있어요.");
-    if (Date.now() >= trip.createdAt + KEEP_MS) return toast("이 여행의 공유 기간이 지났어요.");
     const s = { ...identity, mode: "compose", code: trip.code, generation: trip.generation, participantId: me.id, participantToken: getParticipantToken(), stage: "pick", selected: new Set(), caption: "", includeLocation: false };
     show(s);
     await load(s);
@@ -115,7 +115,7 @@ export function createShares({ getProfile, getProfileToken, getTrip, getParticip
       if (s.mode === "list") {
         const { items } = await api("GET", "/profiles/me/shares", null, s.profileToken, controller.signal);
         if (!valid(s) || s.read !== controller) return;
-        s.items = items.filter((item) => !s.removed.has(item.id) && Date.now() < item.expiresAt);
+        s.items = items.filter((item) => !s.removed.has(item.id) && !shareExpired(item));
         const snapshot = JSON.stringify(s.items);
         if (snapshot !== s.snapshot) { s.snapshot = snapshot; listView(s); }
       } else {
@@ -124,13 +124,12 @@ export function createShares({ getProfile, getProfileToken, getTrip, getParticip
           api("GET", `/profiles/me/moments?trip=${encodeURIComponent(s.code)}`, null, s.profileToken, controller.signal),
         ]);
         if (!valid(s) || s.read !== controller) return;
-        if (trip.generation !== s.generation || Date.now() >= trip.createdAt + KEEP_MS || !trip.participants.some((p) => p.id === s.participantId && p.profileId === s.profileId && p.consent)) {
+        if (trip.generation !== s.generation || !trip.participants.some((p) => p.id === s.participantId && p.profileId === s.profileId && p.consent)) {
           close();
-          return toast("기록 동의나 보관 기간이 바뀌어 공유할 수 없어요.");
+          return toast("기록 동의가 바뀌어 공유할 수 없어요.");
         }
         const options = shareOptions(trip, album.items, s.profileId);
         const snapshot = JSON.stringify(options);
-        s.expiresAt = trip.createdAt + KEEP_MS;
         if (snapshot !== s.snapshot) {
           s.snapshot = snapshot;
           s.options = options;
@@ -163,9 +162,9 @@ export function createShares({ getProfile, getProfileToken, getTrip, getParticip
   }
 
   function listView(s) {
-    const items = s.items.filter((item) => item.direction === s.direction && Date.now() < item.expiresAt);
+    const items = s.items.filter((item) => item.direction === s.direction && !shareExpired(item));
     shell(s, s.direction === "received" ? "받은 공유" : "보낸 공유",
-      h("p", { className: "meta" }, "여행을 만든 뒤 48시간까지 볼 수 있어요. 회수·동의 철회·원본 삭제 뒤에는 보이지 않아요. 다운로드한 이미지는 회수해도 남아요."),
+      h("p", { className: "meta" }, "회수·동의 철회·원본 삭제 뒤에는 보이지 않아요. 다운로드한 이미지는 회수해도 남아요."),
       h("div", { className: "shares-actions" }, button("받은 공유", () => openList("received")), button("보낸 공유", () => openList("sent"))),
       items.length ? h("ul", { className: "shares-list" }, items.map((item) => {
         const revokeButton = shareIconButton("revoke", "공유 회수", () => revoke(s, item));
@@ -179,7 +178,7 @@ export function createShares({ getProfile, getProfileToken, getTrip, getParticip
           item.direction === "sent" && h("p", { className: "meta" }, `받는 사람: ${item.recipients.map((p) => p.name).join(", ")}`),
           h("p", { className: "shares-caption" }, item.caption || "추가 문구 없음"),
           h("p", { className: "meta" }, hasLocation(item) ? `함께 보낸 위치: ${item.lat.toFixed(5)}, ${item.lng.toFixed(5)}` : "위치는 공유하지 않았어요."),
-          h("p", { className: "meta" }, `${when(item.expiresAt)}까지`),
+          item.expiresAt != null && h("p", { className: "meta" }, `${when(item.expiresAt)}까지`),
           h("div", { className: "shares-actions shares-tools" }, downloadButton, item.direction === "sent" && revokeButton),
         );
       })) : h("p", { className: "empty", role: "status" }, s.direction === "received" ? "아직 받은 공유가 없어요." : "아직 보낸 공유가 없어요."),
@@ -187,7 +186,7 @@ export function createShares({ getProfile, getProfileToken, getTrip, getParticip
     );
   }
   async function download(s, item) {
-    if (!valid(s) || s.saving || s.pending.has(item.id) || Date.now() >= item.expiresAt) return sync();
+    if (!valid(s) || s.saving || s.pending.has(item.id) || shareExpired(item)) return sync();
     // 앞선 폴링의 늦은 200이 권한 재확인 실패 뒤 내용을 되살리지 못하게 한다.
     clearTimeout(timer);
     s.read?.abort();
@@ -201,7 +200,7 @@ export function createShares({ getProfile, getProfileToken, getTrip, getParticip
     const current = () => valid(s) && !controller.signal.aborted && !s.removed.has(item.id);
     const fresh = async () => {
       const { items } = await api("GET", "/profiles/me/shares", null, s.profileToken, controller.signal);
-      const found = items.find((entry) => entry.id === item.id && Date.now() < entry.expiresAt);
+      const found = items.find((entry) => entry.id === item.id && !shareExpired(entry));
       if (!current()) throw new Error("공유 화면을 닫았어요.");
       if (!found) {
         s.items = s.items.filter((entry) => entry.id !== item.id);
@@ -221,7 +220,7 @@ export function createShares({ getProfile, getProfileToken, getTrip, getParticip
         })(),
         new Promise((_, reject) => { timeout = setTimeout(() => { controller.abort(); reject(new Error("이미지 저장을 준비하지 못했어요. 연결을 확인한 뒤 다시 시도해 주세요.")); }, 10000); }),
       ]);
-      if (!current() || Date.now() >= result.expiresAt) return sync();
+      if (!current() || shareExpired(result)) return sync();
       const url = URL.createObjectURL(result.blob);
       const link = h("a", { href: url, download: `gachita-${new Date().toISOString().replace(/[-:]/g, "").slice(0, 15)}.png` });
       document.body.append(link);
@@ -278,7 +277,7 @@ export function createShares({ getProfile, getProfileToken, getTrip, getParticip
     if (!hasLocation(moment)) s.includeLocation = false;
     if (s.stage === "preview") {
       shell(s, "보내기 전에 확인해 주세요",
-        h("section", { className: "card" }, h("h2", {}, moment.label || "이름 없는 장면"), h("p", { className: "meta" }, when(moment.at)), h("p", { className: "shares-caption" }, s.caption.trim() || "추가 문구 없음"), h("p", {}, `받는 사람: ${recipients.map((p) => p.name).join(", ")}`), h("p", {}, s.includeLocation ? `위치 포함: ${moment.lat.toFixed(5)}, ${moment.lng.toFixed(5)}` : "위치 제외"), h("p", { className: "meta" }, `${when(s.expiresAt)}까지 볼 수 있어요.`)),
+        h("section", { className: "card" }, h("h2", {}, moment.label || "이름 없는 장면"), h("p", { className: "meta" }, when(moment.at)), h("p", { className: "shares-caption" }, s.caption.trim() || "추가 문구 없음"), h("p", {}, `받는 사람: ${recipients.map((p) => p.name).join(", ")}`), h("p", {}, s.includeLocation ? `위치 포함: ${moment.lat.toFixed(5)}, ${moment.lng.toFixed(5)}` : "위치 제외")),
         h("p", { className: "meta" }, "위 내용만 선택한 동승자에게 보냅니다. 대화 원문과 원음은 포함하지 않아요. 받는 사람은 이미지로 다운로드할 수 있고, 저장한 파일은 공유를 회수해도 남아요."),
         h("div", { className: "shares-actions" }, Object.assign(button("수정하기", () => { s.stage = "edit"; composeView(s); }), { disabled: !!s.sending }), Object.assign(shareIconButton("share", s.sending ? "공유 중" : "이 내용으로 공유", () => send(s), "primary"), { disabled: !!s.sending || !recipients.length })),
       );

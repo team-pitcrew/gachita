@@ -1,6 +1,7 @@
 package io.github.teampitcrew.gachita
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
@@ -55,7 +56,7 @@ class VaultTest {
         assertTrue(Todos(dir, "NONE22", other).items.isEmpty())
     }
 
-    @Test fun 만든_뒤_48시간이_지난_여행의_파일만_지움() {
+    @Test fun 디버그_시험_기간을_명시했을_때만_지난_여행의_파일을_지움() {
         val dir = tmp.root
         val now = 10 * day
         Outbox(dir, "OLD234", TEST_SEAL).also { it.see(1, now - 2 * day - 1) }.add(d(1), null) // 48시간 넘음
@@ -63,9 +64,50 @@ class VaultTest {
         Outbox(dir, "NEW234", TEST_SEAL).also { it.see(1, now - 2 * day + 60_000) }.add(d(1), null) // 아직
         File(dir, "todos-ORPHAN.json").writeText("[{\"id\":1,\"place\":\"마트\"}]") // 만든 시각이 없거나(암호화 전 평문) 열리지 않으면 바로 지움
         File(dir, "keep.txt").writeText("우리 파일이 아님")
-        assertEquals(setOf("OLD234", "ORPHAN"), sweep(dir, TEST_SEAL, now).toSet())
+        assertEquals(setOf("OLD234", "ORPHAN"), sweep(dir, TEST_SEAL, now, keepMs = 2 * day).toSet())
         assertEquals(setOf("utterances-NEW234.jsonl", "utterances-NEW234.acked", "keep.txt"), dir.list()!!.toSet())
         assertNull(Outbox.createdAtOf(dir, "OLD234", TEST_SEAL))
+    }
+
+    @Test fun 기본값은_48시간이_지나도_녹취와_원음이_남고_명시적_철회는_지움() {
+        val dir = tmp.root
+        val born = day
+        val now = 90 * day
+        val outbox = Outbox(dir, "OLD234", TEST_SEAL)
+        outbox.see(1, born)
+        outbox.add(Draft(born, born + 500, "오래된 대화", 0, 0), Fix(37.51, 127.02, born))
+        Todos(dir, "OLD234", TEST_SEAL).add("마트", "마트에서 우유 사자")
+        val pcm = ByteArray(CHUNK_FRAMES * 2) { (it % 127).toByte() }
+        RawWriter(dir, "OLD234", 1, born, TEST_SEAL).use { it.write(pcm) }
+        ClipLog(dir, "OLD234").add("saved-scene")
+        val files = dir.list()!!.toSet()
+
+        assertFalse(retentionExpired(born, now))
+        assertTrue(sweep(dir, TEST_SEAL, now).isEmpty())
+        assertEquals(files, dir.list()!!.toSet())
+        val restored = Outbox(dir, "OLD234", TEST_SEAL)
+        assertEquals("오래된 대화", restored.recent(1).single().text)
+        assertEquals("마트", Todos(dir, "OLD234", TEST_SEAL).open().single().place)
+        assertArrayEquals(pcm, RawFile.of(dir, "OLD234").single().cut(TEST_SEAL, born, born + 100))
+        assertEquals(setOf("saved-scene"), ClipLog(dir, "OLD234").done())
+
+        assertTrue(restored.see(2, born)) // 명시적 동의 철회 세대가 도착함
+        assertEquals(1, dropRaw(dir, "OLD234", below = 2))
+        assertTrue(Outbox(dir, "OLD234", TEST_SEAL).recent(10).isEmpty())
+        assertTrue(RawFile.of(dir, "OLD234").isEmpty())
+        assertTrue(File(dir, "utterances-OLD234.jsonl").readLines().all {
+            val cleared = Utterance.parse(TEST_SEAL.unline(it))
+            cleared.text.isEmpty() && cleared.lat == null && cleared.lng == null
+        })
+    }
+
+    @Test fun 무기한과_유한한_시험_기간은_시각_범위를_넘겨도_조기_만료하지_않음() {
+        assertFalse(retentionExpired(1, Long.MAX_VALUE))
+        assertFalse(retentionExpired(Long.MIN_VALUE, Long.MAX_VALUE))
+        assertFalse(retentionExpired(Long.MAX_VALUE - 10, Long.MAX_VALUE, keepMs = 20))
+        assertFalse(retentionExpired(100, 50, keepMs = 10)) // 기기 시계가 뒤로 이동함
+        assertFalse(retentionExpired(100, 109, keepMs = 10))
+        assertTrue(retentionExpired(100, 110, keepMs = 10))
     }
 
     @Test fun 데이터_키는_감싼_채_파일에_두고_다시_열면_같은_키() {

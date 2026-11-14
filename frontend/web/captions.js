@@ -1,7 +1,6 @@
 // 수동 자막(T80). 원문·자동 결과는 읽기만 하고, 버전이 맞는 수정본만 별도로 저장한다.
 import { h, toast } from "./shared.js";
 
-const KEEP_MS = 48 * 3600 * 1000;
 const key = (row) => `${row.device}\n${row.seq}`;
 const shown = (row) => row.editedText ?? row.asrText ?? row.text;
 const button = (text, onclick, className = "") => h("button", { type: "button", onclick, className }, text);
@@ -17,12 +16,11 @@ export function createCaptions({ getTrip, getParticipant, request, refreshTrip }
   const dialog = h("dialog", { className: "captions-dialog", "aria-labelledby": "captions-title" });
   document.body.append(dialog);
   let state = null;
-  let pollTimer, expiryTimer;
+  let pollTimer;
   const dirty = (s) => !!s?.selected && s.draft !== shown(s.selected);
   function close(force = false) {
     if (!force && dirty(state) && !confirm("저장하지 않은 자막을 버리고 닫을까요?")) return false;
     clearTimeout(pollTimer);
-    clearTimeout(expiryTimer);
     state?.readController?.abort();
     state = null;
     if (dialog.open) dialog.close();
@@ -37,7 +35,7 @@ export function createCaptions({ getTrip, getParticipant, request, refreshTrip }
   const valid = (s) => {
     const trip = getTrip();
     const me = getParticipant();
-    return state === s && trip?.code === s.code && trip.generation === s.generation && me?.id === s.participantId && me.consent && Date.now() < trip.createdAt + KEEP_MS;
+    return state === s && trip?.code === s.code && trip.generation === s.generation && me?.id === s.participantId && me.consent;
   };
   const sync = () => {
     if (state && !valid(state)) {
@@ -56,7 +54,7 @@ export function createCaptions({ getTrip, getParticipant, request, refreshTrip }
     if (!valid(s)) return sync();
     if ([401, 403, 404].includes(e.status)) {
       close(true);
-      toast(e.status === 404 ? "지워졌거나 보관 기간이 지난 기록이에요." : "기록 동의와 이 폰의 연결을 다시 확인해 주세요.");
+      toast(e.status === 404 ? "지워졌거나 찾을 수 없는 기록이에요." : "기록 동의와 이 폰의 연결을 다시 확인해 주세요.");
       await refreshTrip();
       return;
     }
@@ -67,10 +65,8 @@ export function createCaptions({ getTrip, getParticipant, request, refreshTrip }
     if (state && !close()) return;
     const trip = getTrip();
     const me = getParticipant();
-    if (!trip || !me?.consent || Date.now() >= trip.createdAt + KEEP_MS) return toast("기록에 동의한 참가자만 자막을 확인할 수 있어요.");
+    if (!trip || !me?.consent) return toast("기록에 동의한 참가자만 자막을 확인할 수 있어요.");
     const s = state = { code: trip.code, generation: trip.generation, participantId: me.id, rows: [], selected: null, draft: "", busy: false, error: "", conflict: false, revision: 0 };
-    // 앱이 offline/304로 render를 건너뛰어도 보관 기한에는 화면과 초안을 버린다.
-    expiryTimer = setTimeout(sync, Math.max(0, trip.createdAt + KEEP_MS - Date.now()));
     shell(s, h("p", { role: "status" }, "자막을 불러오고 있어요."));
     dialog.showModal();
     await load(s);

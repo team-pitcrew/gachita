@@ -16,7 +16,7 @@ const TRIP = {
   boarding: ["탑승 중", "모두 타면 운전자가 출발을 눌러요."],
   driving: ["주행 중", "부탁은 아래 단추로 언제든 남길 수 있어요."],
   parked: ["주차 완료", "이번 주행의 기록을 마감했어요."],
-  ended: ["여행 종료", "이 여행은 만든 뒤 48시간까지 볼 수 있어요."],
+  ended: ["여행 종료", "함께한 대화와 남긴 장면을 다시 볼 수 있어요."],
 };
 const NEXT_TRIP = { boarding: ["출발", "driving"], driving: ["주차", "parked"], parked: ["여행 끝내기", "ended"] };
 const ONLY_HERE = "이 폰에서 연결한 사람만 켤 수 있어요.";
@@ -27,8 +27,8 @@ const OFF_WIPES = "동의를 끄면 기록이 멈추고, 이 여행에서 지금
 const CONSENT = [
   "대화는 차에서 받아 적힙니다.",
   "녹음은 기본 꺼져 있고, 참가자 모두가 동의할 때만 켭니다.",
-  "받아 적은 글은 여행 기록과 함께 여행을 만든 뒤 48시간이 지나면 지워지고, 그 뒤엔 사람이 장면으로 남긴 것만 남습니다.",
-  "장면을 고를 수 있게 소리는 48시간 동안 차 안에 암호화해 두었다가 지웁니다.",
+  "받아 적은 글과 여행 기록은 기간 제한 없이 보관합니다. 기록 동의를 끄면 이 여행의 받아 적은 글과 서버에 올린 소리를 지웁니다.",
+  "장면을 고를 수 있게 소리는 차 안에 암호화해 보관합니다. 차에서 원음을 직접 지우거나 기록 동의를 끄면 지웁니다.",
   "장면으로 남기면 그 구간의 소리가 서버로 올라갑니다.",
   "자막을 바로잡으려고 그 구간의 소리와 받아 적은 글, 참가자 이름을 외부 음성 인식 서버로 보내 다시 받아 적습니다.",
   "누가 말했는지 가리려고 말소리가 잠시 서버로 갔다가 저장되지 않고 지워집니다.",
@@ -228,7 +228,7 @@ async function refresh(force) {
       if (next) (trip = next), (failed = "");
       // 못 받았으면 다음 폴링에서 다시 한다. 그동안은 참가 화면이 보이고, 거기서 참가해도 같은 참가자로 들어간다.
       const claimed = await claim().catch(() => false);
-      if (!next && !claimed) { conversations.sync(); if (short && Date.now() >= short.createdAt + 48 * 3600 * 1000) closeShort("보관 기간이 지나 숏폼을 닫았어요."); return; }
+      if (!next && !claimed) { conversations.sync(); return; }
     } catch (e) {
       if (e.status === 0) {
         // 터널 같은 곳에서는 마지막 화면을 그대로 두고 계속 다시 묻는다
@@ -558,7 +558,7 @@ const loading = () => [header(h("span", { className: "brand" }, "가치타")), h
 const missing = () => [
   header(h("span", { className: "brand" }, "가치타")),
   h("h1", {}, "여행을 찾지 못했어요"),
-  h("p", { className: "sub" }, "끝났거나 만든 지 48시간이 지나 지워졌어요."),
+  h("p", { className: "sub" }, "여행이 지워졌거나 연결한 주소를 찾을 수 없어요."),
   bar(button("처음으로", () => (location.hash = ""), "primary")),
 ];
 
@@ -720,8 +720,7 @@ function tripView(me) {
 let short = null; // 보고 있는 구성 { title, cast, scenes, code, generation, at(지금 장면), clips(장면별 object URL 약속), started, req }
 const audio = new Audio(); // DOM 밖에 두어 화면을 다시 그려도 끊기지 않는다
 let openingShort;
-const shortReadReason = (s) => Date.now() >= s.createdAt + 48 * 3600 * 1000 ? "보관 기간이 지나 쇼츠를 닫았어요."
-  : trip?.code !== s.code || code() !== s.code ? "여행이 바뀌어 쇼츠를 닫았어요."
+const shortReadReason = (s) => trip?.code !== s.code || code() !== s.code ? "여행이 바뀌어 쇼츠를 닫았어요."
   : !trip.participants.find((p) => p.id === s.participantId)?.consent || trip.generation !== s.generation ? "기록 동의가 바뀌어 쇼츠를 닫았어요."
   : !myToken() || myToken() !== s.token ? "동승 연결을 다시 확인해 주세요." : "";
 const clearFilmFile = (s) => { if (s.fileUrl) URL.revokeObjectURL(s.fileUrl); s.fileUrl = null; s.file = null; s.libraryId = null; };
@@ -832,7 +831,6 @@ async function playScene(i) {
   const s = short;
   if (!s || s.exportJob || i < 0 || i >= s.scenes.length) return;
   if (shortReadReason(s)) return closeShort(shortReadReason(s));
-  if (Date.now() >= s.createdAt + 48 * 3600 * 1000) return closeShort("보관 기간이 지나 숏폼을 닫았어요.");
   const req = ++s.req; // 늦게 끝난 옛 받기가 새 재생의 소리를 덮지 않게 마지막 요청만 튼다
   s.loading = true;
   s.paint?.();
@@ -956,7 +954,7 @@ function render() {
   if (me) store("trip", trip.code); // 처음 화면의 '지난 여행 열기'
   else if (failed && store("trip") === code()) store("trip", null);
   // 숏폼은 기록에 동의한 사람만 본다. 보는 사이 여행이 사라지거나 동의가 꺼지면(세대가 오름) 닫고 받은 소리를 버린다.
-  const gone = short && (Date.now() >= short.createdAt + 48 * 3600 * 1000 ? "보관 기간이 지나 숏폼을 닫았어요." : failed || trip?.code !== short.code ? "여행을 더 볼 수 없어 숏폼을 닫았어요." : !me?.consent || trip.generation !== short.generation ? "기록 동의가 바뀌어 숏폼을 닫았어요." : "");
+  const gone = short && (failed || trip?.code !== short.code ? "여행을 더 볼 수 없어 숏폼을 닫았어요." : !me?.consent || trip.generation !== short.generation ? "기록 동의가 바뀌어 숏폼을 닫았어요." : "");
   if (gone) return closeShort(gone);
   const view = short ? shortView() : location.hash === "#me" ? profileView() : !code() ? (ride ? rideView() : home()) : failed ? missing() : !trip ? loading() : !me ? notHere() : asking(me) || reading ? consentView(me) : tripView(me);
   app.classList.toggle("home-view", !short && !code() && !ride && location.hash !== "#me");
