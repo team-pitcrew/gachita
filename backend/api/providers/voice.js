@@ -74,7 +74,29 @@ function fft(re, im) {
   }
 }
 
+// 임베더의 이름과 벡터 모양. 차량 앱이 같은 수식을 차 안에서 돌려 값만 올린다(ADR-0023) —
+// 수식을 바꾸면 이름을 올리고 voice-vectors.json을 다시 만든다(차량 단위 시험이 같은 파일을 읽는다).
+export const EMBEDDER = "logmel-pitch-1";
+const PITCH_BINS = 20;
 const MEL_BANDS = 26;
+export const DIMS = MEL_BANDS * 2 + PITCH_BINS * 3;
+
+// 기기가 계산해 올린 값의 모양을 본다: 길이, 유한한 수, 세 묶음(로그멜 평균·분산·음높이)이 각각 평균 0·길이 1.
+// 음높이를 못 잡은 소리는 음높이 묶음이 모두 0이다.
+export function checkVector(v) {
+  const bad = (msg) => {
+    throw { status: 400, error: `vector: ${msg}` };
+  };
+  if (!Array.isArray(v) || v.length !== DIMS) bad(`수 ${DIMS}개`);
+  if (!v.every((x) => typeof x === "number" && Number.isFinite(x))) bad("유한한 수만");
+  for (const [from, to, mayBeZero] of [[0, MEL_BANDS, false], [MEL_BANDS, MEL_BANDS * 2, false], [MEL_BANDS * 2, DIMS, true]]) {
+    const g = v.slice(from, to);
+    const norm = Math.sqrt(g.reduce((s, x) => s + x * x, 0));
+    if (Math.abs(g.reduce((s, x) => s + x, 0)) > 1e-6 || !(Math.abs(norm - 1) < 1e-6 || (mayBeZero && norm === 0))) bad("이 임베더의 정규화가 아님");
+  }
+  return v;
+}
+
 const FRAME = 512; // 32 ms @ 16 kHz
 const HOP = 160; // 10 ms
 const melCenters = Array.from({ length: MEL_BANDS + 2 }, (_, i) => {
@@ -148,7 +170,6 @@ export function embed(samples) {
   }
   // 음높이 히스토그램(60~500 Hz, 로그 눈금 20구간 — 반음 두 개쯤 간격). 프레임별 음높이가
   // 흩어져도 같은 사람이면 같은 구간에 모인다 — 아이와 어른은 아예 다른 구간에 온다.
-  const PITCH_BINS = 20;
   const pitchFeat = new Array(PITCH_BINS).fill(0);
   for (const p of pitches) {
     const bin = Math.min(PITCH_BINS - 1, Math.max(0, Math.floor((Math.log2(p / 60) / Math.log2(500 / 60)) * PITCH_BINS)));

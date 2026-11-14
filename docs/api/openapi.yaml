@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: 가치타 API
-  version: 0.11.0
+  version: 0.12.0
   summary: 여행 세션, 기기 프로필, 동승 연결, 부탁, 장면, 기록본, 화자 대조
   description: |
     웹앱(frontend/web)과 차량 앱(frontend/car)이 부르는 API입니다. 구현은 backend/api/server.js입니다.
@@ -966,6 +966,7 @@ paths:
       summary: 여행 참가자의 목소리 등록
       description: |
         차의 가족처럼 프로필 없는 손님도 화자를 붙일 수 있게 이 여행에 목소리를 등록합니다(T38, ADR-0019). 본문과 응답은 `/profiles/me/voice`와 같습니다(WAV, 1~20초, 1.5 MB). 문장 둘(약 7초)을 권합니다.
+        `Content-Type: application/json`이면 기기가 같은 임베더로 계산한 값만 받습니다(ADR-0023) — 소리는 기기를 떠나지 않습니다. 권한과 지우는 규칙은 같습니다.
         **그 참가자 본인의 참가자 토큰**으로만 합니다(없거나 틀리면 401, 다른 참가자의 토큰이면 403). 그 참가자의 녹음 동의가 꺼져 있으면 409입니다.
         본문을 받는 사이 동의 세대가 바뀌었으면(누군가 동의를 끔) 저장하지 않고 409입니다. 동의를 다시 확인한 뒤 다시 등록합니다.
         원본 음성은 저장하지 않고 대조용 값만 여행 저장소에 둡니다. 다시 등록하면 값을 바꿉니다. 그 참가자의 동의가 꺼지면(누가 끄든) 바로 지우고, 꺼져 있던 동의가 다시 켜질 때도 지웁니다(다시 등록). 여행을 만든 뒤 48시간이 지나면 쓰이지 않고, 여행을 치울 때 함께 지웁니다.
@@ -974,6 +975,8 @@ paths:
         required: true
         content:
           application/octet-stream: { schema: { type: string, format: binary } }
+          application/json:
+            schema: { $ref: "#/components/schemas/VoicePrintInput" }
       responses:
         "200":
           description: 등록함
@@ -1069,7 +1072,8 @@ paths:
         동의하지 않은 탑승자가 있는 동안은 403이고 `lastSeq`도 오르지 않습니다. 모두 동의한 뒤 다시 보냅니다.
         기기 이름(`device`)은 처음 올린 참가자의 것입니다. 다른 참가자가 같은 이름으로 올리면 403입니다.
         여행 하나의 발화는 2만 줄까지입니다(넘으면 409).
-        화자(`profileId`)는 받지 않습니다. 서버의 화자 대조(T38)가 붙입니다.
+        화자는 선택 칸입니다(ADR-0023). 차가 차 안에서 대조한 참가자를 `participantId`·`speakerMethod: device-voice`(·`speakerConfidence`)로 함께 올립니다. 그 기기의 발화에만, 녹음에 동의한 이 여행의 참가자만 붙습니다 — 모르는 참가자 id는 묶음을 거절하지 않고 화자 없이 저장합니다(`lastSeq`가 멈추지 않게). `profileId`는 받지 않고 참가자에서 찾습니다.
+        이미 받은 순번을 화자와 함께 다시 보내면, 화자가 비어 있고 사람이 고치지 않은 줄에만 화자를 채웁니다(차가 대조 값을 늦게 받았을 때). 글과 다른 칸, 이미 붙은 화자, 사람이 고친 화자('모름' 포함)는 바꾸지 않습니다. 화자 칸이 없으면 지금까지와 같습니다 — 서버의 화자 대조(`/voice-match`, T38)가 붙입니다.
       security: [{ participantToken: [] }]
       requestBody:
         required: true
@@ -1350,11 +1354,14 @@ paths:
       description: |
         이진 본문(WAV 16 kHz 16비트 PCM, 모노·스테레오 모두 — 스테레오는 합쳐 모노로). 1~20초, 1.5 MB까지.
         **원본 음성은 어디에도 저장하지 않고** 대조용 값(벡터)만 남깁니다(ADR-0019). 다시 등록하면 값을 바꿉니다.
+        `Content-Type: application/json`이면 기기가 같은 임베더로 계산한 값만 받습니다(ADR-0023) — 소리는 기기를 떠나지 않습니다.
       security: [{ profileToken: [] }]
       requestBody:
         required: true
         content:
           application/octet-stream: { schema: { type: string, format: binary } }
+          application/json:
+            schema: { $ref: "#/components/schemas/VoicePrintInput" }
       responses:
         "200":
           description: 등록함
@@ -1482,6 +1489,46 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "413": { $ref: "#/components/responses/Error" }
+  /api/trips/{code}/voice-prints:
+    parameters: [{ $ref: "#/components/parameters/code" }]
+    get:
+      tags: [기록본]
+      summary: 대조 값 조회(기기에서 화자 대조)
+      description: |
+        차가 이 여행의 목소리 대조 값을 받아 가 차 안에서 화자를 가립니다(ADR-0023). 발화 소리를 서버로 보내는 `/voice-match`를 대신합니다.
+        녹음에 동의한 참가자만 부르고(아니면 403), **녹음에 동의한 참가자의 값만** 줍니다. 동의가 꺼진 참가자는 프로필 등록값이 있어도 주지 않습니다.
+        값은 이 여행에 등록한 것(`source: trip`)을 먼저, 없으면 그 사람 프로필의 등록값(`source: profile`)입니다. 다른 임베더로 만든 값(길이가 `dims`와 다름)은 빠집니다.
+        대조 값은 민감정보입니다. 응답은 `Cache-Control: private, no-store`이고, 받은 쪽은 암호화해 두었다가 그 참가자의 동의가 꺼지거나 동의 세대(`generation`)가 오르거나 여행이 지워지면 지웁니다.
+        `threshold`는 서버 대조와 같은 확신 기준입니다. 가장 높은 코사인 유사도가 이 값 이상일 때만 화자를 붙입니다.
+      security: [{ participantToken: [] }]
+      responses:
+        "200":
+          description: 동의한 참가자의 대조 값
+          headers:
+            Cache-Control: { schema: { type: string, const: "private, no-store" } }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [generation, embedder, dims, threshold, items]
+                properties:
+                  generation: { type: integer, description: 지금 동의 세대 }
+                  embedder: { type: string, description: "값을 만든 임베더의 이름(지금 logmel-pitch-1). 기기의 임베더와 다르면 대조하지 않음" }
+                  dims: { type: integer, description: 벡터 길이(지금 112) }
+                  threshold: { type: number, description: 확신 기준(초안 0.9, 조정 중) }
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [participantId, vector, seconds, source]
+                      properties:
+                        participantId: { type: string }
+                        vector: { type: array, items: { type: number } }
+                        seconds: { type: number, description: 등록 음성 길이 }
+                        source: { type: string, enum: [trip, profile] }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /api/trips/{code}/scene-suggestions:
     parameters: [{ $ref: "#/components/parameters/code" }]
     get:
@@ -2080,6 +2127,17 @@ components:
         confidence: { type: number, minimum: 0, maximum: 1, description: 받아쓰기 확신도. 제공자가 주면 }
         lat: { type: number, minimum: -90, maximum: 90, description: 좌표는 둘 다 있거나 둘 다 없음 }
         lng: { type: number, minimum: -180, maximum: 180 }
+        participantId: { type: [string, "null"], description: "화자(참가자 id, 손님 포함). 올릴 때는 선택 칸 — 기기가 차 안에서 대조한 참가자(ADR-0023). 없으면 생략" }
+        speakerMethod: { type: string, enum: [device-voice, server-voice], description: "화자를 붙인 방법. 올릴 때는 device-voice만, participantId가 있으면 꼭 있음. server-voice는 서버 대조(/voice-match)가 붙인 것. 사람이 고친 줄에는 없음" }
+        speakerConfidence: { type: number, minimum: 0, maximum: 1, description: 화자 대조의 코사인 유사도. 있을 때만 }
+    VoicePrintInput:
+      type: object
+      required: [embedder, vector, seconds]
+      description: 기기가 계산한 목소리 대조 값(ADR-0023). 수식은 backend/api/providers/voice.js, 두 구현은 backend/api/voice-vectors.json으로 맞춥니다.
+      properties:
+        embedder: { type: string, const: logmel-pitch-1, description: 서버의 임베더 이름과 다르면 400 — 수식이 다른 값이 섞이지 않게 }
+        vector: { type: array, minItems: 112, maxItems: 112, items: { type: number }, description: "로그멜 평균 26 + 분산 26 + 음높이 60. 묶음마다 평균 0·길이 1(음높이를 못 잡았으면 그 묶음은 0). 아니면 400" }
+        seconds: { type: number, minimum: 1, maximum: 20, description: 값을 만든 등록 음성의 길이 }
     Utterance:
       allOf:
         - $ref: "#/components/schemas/UtteranceInput"
@@ -2087,7 +2145,6 @@ components:
           required: [device, displayText, editedText, editVersion]
           properties:
             device: { type: string }
-            participantId: { type: string, description: 서버의 화자 대조(T38)가 붙인 참가자(손님 포함). 아직 없으면 생략 }
             profileId: { type: string, format: uuid, description: 화자가 프로필 참가자일 때 그 프로필. 아니면 생략 }
             displayText: { type: string, description: 수동 수정본 → ASR → Pleos 원문 순으로 고른 표시 글 }
             editedText: { type: [string, "null"], description: 수동 수정본. 없거나 초기화하면 null }
