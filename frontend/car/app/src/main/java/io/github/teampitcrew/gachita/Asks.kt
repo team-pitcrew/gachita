@@ -46,6 +46,9 @@ fun restStopsOf(json: String): List<Place> = JSONObject(json).getJSONArray("item
     List(a.length()) { i -> a.getJSONObject(i).let { Place(it.getDouble("lat"), it.getDouble("lng"), it.getString("name")) } }
 }
 
+/** 제안 후보: 서버가 답했으면 그 답(빈 목록이면 앞에 들를 곳이 없음), 서버를 쓸 수 없으면(실패·꺼짐·오프라인) 고정 목록. */
+fun stopsFrom(server: Result<List<Place>>, lat: Double?, lng: Double?): List<Place> = server.getOrElse { listOfNotNull(nextStop(lat, lng)) }
+
 /**
  * 내비가 잰 길 위 거리(road, requestTrip)로 본 '지금 길에서 들르는 곳'인가. 서버 추천은 직선 어림이라 나란한 고속도로나
  * 건너편 휴게소를 고를 수 있는데, 그런 곳은 분기점을 돌거나 되돌아와야 해 길 위 거리가 직선보다 훨씬 길다.

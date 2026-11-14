@@ -50,6 +50,29 @@ class AsksTest {
         assertTrue(onRoad(1_000.0, 3_400, null)) // 가까운 곳은 나들목 진입 거리(2 km)까지 봐준다
     }
 
+    @Test fun fixedListOnlyWhenServerUnusable() {
+        val routed = listOf(Place(37.53, 127.21, "하남드림휴게소"))
+        assertEquals(routed, stopsFrom(Result.success(routed), 37.39, 127.11))
+        assertEquals(emptyList<Place>(), stopsFrom(Result.success(emptyList()), 37.4, 127.1)) // 서버가 '앞에 없음'이라 하면 고정 목록으로 가지 않는다
+        assertEquals(listOf("용인휴게소"), stopsFrom(Result.failure(java.io.IOException("꺼짐")), 37.2, 127.1).map { it.spoken })
+        assertEquals(REST_STOPS.first(), stopsFrom(Result.failure(IllegalStateException("위치 모름")), null, null).single())
+    }
+
+    @Test fun sharedLookupAnswersEveryWaiter() {
+        val d = Shared<String>()
+        val got = mutableListOf<String?>()
+        val round = d.join { got += "도착:$it" } // 도착 알림이 먼저 목적지를 묻는다
+        assertEquals(1, round)
+        assertEquals(null, d.join { got += "추천:$it" }) // 그동안 휴게소 추천이 물어도 다시 묻지 않고 끊지도 않는다
+        d.answer("마트")
+        assertEquals(listOf("도착:마트", "추천:마트"), got)
+        val next = d.join { got += "다음:$it" }!!
+        d.answer(null, round) // 앞 차례의 늦은 시간 초과는 다음 차례를 끊지 않는다
+        assertEquals(2, got.size)
+        d.answer(null, next)
+        assertEquals("다음:null", got.last())
+    }
+
     @Test fun onlyFrontRowOrUnknownAccepts() {
         assertTrue(canAccept(u("응", null)))
         assertTrue(canAccept(u("응", 0)))

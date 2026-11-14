@@ -796,18 +796,18 @@ class MainActivity : ComponentActivity() {
 
     /**
      * 지금 경로에서 들를 휴게소를 고르고 그곳까지의 거리·시간을 내비에 묻고 제안한다. 화면은 넘어가지 않는다. 답이 없으면 30초 뒤 보관.
-     * 후보는 서버 추천(T97: 내비의 지금 위치·진행 방향·목적지·남은 길로 고름). 서버가 꺼졌거나 닿지 않거나 빈 답이면 고정 목록(nextStop).
+     * 후보는 서버 추천(T97: 내비의 지금 위치·진행 방향·목적지·남은 길로 고름). 서버가 꺼졌거나 닿지 않거나 위치를 모르면 고정 목록(nextStop).
+     * 서버가 빈 목록으로 답하면 앞에 들를 곳이 없는 것이다(고정 목록으로 가면 다른 길의 휴게소를 제안하게 됨).
      */
     private fun propose(o: Offer, u: Utterance) {
         car.here { lat, lng, heading ->
             car.destination { to, remain ->
                 val url = server
                 val known = lat != null && lng != null && !(lat == 0.0 && lng == 0.0)
-                bg({ if (known) Server(url).restStops(lat!!, lng!!, heading, to, remain) else emptyList() }) { r ->
+                bg({ if (known) Server(url).restStops(lat!!, lng!!, heading, to, remain) else throw IllegalStateException("위치 모름") }) { r ->
                     r.exceptionOrNull()?.let { Log.w(TAG, "휴게소 추천을 받지 못함 · 고정 목록으로", it) }
-                    val routed = r.getOrNull().orEmpty()
-                    val stops = routed.ifEmpty { listOfNotNull(nextStop(lat, lng)) }
-                    Log.i(TAG, "휴게소 후보 ${stops.size}곳 · ${if (routed.isEmpty()) "고정 목록" else "추천 서버"} · 목적지 ${to != null} · 남은 길 ${remain != null}")
+                    val stops = stopsFrom(r, lat, lng)
+                    Log.i(TAG, "휴게소 후보 ${stops.size}곳 · ${if (r.isSuccess) "추천 서버" else "고정 목록"} · 목적지 ${to != null} · 남은 길 ${remain != null}")
                     if (stops.isEmpty()) { Log.i(TAG, "남은 휴게소 없음 · 부탁은 보관"); if (offer?.id == o.id) offer = null; return@bg }
                     ask(o, u, stops, lat, lng, remain)
                 }
