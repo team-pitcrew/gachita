@@ -27,7 +27,7 @@ const terminal = new Set([
   "canceled",
   "submission_unknown",
 ]);
-const view = (r) => ({
+export const generationView = (r) => ({
   id: r.id,
   state: r.state,
   templateId: r.plan.templateId,
@@ -54,6 +54,7 @@ const view = (r) => ({
       }
     : {}),
 });
+const view = generationView;
 export const shortTemplateCatalog = () => ({
   enabled: enabled(),
   provider: "higgsfield",

@@ -8,9 +8,11 @@ import { createConnection } from "node:net";
 import { basename, join as joinPath } from "node:path";
 import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { Readable } from "node:stream";
 import pg from "pg";
 import { classify, migrate, server, sweep, verifyGoogleLink, shortServiceContext } from "./server.js";
 import { shortGenerations } from "./short-generations.js";
+import { shortAssets } from "./short-assets.js";
 import { HiggsfieldError } from "./providers/higgsfield.js";
 import { captureLog } from "./log.js";
 import { cues, suggest } from "./scenes.js";
@@ -117,6 +119,7 @@ before(async () => {
   // 예전에 한 DB에 같이 두던 표가 남았으면 치운다.
   await tripsDb().query("DROP TABLE IF EXISTS voice_prints, profiles"); // make run(한 DB)이면 목소리 값이 프로필을 가리킨다(외래 키째 다시 만들어짐)
   await tripsDb().query("TRUNCATE short_generations");
+  await tripsDb().query("TRUNCATE short_assets, short_asset_trash");
   await tripsDb().query("TRUNCATE trips CASCADE"); // 여행 목소리 값(trip_voice_prints)과 여행에 딸린 공유 표는 외래 키로 함께
   await profilesDb().query("TRUNCATE profiles CASCADE"); // 목소리 값(voice_prints)은 외래 키로 함께
   await new Promise((ok) => server.listen(0, () => ok((base = `http://localhost:${server.address().port}`))));
@@ -1760,6 +1763,106 @@ test('90일 전 여행의 새 영상과 이전 48시간 기한을 가진 영상�
   await w.worker.tick();
   assert.equal((await tripsDb().query('SELECT count(*)::int AS n FROM short_generations WHERE id=$1',[job.id])).rows[0].n,1);
  } finally {delete process.env.SHORTS_ENABLED;delete process.env.HF_CREDENTIALS;delete process.env.SHORTS_DAILY_SECONDS;}
+});
+
+// 저장·경합 시험은 S3와 미디어 검사만 이중으로 주입합니다. 실제 ffprobe/파일 검증은 별도 이미지 실행으로 확인합니다.
+function assetFixture(extra = {}) {
+  const objects = new Map(); let puts = 0;
+  const worker = shortAssets(shortServiceContext, { ready: () => true,
+    probe: async (data, mimeType, seconds) => ({ mimeType, seconds, width: 1080, height: 1920, fps: 30, videoCodec: 'h264', audioCodec: 'aac', audioSampleRate: 48000, audioChannels: 2 }),
+    media: { put: async (key, data) => { puts++; objects.set(key, data); }, get: async key => objects.get(key), remove: async key => { objects.delete(key); } }, ...extra });
+  const request = (f, method, id, leaf, query = new URLSearchParams(), data = Buffer.alloc(0), token = f.a.token) => {
+    const req = Readable.from([data]); req.method = method; req.headers = { authorization: `Bearer ${token}`, 'content-type': 'video/mp4' };
+    return worker.request(req, f.trip.code, id, leaf, query);
+  };
+  const source = async f => (await request(f, 'GET', 'source', undefined, new URLSearchParams({ moment: f.plan.momentId })))[1];
+  const query = (f, s, key) => new URLSearchParams({ moment: f.plan.momentId, generation: String(s.generation), sourceHash: s.sourceHash, key });
+  return { worker, objects, puts: () => puts, request, source, query };
+}
+
+test('기본 쇼츠는 같은 서버 목록과 인증 파일 API로 읽고 동일 키 재전송은 한 파일만 저장합니다(T107)', async () => {
+  const f = await shortFixture(), w = assetFixture(), s = await w.source(f), bytes = Buffer.from('test-only-media-bytes');
+  assert.equal(s.source.scenes.length, 1); assert.equal(s.source.scenes[0].momentId, f.plan.momentId); assert.match(s.sourceHash, /^[0-9a-f]{64}$/);
+  assert.equal((await call('GET', `${f.path}/short-assets/source?moment=${f.plan.momentId}`, null, f.a.token))[1].sourceHash, s.sourceHash, '실제 HTTP 경로도 같은 원본 해시입니다');
+  assert.equal((await call('GET', `${f.path}/short-assets`))[0], 401);
+  const q = w.query(f, s, 'upload-key-1');
+  const [created, asset] = await w.request(f, 'POST', undefined, undefined, q, bytes);
+  assert.equal(created, 201); assert.equal(asset.origin, 'local-render'); assert.equal(asset.state, 'completed');
+  assert.equal(asset.result.width, 1080); assert.equal(asset.result.sha256, createHash('sha256').update(bytes).digest('hex'));
+  assert.equal((await w.request(f, 'POST', undefined, undefined, q, bytes))[1].id, asset.id);
+  assert.equal(w.puts(), 1); assert.equal(w.objects.size, 1);
+  await assert.rejects(w.request(f, 'POST', undefined, undefined, q, Buffer.from('different bytes')), e => e.status === 409);
+  const list = (await w.request(f, 'GET'))[1]; assert.equal(list.items[0].id, asset.id);
+  assert.deepEqual((await w.request(f, 'GET', asset.id, 'file', undefined, undefined, f.b.token)).slice(1), [bytes, 'video/mp4'], '다른 프론트의 같은 여행 참가자도 원본 서버 파일을 받습니다');
+  const other = await shortFixture();
+  await assert.rejects(w.request(f, 'GET', asset.id, 'file', undefined, undefined, other.a.token), e => e.status === 401);
+  await assert.rejects(w.request(f, 'DELETE', asset.id, undefined, undefined, undefined, f.b.token), e => e.status === 403);
+  assert.equal((await w.request(f, 'DELETE', asset.id))[0], 204);
+  await assert.rejects(w.request(f, 'GET', asset.id, 'file'), e => e.status === 410);
+  await assert.rejects(w.request(f, 'POST', undefined, undefined, q, bytes), e => e.status === 410);
+  assert.deepEqual((await w.request(f, 'GET'))[1].items, []);
+});
+
+test('기본 쇼츠는 원음·전사·동의 변경을 저장 전후 검사하고 주행 중에는 저장하지 않습니다(T107)', async () => {
+  const f = await shortFixture(), w = assetFixture(), s = await w.source(f), bytes = Buffer.from('file');
+  const q = w.query(f, s, 'guard-key-1');
+  await call('PATCH', f.path, { status: 'driving' });
+  await assert.rejects(w.request(f, 'POST', undefined, undefined, q, bytes), e => e.status === 409);
+  await call('PATCH', f.path, { status: 'parked' });
+  const [, asset] = await w.request(f, 'POST', undefined, undefined, q, bytes);
+  await call('PATCH', `${f.path}/captions/short-test/1`, { text: '정확히 고친 자막', expectedVersion: 0, generation: 1 }, f.a.token);
+  assert.notEqual((await w.source(f)).sourceHash, s.sourceHash);
+  assert.equal((await w.request(f, 'GET'))[1].items[0].state, 'source_changed');
+  assert.equal((await w.request(f, 'GET'))[1].items[0].result, undefined);
+  await assert.rejects(w.request(f, 'GET', asset.id, 'file'), e => e.status === 409);
+  await assert.rejects(w.request(f, 'POST', undefined, undefined, q, bytes), e => e.status === 409);
+  const current = await w.source(f), next = w.query(f, current, 'guard-key-2');
+  const revoke = assetFixture({ probe: async () => {
+    await call('PATCH', `${f.path}/participants/${f.b.id}`, { consent: false });
+    return { mimeType:'video/mp4',seconds:15,width:1080,height:1920,fps:30 };
+  } });
+  await assert.rejects(revoke.request(f, 'POST', undefined, undefined, next, bytes), e => e.status === 403);
+  assert.equal(revoke.puts(), 0);
+  await call('PATCH', `${f.path}/participants/${f.b.id}`, { consent: true }, f.b.token);
+  assert.deepEqual((await w.request(f, 'GET'))[1].items, []);
+  assert.equal((await tripsDb().query('SELECT state FROM short_assets WHERE id=$1', [asset.id])).rows[0].state, 'deleted');
+});
+
+test('S3 실패는 같은 키로 재시도하되 저장 중 철회·삭제와 느린 다운로드가 파일을 되살리지 않습니다(T107)', async () => {
+  const f = await shortFixture(), objects = new Map(); let bad = true, onPut, onGet;
+  const w = assetFixture({ media: {
+    put: async (key, data) => { objects.set(key,data); await onPut?.(); if(bad) throw Error('S3 down'); },
+    get: async key => { const data = objects.get(key); await onGet?.(); return data; }, remove: async key => { objects.delete(key); },
+  } });
+  const s = await w.source(f), q = w.query(f,s,'retry-upload'), bytes = Buffer.from('same-upload');
+  await assert.rejects(w.request(f,'POST',undefined,undefined,q,bytes),e=>e.status===503);
+  const failed = (await tripsDb().query('SELECT * FROM short_assets WHERE trip_code=$1',[f.trip.code])).rows[0];
+  assert.equal(failed.state,'failed'); bad=false;
+  const [,saved]=await w.request(f,'POST',undefined,undefined,q,bytes);
+  assert.equal(saved.id,failed.id); assert.equal(saved.state,'completed');
+  const live = (await tripsDb().query('SELECT * FROM short_assets WHERE id=$1',[saved.id])).rows[0];
+  assert.notEqual(live.object_key,failed.object_key,'재시도마다 다른 객체 키를 써서 옛 정리가 새 파일을 지우지 않습니다');
+  onGet=async()=>{await w.request(f,'DELETE',saved.id);};
+  await assert.rejects(w.request(f,'GET',saved.id,'file'),e=>e.status===410);
+  onGet=null;
+  const second = await shortFixture(), s2=await w.source(second), q2=w.query(second,s2,'revoke-put');
+  onPut=async()=>{await call('PATCH',`${second.path}/participants/${second.b.id}`,{consent:false});};
+  await assert.rejects(w.request(second,'POST',undefined,undefined,q2,bytes),e=>e.status===403);
+  const revoked=(await tripsDb().query('SELECT * FROM short_assets WHERE trip_code=$1',[second.trip.code])).rows[0];
+  assert.equal(revoked.state,'deleted');
+  assert.ok((await tripsDb().query('SELECT 1 FROM short_asset_trash WHERE object_key=$1',[revoked.object_key])).rowCount,'늦게 끝난 PUT도 정리 큐에 남습니다');
+});
+
+test('기본 영상과 공급자 생성은 같은 목록에서 출처와 파일 URL을 구분합니다(T107)',async()=>{
+ const f=await shortFixture(),w=assetFixture(),s=await w.source(f);
+ const [,local]=await w.request(f,'POST',undefined,undefined,w.query(f,s,'combined-list'),Buffer.from('local movie'));
+ const id=randomUUID();
+ await tripsDb().query(`INSERT INTO short_generations(id,trip_code,participant_id,generation,moment_id,idempotency_key,request_hash,plan,source_key,state,shots,result_key,bytes,expires_at)
+ VALUES($1,$2,$3,1,$4,'fixture-provider','fixture-hash',$5,'fixture-key','completed','[]','fixture-result',100,NULL)`,[id,f.trip.code,f.a.id,f.plan.momentId,f.plan]);
+ const list=(await w.request(f,'GET'))[1].items;
+ assert.deepEqual(new Set(list.map(x=>x.origin)),new Set(['local-render','provider']));
+ assert.equal(list.find(x=>x.id===local.id).result.url,`${f.path}/short-assets/${local.id}/file`);
+ assert.equal(list.find(x=>x.id===id).result.url,`${f.path}/short-generations/${id}/file`);
 });
 
 test("장소별 할 일은 실제 전사·교정본에서 묶고 완료·취소에 인증·세대·버전을 적용합니다(T103)", async () => {
