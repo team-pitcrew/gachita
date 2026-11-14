@@ -160,7 +160,7 @@ class MainActivity : ComponentActivity() {
         }
     private enum class Destination(val label: String) { RIDE("함께 타는 중"), CONVERSATION("대화 기록"), SHORTS("콘텐츠 기록") } // 콘텐츠 기록은 K3 전까지 쇼츠 화면
     private var destination by mutableStateOf(Destination.RIDE)
-    // 가족·동승 그룹(흐름 F2, Family.kt). mock: 차 로그인(흐름 F1) 전에는 디버그 실행 인자(--es profileToken)로만 토큰을 받는다.
+    // 가족·동승 그룹(흐름 F2, Family.kt). 토큰은 차 로그인(흐름 F1, Onboarding.token). 디버그 실행 인자 --es profileToken이 있으면 그것을 앞세운다(시험용).
     private var familyOpen by mutableStateOf(false)
     private var profileToken by mutableStateOf<String?>(null)
     private var shortStudioActive = false
@@ -386,12 +386,12 @@ class MainActivity : ComponentActivity() {
                     when {
                         t != null -> TripScreen(t)
                         carStatus.restricted -> SetupLocked()
-                        onboarding.showing -> OnboardingScreen(onboarding, carStatus.gear)
+                        onboarding.showing -> OnboardingScreen(onboarding, carStatus.gear) { familyOpen = true } // C08 '가족 그룹 만들기' → 가족 흐름(F2)
                         destination == Destination.SHORTS && appVisible -> ShortStudio(server, "", 0, null, "",
                             canRead = { false }, canPlay = { appVisible && !isDestroyed && !carStatus.restricted },
                             onClose = { destination = Destination.RIDE },
                             onActiveChange = ::shortStudioActiveChanged, modifier = Modifier.fillMaxSize())
-                        familyOpen -> FamilyFlow(server, profileToken, onClose = { familyOpen = false }, onStart = ::startGroupTrip)
+                        familyOpen -> FamilyFlow(server, profileToken ?: onboarding.token, onClose = { familyOpen = false }, onStart = ::startGroupTrip)
                         else -> Setup()
                     }
                 }
@@ -473,7 +473,7 @@ class MainActivity : ComponentActivity() {
 
     /** '이 가족과 출발'(C13): 그룹의 저장된 자리·각자 동의로 여행을 만들고, 이 차가 맡을 참가자 토큰(나와 내 아이)을 받는다(T133). */
     private fun startGroupTrip(groupId: String) {
-        val token = profileToken ?: return
+        val token = profileToken ?: onboarding.token ?: return
         val url = server
         s = s.copy(busy = true); error = ""
         bg({

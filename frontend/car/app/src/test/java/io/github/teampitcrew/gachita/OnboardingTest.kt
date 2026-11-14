@@ -48,7 +48,7 @@ class OnboardingTest {
         val p = parseAccountProfile("""{"id":"x","name":"민준","character":"glasses","email":null,"consent":true,"hasVoice":true,"hasPhoto":false}""")
         assertNull(p.email)
         assertTrue(p.consent && p.hasVoice)
-        assertEquals(R.drawable.char_glasses, charRes("glasses-small"))
+        assertEquals(R.drawable.char_glasses, charDrawable("glasses-small"))
     }
 
     /** 요청 하나를 받아 머리·본문을 남기고 정해 둔 응답을 돌려주는 소켓 서버. */

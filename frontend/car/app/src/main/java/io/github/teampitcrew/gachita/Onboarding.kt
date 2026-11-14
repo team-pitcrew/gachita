@@ -85,7 +85,7 @@ private val CHARS = listOf("glasses" to R.drawable.char_glasses, "healing" to R.
     "travel" to R.drawable.char_travel, "game" to R.drawable.char_game, "sport" to R.drawable.char_sport, "pet" to R.drawable.char_pet, "camping" to R.drawable.char_camping, "office" to R.drawable.char_office)
 private val TILE = listOf(Color(0xFFFCE8EF), Color(0xFFFFF4E0), Color(0xFFFFF8E6), Color(0xFFF1EEFF))
 
-fun charRes(key: String): Int = CHARS.firstOrNull { it.first == key.removeSuffix("-small") }?.second ?: R.drawable.char_basic
+fun charDrawable(key: String): Int = CHARS.firstOrNull { it.first == key.removeSuffix("-small") }?.second ?: R.drawable.char_basic
 
 class Onboarding(private val context: Context, private val prefs: SharedPreferences, private val server: () -> String) {
     private val io = Executors.newSingleThreadExecutor()
@@ -288,7 +288,7 @@ class Onboarding(private val context: Context, private val prefs: SharedPreferen
 // ---- 화면(시안 C 토큰: 카드 반경 32, 컨트롤 24, Title 40 / Headline 32 / Body 28 / Label 24) ----
 
 @Composable
-fun OnboardingScreen(o: Onboarding, gear: String?) {
+fun OnboardingScreen(o: Onboarding, gear: String?, onFamily: () -> Unit) {
     val c = MaterialTheme.colorScheme
     val ctx = LocalContext.current
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { o.picked(it) }
@@ -364,7 +364,7 @@ fun OnboardingScreen(o: Onboarding, gear: String?) {
                         Box(Modifier.size(280.dp).clip(RoundedCornerShape(40.dp)).background(TILE[0]), contentAlignment = Alignment.Center) {
                             val b = o.photo
                             if (b != null) Image(b.asImageBitmap(), "고른 프로필 사진", Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-                            else Image(painterResource(charRes(o.character)), null, Modifier.size(250.dp), contentScale = ContentScale.Fit)
+                            else Image(painterResource(charDrawable(o.character)), null, Modifier.size(250.dp), contentScale = ContentScale.Fit)
                         }
                         ObCard(title = "내 사진 선택", detail = "촬영 또는 사진 보관함에서 가져오기", onClick = {
                             // 기기 사진 보관함(사진 선택기)이 있을 때만. 없으면 '사진 대신 캐릭터'로 계속한다.
@@ -394,7 +394,7 @@ fun OnboardingScreen(o: Onboarding, gear: String?) {
                         if (!rec) Text("등록한 목소리로 차량에서 발화자를 구분해요. 소리는 이 차에서 값으로 바뀌고, 값만 서버에 저장돼요.", color = c.onSurfaceVariant, fontSize = 24.sp)
                     }
                     OnboardStep.DONE -> {
-                        ObCard(soft = true, face = charRes(o.character), photo = o.photo, title = shownName, detail = if (p?.hasVoice == true) "캐릭터와 음성 특징 저장 완료" else "캐릭터 저장 완료")
+                        ObCard(soft = true, face = charDrawable(o.character), photo = o.photo, title = shownName, detail = if (p?.hasVoice == true) "캐릭터와 음성 특징 저장 완료" else "캐릭터 저장 완료")
                         ObCard(title = "다음은 우리 가족", detail = "아이의 프로필도 ${shownName}님이 만들어 줄 수 있어요.")
                     }
                 }
@@ -416,7 +416,7 @@ fun OnboardingScreen(o: Onboarding, gear: String?) {
                 SecondaryButton("다시 녹음", Modifier.width(440.dp), enabled = !o.busy) { o.startRecording() }
                 PrimaryButton(if (o.busy) "등록 중" else "녹음 완료", !o.busy && o.heard >= MIN_VOICE_SECONDS, Modifier.weight(1f)) { o.submitVoice() }
             }
-            OnboardStep.DONE -> PrimaryButton("가족 그룹 만들기") { o.done() }
+            OnboardStep.DONE -> PrimaryButton("가족 그룹 만들기") { o.done(); onFamily() }
         }
     }
 }
