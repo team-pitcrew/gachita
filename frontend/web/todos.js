@@ -38,7 +38,8 @@ export function createTodos({ getTrip, getParticipant, getToken, request, onChan
   let state = null; // { key, items, arrival, generation, at(받은 시각), error, denied, ready }
   let seen = ""; // 마지막으로 읽은 여행 버전
   let loading = false;
-  let busy = false;
+  let again = false; // 조회 중에 또 읽으라는 요청이 왔다: 끝나면 한 번 더 읽는다
+  const busy = new Set(); // 수정 요청이 가 있는 항목. 그 줄의 단추만 잠근다
   const open = new Set(); // 펼쳐 둔 원발화(다시 그려도 유지)
   const key = () => {
     const trip = getTrip(), me = getParticipant();
@@ -47,11 +48,12 @@ export function createTodos({ getTrip, getParticipant, getToken, request, onChan
 
   // 권한이 없어졌으면 받은 글(목록·도착·펼친 원발화)을 화면에 남기지 않는다. 먼저 떠난 조회가 늦게 돌아와 되살리지 못하게 판을 올린다.
   const DENIED = "지금은 할 일을 볼 수 없어요. 기록 동의와 동승 연결을 확인해 주세요.";
-  const deny = (s) => { Object.assign(s, { items: [], arrival: null, error: "", denied: DENIED, ready: true, epoch: s.epoch + 1 }); open.clear(); onChange(); };
+  const deny = (s) => { Object.assign(s, { items: [], arrival: null, error: "", denied: DENIED, ready: true, epoch: s.epoch + 1, gone: s.gone + 1 }); open.clear(); onChange(); };
 
   async function load() {
     const k = key();
-    if (!k || loading) return;
+    if (!k) return;
+    if (loading) { again = true; return; }
     loading = true;
     const s = state, epoch = s.epoch;
     const current = () => key() === k && state === s && s.epoch === epoch;
@@ -69,13 +71,14 @@ export function createTodos({ getTrip, getParticipant, getToken, request, onChan
       onChange();
     } finally {
       loading = false;
+      if (again) { again = false; load(); }
     }
   }
 
   // 화면을 그릴 때마다 부른다. 여행·동의 세대·참가자가 바뀌면 받은 목록을 버리고, 여행이 바뀌었으면(도착 포함) 다시 읽는다.
   function sync() {
     const k = key(), trip = getTrip();
-    if (state?.key !== k) { state = k ? { key: k, items: [], arrival: null, error: "", denied: "", ready: false, epoch: 0 } : null; open.clear(); seen = ""; }
+    if (state?.key !== k) { state = k ? { key: k, items: [], arrival: null, error: "", denied: "", ready: false, epoch: 0, gone: 0 } : null; open.clear(); seen = ""; }
     if (!state) return;
     const version = `${trip.code}:${trip.version}`;
     if (version !== seen) { seen = version; load(); }
@@ -85,28 +88,34 @@ export function createTodos({ getTrip, getParticipant, getToken, request, onChan
 
   async function set(todo, status) {
     const s = state;
-    if (!s || busy) return;
-    busy = true;
-    const epoch = s.epoch;
+    if (!s || busy.has(todo.id)) return;
+    busy.add(todo.id);
+    onChange();
+    const gone = s.gone;
     try {
       const { item } = await request("PATCH", `/todos/${todo.id}`, { generation: s.generation, expectedVersion: todo.version, status });
-      if (state !== s || s.epoch !== epoch) return;
+      if (state !== s || s.gone !== gone) return;
+      // 이 수정보다 먼저 떠난 조회는 옛 상태를 들고 온다. 버리고 새로 읽어 완료한 것을 되돌리지 않게 한다.
+      s.epoch++;
       s.items = s.items.map((t) => (t.id === item.id ? item : t));
-      onChange();
+      load();
     } catch (e) {
-      if (state !== s) return;
+      if (state !== s || s.gone !== gone) return;
       if (e.status === 401 || e.status === 403) return deny(s); // 동의가 꺼졌거나 토큰을 잃었다: 다시 읽기를 기다리지 않고 바로 지운다
       // 다른 사람이 먼저 바꿨거나 원문이 바뀌었으면 덮어쓰지 않고 최신 목록을 다시 보인다.
       toast(e.status === 409 || e.status === 404 ? "그사이 바뀌었어요. 최신 목록을 다시 읽었어요." : e.status === 0 ? "연결이 끊겨서 바꾸지 못했어요." : e.message);
+      s.epoch++;
       await load();
     } finally {
-      busy = false;
+      busy.delete(todo.id);
+      onChange();
     }
   }
 
   const row = (t, participants, locked) => {
     const closed = t.status !== "pending";
     const last = t.sources.at(-1);
+    const act = (label, status, className = "") => h("button", { type: "button", className, disabled: locked || busy.has(t.id), onclick: () => set(t, status) }, label);
     return h("li", { className: closed ? "closed" : "" },
       h("div", { className: "between" }, h("span", { className: "what grow" }, t.text), closed && h("span", { className: `pill ${STATUS[t.status][1]}` }, STATUS[t.status][0])),
       h("details", { className: "todo-source", open: open.has(t.id), ontoggle: (e) => (e.target.open ? open.add(t.id) : open.delete(t.id)) },
@@ -117,12 +126,11 @@ export function createTodos({ getTrip, getParticipant, getToken, request, onChan
           src.text !== src.displayText && h("p", { className: "meta" }, `처음 받아 적은 말: ${src.text}`),
         ))),
       ),
-      lock(h("div", { className: "row" }, closed
-        ? button("다시 열기", () => set(t, "pending"), "plain")
-        : [button("완료", () => set(t, "done")), button("취소", () => set(t, "cancelled"), "plain")]), locked),
+      h("div", { className: "row" }, closed
+        ? act("다시 열기", "pending", "plain")
+        : [act("완료", "done"), act("취소", "cancelled", "plain")]),
     );
   };
-  const lock = (el, locked) => { if (locked) for (const b of el.querySelectorAll("button")) b.disabled = true; return el; };
 
   // 여행 화면에 넣을 카드. 볼 수 없으면 이유만 보인다.
   function card() {

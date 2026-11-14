@@ -42,7 +42,8 @@ const fakeDom = () => {
   const el = () => ({ kids: [], append(...k) { this.kids.push(...k); }, setAttribute() {}, querySelectorAll: () => [] });
   globalThis.document = { createElement: el, hidden: false };
   const walk = (n, out = []) => { if (n == null) return out; if (typeof n !== "object") out.push(String(n)); else { out.push(n); n.kids?.forEach((k) => walk(k, out)); } return out; };
-  return { text: (card) => walk(card).filter((x) => typeof x === "string").join("\n"), press: (card, label) => walk(card).find((x) => x.onclick && x.kids?.[0] === label).onclick() };
+  const buttons = (card, label) => walk(card).filter((x) => x.onclick && x.kids?.[0] === label);
+  return { text: (card) => walk(card).filter((x) => typeof x === "string").join("\n"), buttons, press: (card, label, nth = 0) => buttons(card, label).filter((b) => !b.disabled)[nth].onclick() };
 };
 const tick = () => new Promise((ok) => setImmediate(ok));
 
@@ -79,5 +80,52 @@ test("수정이 권한 거부를 받으면 다시 읽기가 실패해도, 먼저
   trip.version = 5; todos.sync(); calls.shift().reject(Object.assign(new Error("거절"), { status: 403 })); await tick();
   assert.doesNotMatch(shown(), /우유|이마트/);
   assert.ok(painted >= 4);
+  delete globalThis.document;
+});
+
+const setup = async (list) => {
+  const dom = fakeDom();
+  const { createTodos } = await import("./todos.js");
+  const trip = { code: "TRIP02", generation: 1, version: 1, participants: [{ id: "me", name: "나", consent: true }] };
+  const calls = [];
+  const request = (method, path, body) => new Promise((resolve, reject) => calls.push({ method, path, body, resolve, reject }));
+  const todos = createTodos({ getTrip: () => trip, getParticipant: () => trip.participants[0], getToken: () => "token", request, onChange: () => {} });
+  todos.sync(); calls.shift().resolve(list); await tick();
+  return { dom, trip, calls, todos, shown: () => dom.text(todos.card()) };
+};
+
+test("완료보다 먼저 떠난 조회가 늦게 돌아와도 완료한 것을 미완료로 되돌리지 않고 새로 읽는다", async () => {
+  const milk = todo("우유", "마트", "pending", 1000);
+  const { dom, trip, calls, todos, shown } = await setup({ generation: 1, items: [milk], arrival: null });
+  trip.version = 2; todos.sync(); // 폴링 조회가 pending/version 0을 읽고 늦는다
+  dom.press(todos.card(), "완료");
+  const [slow, patch] = calls.splice(0);
+  assert.deepEqual([slow.method, patch.method], ["GET", "PATCH"]);
+  const done = { ...milk, status: "done", version: 1 };
+  patch.resolve({ generation: 1, item: done }); await tick();
+  assert.match(shown(), /다시 열기/);
+  slow.resolve({ generation: 1, items: [milk], arrival: null }); await tick();
+  assert.match(shown(), /다시 열기/, "옛 조회가 완료를 되돌리지 않는다");
+  assert.doesNotMatch(shown(), /도착해서 할 일 1건/);
+  assert.equal(calls.length, 1, "옛 조회가 끝나면 새로 읽는다"); assert.equal(calls[0].method, "GET");
+  calls.shift().resolve({ generation: 1, items: [done], arrival: null }); await tick();
+  dom.press(todos.card(), "다시 열기");
+  assert.equal(calls[0].body.expectedVersion, 1, "다음 수정은 새 버전으로 보낸다");
+  delete globalThis.document;
+});
+
+test("서로 다른 항목을 연달아 완료하면 둘 다 보내고, 보내는 중인 줄의 단추만 잠근다", async () => {
+  const milk = todo("우유", "마트", "pending", 1000), water = todo("물", "마트", "pending", 2000);
+  const { dom, calls, todos, shown } = await setup({ generation: 1, items: [milk, water], arrival: null });
+  dom.press(todos.card(), "완료"); // 우유
+  assert.deepEqual(dom.buttons(todos.card(), "완료").map((b) => b.disabled), [true, false], "보내는 중인 줄만 잠근다");
+  dom.press(todos.card(), "완료"); // 남은 활성 단추 = 물
+  assert.deepEqual(calls.map((c) => [c.method, c.path]), [["PATCH", `/todos/${milk.id}`], ["PATCH", `/todos/${water.id}`]]);
+  const [a, b] = calls.splice(0);
+  a.resolve({ generation: 1, item: { ...milk, status: "done", version: 1 } }); await tick();
+  b.resolve({ generation: 1, item: { ...water, status: "done", version: 1 } }); await tick();
+  assert.equal(dom.buttons(todos.card(), "다시 열기").length, 2, "두 결과가 모두 반영된다");
+  assert.doesNotMatch(shown(), /할 일 [12]건/);
+  assert.ok(dom.buttons(todos.card(), "다시 열기").every((x) => !x.disabled), "끝나면 단추가 되살아난다");
   delete globalThis.document;
 });
