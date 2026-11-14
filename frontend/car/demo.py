@@ -125,7 +125,7 @@ def voice_wav(who):
     """그 사람의 등록 문장을 합성(cap.say, 음높이만 다름) → 16 kHz 모노 WAV 바이트. 서버가 같은 임베더로 값을 만든다(1~20초)."""
     import numpy as np
     x = np.concatenate([np.concatenate([cap.say(s, PEOPLE[who][0]), np.zeros(cap.R // 3, "<i2")]) for s in READ[who]])[: cap.R * 18]
-    path = OUT / "inputs" / f"enroll-{PEOPLE[who][0]}.wav"; path.parent.mkdir(exist_ok=True)
+    path = OUT / "inputs" / f"voice-{PEOPLE[who][0]}.wav"; path.parent.mkdir(exist_ok=True)  # API용 모노(가상 마이크용 enroll-*.wav는 2채널)
     with wave.open(str(path), "wb") as w: w.setnchannels(1); w.setsampwidth(2); w.setframerate(cap.R); w.writeframes(x.astype("<i2").tobytes())
     return path.read_bytes()
 
@@ -230,8 +230,11 @@ def seen(*needles):
     w = words(); return next((x for x in needles if any(x in t for t in w)), None)
 
 
+SLOW = float(os.environ.get("DEMO_WAIT", "2"))  # 화면 트리 읽기(uiautomator dump)가 한 번에 4초 넘게 걸리는 바쁜 맥에서는 기다림을 늘린다
+
+
 def wait(needles, timeout=15):
-    end = time.time() + timeout
+    end = time.time() + timeout * SLOW
     while time.time() < end:
         if (got := seen(*needles)): return got
         time.sleep(1)
@@ -252,20 +255,50 @@ def tap(*labels, exact=True, timeout=8):
         time.sleep(1)
 
 
+# Pleos 화면 자판(두벌식)의 글쇠 자리(2560×1440, 11/15 emulator-5586 캡처에서 잼). adb input text는 한글을 넣지 못해 글쇠를 누른다.
+KEYS = {**{k: (x, 919) for k, x in zip("ㅂㅈㄷㄱㅅㅛㅕㅑㅐㅔ", (557, 666, 774, 883, 992, 1101, 1210, 1318, 1427, 1536))},
+        **{k: (x, 1028) for k, x in zip("ㅁㄴㅇㄹㅎㅗㅓㅏㅣ", (666, 774, 883, 992, 1101, 1210, 1318, 1427, 1536))},
+        **{k: (x, 1137) for k, x in zip("ㅋㅌㅊㅍㅠㅜㅡ", (719, 828, 937, 1046, 1155, 1263, 1372))}}
+
+
+def jamo(word):
+    """한글 음절을 두벌식으로 칠 낱자로(받침 하나짜리까지). 자판에 없는 낱자가 있으면 None."""
+    cho, jung, jong = "ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ", "ㅏㅐㅑㅒㅓㅔㅕㅖㅗㅘㅙㅚㅛㅜㅝㅞㅟㅠㅡㅢㅣ", " ㄱㄲㄳㄴㄵㄶㄷㄹㄺㄻㄼㄽㄾㄿㅀㅁㅂㅄㅅㅆㅇㅈㅊㅋㅌㅍㅎ"
+    out = []
+    for ch in word:
+        c = ord(ch) - 0xAC00
+        if not 0 <= c < 11172: return None
+        out += [cho[c // 588], jung[c % 588 // 28]] + ([jong[c % 28]] if c % 28 else [])
+    return out if all(j in KEYS for j in out) else None
+
+
 def type_into(i, value):
-    """i번째 입력 칸에 글을 넣는다. adb input text는 영문·숫자만 넣으므로 한글이면 넣지 못하고 False(아래 이름은 API로 채움)."""
+    """i번째 입력 칸에 글을 넣고, 칸에 그 글이 들어갔는지 화면에서 확인한다. 영문은 adb input text, 한글은 화면 자판의 글쇠를 누른다."""
     fields = [n for n in ui() if "EditText" in n[1]]
-    if len(fields) <= i or not value.isascii(): return False
+    keys = None if value.isascii() else jamo(value)
+    if len(fields) <= i or (not value.isascii() and keys is None): return False
     x1, y1, x2, y2 = fields[i][4]
-    adb("shell", "input", "tap", str((x1 + x2) // 2), str((y1 + y2) // 2)); time.sleep(0.5)
-    adb("shell", "input", "text", shlex.quote(value).replace(" ", "%s")); time.sleep(0.5)
-    adb("shell", "input", "keyevent", "111")  # 자판 닫기(ESC)
-    return True
+    adb("shell", "input", "tap", str((x1 + x2) // 2), str((y1 + y2) // 2)); time.sleep(1)
+    if keys is None: adb("shell", "input", "text", shlex.quote(value).replace(" ", "%s"))
+    else:
+        for k in keys: adb("shell", "input", "tap", *map(str, KEYS[k])); time.sleep(0.3)
+    time.sleep(0.5); hide_keyboard()
+    got = [n[0] for n in ui() if "EditText" in n[1]]
+    ok = len(got) > i and (got[i] == value or not value.isascii() and value in got[i] or len(got[i]) == len(value) and set(got[i]) <= set("•●*"))  # 비밀번호 칸은 점으로
+    note("type", field=i, ok=ok, korean=keys is not None)
+    return ok
 
 
-def launch(*extras):
-    """앱을 연다(디버그 인자). 이미 나눈 창이면 가치타가 왼쪽 넓은 창으로 옮겨 가니 부른 쪽이 다시 나눈다(T112)."""
-    adb("shell", "am", "start", "--user", "10", "-n", f"{PKG}/.MainActivity", "--es", "server", CAR_SERVER, *extras); time.sleep(4)
+def hide_keyboard():
+    """화면 자판(Pleos 한글 자판)이 아래 단추를 가리므로 닫는다. 자판이 떠 있을 때만 뒤로(BACK) — 아니면 화면이 뒤로 간다."""
+    if "mIsInputViewShown=true" in adb("shell", "dumpsys", "input_method"): adb("shell", "input", "keyevent", "4"); time.sleep(1)
+
+
+def launch(*extras, restart=False):
+    """앱을 연다(디버그 인자). 이미 나눈 창이면 가치타가 왼쪽 넓은 창으로 옮겨 가니 부른 쪽이 다시 나눈다(T112).
+    앱은 singleTop이라 떠 있으면 onNewIntent만 받는다: route·stops는 거기서 읽지만 profileToken·family·onboarding은 onCreate에서만 읽으므로
+    그 인자는 restart=True(-S, 앱을 껐다 켬 — 녹음 중에는 쓰지 않음)로 준다."""
+    adb("shell", "am", "start", "--user", "10", *(["-S"] if restart else []), "-n", f"{PKG}/.MainActivity", "--es", "server", CAR_SERVER, *extras); time.sleep(6 if restart else 4)
 
 
 def windows():
@@ -323,26 +356,38 @@ inj = None
 clips = []  # 녹화와 섞을 때: {"part", "clip", "at_ms"}
 
 
-def say(name, lines, seconds=None):
-    """대사를 합성해 가상 마이크에 넣는다. 우리 녹음이 열려 있을 때만(cap.Injector.play가 확인, 닫힌 채 넣으면 에뮬레이터가 멈춘 적이 있음)."""
+FIXTURES = {**LINES, **{f"enroll-{who}": [(who, t) for t in READ[who]] for who in ("아빠",)}}
+
+
+def prepare():
+    """대사 WAV를 미리 합성하고(합성에 몇 초씩 걸려 넣을 때를 놓치지 않게) gRPC 연결을 열어 둔다. 남의 에뮬레이터면 넣지 않는다."""
     global inj
     if not grpc_is_ours():
-        note("say.skip", name=name, why=f"gRPC {os.environ['GACHITA_GRPC_PORT']}이 {os.environ['ANDROID_SERIAL']}의 것이 아님(다른 에뮬레이터에 넣지 않음)"); return False
+        note("say.off", why=f"gRPC {os.environ['GACHITA_GRPC_PORT']}이 {os.environ['ANDROID_SERIAL']}의 것이 아님(-grpc로 켜지 않았거나 다른 에뮬레이터) — 대사를 넣지 않음"); return
+    for name, lines in FIXTURES.items():
+        cap.fixture(name, [(PEOPLE[w][0], t) for w, t in lines], seconds=13 if name.startswith("enroll-") else None, lead=0.5, tail=1.0)  # 등록 녹음(15초)이 닫히기 전에 끝나게
+    try: inj = cap.Injector()
+    except SystemExit as e: note("say.off", why=str(e))
+
+
+def say(name):
+    """미리 만든 대사를 가상 마이크에 넣는다. 우리 녹음이 열려 있을 때만(닫힌 채 넣으면 에뮬레이터가 멈춘 적이 있음, cap.Injector.play도 확인)."""
+    if inj is None: note("say.skip", name=name, why="소리 넣기 꺼짐"); return False
     if not any("silenced:false" in l for l in cap.mic_holders()):
         note("say.skip", name=name, why="가치타가 녹음 중이 아님"); return False
-    inj = inj or cap.Injector()
-    cap.fixture(name, [(PEOPLE[w][0], t) for w, t in lines], seconds=seconds, lead=0.5, tail=2.0)
-    clips.append({"part": part, "clip": name, "at_ms": inj.play(name)})
+    try: clips.append({"part": part, "clip": name, "at_ms": inj.play(name)})
+    except SystemExit as e: note("say.skip", name=name, why=str(e)); return False
     return True
 
 
 def grpc_is_ours():
     """cap.Injector는 gRPC 포트로만 에뮬레이터를 고른다. 그 포트가 ANDROID_SERIAL의 에뮬레이터인지 실행 기록(pid_*.ini)으로 확인한다."""
     serial = os.environ["ANDROID_SERIAL"].removeprefix("emulator-")
+    owners = []
     for ini in (pathlib.Path.home() / "Library/Caches/TemporaryItems/avd/running").glob("pid_*.ini"):
         kv = dict(l.split("=", 1) for l in ini.read_text().splitlines() if "=" in l)
-        if kv.get("grpc.port") == os.environ["GACHITA_GRPC_PORT"]: return kv.get("port.serial") == serial
-    return False
+        if kv.get("grpc.port") == os.environ["GACHITA_GRPC_PORT"]: owners.append(kv.get("port.serial"))
+    return owners == [serial]  # 같은 gRPC 포트를 두 에뮬레이터가 적어 두었으면 어느 쪽에 닿을지 몰라 넣지 않는다
 
 
 # ---- 단계 기록 ----------------------------------------------------------------------------------------------
@@ -391,7 +436,7 @@ def flow_state(flow):
 # ---- 단계 ---------------------------------------------------------------------------------------------------
 def onboarding():
     """01–07 차 계정·온보딩(F1). 화면이 없으면 아빠 계정·동의·목소리를 API로 만든다(대체)."""
-    if not step(1, ["가치타 시작하기", "함께 탄 순간을 오래"], 12):
+    if not step(1, ["가치타 시작하기", "함께 탄 순간을 오래"], 40):  # 설치·데이터 지우기·밤 모드 뒤 첫 화면은 늦게 뜬다
         for n in range(2, 8): mark(n, "없음", f"01 시작 화면이 없어 건너뜀 — {flow_state('F1')}")
         ready_profile("dad", "아빠"); mark(7, "대체", "아빠 계정·동의·목소리를 API로 만듦(차 화면 없음)"); return
     tap("가치타 시작하기")
@@ -407,13 +452,18 @@ def onboarding():
         tap("동의하고 계속")
     step(4, ["목소리 등록하기", "나를 소개해 주세요"], note_="이름은 API로 '민준'(adb가 한글을 못 넣음)")
     tap("목소리 등록하기")
+    said = []
     if step(5, ["녹음 시작", "15초만 들려주세요"]):
-        tap("녹음 시작"); time.sleep(1.5)
-        threading.Thread(target=say, args=("enroll-dad", [("아빠", s) for s in READ["아빠"]], 15), daemon=True).start()
-        time.sleep(10); step(6, ["목소리를 듣고 있어요", "녹음 중"], 5)
-        wait(["녹음을 마쳤어요", "녹음 끝"], 20); tap("녹음 완료")
+        tap("녹음 시작"); time.sleep(1)
+        t = threading.Thread(target=lambda: said.append(say("enroll-아빠")), daemon=True); t.start()
+        time.sleep(8); step(6, ["목소리를 듣고 있어요", "녹음 중"], 5)
+        t.join(30)  # 다 넣은 뒤에 멈춘다(녹음이 닫힌 채 넣으면 에뮬레이터가 멈춘 적이 있음)
+        wait(["녹음을 마쳤어요", "녹음 끝"], 25); tap("녹음 완료")
     step(7, ["목소리 등록 완료"], 20)
     account("dad", "아빠")
+    if not any(said):  # 차가 아빠 목소리 대신 빈 소리를 등록했으면 화자 식별이 안 되므로 같은 합성 음성의 값으로 바꾼다(실제 API)
+        api("POST", "/profiles/me/voice", raw=voice_wav("아빠"), token=st["dad"]["token"], ctype="audio/wav")
+        results[7]["note"] = (results[7].get("note", "") + " 목소리 값은 API로(대사를 넣지 못함)").strip()
 
 
 def family_steps():
@@ -436,7 +486,7 @@ def family_steps():
     for i, kid in enumerate(("서준", "하은")):
         tap("아이 프로필 만들기", "서준 프로필 만들기", "하은 프로필 만들기")
         typed = type_into(0, kid)
-        step(11 + 3 * i, ["아이 프로필 만들기", "보호자가 이름과 캐릭터"], note_="" if typed else "아이 이름은 한글이라 adb로 못 넣음 → API로 만듦")
+        step(11 + 3 * i, ["아이 프로필 만들기", "보호자가 이름과 캐릭터"], note_="" if typed else "아이 이름을 화면 자판으로 넣지 못함 → API로 만듦")
         if typed and tap("동의하고 목소리 등록"):
             step(12 + 3 * i, [f"{kid}의 목소리 등록"]); wait(["가족 그룹에 저장"], 20); tap("가족 그룹에 저장")
             child(kid)  # 차 화면은 아이 목소리를 진행만 그린다(F2 mock) → 같은 합성 음성의 값을 실제 API로
@@ -451,7 +501,7 @@ def family_steps():
 
 def open_family():
     """가족 화면(F2)을 실제 그룹으로 연다. 차 로그인(F1)과 가족 화면이 아직 따로라 디버그 인자로 아빠의 프로필 토큰을 준다(F2 PR의 mock 경로)."""
-    launch("--es", "profileToken", st["dad"]["token"], "--ez", "family", "true")
+    launch("--es", "profileToken", st["dad"]["token"], "--ez", "family", "true", "--ez", "onboarding", "false", restart=True)  # 가족 화면은 열 때 그룹을 읽는다
 
 
 def start_trip(from_family):
@@ -461,7 +511,7 @@ def start_trip(from_family):
         time.sleep(4); trips = api("GET", "/profiles/me/trips", token=st["dad"]["token"])["items"]
         code = trips[0]["code"] if trips and trips[0].get("status") != "ended" else None
     if not code:
-        launch("--ez", "onboarding", "false"); tap("함께 타는 중", timeout=3)
+        launch("--ez", "onboarding", "false", restart=True); tap("함께 타는 중", timeout=3)
         if seen("새 여행 시작"): tap("새 여행 시작")  # 앱 데이터를 지우지 않으므로 지난 여행이 끝난 채 남아 있을 수 있다
         e2e.tap_make(); time.sleep(5)
         consent_on_car()
@@ -496,11 +546,11 @@ def drive_steps(code):
     if not split(): note("split.fail")
     tap("함께 타는 중", timeout=3); drive()
     wait(["아래 버튼으로 언제든 멈출 수 있어요"], 15)
-    say("talk", LINES["talk"])
+    say("talk")
     step(17, ["아래 버튼으로 언제든 멈출 수 있어요"], 30, "대사 5줄(서준·아빠·하은·엄마)")
     tap("기록 중지"); step(18, ["같은 버튼을 누르면 다시 기록해요"])
     tap("기록 재개"); step(19, ["중지한 지점부터 이어서 기록해요"], 8)
-    say("mart", LINES["mart"])
+    say("mart")
     here = navi_here()
     mart, lodge = near(here, NEAR_M * 0.8, NEAR_M * 0.6), near(here, -NEAR_M * 0.6, NEAR_M * 0.8)
     launch("--es", "route", f"{lodge[0]},{lodge[1]},강릉 숙소", "--es", "stops", f"{mart[0]},{mart[1]},하나로마트"); split(); tap("함께 타는 중", timeout=3)
@@ -509,7 +559,7 @@ def drive_steps(code):
     if results[21]["result"] == "없음" and seen("도착했어요"): results[21] = {**results[21], "result": "다른 화면", "note": "develop의 T123 도착 카드(v1) — " + flow_state("F4")}
     tap("장보고 여행 계속", "닫기", timeout=4)
     launch("--es", "route", f"{FAR_LODGE[0]},{FAR_LODGE[1]},강릉 숙소"); split(); tap("함께 타는 중", timeout=3)
-    drive(); say("lodge", LINES["lodge"])
+    drive(); say("lodge")
     step(22, ["내일도 같이 타면 안 돼", "아래 버튼으로 언제든 멈출 수 있어요"], 20, "대사 5줄(하은·엄마·아빠)")
     launch("--es", "route", f"{lodge[0]},{lodge[1]},강릉 숙소"); split(); tap("함께 타는 중", timeout=3)
     step(23, ["강릉 숙소 도착까지"], 25)
@@ -616,10 +666,11 @@ def main(apk):
     if os.environ.get("DEMO_CLEAN") == "1":  # 01부터 보려면 앱 데이터(지난 여행·로그인)를 지운다. 기본은 지우지 않는다(오너 지시)
         adb("shell", "am", "force-stop", "--user", "10", PKG); adb("shell", "pm", "clear", "--user", "10", PKG)
     for perm in ("RECORD_AUDIO", "POST_NOTIFICATIONS"): adb("shell", "pm", "grant", "--user", "10", PKG, f"android.permission.{perm}")
+    prepare()
     try:
-        rec_part(1); launch()
+        rec_part(1); launch(restart=True)  # 서버 주소(--es server)도 onCreate에서 읽는다
         if only(1): onboarding()
-        else: launch("--ez", "onboarding", "false"); ready_profile("dad", "아빠")
+        else: launch("--ez", "onboarding", "false", restart=True); ready_profile("dad", "아빠")
         if only(8): from_family = family_steps()
         else: seed(); open_family(); from_family = tap("이 가족과 출발", timeout=10)
         code = start_trip(from_family)
