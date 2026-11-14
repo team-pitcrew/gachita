@@ -58,7 +58,7 @@ internal fun whoAsked(item: SharedTodo, people: List<Person>): String {
 }
 
 /** One row of the brief: emoji, name, '{who} 요청', amount (empty when none). */
-internal data class BriefRow(val emoji: String, val name: String, val who: String, val qty: String)
+internal data class BriefRow(val emoji: String, val name: String, val who: String, val qty: String, val id: String = "")
 
 internal data class BriefRows(val first: List<BriefRow>, val buy: List<BriefRow>, val remember: List<BriefRow>, val bring: List<BriefRow>) {
     val isEmpty get() = first.isEmpty() && buy.isEmpty() && remember.isEmpty() && bring.isEmpty()
@@ -73,8 +73,8 @@ internal fun briefRows(items: List<SharedTodo>, people: List<Person>): BriefRows
         val kind = kindOf(item)
         val who = whoAsked(item, people)
         val title = item.title ?: shortAsk(item)
-        if (kind == "buy" && item.items.isNotEmpty()) item.items.forEach { g.getValue("buy") += BriefRow(emojiOf(it.name, "buy"), it.name, who, it.qty.orEmpty()) }
-        else g.getValue(kind) += BriefRow(emojiOf("$title ${item.items.firstOrNull()?.name.orEmpty()}", kind), title, who, "")
+        if (kind == "buy" && item.items.isNotEmpty()) item.items.forEach { g.getValue("buy") += BriefRow(emojiOf(it.name, "buy"), it.name, who, it.qty.orEmpty(), item.id) }
+        else g.getValue(kind) += BriefRow(emojiOf("$title ${item.items.firstOrNull()?.name.orEmpty()}", kind), title, who, "", item.id)
     }
     return BriefRows(g.getValue("first"), g.getValue("buy"), g.getValue("remember"), g.getValue("bring"))
 }
@@ -83,6 +83,13 @@ internal fun briefRows(items: List<SharedTodo>, people: List<Person>): BriefRows
 internal fun shortAsk(item: SharedTodo): String {
     val head = Regex(Regex.escape(item.place) + "에서(?:는|도)?\\s*").findAll(item.text).lastOrNull() ?: return item.text
     return item.text.substring(head.range.last + 1).trim().ifEmpty { item.text }
+}
+
+/** mock: replaces the '{who} 요청' line by the design's demo notes (task id → text). Real screens pass no details. */
+internal fun BriefRows.withDetails(details: Map<String, String>): BriefRows {
+    if (details.isEmpty()) return this
+    fun List<BriefRow>.d() = map { it.copy(who = details[it.id] ?: it.who) }
+    return BriefRows(first.d(), buy.d(), remember.d(), bring.d())
 }
 
 /** The main button: waypoint '장보고 여행 계속', final destination '여행 마치고 기록 보기'. */
@@ -96,9 +103,10 @@ internal fun arrivalButton(final: Boolean) = if (final) "여행 마치고 기록
 internal fun ArrivalBrief(
     place: String, final: Boolean, items: List<SharedTodo>, people: List<Person>, note: String,
     onMain: () -> Unit, onRefresh: () -> Unit, onArrive: (() -> Unit)?, modifier: Modifier = Modifier,
+    details: Map<String, String> = emptyMap(), // mock: 시안의 부가 설명 줄(할 일 id → 글). 실제 화면은 '{누구} 요청'
 ) {
     val c = MaterialTheme.colorScheme
-    val rows = briefRows(items, people)
+    val rows = briefRows(items, people).withDetails(details)
     Column(modifier, verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("$place 도착", fontSize = 40.sp, lineHeight = 50.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -191,13 +199,15 @@ internal object F4Mock {
         todo("m3", "마트", "buy", "젤리 한 봉지 사기", listOf(TodoItem("젤리", "1봉지")), "seojun"),
         todo("m4", "마트", "buy", "탄산수 2병 사기", listOf(TodoItem("탄산수", "2병")), "dad"),
     )
-    // C19 줄('하은 화장실 / 고기와 과일 / 간식과 음료')을 그대로 보이려고 도착 전에는 시안의 말을 쓴다
+    // C19·C19p·finalPaused 화면 글('하은 화장실 / 고기와 과일 간식과 음료 챙기기', frames-text.md)을 그대로 보이려고 도착 전에는 시안의 말을 쓴다
     val martNear = listOf(mart[0],
         todo("n2", "마트", "buy", "고기랑 과일 사 가기", listOf(TodoItem("고기", null), TodoItem("과일", null)), "mom"),
-        todo("n3", "마트", "buy", "간식하고 음료 사기", listOf(TodoItem("간식", null), TodoItem("음료", null)), "seojun"))
+        todo("n3", "마트", "bring", "간식과 음료 챙기기", listOf(TodoItem("간식", null), TodoItem("음료", null)), "").copy(requestedBy = emptyList()))
     val lodge = listOf(
         todo("l1", "숙소", "first", "화장실 먼저 다녀오기", listOf(TodoItem("화장실", null)), "haeun"),
         todo("l2", "숙소", "remember", "고기는 바로 냉장 보관", listOf(TodoItem("냉장 보관", null)), "mom"),
         todo("l3", "숙소", "bring", "체크인하고 가방 내리기", listOf(TodoItem("체크인", null), TodoItem("가방", null)), "dad"),
     )
+    // finalBrief의 부가 설명 줄(frames-text.md). 규칙으로 만들 수 없는 시연 글이라 목업에서만 쓴다
+    val lodgeDetails = mapOf("l1" to "하은이와 함께 1층 화장실", "l2" to "엄마가 부탁한 장본 짐 정리", "l3" to "예약자 민준 / 트렁크의 가족 가방")
 }

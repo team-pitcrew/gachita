@@ -1707,7 +1707,8 @@ class MainActivity : ComponentActivity() {
                     b?.place != null -> ArrivalBrief(b.place, b.final, b.arrivalItems ?: placeAsks(b.place, todoList), if (f4Mock != null) F4Mock.people else t.people,
                         when { arrivalNote.isNotEmpty() -> arrivalNote; todoState.note.isNotEmpty() -> todoState.note; else -> "" },
                         onMain = { arrivalMain(b) }, onRefresh = { loadTodos(force = true) },
-                        onArrive = (::arrive).takeIf { vehicleParked() && todoScope() != null && !arrivalLoading }, modifier = Modifier.fillMaxSize())
+                        onArrive = (::arrive).takeIf { vehicleParked() && todoScope() != null && !arrivalLoading }, modifier = Modifier.fillMaxSize(),
+                        details = if (f4Mock == "final") F4Mock.lodgeDetails else emptyMap())
                     b != null -> BriefCard(b, Modifier.fillMaxSize())
                     else -> RideOverview(t, Modifier.fillMaxSize())
                 }
@@ -1793,10 +1794,11 @@ class MainActivity : ComponentActivity() {
     // mock: F4 화면 확인용(디버그 빌드의 --es f4 …). 실제 값은 내비 남은 시간과 서버 할 일이다
     private fun mockApproach(): Approach? = when (f4Mock) {
         "near", "nearPaused" -> Approach("F4DEMO", "하나로마트", 3, 170)
-        "finalNear", "finalPaused" -> Approach("F4DEMO", "강릉 숙소", 1, 60, final = true)
+        "finalNear" -> Approach("F4DEMO", "강릉 숙소", 1, 60, final = true)
+        "finalPaused" -> Approach("F4DEMO", "강릉 숙소", 3, 170, final = true) // 시안 화면 글이 '약 3분'(frames-text.md)
         else -> null
     }
-    private fun mockNearAsks(): List<SharedTodo> = if (f4Mock?.startsWith("final") == true) F4Mock.lodge else F4Mock.martNear
+    private fun mockNearAsks(): List<SharedTodo> = if (f4Mock == "finalNear") F4Mock.lodge else F4Mock.martNear // finalPaused의 시안 글은 C19와 같다
     private fun mockBrief(): Brief? = when (f4Mock) {
         "mart" -> Brief("하나로마트", F4Mock.mart, final = false)
         "final" -> Brief("강릉 숙소", F4Mock.lodge, final = true)
