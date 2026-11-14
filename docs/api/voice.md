@@ -105,7 +105,7 @@
 
 | 요청 | 하는 일 |
 |---|---|
-| `GET /api/trips/:code/scene-suggestions` | 각 발화에서 시작하는 30초 창의 발화 수 + 2 × (말한 사람 수 − 1)로 점수를 매기고(말한 사람은 좌석 구역으로 셈, 발화 4개 미만 제외), 이미 남긴 장면과 겹치지 않는 창을 서로 겹치지 않게 최대 5개, 시각 순으로: `{ items: [{ at, from, to, why, score, lines(30줄까지), lat?, lng? }] }`. 구간 15~35초. 요청할 때만 계산 |
+| `GET /api/trips/:code/scene-suggestions` | 각 발화에서 시작하는 30초 창의 발화 수 + 2 × (말한 사람 수 − 1)로 점수를 매기고(말한 사람은 좌석 구역으로 셈, 발화 4개 미만 제외), 이미 남긴 장면과 겹치지 않는 창을 서로 겹치지 않게 최대 5개, 시각 순으로: `{ items: [{ at, from, to, why, score, lines(30줄까지), lat?, lng? }] }`. 구간 15~35초. 요청할 때만 계산. 차량 앱의 `Scenes.kt`가 같은 규칙이고 두 구현은 `backend/api/scene-vectors.json`으로 맞춘다(T144) |
 | `POST /api/trips/:code/moments` | 고른 후보의 `at`·`from`·`to`를 남긴다. `from`·`to`는 선택 칸(`from ≤ at ≤ to`, 1~60초)이고 차(T63)가 이 구간을 잘라 클립으로 올린다. **구간이 없는 장면(차에서 바로 표시한 것)은 `at` 앞 20초~뒤 10초로 본다 — 차도 이 기본 구간으로 자른다** |
 | `GET /api/trips/:code/shortform` | 클립이 올라온 장면마다 소리 주소(`/api/trips/:code/recordings/:id`, 같은 출처, ADR-0021)·자막 큐(클립 안의 초, 글, 말한 참가자, 좌석 구역)·출연(이름, 캐릭터, 자리). 이 응답은 영상 파일이 아니다. 영상 파일은 기기가 이 데이터로 만들거나, 꺼 둔 서버 생성(`short-generation.md`)이 만든다(ADR-0022) |
 
