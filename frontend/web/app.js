@@ -697,7 +697,7 @@ function tripView(me) {
   if (state.kind === "near") main = button("확인", () => { ride.near = { key: scope, id: state.id }; render(); }, "primary");
   else if (trip.status === "driving") main = recordButton("primary big");
   else if (state.kind === "arrived" && driver) {
-    // v2 도착 브리핑(T141): 경유지 '장보고 여행 계속', 최종 목적지 '여행 마치고 기록 보기'(끝낸 뒤 여행 마무리 P22로, 시연 24→25). 나머지 상태는 아래 카드에 남긴다.
+    // v2 도착 브리핑(T141): 경유지 '계속'(시안 P20), 최종 목적지 '여행 마치고 기록 보기'(끝낸 뒤 여행 마무리 P22로, 시연 24→25). 나머지 상태는 아래 카드에 남긴다.
     const [label, status] = arrivalMove(state);
     main = button(label, () => confirm(status === "ended" ? END_ASK : CONTINUE_ASK) && patch("", { status })().then(() => status === "ended" && trip?.status === "ended" && !afterTrip.isOpen() && afterTrip.open()), "primary");
     moves.splice(moves.findIndex((m) => m[1] === status), 1);

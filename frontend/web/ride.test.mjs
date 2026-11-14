@@ -60,8 +60,8 @@ test("제목과 부제는 시안 문구를 따르되 모르는 값은 빼고 조
   assert.deepEqual(rideHeading({ kind: "drive", target: "하나로마트" }, { title: "강릉 가족 여행" }), { title: "지금은 운전에 집중하세요", sub: "강릉 가족 여행 / 하나로마트로 이동 중" });
   assert.equal(rideHeading({ kind: "drive", target: "" }, { title: "강릉 가족 여행" }).sub, "강릉 가족 여행");
   assert.equal(rideHeading({ kind: "paused" }, { waiting: ["하은"] }).sub, "하은 님의 기록 동의를 기다리고 있어요.");
-  assert.equal(rideHeading({ kind: "near", place: "하나로마트", eta: 170 }).sub, "도착 약 3분 전 / 가족이 말한 부탁"); // v2 시안 P19(T141)
-  assert.equal(rideHeading({ kind: "near", place: "하나로마트", eta: null }).sub, "가족이 말한 부탁");
+  assert.deepEqual(rideHeading({ kind: "near", place: "하나로마트", eta: 170 }), { title: "곧 하나로마트 도착", sub: "도착까지 약 3분" }); // 시안 P19(eZ2xs, T153)
+  assert.equal(rideHeading({ kind: "near", place: "하나로마트", eta: null }).sub, "");
   const items = [todo("고기", "마트", "mom", 30)];
   const fresh = (list) => askState({ ready: true, items: list, error: "" });
   assert.equal(rideHeading({ kind: "continue", place: "하나로마트", target: "강릉 숙소" }, { asks: fresh(items) }).sub, "하나로마트의 부탁 1건 남음 / 강릉 숙소로 이동");

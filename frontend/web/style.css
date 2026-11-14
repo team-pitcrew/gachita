@@ -23,8 +23,8 @@
   --r-ctl: 10px;
   --r-phone-card: 24px; /* 최종 시안(민준 개선안) 폰 카드·컨트롤 반경. 새로 바꾼 여행 화면부터 쓴다 */
   --r-phone-ctl: 16px;
-  --r-phone-char: 48px;
-  --r-phone-panel: 20px; /* 시안 브리핑 카드(P20)·대화 기록 날짜·부탁 칸(P44) 반경 */ /* 시안 Character 조각(사진·캐릭터 틀) 반경 */
+  --r-phone-char: 48px; /* 시안 Character 조각(사진·캐릭터 틀) 반경 */
+  --r-phone-panel: 20px; /* 시안 브리핑 카드(P19·P20) 반경 */
   --pad: 20px;
   --mascot: url("/icons/gachita-192.png");
   --mascot-mark: url("/brand/mascot.svg"); /* 시안 Mascot(7:544) 24px 선 그림, 머리 줄(app bar)에 쓴다 */
@@ -692,25 +692,31 @@ input[type="file"]::file-selector-button {
 /* 대화 기록(최종 시안 P44). 머리·탭·바닥은 고정하고 본문만 스크롤한다. 대화 입력창은 두지 않는다. */
 .conversations-dialog { width: min(100%, 520px); height: 100dvh; max-height: 100dvh; max-width: 520px; margin: 0 auto; padding: 0; border-radius: 0; background: var(--bg); overflow: hidden; }
 .conversations-dialog[open] { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; gap: 12px; animation: none; }
+.conversations-dialog:not(.contents-dialog)[open] { gap: 16px; } /* 시안 P44(eZ2xs): 머리 줄–탭–제목 간격 16 */
 .conversations-dialog .app-bar { padding: max(20px, env(safe-area-inset-top)) var(--pad) 0; } /* 시안 P44: 머리 줄 y 20, 탭 64, 제목 124 */
 .conversations-dialog .journey-tabs { margin: 0 var(--pad); }
 .conversation-body { overflow-y: auto; overscroll-behavior: contain; min-height: 0; scroll-behavior: auto; padding: 0 var(--pad) 20px; display: grid; align-content: start; gap: 12px; }
-.conversation-title { display: grid; gap: 12px; }
-.conversation-range { padding: 12px; border-radius: var(--r-phone-panel); background: var(--accent-soft); font-size: 15px; font-weight: 500; line-height: 22px; }
-.conversation-thread { display: grid; gap: 12px; }
-.conversation-group { display: grid; gap: 12px; }
-.conversation-time { font-size: 13px; font-weight: 400; line-height: 18px; color: var(--ink-2); }
+.conversation-title { display: grid; gap: 6px; }
+.conversation-thread { display: grid; gap: 16px; }
+.conversation-group { display: grid; gap: 16px; }
+.conversation-time { margin: 0; text-align: center; white-space: pre; font-size: 13px; font-weight: 400; line-height: 1.35; color: var(--ink-2); } /* 시안 '09:32  동해고속도로' 가운데 */
+/* 말풍선(시안 P44 'Conversation / Phone'): 얼굴 36·간격 10, 이름 14 Medium, 풍선 여백 12/14·18 Medium, 시각 12 */
 .conversation-message { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
-.message-face { flex: none; width: 32px; }
-.message-face .avatar { display: block; width: 32px; height: 32px; }
-.message-bubble { flex: 1; min-width: 0; display: grid; gap: 4px; padding: 10px 12px; border-radius: 6px 18px 18px 18px; background: var(--surface); }
-.message-name { color: var(--ink-2); font-size: 15px; font-weight: 500; line-height: 22px; }
-.message-text { font-size: 17px; line-height: 26px; white-space: pre-wrap; overflow-wrap: anywhere; }
-.conversation-message.grouped { margin-top: -6px; }
+.conversation-message.me { justify-content: flex-end; }
+.message-face { flex: none; width: 36px; }
+.message-face .avatar { display: block; width: 36px; height: 36px; }
+.message-col { display: grid; gap: 6px; min-width: 0; }
+.conversation-message.me .message-col { justify-items: end; }
+.message-name { margin: 0; color: var(--ink-2); font-size: 14px; font-weight: 500; line-height: 1.35; }
+.message-row { display: flex; align-items: flex-end; gap: 6px; min-width: 0; }
+.conversation-message.me .message-row { flex-direction: row-reverse; }
+.message-bubble { min-width: 0; margin: 0; padding: 12px 14px; border-radius: 6px 18px 18px 18px; background: var(--surface-2); }
+.conversation-message.me .message-bubble { border-radius: 18px 6px 18px 18px; background: var(--accent-soft); }
+.message-text { font-size: 18px; font-weight: 500; line-height: 1.35; white-space: pre-wrap; overflow-wrap: anywhere; }
+.message-time { flex: none; font-size: 12px; line-height: 1.35; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.conversation-message.grouped { margin-top: -10px; }
+.conversation-message.grouped .message-face { visibility: hidden; }
 .conversation-message.grouped .message-bubble { border-radius: 18px; }
-.conversation-ask { display: grid; gap: 6px; padding: 12px; border-radius: var(--r-phone-panel); background: var(--accent-soft); }
-.conversation-ask .meta { font-size: 13px; line-height: 18px; }
-.ask-quote { font-size: 17px; line-height: 26px; overflow-wrap: anywhere; }
 .conversation-empty { min-height: 240px; display: grid; align-content: center; justify-items: center; gap: 18px; padding: 32px; text-align: center; }
 .conversation-empty .what { font-size: 16px; font-weight: 500; }
 .conversation-mark { font-size: 72px; line-height: .8; font-weight: 700; color: var(--accent); }
@@ -950,7 +956,8 @@ button.brand-home { min-height: 44px; margin-block: -6px; padding: 0 4px 0 0; ga
 .link-state::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); }
 .link-state.is-offline::before { background: var(--rec); }
 .ride-title, .conversation-title { display: grid; gap: 8px; }
-.ride-title h1, .conversation-title h1 { margin: 0; font-size: 28px; line-height: 38px; letter-spacing: -0.02em; overflow-wrap: anywhere; }
+.ride-title h1, .conversation-title h1 { margin: 0; font-size: 28px; line-height: 38px; letter-spacing: -0.015em; overflow-wrap: anywhere; } /* 시안 eZ2xs P17–P21: 28/38 자간 -1.5% */
+.conversations-dialog:not(.contents-dialog) .conversation-title h1 { font-size: 26px; line-height: 1.25; } /* 시안 P44: 여행 이름 26 */
 .ride-title .sub, .conversation-title .sub { font-size: 15px; font-weight: 500; line-height: 22px; }
 .seat-map { display: grid; gap: 10px; padding: 16px; border: 2px solid var(--line); border-radius: var(--r-phone-card); background: var(--surface); }
 .seat-front { font-size: 15px; font-weight: 500; line-height: 22px; color: var(--ink-2); }
@@ -968,7 +975,12 @@ button.brand-home { min-height: 44px; margin-block: -6px; padding: 0 4px 0 0; ga
 .ride-status strong { font-size: 19px; line-height: 28px; }
 .ride-status .meta { font-size: 13px; line-height: 18px; }
 .ride-card { display: grid; gap: 14px; padding: 20px; border-radius: var(--r-phone-card); background: var(--surface); }
-.near-card { background: var(--accent-soft); }
+.near-card { gap: 8px; padding: 16px; border-radius: var(--r-phone-panel); background: var(--accent-soft); } /* 시안 P19(eZ2xs) 350×198: 반경 20·여백 16·간격 8 */
+.near-card .brief-label { color: var(--accent); }
+.near-rows { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.near-rows li { display: grid; grid-template-columns: 30px 1fr; align-items: center; gap: 12px; padding: 0; border: 0; }
+.near-rows strong { font-size: 22px; line-height: 30px; font-weight: 700; letter-spacing: -0.01em; overflow-wrap: anywhere; } /* Phone/Title 22 */
+.near-foot { font-size: 15px; line-height: 22px; font-weight: 500; color: var(--ink-2); }
 .near-card h2 { font-size: 19px; line-height: 28px; }
 .near-card > p:not(.meta), .near-asks { font-size: 17px; line-height: 26px; }
 .near-asks { gap: 4px; }
@@ -1099,9 +1111,9 @@ button.ob-other { justify-self: start; min-height: 40px; font-size: 13px; font-w
 .brief-head { display: flex; align-items: center; gap: 8px; }
 .brief-head strong { flex: 1; font-size: 19px; line-height: 28px; }
 .brief-count { font-size: 15px; line-height: 22px; font-weight: 700; }
-.brief-rows { display: grid; gap: 14px; }
+.brief-rows { display: grid; gap: 12px; }
 .brief-rows li { padding: 0; border: 0; }
-.brief-row { display: grid; grid-template-columns: 30px 1fr auto; align-items: center; gap: 12px; min-height: 48px; } /* 시안 행동 항목 318×48, 이모지 30 */
+.brief-row { display: grid; grid-template-columns: 30px 1fr auto; align-items: center; gap: 12px; min-height: 30px; } /* 시안 행동 항목: 이름만 318×30, 요청한 사람까지 318×48 · 이모지 30 */
 .brief-emoji { font-size: 26px; line-height: 30px; text-align: center; }
 .brief-emoji.small { font-size: 24px; line-height: 28px; }
 .brief-copy { display: grid; gap: 2px; min-width: 0; }
