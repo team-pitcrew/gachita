@@ -1114,6 +1114,24 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+  /api/trips/{code}/contents:
+    parameters: [{ $ref: "#/components/parameters/code" }]
+    get:
+      tags: [장면]
+      summary: 이 여행의 콘텐츠 기록(프로필 없는 기기)
+      description: |
+        `GET /profiles/me/trips`의 항목 하나와 같은 모양(`MyTrip`)으로 이 여행의 구성원·장소·경로·콘텐츠를 줍니다(F6, docs/api/places.md). 프로필 토큰이 없는 차량이 콘텐츠 기록(갤러리·타임라인·지도·플레이어)을 그릴 때 씁니다.
+        기록본과 같은 규칙으로 **녹음에 동의한 참가자의 토큰**으로만 읽습니다(없거나 다른 여행의 토큰이면 401, 동의하지 않은 참가자면 403). 영상 파일(`url`)은 지금처럼 전원 동의 규칙을 따릅니다.
+      security: [{ participantToken: [] }]
+      responses:
+        "200":
+          description: 이 여행의 콘텐츠 기록
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MyTrip" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /api/trips/{code}/places:
     parameters: [{ $ref: "#/components/parameters/code" }]
     get:
@@ -2386,13 +2404,37 @@ components:
           type: array
           items:
             type: object
-            required: [id, momentId, title, seconds, at, lat, lng, place, kind, url]
+            required: [id, momentId, title, seconds, at, from, to, lat, lng, place, kind, cast, lines, url]
             properties:
               id: { type: string, format: uuid }
               momentId: { type: string }
               title: { type: string }
               seconds: { type: number }
               at: { type: integer, description: 장면 시각(epoch ms) }
+              from: { type: [integer, "null"], description: 장면 구간 시작(epoch ms). 구간이 없으면 at 앞 20초(F6) }
+              to: { type: [integer, "null"], description: 장면 구간 끝(epoch ms). 구간이 없으면 at 뒤 10초 }
+              cast:
+                type: array
+                description: 장면 구간에서 말한 사람(화자를 확인한 줄만), 처음 말한 순서. 갤러리 타일·플레이어의 캐릭터(F6)
+                items:
+                  type: object
+                  required: [participantId, name, character]
+                  properties:
+                    participantId: { type: string }
+                    name: { type: string }
+                    character: { type: string }
+              lines:
+                type: array
+                maxItems: 30
+                description: 장면 구간의 발화(지금 동의 세대, 시각 순, 30줄까지). 플레이어 자막 줄(F6). 화자를 모르면 participantId·name이 null
+                items:
+                  type: object
+                  required: [at, participantId, name, text]
+                  properties:
+                    at: { type: integer }
+                    participantId: { type: [string, "null"] }
+                    name: { type: [string, "null"] }
+                    text: { type: string, description: 고친 글 → 다시 받아 적은 글 → 원래 글 순 }
               lat: { type: [number, "null"] }
               lng: { type: [number, "null"] }
               place: { type: [string, "null"], description: 그 시각 전에 남은 마지막 장소 이름 }

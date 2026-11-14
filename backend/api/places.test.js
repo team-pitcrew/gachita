@@ -219,10 +219,12 @@ test("내 여행: 내 프로필이 참가한 여행만 최신 순으로, 구성�
   assert.ok(trip.route.every((p, i) => i === 0 || p[2] > trip.route[i - 1][2]));
 
   // 콘텐츠: 완료된 것만, 장면의 제목·좌표·그때의 장소, 시각순
-  assert.deepEqual(trip.contents, [
-    { id: genId, momentId: plain.id, title: "가족 바다 여행", seconds: 8, at: t0 + 10_000, lat: null, lng: null, place: "집", kind: "generated", url: `/api/trips/${first.code}/short-generations/${genId}/file` },
-    { id: assetId, momentId: moment.id, title: "파도 소리", seconds: 12.5, at: t0 + 40_000, lat: 38.19, lng: 128.6, place: "속초 해수욕장", kind: "device", url: `/api/trips/${first.code}/short-assets/${assetId}/file` },
+  assert.deepEqual(trip.contents.map(({ lines, cast, ...c }) => c), [
+    { id: genId, momentId: plain.id, title: "가족 바다 여행", seconds: 8, at: t0 + 10_000, from: t0 - 10_000, to: t0 + 20_000, lat: null, lng: null, place: "집", kind: "generated", url: `/api/trips/${first.code}/short-generations/${genId}/file` },
+    { id: assetId, momentId: moment.id, title: "파도 소리", seconds: 12.5, at: t0 + 40_000, from: t0 + 20_000, to: t0 + 50_000, lat: 38.19, lng: 128.6, place: "속초 해수욕장", kind: "device", url: `/api/trips/${first.code}/short-assets/${assetId}/file` },
   ]);
+  // 장면 구간의 자막 줄은 30줄까지, 말한 사람을 모르면 이름 없이(지어내지 않음)
+  assert.deepEqual(trip.contents.map((c) => [c.lines.length, c.lines[0].text, c.lines[0].name, c.cast]), [[30, "말 0", null, []], [30, "말 200", null, []]]);
 
   // 동의를 철회하면(세대가 오름) 옛 세대의 경로와 콘텐츠는 빠진다
   await call("PATCH", `/trips/${first.code}/participants/${b.id}`, { consent: false });
@@ -237,4 +239,57 @@ test("내 여행은 50개까지", async () => {
   assert.equal(status, 200, JSON.stringify(data));
   assert.equal(data.items.length, 50);
   assert.equal(data.items[0].title, "여행 51");
+});
+
+test("콘텐츠 기록: 장면에서 말한 사람(cast)과 자막 줄, 프로필 없는 기기는 참가자 토큰으로 여행 하나를 같은 모양으로", async () => {
+  const dad = await profile("민준", "glasses");
+  const trip = await newTrip("강릉 가족 여행");
+  const a = await join(trip.code, dad, "ROW_1_LEFT");
+  const son = await join(trip.code, { name: "서준" }, "ROW_2_LEFT");
+  const t0 = trip.createdAt;
+  await call("POST", `/trips/${trip.code}/places`, { kind: "start", name: "집", at: t0 }, a.token);
+  await call("PATCH", `/trips/${trip.code}`, { status: "driving" });
+  const said = { speakerMethod: "device-voice" };
+  const items = [
+    { seq: 1, at: t0 + 1000, text: "바다 언제 보여?", participantId: a.id, ...said, lat: 37.5, lng: 128.9 },
+    { seq: 2, at: t0 + 2000, text: "아빠, 아까부터 바다 보이는데?", participantId: son.id, ...said, lat: 37.6, lng: 128.95 },
+    { seq: 3, at: t0 + 3000, text: "누가 말했는지 모르는 줄", lat: 37.7, lng: 129 },
+    { seq: 4, at: t0 + 60_000, text: "구간 밖", participantId: a.id, ...said },
+  ];
+  assert.equal((await call("POST", `/trips/${trip.code}/utterances`, { device: "car", generation: 1, items }, a.token)).status, 200);
+  const moment = (await call("POST", `/trips/${trip.code}/moments`, { at: t0 + 2000, from: t0 + 500, to: t0 + 5000, label: "아빠보다 빠른 서준의 정답" }, a.token)).data;
+  const assetId = randomUUID();
+  await tripsDb().query(
+    `INSERT INTO short_assets (id, trip_code, participant_id, generation, moment_id, source_hash, idempotency_key, request_hash, sha256, media, object_key, state, attempt, lease_until)
+     VALUES ($1, $2, $3, 1, $4, 'h', 'key-c', 'r', 's', $5, 'kc', 'completed', $6, now() + interval '1 hour')`,
+    [assetId, trip.code, a.id, moment.id, { seconds: 4.5, mimeType: "video/mp4" }, randomUUID()]
+  );
+  await call("PATCH", `/trips/${trip.code}`, { status: "parked" });
+
+  const mine = (await call("GET", "/profiles/me/trips", undefined, dad.token)).data.items[0];
+  const [content] = mine.contents;
+  assert.deepEqual(content.cast, [
+    { participantId: a.id, name: "민준", character: "glasses" },
+    { participantId: son.id, name: "서준", character: "" },
+  ], "말한 순서대로, 화자를 확인한 사람만");
+  assert.deepEqual(content.lines.map((l) => [l.participantId, l.name, l.text]), [
+    [a.id, "민준", "바다 언제 보여?"],
+    [son.id, "서준", "아빠, 아까부터 바다 보이는데?"],
+    [null, null, "누가 말했는지 모르는 줄"],
+  ], "장면 구간 안의 줄만");
+  assert.deepEqual([content.from, content.to, content.place], [t0 + 500, t0 + 5000, "집"]);
+
+  // 차(프로필 토큰 없음): 참가자 토큰으로 이 여행 하나를 같은 모양으로
+  const path = `/trips/${trip.code}/contents`;
+  const one = await call("GET", path, undefined, a.token);
+  assert.equal(one.status, 200);
+  assert.deepEqual(one.data, mine, "내 여행 항목과 같은 모양");
+  assert.equal((await call("GET", path)).status, 401, "토큰 없이는 읽지 못함(장소·경로·자막)");
+  assert.equal((await call("POST", path, {}, a.token)).status, 405);
+  assert.equal((await call("GET", `${path}/x`, undefined, a.token)).status, 404);
+  const quiet = await join(trip.code, { name: "동의 안 함" }, "ROW_2_RIGHT", false);
+  assert.equal((await call("GET", path, undefined, quiet.token)).status, 403, "동의하지 않은 참가자는 읽지 못함");
+  const other = await newTrip("남의 여행");
+  const stranger = await join(other.code, { name: "남" }, "ROW_1_LEFT");
+  assert.equal((await call("GET", path, undefined, stranger.token)).status, 401, "다른 여행의 토큰은 거절");
 });
