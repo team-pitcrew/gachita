@@ -492,10 +492,10 @@ fun FamilyFlow(
                 val adults = others.filter { it.role != "child" }
                 TitleBlock(when { kids.isNotEmpty() -> "${kids.last().name}까지 준비됐어요"; adults.isNotEmpty() -> "${adults.last().name}${if (batchim(adults.last().name)) "이" else "가"} 함께해요"; else -> "우리 가족 추가" },
                     when { kids.isNotEmpty() -> "${(listOf(myName) + adults.map { it.name } + kids.map { it.name }).joinToString(", ")} 준비 완료 / 다음 아이를 추가해 주세요."; adults.isNotEmpty() -> "${adults.last().name} 계정 연결 완료 / 이제 아이를 추가해 주세요."; else -> "기존 계정 연결 또는 아이 프로필 직접 만들기" })
-                // 시안의 '아빠 민준'·'엄마의 계정 초대하기'처럼 호칭이 든 글은 앱에 호칭이 없어 이름·'가족'으로.
+                // 시안의 '아빠 민준'·'엄마의 계정 초대하기'처럼 호칭이 든 글은 아빠·엄마를 고정하지 않는다(11/15 오너 "초대하기로 바꿔"): 이름, 초대는 '초대하기'.
                 Body(side = side.takeIf { others.isEmpty() }) {
                     InfoCard(myName, "내 계정 / 목소리 등록 완료", soft = true, face = charRes(myChar))
-                    CarButton("가족의 계정 초대하기", kind = CarButtonKind.Secondary, enabled = !busy) { act { issue(ensureFamily()) } }
+                    CarButton("초대하기", kind = CarButtonKind.Secondary, enabled = !busy) { act { issue(ensureFamily()) } }
                     CarButton("아이 프로필 만들기", kind = CarButtonKind.Secondary, enabled = !busy) { view = FamilyView.CHILD }
                     InfoCard("가족 그룹은 한 번만", "저장한 구성원과 좌석을 다음 여행에도 사용")
                 }
