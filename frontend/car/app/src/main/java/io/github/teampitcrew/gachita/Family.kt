@@ -250,7 +250,7 @@ private fun tabless(view: FamilyView, guest: Boolean) =
     view == FamilyView.MEMBER || view == FamilyView.CHILD || view == FamilyView.CHILD_VOICE || (!guest && (view == FamilyView.INVITE || view == FamilyView.GROUP_INVITE))
 
 /** 아이 목소리 파형(C12·C42 '파형'): 막대 64개, 폭 칸 나눔·간격 7, 높이 126 안. */
-private const val WAVE_BARS = 64
+private const val CHILD_WAVE_BARS = 64
 
 /** 그룹 카드 모서리(C16A·B·C·G·L, 미니 프로필 2094:5280): 28. 링크 카드(C10 '생성된 딥링크'): 16. CarShape에 아직 없어 여기 둔다. */
 private val GroupShape = RoundedCornerShape(28.dp)
@@ -391,7 +391,7 @@ fun FamilyFlow(server: String, token: String?, onClose: () -> Unit, onStart: (St
                 ctx.checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED -> mic.launch(Manifest.permission.RECORD_AUDIO)
                 else -> {
                     voiceState = "recording"
-                    val meter = VoiceMeter(WAVE_BARS)
+                    val meter = VoiceMeter(CHILD_WAVE_BARS)
                     rec = VoiceRecorder({ sec, level -> meter.add(sec, level); val snap = meter.snapshot(); scope.launch { voiceSec = minOf(15, sec.toInt()); voiceLevels = snap } }) { pcm, failed ->
                         scope.launch {
                             if (failed != null) { voiceState = "failed"; note = failed; return@launch }
@@ -528,7 +528,7 @@ fun FamilyFlow(server: String, token: String?, onClose: () -> Unit, onStart: (St
                         Column(Modifier.padding(28.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
                             Text("아이 목소리  $voiceSec / 15초", style = CarText.Label, color = c.onSurfaceVariant)
                             // 지난 칸·지금 칸은 실제 들어온 소리 크기, 앞으로 칸은 낮은 막대(10).
-                            Waveform(voiceLevels, if (voiceState == "recording") minOf(WAVE_BARS, voiceSec * WAVE_BARS / 15) else if (voiceLevels.isEmpty()) -1 else WAVE_BARS)
+                            Waveform(voiceLevels, if (voiceState == "recording") minOf(CHILD_WAVE_BARS, voiceSec * CHILD_WAVE_BARS / 15) else if (voiceLevels.isEmpty()) -1 else CHILD_WAVE_BARS)
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                 Text("00:${voiceSec.toString().padStart(2, '0')}", style = CarText.Label, color = c.onSurfaceVariant)
                                 Text("00:15", style = CarText.Label, color = c.onSurfaceVariant)
@@ -845,7 +845,7 @@ private fun GuestCard(g: CarGroup) {
 private fun Waveform(levels: DoubleArray, now: Int) {
     val c = MaterialTheme.colorScheme
     Row(Modifier.fillMaxWidth().height(126.dp), horizontalArrangement = Arrangement.spacedBy(7.dp), verticalAlignment = Alignment.CenterVertically) {
-        repeat(WAVE_BARS) { i ->
+        repeat(CHILD_WAVE_BARS) { i ->
             val h = if (i <= now) 10 + 94 * (levels.getOrNull(i) ?: 0.0) else 10.0
             Box(Modifier.weight(1f).height(h.toFloat().dp).background(c.primary, RoundedCornerShape(3.dp)))
         }
