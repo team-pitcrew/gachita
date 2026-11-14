@@ -140,6 +140,40 @@ const call = async (method, path, body, token) => {
 };
 const join = (code, name, seat, consent = true) => call("POST", `/api/trips/${code}/participants`, { name, seat, consent });
 
+test("본인 확인은 동의 전에도 토큰 주체의 네 필드만 주고 기존 인증 경계를 지킵니다(T115)", async () => {
+  const [, profile] = await call("POST", "/api/profiles", { name: "본인 확인" });
+  const [, trip] = await call("POST", "/api/trips", {});
+  const t = `/api/trips/${trip.code}`;
+  const [, guest] = await join(trip.code, "다른 참가자", "ROW_1_LEFT");
+  const [, person] = await call("POST", `${t}/participants`, { seat: "ROW_1_RIGHT", consent: false }, profile.token);
+  const [, before] = await call("GET", t);
+  const res = await fetch(`${base}${t}/me?v=${before.version}`, { headers: { authorization: `Bearer ${person.token}` } });
+  assert.equal(res.status, 200, "동의 전에도 본인을 확인하고 조건부 304를 반환하지 않습니다");
+  assert.equal(res.headers.get("cache-control"), "no-store");
+  assert.deepEqual(await res.json(), { id: person.id, name: person.name, seat: "ROW_1_RIGHT", consent: false }, "프로필ID·토큰·다른 참가자·여행 정보를 섞지 않습니다");
+  assert.deepEqual((await call("GET", t))[1], before, "본인 조회가 동의·상태·토큰·여행 버전을 바꾸지 않습니다");
+  assert.deepEqual((await call("GET", `${t}/me`, null, guest.token))[1], { id: guest.id, name: guest.name, seat: guest.seat, consent: true });
+
+  const [, otherTrip] = await call("POST", "/api/trips", {});
+  const [, outsider] = await join(otherTrip.code, "다른 여행", "ROW_1_LEFT");
+  for (const token of [undefined, "", "bad", "A".repeat(43), profile.token, outsider.token]) {
+    const [status, body] = await call("GET", `${t}/me`, null, token);
+    assert.equal(status, 401, "기존 참가자 토큰 오류 계약을 유지합니다");
+    assert.deepEqual(Object.keys(body).sort(), ["error", "type"]);
+  }
+  for (const method of ["POST", "PATCH", "DELETE"]) assert.equal((await call(method, `${t}/me`, {}, person.token))[0], 405);
+  assert.equal((await call("GET", `${t}/me/other`, null, person.token))[0], 404);
+
+  const [, rotated] = await call("POST", `${t}/participants`, { seat: person.seat }, profile.token);
+  assert.notEqual(rotated.token, person.token);
+  for (const token of [person.token, rotated.token]) assert.equal((await call("GET", `${t}/me`, null, token))[1].id, person.id, "유효한 최근 기기의 토큰도 기존 규칙대로 허용합니다");
+  await call("PATCH", t, { status: "ended" });
+  assert.equal((await call("GET", `${t}/me`, null, rotated.token))[0], 200, "남아 있는 종료 여행의 기록을 이어볼 수 있습니다");
+  await tripsDb().query("DELETE FROM trips WHERE code=$1", [trip.code]);
+  assert.equal((await call("GET", `${t}/me`, null, rotated.token))[0], 404);
+  assert.equal((await call("GET", `${t}/me`))[0], 404);
+});
+
 test("여행 하나의 흐름: 참가, 자리, 동의와 기록, 부탁, 장면", async () => {
   const [created, trip] = await call("POST", "/api/trips", { title: "양양" });
   assert.equal(created, 201);
