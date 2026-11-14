@@ -271,7 +271,7 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
     const kid = s.child;
     const bars = Array.from({ length: 28 }, (_, i) => h("i", { style: `height:${i < (s.voice / 15) * 28 ? 18 + ((i * 37) % 40) : 10}px` }));
     const done = s.voice >= 15;
-    return page(`${kid?.name ?? "아이"}의 목소리 등록`, `“나는 ${kid?.name ?? "아이"}${batchim(kid?.name ?? "아이") ? "이야" : "야"}. 바다에 가서 모래성을 만들 거야.”`, [
+    return page(`${kid?.name ?? "아이"}의 목소리 등록`, `“나는 ${kid?.name ?? "아이"}야. 바다에 가서 모래성을 만들 거야.”`, [
       h("div", { className: "group-card" }, h("small", {}, `아이 목소리  ${s.voice} / 15초`), h("div", { className: "group-wave", "aria-hidden": "true" }, bars), h("small", {}, `00:${String(s.voice).padStart(2, "0")}`)),
       done && h("div", { className: "group-card soft row" }, face(kid), h("div", {}, h("strong", {}, `${kid?.name ?? "아이"}의 프로필 준비 완료`), h("small", {}, "다음 아이도 같은 방법으로 추가할 수 있어요."))),
     ], [button(done ? "가족 그룹에 저장" : "녹음 중…", () => act(async () => { await load(); go("member"); }), "primary", !done || s.busy)]);
