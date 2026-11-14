@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { groupCode, lostSeats, memberHeading, readiness, seatPick, seatTo, swapSeats } from "./groups.js";
+import { groupCode, groupLine, lostSeats, memberHeading, readiness, seatPick, seatRows, seatTo, swapSeats } from "./groups.js";
 
 const O = "https://gachita.mangowhois.ai";
 
@@ -71,4 +71,16 @@ test("앉은 사람을 고른 뒤 자리 없는 사람을 누르면 고른 사�
   }
   // 막는 장치: 저장한 그룹에서 앉아 있던 사람이 자리 없음이 되면 알아낸다
   assert.deepEqual(lostSeats(members, swapSeats(members, "mom", "son")).map((m) => m.name), ["엄마"]);
+});
+
+test("그룹 한 줄과 구성원·저장된 좌석(P16A·P16L)", () => {
+  const family = { kind: "family", members: [
+    { name: "하은", seat: "ROW_2_RIGHT" }, { name: "아빠", seat: "ROW_1_LEFT" }, { name: "이모", seat: null }, { name: "엄마", seat: "ROW_1_RIGHT" },
+  ] };
+  assert.equal(groupLine(family), "4명  |  기본 그룹");
+  assert.deepEqual(seatRows(family.members), [["운전석", "아빠"], ["조수석", "엄마"], ["뒤 오른쪽", "하은"], ["자리 없음", "이모"]], "자리 순서, 자리 없는 사람은 마지막 한 줄");
+  const solo = { kind: "guest", members: [{ name: "민준", seat: "ROW_1_LEFT" }], invite: { code: "TRIP-5812" } };
+  assert.equal(groupLine(solo), "1명  |  초대 대기");
+  assert.equal(groupLine({ ...solo, invite: null }), "1명  |  동승 그룹");
+  assert.equal(groupLine({ ...solo, members: [...solo.members, { name: "지우" }] }), "2명  |  동승 그룹");
 });
