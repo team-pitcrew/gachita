@@ -1007,7 +1007,7 @@ main:has(.bar .big) { padding-bottom: calc(196px + env(safe-area-inset-bottom));
 /* 계정·온보딩(T142, 최종 시안 P01–P08). 카드 24·컨트롤 16, Display 28 / Headline 19 / Label 15 / Caption 13. */
 .onboarding-view { gap: 12px; }
 .ob-title { display: grid; gap: 8px; }
-.ob-title h1 { margin: 0; font-size: 28px; line-height: 38px; letter-spacing: -0.02em; overflow-wrap: anywhere; }
+.ob-title h1 { margin: 0; font-size: 28px; line-height: 38px; letter-spacing: -0.015em; overflow-wrap: anywhere; } /* 시안 Display 28 자간 -1.5% */
 .ob-title .sub { margin: 0; font-size: 15px; font-weight: 500; line-height: 22px; }
 .ob-card { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 0; padding: 16px; border-radius: var(--r-phone-card); background: var(--surface); color: var(--ink); text-align: left; font-weight: 400; }
 .ob-card.soft { background: var(--accent-soft); }
@@ -1026,7 +1026,7 @@ button.ob-card:active { transform: scale(0.99); }
 .ob-field input:not([type="radio"]), .onboarding-view .ob-field input:not([type="radio"]) { padding: 0 15px; border: 0; border-radius: var(--r-phone-card); background: var(--surface-2); font-size: 17px; }
 .ob-field input:not([type="radio"]):focus { outline: 2px solid var(--accent); }
 button.ob-other { justify-self: start; min-height: 40px; font-size: 13px; font-weight: 500; text-decoration: underline; }
-.ob-steps { margin: 0; display: flex; gap: 12px; font-size: 15px; font-weight: 500; color: var(--ink-2); }
+.ob-steps { margin: 0; display: flex; gap: 12px; font-size: 15px; font-weight: 500; line-height: 22px; color: var(--ink-2); }
 .ob-chars legend { margin-bottom: 12px; font-size: 15px; line-height: 22px; font-weight: 500; }
 .ob-chars > div { display: flex; gap: 8px; overflow-x: auto; padding: 14px; border-radius: var(--r-phone-card); background: var(--surface); scrollbar-width: none; }
 .ob-char { position: relative; flex: none; width: 66px; height: 66px; border-radius: var(--r-phone-char); display: grid; place-items: center; cursor: pointer; }
@@ -1045,8 +1045,7 @@ button.ob-other { justify-self: start; min-height: 40px; font-size: 13px; font-w
 .ob-script strong { font-size: 19px; line-height: 28px; letter-spacing: -0.01em; }
 .ob-script span { font-size: 15px; line-height: 22px; font-weight: 500; color: var(--ink-2); }
 .ob-meter { display: grid; gap: 12px; padding: 18px; border-radius: var(--r-phone-card); background: var(--surface); }
-.ob-meter > span { font-size: 15px; line-height: 22px; font-weight: 500; color: var(--ink-2); }
-.ob-meter > span b { font-weight: 500; }
+.ob-meter > span { font-size: 15px; line-height: 22px; font-weight: 500; color: var(--ink-2); white-space: pre-wrap; } /* 시안 '녹음 중  10 / 15초'의 두 칸 띄움 */
 .ob-meter > p { margin: 0; display: flex; justify-content: space-between; font-size: 13px; line-height: 18px; color: var(--ink-2); font-variant-numeric: tabular-nums; } /* 최신 시안 P06·P07 '파형 시간 범위': 왼쪽 지금 · 오른쪽 00:15 */
 .ob-wave { display: flex; align-items: center; justify-content: space-between; height: 72px; } /* 시안 파형 314×72, 막대 36개 5px·반경 3 */
 .ob-wave i { width: 5px; border-radius: 3px; background: var(--line); }
@@ -1063,7 +1062,7 @@ button.ob-other { justify-self: start; min-height: 40px; font-size: 13px; font-w
 .group-content { max-width: 480px; margin: 0 auto; padding: max(20px, env(safe-area-inset-top)) var(--pad) calc(120px + env(safe-area-inset-bottom)); display: grid; align-content: start; gap: 12px; }
 .group-content:has(.group-actions > * + *) { padding-bottom: calc(184px + env(safe-area-inset-bottom)); }
 .group-content .app-bar .brand-home { margin-right: auto; }
-.group-back { min-width: 24px; min-height: 44px; margin-block: -6px; padding: 0 8px 0 0; font-size: 24px; background: none; color: var(--ink-2); }
+.groups-dialog .journey-tabs button { min-height: 40px; } /* 시안 상위 탭 칸 40(탭 묶음 48) */
 .group-content > small { font-size: 15px; line-height: 22px; font-weight: 500; color: var(--ink-2); }
 .group-card { background: var(--surface); border-radius: var(--r-phone-card); padding: 16px; display: grid; gap: 5px; }
 .group-card.soft { background: var(--accent-soft); }
@@ -1074,11 +1073,10 @@ button.ob-other { justify-self: start; min-height: 40px; font-size: 13px; font-w
 .group-card small { font-size: 15px; line-height: 22px; font-weight: 500; color: var(--ink-2); }
 .group-card.center > small, .group-card.center > p { font-size: 17px; line-height: 26px; font-weight: 400; color: var(--ink); }
 /* 초대 화면(P10·P16): '초대 링크' 이름표와 링크 카드는 시안 Body 17 / 22px 굵은 제목, 링크 카드는 반경 16·여백 12/16·간격 8 */
-.group-content > small.group-label { font-size: 17px; line-height: 26px; font-weight: 400; color: var(--ink); }
 .group-card.group-link { border-radius: var(--r-phone-ctl); padding: 12px 16px; gap: 8px; }
 .group-card.group-link strong, .group-card .group-code { font-size: 22px; line-height: 30px; letter-spacing: -0.01em; }
 .group-card.group-link small { font-size: 17px; line-height: 26px; font-weight: 400; color: var(--ink); }
-.group-character { border: 0; font: inherit; color: inherit; width: 100%; padding: 12px; align-items: start; } /* 시안 P11: 이름은 캐릭터 위쪽에 맞춤 */
+.group-card.group-character { border: 0; font: inherit; color: inherit; width: 100%; padding: 12px; align-items: start; } /* 시안 P11: 이름은 캐릭터 위쪽에 맞춤(.group-card.row의 가운데 정렬보다 앞서게) */
 .group-character .group-face { width: 70px; height: 70px; }
 .group-face { width: 44px; height: 44px; border-radius: 50%; overflow: hidden; display: inline-grid; place-items: center; }
 .group-face img { width: 100%; height: 100%; object-fit: contain; }
@@ -1090,11 +1088,12 @@ button.ob-other { justify-self: start; min-height: 40px; font-size: 13px; font-w
 .group-qr { width: 158px; height: 158px; background: #fff; }
 .group-qr path { fill: #111; }
 .group-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.group-invite { display: grid; gap: 16px; }
+.group-invite.adding { gap: 8px; } /* 시안 P10 본문 간격 8 */
+.group-join { display: grid; gap: 10px; }
+.group-join > small.group-label { font-size: 17px; line-height: 26px; font-weight: 400; color: var(--ink); }
 .group-content .group-input { box-sizing: border-box; width: 100%; min-height: 56px; padding: 0 15px; border: 0; border-radius: var(--r-phone-card); background: var(--surface-2); color: var(--ink); font: inherit; font-size: 17px; }
-.group-check { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; line-height: 18px; color: var(--ink-2); }
-.group-check input { flex: none; width: 18px; height: 18px; min-height: 0; margin: 0; accent-color: var(--accent-fill); } /* 전역 입력 높이(56)를 받지 않게 */
 .group-toast { position: fixed; left: 50%; bottom: calc(96px + env(safe-area-inset-bottom)); transform: translateX(-50%); width: min(350px, calc(100vw - 40px)); box-sizing: border-box; margin: 0; padding: 24px 28px; border-radius: var(--r-phone-card); background: var(--accent-soft); color: var(--ink); font-size: 22px; line-height: 30px; font-weight: 700; letter-spacing: -0.01em; z-index: 2; } /* 시안 2047:2313 '복사했어요' 350×78 */
-.group-clock { font-size: 13px; line-height: 18px; font-weight: 400; color: var(--ink-2); font-variant-numeric: tabular-nums; }
 .group-content .meta { font-size: 13px; line-height: 18px; }
 .group-ready { font-size: 13px; line-height: 18px; color: var(--accent); }
 .group-seats .seat { border: 0; font: inherit; color: inherit; }
@@ -1109,10 +1108,12 @@ button.ob-other { justify-self: start; min-height: 40px; font-size: 13px; font-w
 /* 그룹 상세·좌석 배정·구성원 선택·전체 그룹(P16A·B·C·G·L) */
 .group-faces { display: grid; grid-template-columns: 28px 28px; gap: 4px; padding: 6px; border-radius: var(--r-phone-ctl); background: var(--surface-2); } /* 'Group / 2x2 profile / Phone' 2094:4300 */
 .group-faces .group-face, .group-slot { width: 28px; height: 28px; }
-.group-slot { box-sizing: border-box; border: 2px dashed var(--line); border-radius: 50%; } /* 미등록(폰 28px 칸엔 글이 들어가지 않아 점선만) */
-.group-slot.inviting { border-color: var(--accent); } /* 초대 중 */
+.group-slot { box-sizing: border-box; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 8px; font-size: 6.5px; line-height: 9px; color: var(--ink-2); white-space: nowrap; } /* 미등록 칸(시안 'Group / 2x2 / inviting / Phone' 2101:4928: 선 1·반경 8·6.5px 글자) */
+.group-slot.inviting { border-color: var(--accent-fill); color: var(--accent-fill); } /* 초대 중(시안 color/accent) */
+.group-faces.labeled { border-radius: var(--r-card); } /* 시안 P10 배지 반경 14 */
 .group-face.big { width: 68px; height: 68px; }
 .group-pick, .group-member { border: 0; font: inherit; color: inherit; width: 100%; }
+.group-card.group-pick, .group-card.group-head, .group-card.group-rows, .group-card.group-target, .group-card.group-member, .group-card.group-solo, .group-assign, .group-assign .seat { border-radius: var(--r-phone-panel); } /* 시안 P16·P16A·B·C·G·L 카드 반경 20 */
 .group-card.group-pick > div { gap: 4px; }
 .group-pick strong, .group-head strong, .group-solo strong { font-size: 22px; line-height: 30px; }
 .group-pick.solo strong { font-size: 19px; line-height: 28px; }
@@ -1137,7 +1138,7 @@ button.ob-other { justify-self: start; min-height: 40px; font-size: 13px; font-w
 .group-assign .seat > :first-child { order: -2; }
 .group-assign .seat small { order: -1; } /* 시안: 캐릭터 · 자리 · 이름 */
 .group-content .group-hint { text-align: center; }
-.group-content .ob-title.group-aside { display: grid; grid-template-columns: 1fr auto; column-gap: 16px; align-items: center; } /* 시안 P10: 제목 옆 2x2 배지 */
+.group-content .ob-title.group-aside { display: grid; grid-template-columns: 1fr auto; column-gap: 16px; row-gap: 6px; align-items: center; align-content: center; } /* 시안 P10: 제목 옆 2x2 배지, 제목–부제 6 */
 .group-content .ob-title.group-aside > .group-faces { grid-column: 2; grid-row: 1 / span 2; }
 .group-share-row > *, .group-share > .group-ghost { min-height: 48px; padding: 0; border-radius: var(--r-phone-ctl); background: var(--surface-2); color: var(--ink); font: inherit; font-size: 19px; line-height: 28px; font-weight: 700; letter-spacing: -0.01em; border: 0; display: grid; place-items: center; text-decoration: none; }
 /* v2 도착 브리핑(P19·P20·finalBrief, T141): 분류별 행동 항목. 'Briefing / action item / Phone'(2056:2246) */
