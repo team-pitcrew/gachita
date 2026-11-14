@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 콘텐츠 기록 도식 지도 바탕(피그마 v2 D29 '지도 / 강릉 여행 경로 개략도'의 도로·바다, 실제 지형 아님). 기록 좌표가 번들 실제 지도(content_map_gangneung) 밖일 때만 쓴다.
+     초록 길은 그리지 않는다 — 화면이 이 여행에서 기록한 좌표로 그린다. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="1546dp" android:height="380dp" android:viewportWidth="1546" android:viewportHeight="380">
+  <path android:strokeColor="#B9B2A5" android:strokeWidth="7.38889"
+      android:pathData="M245.222,306.111L571.987,263.632M571.987,263.632L884.502,223.005M571.987,263.632L484.377,126.503M571.987,263.632L646.333,380M884.502,223.005L908.714,219.857M884.502,223.005L879.742,213.483M884.502,223.005L963,380M908.714,219.857L1300.78,168.889M908.714,219.857L879.742,213.483M908.714,219.857L1300.78,306.111M403.556,0L484.377,126.503M484.377,126.503L245.222,73.8889M484.377,126.503L879.742,213.483M773,0L879.742,213.483" />
+  <path android:fillColor="#91BFCE" android:fillAlpha="0.5"
+      android:pathData="M1163.56,0C1100.22,137.222 1258.56,147.778 1226.89,380H1300.78V0H1163.56Z" />
+</vector>

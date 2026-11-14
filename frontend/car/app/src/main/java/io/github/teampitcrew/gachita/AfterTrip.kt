@@ -6,6 +6,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
@@ -300,7 +301,7 @@ internal fun AfterTrip(trip: Trip, lines: List<AfterLine>, base: String, token: 
             AfterStep.UPLOAD -> "오늘의 주행을 기록했어요" to (if (trip.status == "ended") "여행을 마쳤어요" else "주차 후 여행 마무리")
             AfterStep.SELECT -> "남기고 싶은 순간을 골라요" to (if (picks.isEmpty()) "아직 추천할 장면을 찾지 못했어요" else "받아 적은 대화에서 찾은 추천 장면 ${picks.size}개")
             AfterStep.MAKE -> "우리의 콘텐츠를 만들어요" to "선택한 장면에 캐릭터와 자막을 입히는 중"
-            AfterStep.DONE -> "우리의 순간이 완성됐어요" to "선택한 장면을 콘텐츠 기록에 저장했어요."
+            AfterStep.DONE -> (running?.items?.count { it.phase == Phase.DONE }?.takeIf { it > 0 }?.let { "${it}개의 순간이 완성됐어요" } ?: "우리의 순간이 완성됐어요") to "선택한 장면을 콘텐츠 기록에 저장했어요."
         }
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(title, fontSize = 40.sp, lineHeight = 52.sp, fontWeight = FontWeight.Bold)
@@ -330,11 +331,12 @@ internal fun AfterTrip(trip: Trip, lines: List<AfterLine>, base: String, token: 
                     }
                     if (picks.isEmpty()) Text("대화가 더 쌓이면 다시 찾아요.", fontSize = 24.sp, color = c.onSurfaceVariant)
                 }
-                AfterStep.MAKE, AfterStep.DONE -> {
+                AfterStep.DONE -> DoneCovers(trip, running, lines)
+                AfterStep.MAKE -> {
                     val r = running
                     Split(trip) {
                         if (r == null) Text("만들 장면이 없어요.", fontSize = 24.sp)
-                        else if (step == AfterStep.MAKE) {
+                        else {
                             val ready = r.items.count { it.phase >= Phase.RENDER && it.phase != Phase.FAILED }
                             val now2 = r.items.firstOrNull { it.phase in Phase.MOMENT..Phase.SAVE }
                             val overall = r.items.sumOf { phaseProgress(it.phase, it.render).toDouble() }.toFloat() / r.items.size
@@ -348,20 +350,6 @@ internal fun AfterTrip(trip: Trip, lines: List<AfterLine>, base: String, token: 
                                 })
                             WaveCard("콘텐츠 생성 중  ${(overall * 100).toInt()}%", bars, overall, seconds)
                             Text("다른 탭으로 가도 이 차에서 계속 만들어요. 앱을 닫거나 주행을 시작하면 멈춰요.", fontSize = 24.sp, color = c.onSurfaceVariant)
-                        } else {
-                            r.items.forEachIndexed { i, item ->
-                                Surface(shape = RoundedCornerShape(32.dp), color = if (i % 2 == 0) c.secondaryContainer else c.surfaceVariant, modifier = Modifier.fillMaxWidth()) {
-                                    Row(Modifier.padding(24.dp), horizontalArrangement = Arrangement.spacedBy(20.dp), verticalAlignment = Alignment.CenterVertically) {
-                                        val who = trip.people.firstOrNull { it.id == item.pick.speakerId }
-                                        Character(who?.let(::seatCharacter) ?: i, 88.dp)
-                                        Column {
-                                            Text(item.pick.title, fontSize = 32.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                            Text(if (item.phase == Phase.DONE) "${item.seconds.toInt()}초 / 캐릭터 자막형" else "만들지 못했어요 · ${item.error}", fontSize = 24.sp, color = c.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                        }
-                                    }
-                                }
-                            }
-                            Text("같은 계정의 폰에서도 바로 볼 수 있어요.", fontSize = 24.sp, color = c.onSurfaceVariant)
                         }
                     }
                 }
@@ -485,4 +473,30 @@ internal fun afterLines(context: Context, trip: Trip, server: List<TranscriptLin
         .map { u -> AfterLine(u.seq, u.startedAt, u.text, u.seatZone?.toString(), heard[u.startedAt], u.lat, u.lng) }
     if (local.size >= 4) return local.sortedBy { it.at }
     return server.filter { it.text.isNotBlank() }.sortedBy { it.at }.mapIndexed { i, l -> AfterLine(i + 1L, l.at, l.text, l.participantId, l.participantId) }
+}
+
+/**
+ * D26 완성(최종 시안 v3 2007:2687): 만든 장면마다 숏폼 표지(Contents.kt ContentCover, 400×550)와 두 줄 제목을 가운데 한 줄로.
+ * 표지의 캐릭터는 그 장면 구간에서 말한 사람(받아 적은 줄의 화자), 따옴표 줄은 장면 대표 말(pick.quote). 만들지 못한 장면은 이유를 적는다.
+ */
+@Composable
+private fun DoneCovers(trip: Trip, r: AfterRun?, lines: List<AfterLine>) {
+    val c = MaterialTheme.colorScheme
+    if (r == null) { Text("만들 장면이 없어요.", fontSize = 24.sp); return }
+    val tones = listOf(c.inverseSurface, c.surfaceBright)
+    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(24.dp, Alignment.CenterHorizontally)) {
+        r.items.forEachIndexed { i, item ->
+            val p = item.pick
+            val speakers = lines.filter { it.at in p.from..p.to }.mapNotNull { it.person }.distinct()
+                .mapNotNull { id -> trip.people.firstOrNull { it.id == id } }.take(2).map { ContentPerson(it.id, it.name, "", it.seat) }
+            val who = trip.people.firstOrNull { it.id == p.speakerId }?.name
+            // mock: 표지 아래 한 줄('서준의 한마디에 모두 웃음')은 원천이 없어 말한 사람으로 만든다(Contents.kt coverOf와 같음).
+            val cover = CoverData(contentCoverDate(p.at), trip.title, p.quote.ifBlank { p.title }, speakers, who?.let { "${it}의 한마디" } ?: trip.title, item.seconds)
+            Column(Modifier.width(400.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                ContentCover(cover, tones[i % 2], 400.dp)
+                Text(contentTwoLines(p.title), fontSize = 32.sp, lineHeight = 42.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                if (item.phase != Phase.DONE) Text("만들지 못했어요 · ${item.error}", fontSize = 24.sp, color = c.onSurfaceVariant, maxLines = 2)
+            }
+        }
+    }
 }
