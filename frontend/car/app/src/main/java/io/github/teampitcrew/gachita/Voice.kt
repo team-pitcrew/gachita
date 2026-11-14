@@ -196,6 +196,23 @@ class VoicePrints(dir: File, val trip: String, private val seal: Seal, now: Long
         tmp.writeText(seal.line(o.toString())); tmp.renameTo(file)
     }
 
+    /**
+     * 대조 전에 부른다(통신 스레드): 보관 시간이 지난 사본은 지우고, 다시 받아야 하면 fetch로 받아 바꾼다.
+     * 서버에 닿지 않으면(IOException) 보관 시간 안의 사본으로 계속한다 — 사본이 없을 때만 던져 이번 대조를 미룬다.
+     * 서버가 거절하면(동의 대기 403, 옛 서버 404) 그대로 던진다. 새로 받았으면 true.
+     */
+    fun refresh(now: Long, generation: Int, fetch: () -> JSONObject): Boolean {
+        expire(now)
+        if (!stale(now)) return false
+        try {
+            put(fetch(), now); see(generation)
+            return true
+        } catch (e: java.io.IOException) {
+            if (size == 0) throw e
+            return false
+        }
+    }
+
     /** 지금 동의 세대. 사본의 세대와 다르면 지운다(철회 전의 값으로 대조하지 않게). */
     @Synchronized fun see(g: Int) {
         if (generation == 0 || generation == g) return // 받은 것이 없거나 같은 세대
@@ -215,6 +232,16 @@ class VoicePrints(dir: File, val trip: String, private val seal: Seal, now: Long
         return Speaker(best.takeIf { bestSim >= threshold }, Math.round(bestSim * 1000) / 1000.0)
     }
 }
+
+const val CONSENT_FRESH_MS = 5 * 60_000L // 끊긴 동안에는 마지막으로 동의를 확인한 뒤 이 시간까지만 차 안 대조를 잇는다(ADR-0007의 5분)
+
+/**
+ * 말한 사람 한 차례(통신 스레드). 차 안 대조(match)는 통신이 필요 없으니 먼저 하고, 서버에 보내는 일(사람이 고친 것 fixes,
+ * 찾은 화자 send)이 실패해도 대조를 막지 않는다 — 보내지 못한 것은 재전송 대기로 남아 다음 차례에 간다.
+ * 셋을 모두 해 보고 첫 실패를 돌려준다(없으면 null).
+ */
+fun speakerRound(match: () -> Unit, fixes: () -> Unit, send: () -> Unit): Throwable? =
+    listOf(match, fixes, send).mapNotNull { runCatching(it).exceptionOrNull() }.firstOrNull()
 
 const val SPEAKER_BATCH = 100 // 화자를 다시 올리는 한 묶음. 서버는 한 번에 500건까지 받는다
 

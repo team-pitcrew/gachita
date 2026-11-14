@@ -135,4 +135,24 @@ class VoiceTest {
         assertEquals(setOf(n.toLong()), sp.unsentMatches().keys) // 서버가 받지 않은 발화의 것은 받은 뒤에 보낸다
         assertTrue(sent.all { it <= 500 })
     }
+
+    @Test fun `끊겨도 보관 시간 안의 사본으로 대조하고 보내기 실패는 대조를 막지 않는다`() {
+        val low = vector(cases[0])
+        val vp = VoicePrints(tmp.root, "ABC123", TEST_SEAL, now = 1_000)
+        val down = { throw java.io.IOException("끊김") }
+        assertTrue("사본이 없으면 대조를 미룸", runCatching { vp.refresh(1_000, 1, down) }.exceptionOrNull() is java.io.IOException)
+        assertTrue(vp.refresh(1_000, 1) { prints(1, "dad" to low) })
+        var asked = 0
+        assertFalse("보관 시간 안에는 서버에 묻지 않음", vp.refresh(2_000, 1) { asked++; prints(1) }); assertEquals(0, asked)
+        vp.fetchedAt = 0 // 다시 받으라는 표시(탑승자가 바뀜) 뒤 끊김: 가진 사본으로 계속
+        assertFalse(vp.refresh(3_000, 1, down)); assertEquals("dad", vp.match(low, listOf("dad")).who)
+        assertTrue("서버의 거절은 그대로 던짐", runCatching { vp.refresh(3_000, 1) { throw ApiError(403, "동의 대기") } }.exceptionOrNull() is ApiError)
+        assertTrue("보관 시간이 지나면 끊긴 동안에는 대조하지 않음", runCatching { vp.refresh(1_000 + PRINTS_KEEP_MS, 1, down) }.isFailure); assertEquals(0, vp.size)
+
+        // 한 차례: 고친 화자 보내기가 실패해도 차 안 대조와 화자 올리기 시도는 그대로 한다
+        val ran = mutableListOf<String>()
+        val failed = speakerRound(match = { ran += "match" }, fixes = { ran += "fixes"; throw java.io.IOException("끊김") }, send = { ran += "send" })
+        assertEquals(listOf("match", "fixes", "send"), ran); assertTrue(failed is java.io.IOException)
+        assertNull(speakerRound({}, {}, {}))
+    }
 }

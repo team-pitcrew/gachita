@@ -193,6 +193,7 @@ class MainActivity : ComponentActivity() {
     private var speakers: Speakers? = null // 지금 여행의 발화별 말한 사람(T37)
     private var prints: VoicePrints? = null // 지금 여행 탑승자의 목소리 대조 값 사본(ADR-0023)
     private var printsFor = "" // 사본을 받을 때의 탑승자와 동의
+    private var consentSeenAt = 0L // 서버에서 여행(동의)을 마지막으로 확인한 시각
     private var matching = false // 대조·고침 보내기가 clipIo에 있음
     private var heardTick by mutableStateOf(0) // 말한 사람이 바뀌면 받아 적은 말 카드를 다시 그린다
     /** 이 차에서 목소리를 등록한 참가자. 그 사람의 동의가 꺼지면 서버가 등록값을 지우므로 여기서도 뺀다(#65). */
@@ -476,12 +477,18 @@ class MainActivity : ComponentActivity() {
                 val wasWithdrawing = s.offPending
                 s = (if (got == null) s.copy(online = true) else s.withTrip(keep(got))).polled()
                 if (wasWithdrawing && !s.offPending) s = s.copy(note = "동의를 철회했어요. 다시 녹음하려면 각자의 동의와 녹음 시작이 필요해요")
+                consentSeenAt = System.currentTimeMillis()
                 upload(t, resync, prune) // 받은 여행의 동의 세대를 보관함에 반영한(철회면 글을 지운) 뒤에만 올린다
                 speakers(t) // 올릴 새 발화가 없어도 밀린 대조와 고침을 잇는다
                 s.trip?.let(::clips)
                 loadTodos()
             }
-                .onFailure { if (it is Gone) forget(t.code) else s = s.pollFailed(it) } // 조회를 못 하면 이번에는 올리지 않는다
+                .onFailure {
+                    if (it is Gone) forget(t.code) else s = s.pollFailed(it) // 조회를 못 하면 이번에는 올리지 않는다
+                    // 서버에 닿지 않아도(끊김) 차 안 대조는 잇는다: 마지막으로 동의를 확인한 지 5분 안이고 그때 모두 동의였을 때만.
+                    // 서버가 거절한 것(ApiError)은 동의·권한이 달라졌을 수 있어 잇지 않는다
+                    if (it !is ApiError && it !is Gone && System.currentTimeMillis() - consentSeenAt < CONSENT_FRESH_MS && s.trip?.code == t.code) speakers(t)
+                }
         }
     }
 
@@ -525,16 +532,17 @@ class MainActivity : ComponentActivity() {
         matching = true
         val url = server; val dev = device
         if (!clipIo.isShutdown) clipIo.execute {
-            val r = runCatching {
-                val api = Server(url)
-                for ((seq, f) in sp.unsent()) { api.fixSpeaker(t.code, up, dev, seq, f.who); sp.set(seq, f.copy(sent = true)) }
-                if (todo.isNotEmpty()) { refreshPrints(api, t, up, vp); match(t, todo, sp, vp) }
+            val api = Server(url)
+            // 대조는 차 안에서 끝나므로 먼저 하고, 보내기(고친 것, 찾은 화자)가 실패해도 대조를 막지 않는다(끊긴 동안에도 사본으로 대조)
+            val failed = speakerRound(
+                match = { if (todo.isNotEmpty()) { refreshPrints(api, t, up, vp); match(t, todo, sp, vp) } },
+                fixes = { for ((seq, f) in sp.unsent()) { api.fixSpeaker(t.code, up, dev, seq, f.who); sp.set(seq, f.copy(sent = true)) } },
                 // 찾은 사람을 그 발화와 함께 다시 올린다. 서버는 화자가 빈 줄에만 채운다(사람이 고친 줄은 그대로)
-                sendSpeakers(box, sp, { clipsAllowed }) { items -> api.utterances(t.code, up, dev, items) }
-            }
+                send = { sendSpeakers(box, sp, { clipsAllowed }) { items -> api.utterances(t.code, up, dev, items) } },
+            )
             main.post {
                 matching = false; heardTick++
-                r.exceptionOrNull()?.let { Log.i(TAG, "말한 사람 대조·남기기 미룸 ${if (it is ApiError) it.status else "연결"}") }
+                failed?.let { Log.i(TAG, "말한 사람 대조·남기기 미룸 ${if (it is ApiError) it.status else "연결"}") }
             }
         }
     }
@@ -545,15 +553,8 @@ class MainActivity : ComponentActivity() {
      * 서버가 거절하면(동의 대기 403, 옛 서버 404) 던져서 이번 차례의 대조를 미룬다. 소리를 서버로 보내는 옛 대조로 돌아가지 않는다.
      */
     private fun refreshPrints(api: Server, t: Trip, token: String, vp: VoicePrints) {
-        val now = System.currentTimeMillis()
-        vp.expire(now)
-        if (!vp.stale(now)) return
-        try {
-            vp.put(api.voicePrints(t.code, token), now); vp.see(t.generation)
+        if (vp.refresh(System.currentTimeMillis(), t.generation) { api.voicePrints(t.code, token) })
             Log.i("GachitaCapture", "대조 값 ${vp.size}명 받음") // 값·이름은 남기지 않는다
-        } catch (e: java.io.IOException) {
-            if (vp.size == 0) throw e
-        }
     }
 
     /** 명시한 디버그 시험 기간이 지난 여행만 정리한다. 운영 기본값에서는 호출하지 않는다. */
