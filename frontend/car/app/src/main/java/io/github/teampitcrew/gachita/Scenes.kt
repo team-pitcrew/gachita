@@ -49,3 +49,32 @@ fun suggestScenes(lines: List<SceneLine>, moments: List<Moment>): List<SceneCand
         SceneCandidate(lines[w.i].at, w.from, w.to, why, w.score, inside.take(SCENE_MAX_LINES), here?.lat, here?.lng)
     }
 }
+
+/** 자막 큐 입력 한 줄. text는 Pleos 원문(길이 어림에 씀), shown은 보일 글(수동 수정 → 재전사 → 원문). endAt은 실제 끝 시각(있으면). */
+data class CueLine(val seq: Long, val at: Long, val text: String, val shown: String = text, val endAt: Long? = null)
+data class CueTiming(val seq: Long, val start: Double, val end: Double, val text: String)
+
+/**
+ * 숏폼 자막 큐를 차 안에서(T144). 서버 scenes.js의 cues와 같은 규칙이고 두 구현은 backend/api/cue-vectors.json으로 맞춘다(ScenesTest.kt).
+ * 클립 구간(startAt부터 seconds초) 안의 발화(시각 순)를 클립 처음부터의 초로. 끝 시각이 있으면 그것(겹침 보존), 없으면 원문 코드포인트 수 × 0.15초
+ * (1~6초)를 다음 발화에서 자르되 1초는 남긴다. 클립보다 먼저 시작했어도 실제 구간이 겹치면 넣는다(끝 시각은 10초까지라 10초 앞부터 본다).
+ */
+fun cuesOf(lines: List<CueLine>, startAt: Long, seconds: Double): List<CueTiming> {
+    val end = startAt + seconds * 1000
+    var lo = 0
+    var hi = lines.size
+    while (lo < hi) { val mid = (lo + hi) ushr 1; if (lines[mid].at < startAt - 10_000) lo = mid + 1 else hi = mid }
+    val inside = ArrayList<CueLine>()
+    for (k in lo until lines.size) {
+        val u = lines[k]
+        if (u.at >= end) break
+        if (u.at >= startAt || (u.endAt ?: Long.MIN_VALUE) > startAt) inside += u
+    }
+    fun sec(ms: Double) = Math.round(ms) / 1000.0
+    return inside.mapIndexed { i, u ->
+        val guess = u.at + minOf(6000, maxOf(1000, u.text.codePointCount(0, u.text.length) * 150)).toDouble()
+        val stop = if (u.endAt != null) minOf(end, u.endAt.toDouble())
+            else minOf(end, maxOf(u.at + 1000.0, minOf(guess, inside.getOrNull(i + 1)?.at?.toDouble() ?: end)))
+        CueTiming(u.seq, sec(maxOf(0.0, (u.at - startAt).toDouble())), sec(stop - startAt), u.shown)
+    }
+}
