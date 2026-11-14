@@ -22,6 +22,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.ColumnScope
@@ -58,6 +59,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
@@ -401,19 +404,27 @@ class MainActivity : ComponentActivity() {
                 Surface(if (w > 0) Modifier.fillMaxHeight().width(w.dp) else Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     // mock: --es f4 …이면 저장된 여행 대신 시안의 '강릉 가족 여행'(F4Mock)을 띄운다(디버그 빌드)
                     val t = f4Mock?.let { Trip("F4DEMO", "강릉 가족 여행", "driving", F4Mock.people, 0, 1) } ?: s.trip
-                    when {
-                        // 여행 중 프로필 메뉴의 '현재 동승 그룹'(동승 그룹 변경, 2200:5862)도 가족 흐름(C16 groups)으로 연다. 주차 중에만
-                        familyOpen && !carStatus.restricted -> Box(Modifier.fillMaxSize()) {
-                            // 그룹 화면의 '내 얼굴' 메뉴(2200:5852): 갤러리 바로가기 → 여행 화면 콘텐츠 기록(C33), 로그아웃 → 확인(2220:5864) → C01
-                            FamilyFlow(server, profileToken ?: onboarding.token, onClose = { familyOpen = false }, onStart = ::startGroupTrip,
-                                face = charDrawable(onboarding.character), name = onboarding.name,
-                                onGallery = { familyOpen = false; destination = Destination.SHORTS }, onLogout = { logoutAsk = true })
+                    // 오른쪽 위 '내 얼굴'은 모든 화면에 하나(TripHeader). 로그인 뒤에는 프로필 메뉴, 로그인 전에는 기본 캐릭터 얼굴 → 로그인 / 계정 만들기(C02)
+                    val signedIn = (profileToken ?: onboarding.token) != null
+                    val me = Me(if (signedIn) charDrawable(onboarding.character) else R.drawable.char_basic) { shell, face ->
+                        if (signedIn) { menuShell = shell; menuFace = face; profileMenu = true }
+                        else { familyOpen = false; if (!onboarding.showing) onboarding.reopen(); onboarding.go(OnboardStep.SIGNUP) }
+                    }
+                    BackHandler(profileMenu || logoutAsk) { profileMenu = false; logoutAsk = false }
+                    CompositionLocalProvider(LocalMe provides me) {
+                        Box(Modifier.fillMaxSize()) {
+                            when {
+                                // 프로필 메뉴의 '동승 그룹 변경'·'좌석 배정'도 가족 흐름(C16 groups·C16B)으로 연다. 주차 중에만
+                                familyOpen && !carStatus.restricted -> FamilyFlow(server, profileToken ?: onboarding.token, onClose = { familyOpen = false },
+                                    onStart = ::startGroupTrip, jump = familyJump, onJumped = { familyJump = null })
+                                t != null -> TripScreen(t)
+                                carStatus.restricted -> SetupLocked()
+                                onboarding.showing -> OnboardingScreen(onboarding, carStatus.gear) { familyOpen = true } // C08 '가족 그룹 만들기' → 가족 흐름(F2)
+                                else -> Setup()
+                            }
+                            if (profileMenu) MenuOverlay(t)
                             if (logoutAsk) LogoutConfirm(onCancel = { logoutAsk = false }, onLogout = { logoutAsk = false; familyOpen = false; logout() })
                         }
-                        t != null -> TripScreen(t)
-                        carStatus.restricted -> SetupLocked()
-                        onboarding.showing -> OnboardingScreen(onboarding, carStatus.gear) { familyOpen = true } // C08 '가족 그룹 만들기' → 가족 흐름(F2)
-                        else -> Setup()
                     }
                 }
             }
@@ -1668,7 +1679,7 @@ class MainActivity : ComponentActivity() {
     private fun Setup() {
         val c = MaterialTheme.colorScheme
         Column(Modifier.fillMaxSize().padding(32.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
-            AppBar(TITLE, listening = false, *pills(online = null))
+            TripHeader(Shell.PARKED, carStatus.gear, online = true, listening = false)
             Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 OutlinedButton(onClick = { onboarding.reopen() }, shape = RoundedCornerShape(10.dp)) { Text("계정·목소리 등록", fontSize = 24.sp) }
                 OutlinedButton(onClick = { familyOpen = true }, shape = RoundedCornerShape(10.dp)) { Text("우리 가족", fontSize = 24.sp) }
@@ -1711,23 +1722,20 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun SetupLocked() {
         Column(Modifier.fillMaxSize().padding(32.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
-            AppBar(TITLE, listening = false)
+            TripHeader(Shell.RIDE, carStatus.gear, online = true, listening = false, chip = false)
             Spacer(Modifier.height(8.dp))
             Text("누구랑 같이 타나요?", fontSize = 40.sp, fontWeight = FontWeight.Bold)
             Card { Text("주차(P)한 뒤 여행을 만들 수 있어요", fontSize = 30.sp, fontWeight = FontWeight.Bold) }
         }
     }
 
-    /** 머리 줄 알약: 주차 중이면 기어(C5·C6), 여행 중이면 서버 연결(C1). 주행 중 기어는 Pleos 주행 화면이 보인다. */
-    private fun pills(online: Boolean?): Array<Pair<String, Boolean>> = listOfNotNull(
-        carStatus.gear?.takeIf { !carStatus.restricted }?.let { "주차 중 · $it" to true },
-        online?.let { if (it) "서버 연결됨" to true else "연결 끊김" to false },
-    ).toTypedArray()
-
     // 녹음 시계(A D17–D20 '00:12:48'): 실제로 받아 적는 동안만 흐르고 멈추면 그 자리에 선다. 여행마다 prefs "recClock"({여행}:{ms}) 하나에 남긴다
     private var recordedMs by mutableLongStateOf(0L)
     private var recordedTrip: String? = null
-    private var profileMenu by mutableStateOf(false) // 머리 줄 '내 얼굴' 프로필 메뉴(2200:5852)
+    private var profileMenu by mutableStateOf(false) // 머리 줄 '내 얼굴' 프로필 메뉴(2200:5852 · 2257:5780)
+    private var menuShell by mutableStateOf(Shell.RIDE) // 메뉴를 연 머리 줄의 틀(자리·좁은/넓은 메뉴)
+    private var menuFace by mutableIntStateOf(R.drawable.char_basic)
+    private var familyJump by mutableStateOf<FamilyJump?>(null) // 메뉴 → 가족 흐름 C16 groups·C16B
     private var logoutAsk by mutableStateOf(false) // 로그아웃 확인(2220:5864)
     // 그룹 여행 참가자의 프로필 캐릭터(참가자 id → 'glasses' 등). 여행 문서에는 없어 콘텐츠 기록의 members에서 한 번 받는다
     private var memberChars by mutableStateOf(emptyMap<String, String>())
@@ -1742,7 +1750,6 @@ class MainActivity : ComponentActivity() {
         BackHandler(boarding.page != BoardingPage.HIDDEN) {
             if (boarding.page == BoardingPage.PEOPLE) closeBoarding() else openBoarding()
         }
-        BackHandler(profileMenu || logoutAsk) { profileMenu = false; logoutAsk = false }
         val mockDriving = f4Mock in MOCK_DRIVING // mock: 주행 시연은 주행 중 모양, 시연 여행은 서버에 없어 머리 줄은 '연결됨'으로 둔다
         val parked = !carStatus.restricted && !mockDriving
         val scope = contentScope()
@@ -1783,14 +1790,13 @@ class MainActivity : ComponentActivity() {
         // C17 계열(기록 중인 함께 타는 중)은 머리 줄에 '연결됨'이 없다. 대화 기록(C44)·끝난 여행(2026:2410)·기록 전에는 있다
         val recordingView = destination == Destination.RIDE && b == null && boarding.page == BoardingPage.HIDDEN && !takeover() &&
             (mockDriving || s.recording && t.status != "ended")
-        val me = mePerson(t.people)
-        val myFace = me?.takeIf { it.character.isNotBlank() }?.let(::faceRes) ?: charDrawable(onboarding.character)
+        // 여행 화면의 '내 얼굴'은 이 여행에서 내 자리 캐릭터(없으면 계정 캐릭터)
+        val myFace = mePerson(t.people)?.takeIf { it.character.isNotBlank() }?.let(::faceRes) ?: charDrawable(onboarding.character)
+        CompositionLocalProvider(LocalMe provides Me(myFace, LocalMe.current.open)) {
         Box(Modifier.fillMaxSize()) {
             Column(Modifier.fillMaxSize().padding(horizontal = shell.padH, vertical = shell.padV), verticalArrangement = Arrangement.spacedBy(shell.gap)) {
-                // '내 얼굴'은 여행 화면 머리 줄 오른쪽 위에 늘 있다(11/15 오너 "우상단에 프로필 UI는 고정"; 원본 C17·C20·C22–C38·C44 모두 '프로필 메뉴 열기').
-                // 주차 화면은 '주차 중  P' 다음(간격 18), 주행 창은 끝에.
                 TripHeader(shell, carStatus.gear, s.online || mockDriving, listening = s.recording && Live.mic == Mic.ON && !muted && handoff.state == Handoff.State.OFF,
-                    chip = !recordingView, me = { MeButton(myFace) { profileMenu = true } })
+                    chip = !recordingView)
                 TripTabs(Destination.entries.map { it.label }, destination.ordinal, { parked || it != Destination.SHORTS.ordinal },
                     height = if (shell == Shell.TALK) 80.dp else 76.dp, style = if (shell == Shell.TALK) TalkTabText else CarText.Label, onSelect = { i ->
                         val tab = Destination.entries[i]
@@ -1815,16 +1821,31 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
-            if (profileMenu) ProfileMenu(
-                name = onboarding.name.ifBlank { me?.name.orEmpty() }.ifBlank { "내 프로필" }, face = myFace, group = t.title.ifBlank { TITLE }, people = t.people,
-                driving = !parked, top = shell.padV + shell.head + 12.dp, end = shell.padH, onClose = { profileMenu = false },
-                onGroup = { profileMenu = false; closeBoarding(); familyOpen = true }, // 동승 그룹 변경 → C16 groups(가족 흐름)
-                onSeats = { profileMenu = false; destination = Destination.RIDE; openBoarding() }, // 좌석 배정 → 이 여행의 자리·동의(BoardingPanel)
-                onGallery = { profileMenu = false; stopShort(); closeBoarding(); afterStart = null; destination = Destination.SHORTS }, // C33
-                onLogout = { profileMenu = false; logoutAsk = true },
-            )
-            if (logoutAsk) LogoutConfirm(onCancel = { logoutAsk = false }, onLogout = { logoutAsk = false; logout() })
         }
+        }
+    }
+
+    /**
+     * 프로필 메뉴(모든 화면 하나): 주행 창은 좁은 메뉴(2200:5852, 머리 줄 아래 12), 주차 화면은 1682 폭 메뉴(2257:5780, 위 120·오른쪽 45).
+     * 동승 그룹 변경 → C16 groups, 좌석 배정 → 여행 중이면 이 여행의 자리(BoardingPanel), 아니면 C16B, 갤러리 바로가기 → C33, 로그아웃 → 확인(2220:5864).
+     */
+    @Composable
+    private fun BoxScope.MenuOverlay(t: Trip?) {
+        val wide = menuShell == Shell.PARKED
+        val people = t?.people.orEmpty()
+        ProfileMenu(
+            name = onboarding.name.ifBlank { mePerson(people)?.name.orEmpty() }.ifBlank { "내 프로필" }, face = menuFace, group = t?.title?.ifBlank { TITLE } ?: "우리 가족",
+            people = people, driving = carStatus.restricted || f4Mock in MOCK_DRIVING, wide = wide,
+            top = if (wide) menuShell.padV + menuShell.head else menuShell.padV + menuShell.head + 12.dp, end = if (wide) 45.dp else menuShell.padH,
+            onClose = { profileMenu = false },
+            onGroup = { profileMenu = false; closeBoarding(); familyJump = FamilyJump.GROUPS; familyOpen = true },
+            onSeats = {
+                profileMenu = false
+                if (t != null && !familyOpen) { destination = Destination.RIDE; openBoarding() } else { familyJump = FamilyJump.SEATS; familyOpen = true }
+            },
+            onGallery = { profileMenu = false; familyOpen = false; stopShort(); closeBoarding(); afterStart = null; destination = Destination.SHORTS },
+            onLogout = { profileMenu = false; logoutAsk = true },
+        )
     }
 
     /**

@@ -477,6 +477,9 @@ def only(n):
     return int(lo) <= n <= int(hi or lo)
 
 
+FACE = "프로필 메뉴 열기"  # TripHeader의 '내 얼굴' 단추(Drive.kt MeButton) 접근성 이름
+
+
 def step(n, needles, timeout=15, note_="", seeded=False):
     """단계 n의 화면 글(needles 중 하나)이 보이면 캡처하고 '보임'(시드·목업으로 띄운 화면이면 '시드'). 없으면 '없음'과 그 흐름의 PR 상태."""
     meta = next(s for s in STEPS if s[0] == n)
@@ -485,6 +488,10 @@ def step(n, needles, timeout=15, note_="", seeded=False):
     if got:
         e2e.shot(shot.removesuffix(".png"))
         results[n] = {"result": "시드" if seeded else "보임", "matched": got, "note": note_, "shot": shot}
+        # 11/15 오너 "모든 페이지 우측상단은 프로필 고정, 예외 없음": 단계마다 머리 줄 '내 얼굴'(접근성 이름)이 화면 트리에 있는지
+        face = seen(FACE) is not None
+        results[n]["face"] = face
+        check(f"{n} 오른쪽 위 프로필", face)
     else:
         results[n] = {"result": "없음", "note": note_ or f"화면 글 {needles[0]!r}이 {timeout}초 안에 안 보임 — {flow_state(meta[4])}", "shot": None}
     check(f"{n} {meta[1]}", got, matched=got)

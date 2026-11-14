@@ -110,6 +110,8 @@ object CarRecord {
 object CarMenu {
     val Surface = Color(0xFF262824) // 드롭다운·확인 바탕
     val Line = Color(0xFF7A9C87) // 테두리 2
+    val CountWide = Color(0xFFADC2B8) // 주차 1682 메뉴(2257:5886) 동승자 수
+    val InkWide = Color(0xFFF5F2ED) // 주차 1682 메뉴(2257:5902) '갤러리 바로가기'
     val Ink = Color(0xFFF5F2ED) // 확인 제목·취소, '갤러리 바로가기' 글
     val Ink2 = Color(0xFFB8BAB0) // 확인 설명
     val Count = Color(0xFFADC2B8) // 동승 그룹 인원
@@ -151,16 +153,16 @@ fun TitleBlock(title: String, sub: String, modifier: Modifier = Modifier) = Colu
 
 /**
  * 주차 화면 틀(시안 C01–C16·C20·C22–C38): 여백 40, 머리 줄 80('가치타' · '주차 중  P'), 위 탭(있으면, 76), 칸 간격 24, 본문, 아래 단추 줄(간격 24).
- * [tab]이 null이면 탭을 그리지 않는다. [me]는 머리 줄 오른쪽 위 '내 얼굴' 단추('주차 중  P' 다음).
+ * [tab]이 null이면 탭을 그리지 않는다. 머리 줄 오른쪽 위 '내 얼굴'은 TripHeader가 늘 그린다('주차 중  P' 다음).
  */
 @Composable
 fun ParkedFrame(
     tab: Int? = null, onTab: (Int) -> Unit = {}, tabEnabled: (Int) -> Boolean = { true }, gear: String? = "P", online: Boolean = true,
-    me: (@Composable () -> Unit)? = null, bottom: (@Composable RowScope.() -> Unit)? = null, overlay: @Composable BoxScope.() -> Unit = {},
+    bottom: (@Composable RowScope.() -> Unit)? = null, overlay: @Composable BoxScope.() -> Unit = {},
     body: @Composable ColumnScope.() -> Unit,
 ) = Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
     Column(Modifier.fillMaxSize().padding(Shell.PARKED.padH), verticalArrangement = Arrangement.spacedBy(Shell.PARKED.gap)) {
-        TripHeader(Shell.PARKED, gear, online, listening = false, me = me)
+        TripHeader(Shell.PARKED, gear, online, listening = false)
         if (tab != null) TripTabs(TRIP_TABS, tab, tabEnabled, onTab)
         Column(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Shell.PARKED.gap), content = body)
         if (bottom != null) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(24.dp), content = bottom)

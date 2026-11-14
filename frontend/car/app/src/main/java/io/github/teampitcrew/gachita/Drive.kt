@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -34,6 +35,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -258,11 +260,21 @@ internal val TalkTabText: TextStyle = CarText.Body.copy(fontWeight = FontWeight.
 private fun menuText(size: Int, line: Int, weight: FontWeight = FontWeight.Bold) = CarText.Label.copy(fontSize = size.sp, lineHeight = line.sp, fontWeight = weight)
 
 /**
+ * 오른쪽 위 '내 얼굴'(11/15 오너 "모든 페이지 우측상단은 프로필 고정, 예외 없음"): 얼굴 그림과 누를 때 할 일. setContent 바닥이 한 번 준다 —
+ * 로그인 뒤에는 프로필 메뉴(좁은 창 2200:5852, 주차 1682 폭 2257:5780), 로그인 전에는 기본 캐릭터 얼굴과 '로그인 / 계정 만들기'(C02).
+ * [open]은 머리 줄의 틀(메뉴 자리)과 지금 얼굴을 받는다.
+ */
+class Me(val face: Int, val open: (Shell, Int) -> Unit)
+
+val LocalMe = compositionLocalOf { Me(R.drawable.char_basic) { _, _ -> } }
+
+/**
  * Header row: mascot, '가치타', then the '● 연결됨' chip where the design has it ([chip]: C44·ended; the C17 family has none), '주차 중  P' on
- * parked screens, and the '내 얼굴' button at the right end ([me], 2200:5920). Offline always shows '연결 대기'.
+ * parked screens, and always the '내 얼굴' button at the right end ([LocalMe], 2200:5920) — every screen draws its header here.
+ * Offline always shows '연결 대기'.
  */
 @Composable
-internal fun TripHeader(shell: Shell, gear: String?, online: Boolean, listening: Boolean, chip: Boolean = true, me: (@Composable () -> Unit)? = null) {
+internal fun TripHeader(shell: Shell, gear: String?, online: Boolean, listening: Boolean, chip: Boolean = true) {
     val c = MaterialTheme.colorScheme
     val park = shell == Shell.PARKED
     Row(Modifier.fillMaxWidth().height(shell.head), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(shell.headGap)) {
@@ -271,7 +283,8 @@ internal fun TripHeader(shell: Shell, gear: String?, online: Boolean, listening:
         Spacer(Modifier.weight(1f))
         if (!online) Pill("연결 대기", ok = false) else if (!park && chip) Pill("연결됨")
         if (park) Text(if (gear == "P") "주차 중  P" else "정차 중", color = c.onSurfaceVariant, style = CarText.Label, maxLines = 1)
-        me?.invoke()
+        val me = LocalMe.current
+        MeButton(me.face) { me.open(shell, me.face) }
     }
 }
 
@@ -556,18 +569,22 @@ internal fun MeButton(face: Int, onClick: () -> Unit) {
  * Profile menu (2200:5854): 480 wide at the top right, corner 26, border 2, padding 24/20, gap 12, outside black 56%. Face 48 and name 29 with
  * 닫기; the current riding group (ok-soft 106: '현재 동승 그룹' 19, name 25, 👤 count, 2×2 faces, ›) that opens the group change; 좌석 배정;
  * 🖼 갤러리 바로가기; while driving the note '그룹 변경과 좌석 배정은 주차 후에 이용해 주세요.' with those blocked; 로그아웃.
+ * [wide] is the parked 1682 window (2257:5870, Noto Sans KR — the system Korean font): profile row 86, group card 114 with just the name 30/36
+ * and 👤 count (#ADC2B8), 갤러리 바로가기 without the picture (#F5F2ED), 로그아웃 92% white, and the note always last, centred.
  */
 @Composable
 internal fun BoxScope.ProfileMenu(
     name: String, face: Int, group: String, people: List<Person>, driving: Boolean, top: Dp, end: Dp,
-    onClose: () -> Unit, onGroup: () -> Unit, onSeats: () -> Unit, onGallery: () -> Unit, onLogout: () -> Unit,
+    onClose: () -> Unit, onGroup: () -> Unit, onSeats: () -> Unit, onGallery: () -> Unit, onLogout: () -> Unit, wide: Boolean = false,
 ) {
+    fun menuText(size: Int, line: Int, weight: FontWeight = FontWeight.Bold): TextStyle =
+        CarText.Label.copy(fontSize = size.sp, lineHeight = line.sp, fontWeight = weight).let { if (wide) it.copy(fontFamily = FontFamily.Default) else it }
     val c = MaterialTheme.colorScheme
     Scrim(CarMenu.Scrim, onClose)
     Surface(Modifier.align(Alignment.TopEnd).padding(top = top, end = end).width(480.dp), RoundedCornerShape(26.dp), color = CarMenu.Surface,
         border = BorderStroke(2.dp, CarMenu.Line), shadowElevation = 18.dp) {
         Column(Modifier.padding(horizontal = 24.dp, vertical = 20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Row(Modifier.fillMaxWidth().height(58.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxWidth().height(if (wide) 86.dp else 58.dp), verticalAlignment = Alignment.CenterVertically) {
                 Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                     CharAvatar(face, 48.dp)
                     Text(name, style = menuText(29, 42), color = c.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -575,15 +592,17 @@ internal fun BoxScope.ProfileMenu(
                 Box(Modifier.size(48.dp).clip(CircleShape).clickable(role = Role.Button, onClick = onClose).semantics { contentDescription = "닫기" },
                     contentAlignment = Alignment.Center) { Canvas(Modifier.size(16.dp)) { cross(c.onSurface) } }
             }
-            Surface(onClick = onGroup, enabled = !driving, modifier = Modifier.fillMaxWidth().height(106.dp), shape = RoundedCornerShape(18.dp), color = c.tertiaryContainer) {
+            Surface(onClick = onGroup, enabled = !driving, modifier = Modifier.fillMaxWidth().height(if (wide) 114.dp else 106.dp), shape = RoundedCornerShape(18.dp),
+                color = c.tertiaryContainer) {
                 Row(Modifier.padding(horizontal = 18.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                        Text("현재 동승 그룹", style = menuText(19, 26, FontWeight.Medium), color = c.onSurface, maxLines = 1)
+                        if (!wide) Text("현재 동승 그룹", style = menuText(19, 26, FontWeight.Medium), color = c.onSurface, maxLines = 1)
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Text(group, Modifier.weight(1f, fill = false), style = menuText(25, 34), color = c.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(group, Modifier.weight(1f, fill = false), style = if (wide) menuText(30, 36) else menuText(25, 34), color = c.onSurface, maxLines = 1,
+                                overflow = TextOverflow.Ellipsis)
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                                 Image(painterResource(R.drawable.ic_menu_person), null, Modifier.size(20.dp))
-                                Text("${people.size}", style = menuText(19, 26, FontWeight.Medium), color = CarMenu.Count, maxLines = 1)
+                                Text("${people.size}", style = menuText(19, 26, FontWeight.Medium), color = if (wide) CarMenu.CountWide else CarMenu.Count, maxLines = 1)
                             }
                         }
                     }
@@ -593,14 +612,17 @@ internal fun BoxScope.ProfileMenu(
                     }
                 }
             }
-            MenuRow("좌석 배정", null, c.onSurface, !driving, onSeats)
-            MenuRow("갤러리 바로가기", R.drawable.ic_menu_gallery, CarMenu.Ink, !driving, onGallery)
-            if (driving) Text("그룹 변경과 좌석 배정은 주차 후에 이용해 주세요.", Modifier.fillMaxWidth(), color = c.onSurfaceVariant, style = menuText(18, 30, FontWeight.Normal))
+            MenuRow("좌석 배정", null, c.onSurface, !driving, onSeats, wide)
+            MenuRow("갤러리 바로가기", if (wide) null else R.drawable.ic_menu_gallery, if (wide) CarMenu.InkWide else CarMenu.Ink, !driving, onGallery, wide)
+            val noteText = "그룹 변경과 좌석 배정은 주차 후에 이용해 주세요."
+            if (driving && !wide) Text(noteText, Modifier.fillMaxWidth(), color = c.onSurfaceVariant, style = menuText(18, 30, FontWeight.Normal))
             Surface(onClick = onLogout, modifier = Modifier.fillMaxWidth().height(60.dp), shape = RoundedCornerShape(16.dp), color = Color.Transparent) {
                 Box(Modifier.padding(horizontal = 18.dp), contentAlignment = Alignment.CenterStart) {
-                    Text("로그아웃", style = menuText(24, 34), color = CarMenu.ConfirmInk, maxLines = 1)
+                    Text("로그아웃", style = menuText(24, 34), color = if (wide) Color.White.copy(alpha = 0.92f) else CarMenu.ConfirmInk, maxLines = 1)
                 }
             }
+            if (wide) Text(noteText, Modifier.fillMaxWidth().height(47.dp).wrapContentHeight(), color = c.onSurfaceVariant, style = menuText(18, 30, FontWeight.Normal),
+                textAlign = TextAlign.Center)
         }
     }
 }
@@ -634,12 +656,12 @@ private fun BoxScope.Scrim(color: Color, onClick: () -> Unit) {
 
 /** Menu row (2200:5876·2220:5905): 66 high, corner 16, padding 18, surface-2, icon 26 (gap 13), text 25 Bold, '›' 20×28 at the right. Off while driving. */
 @Composable
-private fun MenuRow(label: String, icon: Int?, ink: Color, enabled: Boolean, onClick: () -> Unit) {
+private fun MenuRow(label: String, icon: Int?, ink: Color, enabled: Boolean, onClick: () -> Unit, wide: Boolean = false) {
     val c = MaterialTheme.colorScheme
     Surface(onClick = onClick, enabled = enabled, modifier = Modifier.fillMaxWidth().height(66.dp), shape = RoundedCornerShape(16.dp), color = c.surfaceVariant) {
         Row(Modifier.padding(horizontal = 18.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(13.dp)) {
             icon?.let { Image(painterResource(it), null, Modifier.size(26.dp)) }
-            Text(label, Modifier.weight(1f), style = menuText(25, 36), color = ink, maxLines = 1)
+            Text(label, Modifier.weight(1f), style = menuText(25, 36).let { if (wide) it.copy(fontFamily = FontFamily.Default) else it }, color = ink, maxLines = 1)
             Canvas(Modifier.size(20.dp, 28.dp)) { chevron(c.onSurface) }
         }
     }

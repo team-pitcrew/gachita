@@ -175,17 +175,6 @@ fun Mascot(listening: Boolean, size: Dp = 56.dp) {
     )
 }
 
-/** 화면 맨 위 줄: 마스코트, 이름, 여행 제목, 오른쪽에 상태 알약(주차 중 · P, 서버 연결됨 — 시안 C1·C5·C6). 알약은 (글, 괜찮은지). */
-@Composable
-fun AppBar(title: String, listening: Boolean, vararg pills: Pair<String, Boolean>) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-        Mascot(listening)
-        Text("가치타", fontSize = 32.sp, fontWeight = FontWeight.Bold)
-        Text(title, Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        pills.forEach { (text, ok) -> Pill(text, ok) }
-    }
-}
-
 /** 상태 알약: 점과 글. 괜찮으면 민트, 아니면 빨강 기운. 움직이지 않는다. */
 @Composable
 fun Pill(text: String, ok: Boolean = true) {
