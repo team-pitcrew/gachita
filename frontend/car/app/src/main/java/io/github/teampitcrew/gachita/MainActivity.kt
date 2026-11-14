@@ -114,6 +114,7 @@ class MainActivity : ComponentActivity() {
     private val main = Handler(Looper.getMainLooper())
     private lateinit var prefs: SharedPreferences
     private lateinit var car: Car
+    private lateinit var onboarding: Onboarding // 계정·온보딩 C01–C08(T142, Onboarding.kt)
 
     private var state by mutableStateOf(Session())
 
@@ -159,7 +160,7 @@ class MainActivity : ComponentActivity() {
         }
     private enum class Destination(val label: String) { RIDE("함께 타는 중"), CONVERSATION("대화 기록"), SHORTS("콘텐츠 기록") } // 콘텐츠 기록은 K3 전까지 쇼츠 화면
     private var destination by mutableStateOf(Destination.RIDE)
-    // 가족·동승 그룹(흐름 F2, Family.kt). mock: 차 로그인(흐름 F1) 전에는 디버그 실행 인자(--es profileToken)로만 토큰을 받는다.
+    // 가족·동승 그룹(흐름 F2, Family.kt). 토큰은 차 로그인(흐름 F1, Onboarding.token). 디버그 실행 인자 --es profileToken이 있으면 그것을 앞세운다(시험용).
     private var familyOpen by mutableStateOf(false)
     private var profileToken by mutableStateOf<String?>(null)
     private var shortStudioActive = false
@@ -336,6 +337,8 @@ class MainActivity : ComponentActivity() {
         if (debug) { profileToken = intent.getStringExtra("profileToken"); familyOpen = intent.getBooleanExtra("family", false) }
         server = prefs.getString("server", null) ?: DEFAULT_SERVER
         device = prefs.getString("device", null) ?: UUID.randomUUID().toString().also { prefs.edit().putString("device", it).apply() }
+        onboarding = Onboarding(this, prefs) { server }
+        if (debug && !intent.getBooleanExtra("onboarding", true)) onboarding.skipForDebug() // --ez onboarding false: 기존 e2e는 처음 화면을 여행 만들기로 본다
         // 기본값은 무기한. --el keepMs를 명시한 디버그 빌드에서만 시간에 따른 정리를 시험한다.
         val now = System.currentTimeMillis()
         retentionMs = if (debug && intent.hasExtra("keepMs")) intent.getLongExtra("keepMs", -1).takeIf { it >= 0 } else null
@@ -358,6 +361,7 @@ class MainActivity : ComponentActivity() {
                 if (it.gear != "P" || it.restricted) brief = null
             }
             if (it.restricted) cancelShortExport("주행 중에는 영상 만들기를 멈춰요")
+            if (it.restricted) onboarding.stopRecording() // 온보딩은 주차 중에만(목소리 녹음도 멈춤)
             // 주행 중에도 대화 기록은 읽기만으로 보인다(시안 2026:2308·2358, T11 완화). 콘텐츠 기록과 여행 관리는 주차 중에만
             if (it.restricted) { managing = false; if (destination == Destination.SHORTS) destination = Destination.RIDE }
             if (it.restricted || it.gear != "P") closeBoarding() // 주행 제한·기어 변경은 QR을 즉시 가리고 초대를 폐기한다
@@ -382,11 +386,12 @@ class MainActivity : ComponentActivity() {
                     when {
                         t != null -> TripScreen(t)
                         carStatus.restricted -> SetupLocked()
+                        onboarding.showing -> OnboardingScreen(onboarding, carStatus.gear) { familyOpen = true } // C08 '가족 그룹 만들기' → 가족 흐름(F2)
                         destination == Destination.SHORTS && appVisible -> ShortStudio(server, "", 0, null, "",
                             canRead = { false }, canPlay = { appVisible && !isDestroyed && !carStatus.restricted },
                             onClose = { destination = Destination.RIDE },
                             onActiveChange = ::shortStudioActiveChanged, modifier = Modifier.fillMaxSize())
-                        familyOpen -> FamilyFlow(server, profileToken, onClose = { familyOpen = false }, onStart = ::startGroupTrip)
+                        familyOpen -> FamilyFlow(server, profileToken ?: onboarding.token, onClose = { familyOpen = false }, onStart = ::startGroupTrip)
                         else -> Setup()
                     }
                 }
@@ -426,6 +431,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         closeBoarding()
+        onboarding.close()
         boardingIo.shutdown() // 발급 중 닫힌 요청은 같은 실행기에서 초대를 폐기하고 끝난다
         cancelRecordingStart?.invoke()
         recordingIo.shutdownNow()
@@ -467,7 +473,7 @@ class MainActivity : ComponentActivity() {
 
     /** '이 가족과 출발'(C13): 그룹의 저장된 자리·각자 동의로 여행을 만들고, 이 차가 맡을 참가자 토큰(나와 내 아이)을 받는다(T133). */
     private fun startGroupTrip(groupId: String) {
-        val token = profileToken ?: return
+        val token = profileToken ?: onboarding.token ?: return
         val url = server
         s = s.copy(busy = true); error = ""
         bg({
@@ -1582,6 +1588,7 @@ class MainActivity : ComponentActivity() {
             AppBar(TITLE, listening = false, *pills(online = null))
             Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 OutlinedButton(onClick = { destination = Destination.SHORTS }, shape = RoundedCornerShape(10.dp)) { Text("저장한 쇼츠", fontSize = 24.sp) }
+                OutlinedButton(onClick = { onboarding.reopen() }, shape = RoundedCornerShape(10.dp)) { Text("계정·목소리 등록", fontSize = 24.sp) }
                 OutlinedButton(onClick = { familyOpen = true }, shape = RoundedCornerShape(10.dp)) { Text("우리 가족", fontSize = 24.sp) }
                 WindowSize()
             }

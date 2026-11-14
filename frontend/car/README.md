@@ -21,6 +21,13 @@ adb shell am start --user 10 -n io.github.teampitcrew.gachita/.MainActivity --es
 - 기어 값은 Cold boot한 에뮬레이터에서만 읽힙니다(`docs/emulator/README.md`).
 - 마이크 권한(`RECORD_AUDIO`)과 알림 권한(`POST_NOTIFICATIONS`, 화면 뒤에서 '기록 멈춤'을 알림으로 보임)은 처음 기록할 때 함께 묻습니다. `-g`로 설치하면 미리 허용됩니다.
 
+## 계정·온보딩(T142)
+
+- 이 차에 계정 토큰이 없고 여행이 없으면 주차 중 전체 창에 시안 C01–C08(`Onboarding.kt`): 이메일 가입·로그인(`POST /api/accounts`·`/api/sessions`, 기기 이름 '차' — 토큰은 이 차에 암호화해 둠) → 계정 동의 → 이름·캐릭터 → 사진(기기 사진 선택기, 없으면 '사진 대신 캐릭터') → 15초 목소리 → 등록 완료. 서버 호출은 `Account.kt`.
+- 목소리는 수음과 같은 형식(MIC, 16 kHz 2채널 → `downmix` 모노)으로 15초를 모아 `embed(pcmSamples(...))`로 값만 `POST /api/profiles/me/voice`에 올립니다(ADR-0023). 계정 동의가 켜져 있지 않으면 마이크를 열지 않습니다.
+- 주행 제한이면 지금처럼 잠금 화면이고 녹음 중이면 멈춥니다. 머리 줄 '나중에'나 C08 '가족 그룹 만들기'는 지금의 여행 만들기로 가고, 처음 화면 '계정·목소리 등록'으로 다시 엽니다. 가족 그룹(F2)이 들어오기 전이라 오른쪽 '우리 가족 4명'은 고정 그림입니다(`// mock:`).
+- 기존 e2e 스크립트는 첫 실행에 디버그 인자 `--ez onboarding false`를 붙여 처음 화면을 여행 만들기로 봅니다(이 차에 기억).
+
 ## 주행 중 화면(T11)
 
 - **선언:** `MainActivity`에 `distractionOptimized`. 선언하지 않으면 기어 D에서 Pleos 차단 화면이 앱을 덮습니다.
