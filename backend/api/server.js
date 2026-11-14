@@ -14,12 +14,13 @@ import { profilesDb, tripsDb } from "./db.js";
 import { withActiveProfile, withDeletingProfiles } from "./profile-lifecycle.js";
 import { createShare, sharedResults } from "./result-shares.js";
 import { errFields, log } from "./log.js";
-import { asrReady, contextOf, retranscribe, toWav } from "./providers/asr.js";
+import { asrReady, contextOf, retranscribe, toWav, transcribe } from "./providers/asr.js";
 import { clipStore } from "./providers/clips.js";
 import { googleIdentity, googlePublicConfig } from "./providers/google.js";
 import { cues, momentSpan, suggest } from "./scenes.js";
 import { embed, matchThreshold, similarity, wavMono } from "./providers/voice.js";
 import { rideLinks, redeemRideLink } from "./ride-links.js";
+import { boardingInvites, tripBoardingInvites } from "./boarding-invites.js";
 import { restStops, SOURCE as REST_STOPS_SOURCE } from "./rest-stops.js";
 import { shortGenerations, shortTemplateCatalog } from "./short-generations.js";
 
@@ -56,7 +57,11 @@ const NEXT = {
   done: [],
   cancelled: [],
 };
-const MIME = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".json": "application/json", ".webmanifest": "application/manifest+json" };
+const MIME = {
+  ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
+  ".svg": "image/svg+xml; charset=utf-8", ".json": "application/json; charset=utf-8", ".webmanifest": "application/manifest+json; charset=utf-8",
+  ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".ico": "image/vnd.microsoft.icon",
+};
 
 const RETIRED_GROUP = "그룹 초대는 종료됐어요. 탑승자 폰에서 동승 연결 QR을 열고, 주차 중인 차에서 읽어 주세요.";
 
@@ -65,7 +70,7 @@ const fail = (status, error) => {
 };
 
 // 오류 종류(T71): 응답의 type과 로그의 err.type. 상태에서 정하는 닫힌 목록이라 클라이언트는 문장이 아니라 종류로 가른다.
-const ERROR_TYPE = { 400: "invalid", 401: "unauthenticated", 403: "forbidden", 404: "not_found", 405: "method_not_allowed", 409: "conflict", 410: "gone", 413: "too_large", 429: "rate_limited", 502: "unavailable", 503: "unavailable", 504: "unavailable" };
+const ERROR_TYPE = { 400: "invalid", 401: "unauthenticated", 403: "forbidden", 404: "not_found", 405: "method_not_allowed", 409: "conflict", 410: "gone", 413: "too_large", 422: "invalid", 429: "rate_limited", 502: "unavailable", 503: "unavailable", 504: "unavailable" };
 // DB에 닿지 않거나(연결 끊김·거절, 연결 수 초과) 질의 시간 제한(57014, T26)에 걸린 것: 다시 해도 되는 503.
 // Postgres 오류 번호 08xxx 연결, 53xxx 자원 부족, 57014 질의 취소, 57P0x 서버 종료·시작 중.
 const DB_DOWN = /^(08|53|57014|57P0)/;
@@ -78,7 +83,8 @@ export function classify(e) {
 }
 
 // 로그의 경로 틀: 정한 낱말이 아닌 마디(여행 코드, id, 초대 코드)는 :p로 가린다. 웹 파일은 /(web) 하나로.
-const ROUTE_WORDS = new Set(["api", "config", "trips", "participants", "requests", "moments", "utterances", "transcript", "captions", "voice-match", "recordings", "scene-suggestions", "shortform", "short-templates", "short-plans", "short-generations", "file", "profiles", "me", "links", "google", "feed", "tokens", "photo", "voice", "groups", "members", "invites", "j", "rest-stops"]);
+const ROUTE_WORDS = new Set(["api", "config", "trips", "participants", "requests", "moments", "utterances", "transcript", "transcriptions", "captions", "voice-match", "recordings", "scene-suggestions", "shortform", "short-templates", "short-plans", "short-generations", "file", "profiles", "me", "links", "google", "feed", "tokens", "photo", "voice", "groups", "members", "invites", "j", "rest-stops"]);
+ROUTE_WORDS.add("boarding-invites");
 const routeOf = (pathname) =>
   pathname === "/healthz" ? pathname : pathname.startsWith("/api/") ? `/${pathname.split("/").filter(Boolean).map((s) => (ROUTE_WORDS.has(s) ? s : ":p")).join("/")}` : "/(web)";
 // ALB가 붙이는 추적 id(X-Amzn-Trace-Id)를 그대로 쓴다. 없거나 모양이 이상하면 새로.
@@ -127,6 +133,7 @@ export async function migrate() {
   await tripsDb().query(await readFile(new URL("trips-7-result-shares.sql", import.meta.url), "utf8"));
   await tripsDb().query(await readFile(new URL("trips-8-short-generations.sql", import.meta.url), "utf8"));
   await tripsDb().query(await readFile(new URL("trips-9-retention.sql", import.meta.url), "utf8"));
+  await tripsDb().query(await readFile(new URL("trips-11-boarding-invites.sql", import.meta.url), "utf8"));
   await profilesDb().query(await readFile(PROFILES_SQL, "utf8"));
   await profilesDb().query(await readFile(LINKS_SQL, "utf8"));
   await profilesDb().query(await readFile(ALBUM_SQL, "utf8"));
@@ -505,6 +512,49 @@ async function participantVoice(code, id, req) {
   return enrolled(print);
 }
 
+// 웹의 첫 전사(T96). 서버는 소리와 글을 저장하지 않는다. 받은 글의 저장·화자 대조는 기존 API로 한다.
+async function transcriptions(code, req, query, signal) {
+  if (req.method !== "POST") fail(405, "POST만 됨");
+  const generation = int(Number(query.get("generation")), 1, 2_147_483_647, "generation");
+  const check = () => withTrip(code, false, (trip) => {
+    participantOf(req, trip);
+    if (!everyoneConsents(trip)) fail(403, "모두 녹음에 동의한 뒤 전사할 수 있음");
+    if (generation !== (trip.generation ?? 1)) fail(409, "동의 세대가 바뀜. 음성을 다시 녹음해 주세요");
+  });
+  await check(); // 본문을 읽기 전에 인증한다.
+  if (!asrReady()) fail(503, "음성 전사 서버가 준비되지 않았어요");
+  if (req.headers["content-type"]?.split(";")[0].trim().toLowerCase() !== "audio/wav") fail(400, "Content-Type은 audio/wav");
+  const wav = await readRaw(req, 400_000);
+  const { samples, channels } = wavMono(wav);
+  // 잘린 data를 허용하는 기존 대조 파서보다 엄격하게 확인한다. 유실된 음성을 정상 전사로 보이지 않게 한다.
+  if (wav.readUInt32LE(4) !== wav.length - 8) fail(400, "WAV 길이가 맞지 않음");
+  const chunks = new Set();
+  for (let pos = 12; pos < wav.length;) {
+    if (pos + 8 > wav.length) fail(400, "잘린 WAV 머리말");
+    const id = wav.toString("latin1", pos, pos + 4);
+    const size = wav.readUInt32LE(pos + 4);
+    const end = pos + 8 + size + size % 2;
+    if (end > wav.length) fail(400, "잘린 WAV 본문");
+    if (id === "fmt " || id === "data") {
+      if (chunks.has(id)) fail(400, "중복 WAV 구간");
+      chunks.add(id);
+      if (id === "data" && size % 2) fail(400, "잘린 WAV 표본");
+      if (id === "fmt " && (wav.readUInt32LE(pos + 16) !== 32000 || wav.readUInt16LE(pos + 20) !== 2)) fail(400, "16 kHz 모노 PCM16 WAV만 됨");
+    }
+    pos = end;
+  }
+  const seconds = samples.length / 16000;
+  if (channels !== 1 || seconds < 0.5 || seconds > 10) fail(400, "발화 음성은 16 kHz 모노 PCM16 WAV 0.5~10초");
+  if (!samples.some((sample) => sample !== 0)) fail(422, "받아 적을 음성이 없어요");
+  const result = await transcribe(wav, check, signal); // 대기 뒤, 공급자로 보내기 직전에 다시 확인한다.
+  await check(); // 철회·재동의·참가자 삭제 뒤에 도착한 결과는 돌려주지 않는다.
+  if (result.text) return [200, { text: result.text, seconds, generation }];
+  if (result.reason === "empty") fail(422, "받아 적을 음성이 없어요");
+  if (result.reason === "rate_limited") fail(429, "음성 전사 요청이 많아요. 잠시 뒤 다시 해 주세요");
+  if (result.reason === "timeout") fail(504, "음성 전사 응답 시간이 지났어요");
+  fail(503, "음성을 받아 적지 못했어요. 원음을 보관하고 다시 시도해 주세요");
+}
+
 // 발화 대조(ADR-0008·0019): 발화 음성과 좌석 구역(앞줄·뒷줄)을 받아 그 줄 참가자의 등록 목소리와 비교해
 // 참가자와 확신도를 돌려준다. 확신이 낮으면 '모름'(participantId: null).
 // 원본 음성은 저장하지 않고, 찾으면 그 발화 줄의 participant_id(프로필 참가자면 profile_id도)를 채운다(ADR-0014).
@@ -849,7 +899,7 @@ async function withTrip(code, write, fn, lockedClient) {
   }
 }
 
-async function trips(req, [code, sub, id, leaf, ...rest], b, query) {
+async function trips(req, [code, sub, id, leaf, ...rest], b, query, signal) {
   const m = req.method;
   if (!code) {
     if (m !== "POST") fail(405, "POST만 됨");
@@ -875,6 +925,7 @@ async function trips(req, [code, sub, id, leaf, ...rest], b, query) {
   }
   if ((sub === "short-plans" || sub === "short-generations") && !rest.length) return shortService.request(req, code, sub, id, leaf, b);
   if (rest.length || (leaf !== undefined && !(sub === "participants" && leaf === "voice") && sub !== "utterances" && sub !== "captions")) fail(404, "없는 경로");
+  if (sub === "boarding-invites") return tripBoardingInvites(req, code, id, { withTrip, participantOf });
   if (sub === "captions") {
     if (!id || !leaf || rest.length) fail(404, "자막 경로에 기기와 순번이 필요함");
     if (m !== "PATCH") fail(405, "PATCH만 됨");
@@ -902,6 +953,7 @@ async function trips(req, [code, sub, id, leaf, ...rest], b, query) {
     });
   }
   if (sub === "voice-match" && !id) return voiceMatch(code, req, query);
+  if (sub === "transcriptions" && !id) return transcriptions(code, req, query, signal);
   if (sub === "recordings") return recordings(code, id, req, query);
   if (sub === "participants" && m === "POST" && !id && b.profileId !== undefined) fail(410, RETIRED_GROUP);
   if (leaf === "voice") return participantVoice(code, id, req);
@@ -1260,7 +1312,7 @@ async function serveFile(path, req, res) {
   // If-None-Match는 약한 비교(RFC 9110 13.1.2): Cloudflare가 압축하면서 W/를 붙이고, 목록이나 *로도 온다.
   const inm = req.headers["if-none-match"];
   if (inm === "*" || inm?.split(",").some((t) => t.trim().replace(/^W\//, "") === headers.etag)) return void (res.writeHead(304, headers), res.end());
-  res.writeHead(200, { "content-type": `${MIME[page ? ".html" : extname(file)] ?? "application/octet-stream"}; charset=utf-8`, ...headers });
+  res.writeHead(200, { "content-type": MIME[page ? ".html" : extname(file).toLowerCase()] ?? "application/octet-stream", ...headers });
   res.end(data);
 }
 
@@ -1272,8 +1324,10 @@ export const server = createServer(async (req, res) => {
   let failure = null;
   let route = "/(bad-url)"; // 주소를 읽지 못한 요청. 아래 try에서 한 번만 읽는다(로그에서 다시 읽다 던지면 프로세스가 죽는다)
   // 'close'는 응답을 다 보냈을 때도, 클라이언트가 먼저 끊었을 때도 한 번 온다. 끊긴 것은 499(nginx의 관례)와 aborted로.
+  const cancelled = new AbortController();
   res.on("close", () => {
     const aborted = !res.writableFinished;
+    if (aborted) cancelled.abort();
     const status = aborted ? 499 : res.statusCode;
     if (!route.startsWith("/api/") && status < 400) return;
     log(status >= 500 && !aborted ? "error" : "info", "request", {
@@ -1317,13 +1371,14 @@ export const server = createServer(async (req, res) => {
       // 발화 묶음은 본문이 커서 그 경로만 따로 한도를 둔다(docs/api/voice.md).
       const big = seg[1] === "trips" && seg[3] === "utterances";
       // 목소리 등록(…/voice)·발화 대조는 이진 본문(WAV)이다 — JSON으로 먼저 읽지 않는다.
-      const binary = req.method === "POST" && (seg.at(-1) === "voice" || (seg[1] === "trips" && (seg[3] === "voice-match" || seg[3] === "recordings")));
+      const binary = req.method === "POST" && (seg.at(-1) === "voice" || (seg[1] === "trips" && ["voice-match", "recordings", "transcriptions"].includes(seg[3])));
       const body = !binary && (req.method === "POST" || req.method === "PATCH") ? await readBody(req, big ? 1_000_000 : MAX_BODY) : {};
       if (seg[1] === "rest-stops" && !seg[2]) {
         if (req.method !== "POST") fail(405, "POST만 됨");
         return send(200, restStopsOf(body));
       }
       if (seg[1] === "ride-links") return send(...(await rideLinks(req, seg.slice(2), { profileOf })));
+      if (seg[1] === "boarding-invites") return send(...(await boardingInvites(req, seg.slice(2), body, { profileOf, withTrip, seats: SEATS })));
       if (seg[1] === "trips" && seg[2] && seg[3] === "ride-links" && !seg[4])
         return send(...(await redeemRideLink(req, seg[2], body, { profileById, seats: SEATS })));
       if (seg[1] === "profiles") {
@@ -1332,7 +1387,7 @@ export const server = createServer(async (req, res) => {
         return send(...r);
       }
       if (seg[1] === "trips") {
-        const r = await trips(req, seg.slice(2), body, url.searchParams);
+        const r = await trips(req, seg.slice(2), body, url.searchParams, cancelled.signal);
         if (Buffer.isBuffer(r[1])) return void sendRaw(r[0], r[1], r[2]); // 클립 소리 같은 이진 응답
         return send(...r);
       }
