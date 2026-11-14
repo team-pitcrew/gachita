@@ -41,5 +41,11 @@ test("내 얼굴 단추는 프로필이 없어도 늘 있고(빈 원형 + 기본
   assert.deepEqual(went, ["signIn"]);
   profile = { name: "민준" };
   assert.equal(menu.button().className, "me-button");
+  // 계정 토큰은 있는데 프로필을 다시 읽는 중이면 기본 얼굴(로그인 길)이 아니라 내 얼굴 자리 → 내 프로필로
+  profile = null;
+  const loading = createProfileMenu({ getProfile: () => null, signedIn: () => true, face: () => "얼굴", onSignIn: () => went.push("signIn"), onProfile: () => went.push("profile") });
+  assert.equal(loading.button().className, "me-button");
+  await loading.button().onclick();
+  assert.deepEqual(went, ["signIn", "profile"]);
   delete globalThis.document;
 });

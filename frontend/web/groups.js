@@ -543,7 +543,7 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
       s.groups = [g];
       s.groupId = g.id;
       sessionStorage.removeItem(PENDING);
-      onChange();
+      await onChange(); // 프로필을 다시 읽은 뒤에 그려야 머리 줄이 기본 얼굴이 아닌 내 얼굴(참여 완료)
       go("joined");
     }), "primary", s.busy)]);
   }
