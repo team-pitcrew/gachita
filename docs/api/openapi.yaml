@@ -1115,6 +1115,37 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+  /api/trips/{code}/places:
+    parameters: [{ $ref: "#/components/parameters/code" }]
+    post:
+      tags: [장면]
+      summary: 장소 남기기(출발·경유·곧 도착·도착·목적지)
+      description: |
+        차가 내비에서 읽은 장소 이름을 여행 문서의 `places`에 쌓습니다(T131, docs/api/places.md). 콘텐츠 기록의 지도·타임라인과 폰의 '곧 도착'이 읽습니다.
+        그 여행의 참가자 토큰이 있어야 합니다(없거나 다른 여행의 토큰이면 401). 녹음 동의와 관계없습니다 — 음성이 아니라 내비의 장소입니다.
+        `at`을 안 보내면 서버 시각을 씁니다. 늦게 올릴 때는 그때의 시각을 보내되 여행을 만들기 1분 전 ~ 지금+1분 안이어야 합니다. 좌표는 둘 다 있거나 둘 다 없음만 받습니다.
+        `places`는 늘 `at` 순서(같으면 받은 순서)라, 늦게 도착한 장소도 제 시각 자리에 들어갑니다. **지금 상태는 `at`이 가장 큰 장소(마지막)**입니다.
+        여행 하나에 200개까지 두고, 넘으면 `at`이 가장 이른 것부터 버립니다. 차는 상태가 바뀔 때만 올립니다. 장소는 장면처럼 여행 코드로 읽는 여행 문서에 실립니다.
+      security: [{ participantToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [kind, name]
+              properties:
+                kind: { $ref: "#/components/schemas/PlaceKind" }
+                name: { type: string, minLength: 1, maxLength: 100 }
+                lat: { type: number, minimum: -90, maximum: 90 }
+                lng: { type: number, minimum: -180, maximum: 180 }
+                at: { type: integer, description: epoch 밀리초 }
+                etaSeconds: { type: integer, minimum: 0, maximum: 86400, description: 내비가 알려 준 남은 시간(초). 곧 도착에서 }
+      responses:
+        "201": { description: 남김, content: { application/json: { schema: { $ref: "#/components/schemas/Place" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /api/trips/{code}/utterances:
     parameters: [{ $ref: "#/components/parameters/code" }]
     post:
@@ -1308,6 +1339,28 @@ paths:
                 required: [items]
                 properties:
                   items: { type: array, items: { $ref: "#/components/schemas/FeedItem" } }
+        "401": { $ref: "#/components/responses/Error" }
+  /api/profiles/me/trips:
+    get:
+      tags: [프로필]
+      summary: 내 여행과 콘텐츠 목록
+      description: |
+        내 프로필이 참가자로 있는 여행을 최신 순으로 50개까지 줍니다(T131, docs/api/places.md). 콘텐츠 기록 화면(갤러리·타임라인·지도)이 읽습니다.
+        `route`와 `contents`는 기록본과 같은 규칙으로 **그 여행에서 내 참가자가 녹음에 동의했을 때만** 채우고, 지금 동의 세대의 것만 담습니다(철회로 세대가 오르면 빠짐).
+        `route`는 좌표가 있는 발화를 시간순으로 골고루 줄인 `[lat, lng, at]`이고 200점까지입니다(첫 점·끝 점은 남김). 지도 제공자는 쓰지 않습니다.
+        `contents`는 서버 보관을 마친 기본 영상(`kind: device`, short-assets)과 생성을 마친 영상(`kind: generated`, short-generations)입니다. 제목·시각·좌표는 그 장면(제목이 없으면 여행 제목), `place`는 그 시각 전에 남은 마지막 장소 이름입니다.
+        파일(`url`)은 지금처럼 그 여행의 **참가자 토큰**으로 받고 전원 동의 규칙을 따릅니다(docs/api/short-assets.md). 이 기기에 토큰이 없으면 프로필 토큰으로 다시 참가(`POST /trips/{code}/participants`)해 받습니다.
+      security: [{ profileToken: [] }]
+      responses:
+        "200":
+          description: 내 여행
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, maxItems: 50, items: { $ref: "#/components/schemas/MyTrip" } }
         "401": { $ref: "#/components/responses/Error" }
   /api/profiles/me/moments:
     get:
@@ -2429,9 +2482,65 @@ components:
         label: { type: string }
         lat: { type: number }
         lng: { type: number }
+    PlaceKind: { type: string, enum: [start, stop, approaching, arrived, destination], description: "출발, 경유, 곧 도착, 도착, 목적지(내비에 정함)" }
+    Place:
+      type: object
+      required: [id, kind, name, at, by]
+      properties:
+        id: { type: string }
+        kind: { $ref: "#/components/schemas/PlaceKind" }
+        name: { type: string }
+        at: { type: integer, description: epoch 밀리초 }
+        lat: { type: number, description: 좌표 없는 장소는 아예 없음 }
+        lng: { type: number }
+        etaSeconds: { type: integer, description: 보냈을 때만 }
+        by: { type: string, description: 남긴 참가자 id }
+    MyTrip:
+      type: object
+      required: [code, title, status, createdAt, startedAt, endedAt, groupName, members, places, route, contents]
+      properties:
+        code: { type: string }
+        title: { type: string }
+        status: { $ref: "#/components/schemas/TripStatus" }
+        createdAt: { type: integer }
+        startedAt: { type: [integer, "null"], description: 처음 주행을 시작한 시각. 그 전·옛 여행은 null }
+        endedAt: { type: [integer, "null"], description: 여행을 끝낸 시각 }
+        groupName: { type: [string, "null"], description: 그룹으로 만든 여행일 때 그 그룹 이름 }
+        members:
+          type: array
+          items:
+            type: object
+            required: [participantId, name, character, seat]
+            properties:
+              participantId: { type: string }
+              name: { type: string }
+              character: { type: string, description: 프로필의 지금 캐릭터, 없으면 참가할 때의 것, 손님은 빈 글 }
+              seat: { $ref: "#/components/schemas/Seat" }
+              profileId: { type: string, format: uuid, description: 프로필로 참가했을 때만 }
+        places: { type: array, items: { $ref: "#/components/schemas/Place" } }
+        route:
+          type: array
+          maxItems: 200
+          items: { type: array, prefixItems: [{ type: number }, { type: number }, { type: integer }], minItems: 3, maxItems: 3, description: "[lat, lng, at]" }
+        contents:
+          type: array
+          items:
+            type: object
+            required: [id, momentId, title, seconds, at, lat, lng, place, kind, url]
+            properties:
+              id: { type: string, format: uuid }
+              momentId: { type: string }
+              title: { type: string }
+              seconds: { type: number }
+              at: { type: integer, description: 장면 시각(epoch ms) }
+              lat: { type: [number, "null"] }
+              lng: { type: [number, "null"] }
+              place: { type: [string, "null"], description: 그 시각 전에 남은 마지막 장소 이름 }
+              kind: { type: string, enum: [device, generated] }
+              url: { type: string, description: 그 여행의 참가자 토큰으로 받는 파일 주소 }
     Trip:
       type: object
-      required: [code, title, status, recording, participants, requests, moments, version, createdAt]
+      required: [code, title, status, recording, participants, requests, moments, places, version, createdAt]
       properties:
         code: { type: string }
         title: { type: string }
@@ -2441,5 +2550,8 @@ components:
         participants: { type: array, items: { $ref: "#/components/schemas/Participant" } }
         requests: { type: array, items: { $ref: "#/components/schemas/Request" } }
         moments: { type: array, items: { $ref: "#/components/schemas/Moment" } }
+        places: { type: array, maxItems: 200, items: { $ref: "#/components/schemas/Place" }, description: "차가 남긴 장소(T131), at 순서(같으면 받은 순서). 지금 상태는 마지막(at이 가장 큰) 장소. 그 전에 만든 여행은 빈 목록" }
+        startedAt: { type: integer, description: 처음 주행을 시작한 시각(T131). 그 전에는 없음 }
+        endedAt: { type: integer, description: 끝낸 시각. 끝낸 여행에만 }
         version: { type: integer, description: 바뀔 때마다 1씩 늘어남 }
         createdAt: { type: integer }

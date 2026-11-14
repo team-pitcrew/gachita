@@ -1,4 +1,4 @@
-import { mediaButton, mediaIcon, setMediaButton, audioPeaks, drawWaveform } from "/media-controls.js";
+import { mediaButton, setMediaButton, audioPeaks, drawWaveform } from "/media-controls.js";
 // 가치타 모바일 화면(gachita.mangowhois.ai). 빌드 없이 브라우저가 그대로 읽는다.
 // 주소: /#코드는 이 폰이 들어간 여행, /#me는 내 프로필. 여행에는 차가 표시한 참석 QR을 이 폰의 카메라로 읽어 참여한다.
 // 이 폰이 누구인지(프로필 토큰, 여행마다 참가자 id와 토큰)는 localStorage에 둔다. 폰에서는 수음하지 않는다. 차가 표시한 참석 QR을 폰 카메라로 읽어 참여한다.
@@ -14,14 +14,10 @@ import { CHARACTER_OPTIONS, characterKey, characterImage, createShortFilm, expor
 import { createShortStudio } from "/short-studio.js";
 import { createScenePicker } from "/short-scenes.js";
 import { createBoarding } from "/boarding.js";
+import { appBar, arrivalCards, askState, driveState, journeyTabs, nearCard, recordingLine, rideHeading, seatMap, statusMoves } from "/ride.js";
 
-const TRIP = {
-  boarding: ["탑승 중", "모두 타면 운전자가 출발을 눌러요."],
-  driving: ["주행 중", "부탁은 아래 단추로 언제든 남길 수 있어요."],
-  parked: ["주차 완료", "이번 주행의 기록을 마감했어요."],
-  ended: ["여행 종료", "함께한 대화와 남긴 장면을 다시 볼 수 있어요."],
-};
-const NEXT_TRIP = { boarding: ["출발", "driving"], driving: ["주차", "parked"], parked: ["여행 끝내기", "ended"] };
+// 여행 상태 이름. 상태별 제목·부제·운전석 단추는 ride.js가 고른다.
+const TRIP = { boarding: "탑승 중", driving: "주행 중", parked: "주차 완료", ended: "여행 종료" };
 const ONLY_HERE = "이 폰에서 연결한 사람만 켤 수 있어요.";
 // 켜져 있던 동의를 끄면 서버가 동의 세대를 올려 그 여행의 받아 적은 글과 클립을 모두 지운다(ADR-0007). 누르기 전에 알린다.
 const OFF_WIPES = "동의를 끄면 기록이 멈추고, 이 여행에서 지금까지 받아 적은 글과 올라간 소리가 모두 지워져요. 끌까요?";
@@ -115,11 +111,9 @@ const conversations = createConversations({
     if (trip?.code !== c) return Promise.reject(new Error("여행이 바뀌었어요."));
     return asMe(trip.participants.find((p) => p.id === myId()), (code, token) => api("GET", `/trips/${code}/transcript`, null, token, signal));
   },
-  avatar: (person) => {
-    const mine = person?.profileId && person.profileId === profile?.id;
-    const fallback = ["basic", "cap", "glasses", "travel", "game"][Math.max(0, SEATS.findIndex(([seat]) => seat === person?.seat))];
-    return avatar(mine ? profile : { ...person, character: person?.character || fallback }, mine ? photo : "");
-  },
+  avatar: (person) => personAvatar(person),
+  isOnline: () => !offline,
+  onHome: () => { location.hash = ""; },
   onCaptions: () => captions.open(),
   onShorts: () => launchShort(),
   onScenes: () => scenes.open(),
@@ -282,10 +276,6 @@ const chipGroup = (legend, name, options, current, onpick) =>
     ? h("label", { className: "chip character-option" }, h("input", { type: "radio", name, value: v, checked: v === current, onchange: () => onpick(v) }), characterImage(v), h("span", {}, label))
     : chip(name, v, label, { checked: v === current, onpick }))));
 
-// 좌석 배치. 위가 차 앞쪽이다.
-const car = (seat, className = "car") =>
-  h("div", { className }, h("p", { className: "meta" }, "차 앞쪽"), h("div", { className: "front" }, SEATS.slice(0, 2).map(seat)), h("div", { className: "rear" }, SEATS.slice(2).map(seat)));
-
 // 얼굴: 사진, 없으면 캐릭터 그림(style.css .c-*), 없으면 기본 그림
 // 캐릭터 값은 서버가 20자 문자열로만 받으므로, 목록에 있는 값만 클래스로 쓴다(다른 클래스가 섞이지 않게).
 const face = characterKey;
@@ -308,11 +298,12 @@ const uiIcon = (name) => {
   return svg;
 };
 const editPortrait = () => h("button", { type: "button", className: "portrait-edit", "aria-label": "내 사진과 프로필 편집", onclick: () => { location.hash = "me"; } }, avatar(profile, photo), h("span", { className: "portrait-pencil" }, uiIcon("pencil")));
-const journeyTabs = () => h("nav", { className: "journey-tabs", "aria-label": "여행 메뉴" },
-  h("button", { type: "button", className: "selected", "aria-current": "page" }, "여행"),
-  button("대화", () => conversations.open()),
-  button("쇼츠", launchShort),
-);
+// 참가자 얼굴: 내 프로필이면 내 사진·캐릭터, 아니면 자리 순서의 기본 캐릭터(시안: basic·cap·glasses·travel·game).
+function personAvatar(person) {
+  const mine = person?.profileId && person.profileId === profile?.id;
+  const fallback = ["basic", "cap", "glasses", "travel", "game"][Math.max(0, SEATS.findIndex(([seat]) => seat === person?.seat))];
+  return avatar(mine ? profile : { ...person, character: person?.character || fallback }, mine ? photo : "");
+}
 
 function fillDraft() {
   URL.revokeObjectURL(pdraft.preview);
@@ -552,11 +543,13 @@ const consentOn = (me) =>
     }),
   );
 
+// '함께 타는 중'(최종 시안 P17–P21). 위는 지금 상태(제목·좌석 지도·기록 상태 또는 곧 도착·도착 부탁),
+// 아래는 그대로 둔 기능(할 일, 챙길 부탁, 내 동의, 장면·자막·공유)이다. 도착과 '확인'은 이 탭에서만 기억한다(여행·동의 세대별, 저장하지 않음).
+const ride = { seen: { key: "", place: "" }, near: { key: "", place: "" } };
 function tripView(me) {
   const t = `/${trip.code}`;
   const driver = me.seat === "ROW_1_LEFT";
   const by = Object.fromEntries(trip.participants.map((p) => [p.id, p]));
-  const seated = Object.fromEntries(trip.participants.map((p) => [p.seat, p]));
   const waiting = trip.status === "driving" ? trip.participants.filter((p) => !p.consent).map((p) => p.name) : [];
   const patch = (path, body) => () => act(() => call("PATCH", t + path, body));
   // 지우기(#156 동의 문구): 장면 소리는 이 여행의 참가자 누구나, 자기 글은 프로필로 참가한 사람만
@@ -578,11 +571,30 @@ function tripView(me) {
       toast(deleted ? `내 이름이 붙은 글 ${deleted}줄을 지웠어요.` : "지울 내 글이 없어요.");
     });
   const open = trip.requests.filter((r) => !CLOSED.includes(r.status));
-  const recordingSwitch = h("button", { type: "button", className: "record-setting-switch", role: "switch", "aria-label": "차량 기록 설정", "aria-checked": String(!!trip.recording), disabled: trip.status !== "driving" || Boolean(waiting.length) || offline, onclick: async (e) => { const control = e.currentTarget; control.disabled = true; try { await patch("", { recording: !trip.recording })(); } finally { if (control.isConnected) control.disabled = offline; } } }, h("span", { className: "switch-track", "aria-hidden": "true" }, h("i")));
-  const next = NEXT_TRIP[trip.status];
-  const controls = [
-    driver && next && button(next[0], patch("", { status: next[1] }), "primary grow"),
-  ].filter(Boolean);
+
+  // 지금 상태 고르기. 할 일은 기록에 동의하고 이 폰에서 연결한 사람만 읽는다(todos.snapshot이 null이면 부탁을 말하지 않음).
+  // 마지막 읽기가 실패한 목록(stale)으로는 완료·남은 수를 단정하지 않는다.
+  const scope = `${trip.code}:${trip.generation ?? 1}`;
+  const list = todos.snapshot();
+  const asks = askState(list);
+  if (trip.status === "parked" && list?.arrival?.place) ride.seen = { key: scope, place: list.arrival.place };
+  const state = driveState(trip, { arrival: list?.arrival, seenArrival: ride.seen.key === scope ? ride.seen.place : "", nearSeen: ride.near.key === scope ? ride.near.place : "" });
+  const heading = rideHeading(state, { title: trip.title, waiting, asks });
+  const [recordText, recordOn] = recordingLine(trip, waiting);
+
+  // 아래 단추: 기록 중지·재개(주행 중, 누구나), 곧 도착 '확인', 그 밖에는 운전석의 다음 여행 상태. 부탁 남기기는 늘 함께.
+  const moves = driver ? statusMoves(trip, state) : [];
+  const toggleRecording = async (e) => {
+    const control = e.currentTarget;
+    control.disabled = true;
+    try { await patch("", { recording: !trip.recording })(); } finally { if (control.isConnected) control.disabled = offline; }
+  };
+  const recordButton = (className) => h("button", { type: "button", className, disabled: offline || (!trip.recording && waiting.length > 0), onclick: toggleRecording }, trip.recording ? "기록 중지" : "기록 재개");
+  let main = null;
+  if (state.kind === "near") main = button("확인", () => { ride.near = { key: scope, place: state.place }; render(); }, "primary");
+  else if (trip.status === "driving") main = recordButton("primary big");
+  else if (moves.length) { const [label, status] = moves.shift(); main = button(label, patch("", { status }), "primary"); }
+  const ask = trip.status !== "ended" && button("부탁 남기기", () => (sheet.showModal(), sheet.querySelector("#sheet-text").focus()), main ? "secondary" : "primary");
 
   // 운전자가 제안하고 수락한다. 반영 확인은 차량 앱이 내비 결과를 받은 뒤 누르는 자리다.
   const request = (r) => {
@@ -604,19 +616,19 @@ function tripView(me) {
     );
   };
 
+  // 기록 상태 띠. 곧 도착 화면에서는 주 단추가 '확인'이라 기록 중지·재개를 띠 안에 둔다(멈추는 길을 가리지 않게).
+  const band = (withToggle) => h("section", { className: `ride-status${recordOn ? " on" : ""}`, role: "status" },
+    h("div", { className: "between" }, h("strong", {}, recordText), withToggle && recordButton("plain")),
+    h("p", { className: "meta" }, "실제 녹음 상태는 차 화면에서 확인해 주세요."));
+  const now = state.kind === "near" ? [nearCard(state, asks), band(true)]
+    : state.kind === "arrived" ? arrivalCards(state, asks, trip.participants, personAvatar)
+    : [seatMap(trip, me, personAvatar), band(false)];
+
   return [
-    header(button("처음으로", () => { location.hash = ""; }, "plain"), h("span", { className: "brand" }, "가치타")),
-    h("h1", {}, trip.title || "함께 탄 여행"),
-    journeyTabs(),
-    h(
-      "section",
-      { className: "card" },
-      h("p", { className: "state" }, TRIP[trip.status][0]),
-      h("div", { className: "record-setting" }, h("span", { className: "record-setting-icon", "aria-hidden": "true" }, mediaIcon("mic")), h("div", { className: "grow" }, h("strong", {}, "차량 기록 설정"), h("p", { className: "meta" }, trip.recording ? "켜짐" : "꺼짐")), recordingSwitch),
-      h("p", { className: "sub" }, waiting.length ? `${waiting.join(", ")} 님의 기록 동의를 기다리고 있어요.` : TRIP[trip.status][1]),
-      h("p", { className: "meta" }, "실제 녹음 상태는 차 화면에서 확인해 주세요."),
-      controls.length > 0 && h("div", { className: "row" }, controls),
-    ),
+    appBar({ online: !offline, onHome: () => { location.hash = ""; } }),
+    journeyTabs("ride", { talk: () => conversations.open(), contents: launchShort }),
+    h("div", { className: "ride-title" }, h("h1", {}, heading.title), heading.sub && h("p", { className: "sub" }, heading.sub)),
+    ...now,
     todos.card(),
     h(
       "section",
@@ -626,17 +638,10 @@ function tripView(me) {
     ),
     h(
       "section",
-      { className: "stack" },
-      h("h2", {}, `일행 ${trip.participants.length}명`),
-      car(([id, label]) => {
-        const p = seated[id];
-        return h("div", { className: `chip${p ? "" : " empty"}${p?.id === me.id ? " me" : ""}` }, p ? p.name : "빈자리", h("small", {}, label));
-      }, "car readonly"),
-    ),
-    h(
-      "section",
       { className: "card" },
-      h("div", {}, h("p", { className: "what" }, "내 자리"), h("p", { className: "meta" }, SEAT[me.seat])),
+      h("div", { className: "between" }, h("div", {}, h("p", { className: "what" }, "내 자리"), h("p", { className: "meta" }, `${SEAT[me.seat]} · ${TRIP[trip.status]}`)),
+        // 운전석의 나머지 여행 상태 단추(첫째는 아래 주 단추 자리). 시안 위쪽을 가리지 않게 여기 둔다.
+        moves.length > 0 && h("div", { className: "row ride-moves" }, moves.map(([label, status]) => button(label, patch("", { status }))))),
       h(
         "div",
         { className: "between" },
@@ -672,7 +677,7 @@ function tripView(me) {
         ),
       ),
     profile && me.profileId === profile.id && me.consent && myToken() && trip.moments.length > 0 && h("section", { className: "card" }, h("div", { className: "between" }, h("h2", {}, "함께 나눌 장면"), shareIconButton("share", "내 장면 공유", () => shares.openCompose())), h("p", { className: "meta" }, "내 앨범에 남긴 장면과 받는 동승자를 직접 골라요.")),
-    trip.status !== "ended" && bar(button("부탁 남기기", () => (sheet.showModal(), sheet.querySelector("#sheet-text").focus()), "primary")),
+    (ask || main) && bar(ask, main),
   ];
 }
 
@@ -952,8 +957,10 @@ function render() {
   const gone = short && (failed || trip?.code !== short.code ? "여행을 더 볼 수 없어 숏폼을 닫았어요." : !me?.consent || trip.generation !== short.generation ? "기록 동의가 바뀌어 숏폼을 닫았어요." : "");
   if (gone) return closeShort(gone);
   const ownProfile = profile && me?.profileId === profile.id;
-  const view = short ? shortView() : location.hash === "#me" ? profileView() : !code() ? home() : failed ? missing() : !trip ? loading() : !me ? notHere() : (asking(me) || reading) && !ownProfile ? consentView(me) : tripView(me);
-  app.classList.toggle("home-view", !short && !code() && location.hash !== "#me");
+  const page = short ? "short" : location.hash === "#me" ? "profile" : !code() ? "home" : failed ? "missing" : !trip ? "loading" : !me ? "notHere" : (asking(me) || reading) && !ownProfile ? "consent" : "trip";
+  const view = { short: shortView, profile: profileView, home, missing, loading, notHere, consent: () => consentView(me), trip: () => tripView(me) }[page]();
+  app.classList.toggle("home-view", page === "home");
+  app.classList.toggle("ride-view", page === "trip");
   app.replaceChildren(...view.flat().filter(Boolean));
   if (!short && me && ownProfile && myToken() && (asking(me) || reading)) boarding.openConsent(trip, me, myToken());
   if (conversationPending && me && !asking(me) && !reading) { conversationPending = false; conversations.open(); }
