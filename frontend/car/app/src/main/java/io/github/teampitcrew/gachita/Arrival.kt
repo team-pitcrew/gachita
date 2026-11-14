@@ -130,14 +130,11 @@ private enum class BriefLayout(val pictureFirst: Boolean, val pad: PaddingValues
 
 /**
  * C20 / D19 / finalBrief. [onMain] runs the main button ('계속' closes the brief, '여행 마치고 기록 보기' ends the trip and opens the
- * conversation record). [note], [onRefresh] and [onArrive] are no longer drawn (the design has no sync line); they stay until the call
- * site in MainActivity (F3) drops them.
+ * conversation record).
  */
-@Suppress("UNUSED_PARAMETER")
 @Composable
 internal fun ArrivalBrief(
-    place: String, final: Boolean, items: List<SharedTodo>, people: List<Person>, note: String,
-    onMain: () -> Unit, onRefresh: () -> Unit, onArrive: (() -> Unit)?, modifier: Modifier = Modifier,
+    place: String, final: Boolean, items: List<SharedTodo>, people: List<Person>, onMain: () -> Unit, modifier: Modifier = Modifier,
     details: Map<String, String> = emptyMap(), // mock: 시안의 부가 설명 줄(할 일 id → 글). 실제 화면은 '{누구} 요청'
 ) {
     val rows = briefRows(items, people).withDetails(details)

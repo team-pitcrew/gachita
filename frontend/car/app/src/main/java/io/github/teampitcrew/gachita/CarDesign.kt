@@ -37,6 +37,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -52,13 +53,17 @@ import androidx.compose.ui.window.DialogProperties
  * 화면 파일은 여기 조각을 조립하고, 시안에 같은 조각이 있으면 새로 그리지 않는다. 프레임 → 코드 맵은 docs/car-frames.md.
  */
 
-/** 시안 글자 스타일(Pretendard). Figma 자간 -2·-1은 퍼센트라 em으로 옮긴다(-2% = -0.02em). */
+/**
+ * 시안 글자 스타일(Pretendard). Figma 자간은 퍼센트라 em으로 옮긴다(Title -1.5% = -0.6px, Status -2%, Headline -1%).
+ * 줄 높이 안에서 글자를 가운데에 두고 첫·끝 줄을 깎지 않는다(Figma와 같게. Compose 기본은 위아래를 깎아 3–5px 밀림).
+ */
 object CarText {
-    val Status = TextStyle(fontFamily = Pretendard, fontWeight = FontWeight.Bold, fontSize = 56.sp, lineHeight = 64.sp, letterSpacing = (-0.02).em) // Car/Status 56
-    val Title = TextStyle(fontFamily = Pretendard, fontWeight = FontWeight.Bold, fontSize = 40.sp, lineHeight = 50.sp, letterSpacing = (-0.02).em) // Car/Title 40
-    val Headline = TextStyle(fontFamily = Pretendard, fontWeight = FontWeight.Bold, fontSize = 32.sp, lineHeight = 42.sp, letterSpacing = (-0.01).em) // Car/Headline 32
-    val Body = TextStyle(fontFamily = Pretendard, fontWeight = FontWeight.Medium, fontSize = 28.sp, lineHeight = 40.sp) // Car/Body 28
-    val Label = TextStyle(fontFamily = Pretendard, fontWeight = FontWeight.Medium, fontSize = 24.sp, lineHeight = 32.sp) // Car/Label 24, 차의 가장 작은 글자
+    private val Lines = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.None)
+    val Status = TextStyle(fontFamily = Pretendard, fontWeight = FontWeight.Bold, fontSize = 56.sp, lineHeight = 64.sp, letterSpacing = (-0.02).em, lineHeightStyle = Lines) // Car/Status 56
+    val Title = TextStyle(fontFamily = Pretendard, fontWeight = FontWeight.Bold, fontSize = 40.sp, lineHeight = 50.sp, letterSpacing = (-0.015).em, lineHeightStyle = Lines) // Car/Title 40
+    val Headline = TextStyle(fontFamily = Pretendard, fontWeight = FontWeight.Bold, fontSize = 32.sp, lineHeight = 42.sp, letterSpacing = (-0.01).em, lineHeightStyle = Lines) // Car/Headline 32
+    val Body = TextStyle(fontFamily = Pretendard, fontWeight = FontWeight.Medium, fontSize = 28.sp, lineHeight = 40.sp, lineHeightStyle = Lines) // Car/Body 28
+    val Label = TextStyle(fontFamily = Pretendard, fontWeight = FontWeight.Medium, fontSize = 24.sp, lineHeight = 32.sp, lineHeightStyle = Lines) // Car/Label 24
 }
 
 /** 시안 모서리: radius/car-card 32, radius/car-ctl 24, 위 탭 바 20·칸 16, 캐릭터 칸 48, 공유 시트 28, 링크 카드 16. */
@@ -84,14 +89,31 @@ object CarPaper {
     val Ink2 = Color(0xFF5A5044)
 }
 
+/**
+ * 시안의 '내 얼굴' 프로필 메뉴(2200:5854)와 로그아웃 확인(2220:5866)에만 있는 색. 시안이 변수 없이 적은 값이라 Material 역할에 없다.
+ * 바깥 어둡게는 검정 56%(드롭다운)·62%(확인).
+ */
+object CarMenu {
+    val Surface = Color(0xFF262824) // 드롭다운·확인 바탕
+    val Line = Color(0xFF7A9C87) // 테두리 2
+    val Ink = Color(0xFFF5F2ED) // 확인 제목·취소, '갤러리 바로가기' 글
+    val Ink2 = Color(0xFFB8BAB0) // 확인 설명
+    val Count = Color(0xFFADC2B8) // 동승 그룹 인원
+    val Cancel = Color(0xFF383833) // 확인의 취소
+    val Confirm = Color.White.copy(alpha = 0.12f) // 확인의 로그아웃 바탕
+    val ConfirmInk = Color.White.copy(alpha = 0.92f) // 메뉴·확인의 '로그아웃' 글
+    val Scrim = Color.Black.copy(alpha = 0.56f)
+    val ConfirmScrim = Color.Black.copy(alpha = 0.62f)
+}
+
 /** 단추 종류: 큰 단추(accent 바탕·on-accent 글), 보조(surface-2·ink), 멈춤(rec-soft·rec, 기록 중지). */
 enum class CarButtonKind { Primary, Secondary, Stop }
 
-/** 시안 단추(Button/car/primary 등): 높이 96(초대·시트 안 80, 주행 큰 단추 132), 모서리 24, Car/Headline 32. 꺼진 큰 단추는 시안(C23)대로 같은 색 45%, 꺼진 보조 단추는 surface-2·ink-2. */
+/** 시안 단추(Button/car/primary 등): 높이 96(초대·시트 안 80, 주행 큰 단추 132, 대화 기록 112), 모서리 24, Car/Headline 32(대화 기록은 36 SemiBold, [style]). 꺼진 큰 단추는 시안(C23)대로 같은 색 45%, 꺼진 보조 단추는 surface-2·ink-2. */
 @Composable
 fun CarButton(
     label: String, modifier: Modifier = Modifier.fillMaxWidth(), kind: CarButtonKind = CarButtonKind.Primary, enabled: Boolean = true,
-    height: Dp = 96.dp, onClick: () -> Unit,
+    height: Dp = 96.dp, style: TextStyle = CarText.Headline, onClick: () -> Unit,
 ) {
     val c = MaterialTheme.colorScheme
     val (bg, fg) = when {
@@ -102,7 +124,7 @@ fun CarButton(
     }
     Surface(onClick = onClick, enabled = enabled, modifier = modifier.height(height).alpha(if (!enabled && kind == CarButtonKind.Primary) 0.45f else 1f),
         shape = CarShape.Ctl, color = bg) {
-        Box(contentAlignment = Alignment.Center) { Text(label, color = fg, style = CarText.Headline, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center) }
+        Box(contentAlignment = Alignment.Center) { Text(label, color = fg, style = style, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center) }
     }
 }
 
@@ -115,16 +137,16 @@ fun TitleBlock(title: String, sub: String, modifier: Modifier = Modifier) = Colu
 
 /**
  * 주차 화면 틀(시안 C01–C16·C20·C22–C38): 여백 40, 머리 줄 80('가치타' · '주차 중  P'), 위 탭(있으면, 76), 칸 간격 24, 본문, 아래 단추 줄(간격 24).
- * [tab]이 null이면 탭을 그리지 않는다. [headerExtra]는 머리 줄 오른쪽 끝(창 크기 안내 등 유지 단추).
+ * [tab]이 null이면 탭을 그리지 않는다.
  */
 @Composable
 fun ParkedFrame(
     tab: Int? = null, onTab: (Int) -> Unit = {}, tabEnabled: (Int) -> Boolean = { true }, gear: String? = "P", online: Boolean = true,
-    headerExtra: @Composable () -> Unit = {}, bottom: (@Composable RowScope.() -> Unit)? = null, overlay: @Composable BoxScope.() -> Unit = {},
+    bottom: (@Composable RowScope.() -> Unit)? = null, overlay: @Composable BoxScope.() -> Unit = {},
     body: @Composable ColumnScope.() -> Unit,
 ) = Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
     Column(Modifier.fillMaxSize().padding(Shell.PARKED.padH), verticalArrangement = Arrangement.spacedBy(Shell.PARKED.gap)) {
-        TripHeader(Shell.PARKED, gear, online, listening = false, extra = headerExtra)
+        TripHeader(Shell.PARKED, gear, online, listening = false)
         if (tab != null) TripTabs(TRIP_TABS, tab, tabEnabled, onTab)
         Column(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Shell.PARKED.gap), content = body)
         if (bottom != null) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(24.dp), content = bottom)

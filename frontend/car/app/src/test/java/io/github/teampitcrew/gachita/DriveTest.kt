@@ -86,14 +86,14 @@ class DriveTest {
     @Test fun briefFoldsAsksIntoShortActions() {
         val trash = SharedTodo("n4", "마트", "쓰레기 정리하기", "pending", 0, emptyList(), "remember", listOf(TodoItem("쓰레기", null)), listOf("dad"), "쓰레기 정리하기")
         // A D20 '화장실 가기 / 장보기 / 쓰레기 정리하기'
-        assertEquals(listOf(NearRow(NearMark.TOILET, "화장실 가기"), NearRow(NearMark.CART, "장보기"), NearRow(NearMark.TRASH, "쓰레기 정리하기")),
+        assertEquals(listOf(NearRow(BriefIcon.RESTROOM, "화장실 가기"), NearRow(BriefIcon.CART, "장보기"), NearRow(BriefIcon.TRASH, "쓰레기 정리하기")),
             nearRows(F4Mock.martNear.take(2) + trash))
         // every thing to buy is one '장보기' row; at most three rows; anything else keeps its title with a mark by its words
-        assertEquals(listOf(NearRow(NearMark.CART, "장보기")), nearRows(F4Mock.mart.drop(1)))
-        assertEquals(listOf(NearRow(NearMark.TOILET, "화장실 가기"), NearRow(NearMark.COLD, "고기는 바로 냉장 보관"), NearRow(NearMark.BAG, "체크인하고 가방 내리기")),
+        assertEquals(listOf(NearRow(BriefIcon.CART, "장보기")), nearRows(F4Mock.mart.drop(1)))
+        assertEquals(listOf(NearRow(BriefIcon.RESTROOM, "화장실 가기"), NearRow(BriefIcon.COLD, "고기는 바로 냉장 보관"), NearRow(BriefIcon.LUGGAGE, "체크인하고 가방 내리기")),
             nearRows(F4Mock.lodge))
         val old = SharedTodo("o", "마트", "우유 꼭 사기", "pending", 0, emptyList()) // 이전 서버: 분류·제목 없음
-        assertEquals(listOf(NearRow(NearMark.DOT, "우유 꼭 사기")), nearRows(listOf(old)))
+        assertEquals(listOf(NearRow(BriefIcon.DRINK, "우유 꼭 사기")), nearRows(listOf(old))) // 도착 브리핑과 같은 그림(Twemoji 🥤)
         assertTrue(nearRows(F4Mock.mart + F4Mock.lodge).size <= 3)
     }
 
@@ -109,5 +109,12 @@ class DriveTest {
         val dad = Person("a", "민준", "ROW_1_LEFT", true, profile = true)
         assertEquals(dad, mePerson(listOf(Person("b", "엄마", "ROW_1_RIGHT", true, profile = true), dad)))
         assertEquals(null, mePerson(listOf(Person("c", "손님", "ROW_1_LEFT", true)))) // 손님 운전자는 이 차의 계정이 아님
+    }
+
+    @Test fun seatFacesFollowTheGroupProfile() {
+        assertEquals(R.drawable.char_glasses, faceRes(Person("a", "아빠", "ROW_1_LEFT", true, profile = true, character = "glasses"))) // 시안 A 아빠
+        assertEquals(R.drawable.char_cap, faceRes(Person("s", "서준", "ROW_2_LEFT", true, profile = true, character = "cap-small")))
+        assertEquals(R.drawable.char_basic, faceRes(Person("g", "손님", "ROW_1_LEFT", true))) // 손님은 자리 순서
+        assertEquals(R.drawable.char_cap, faceRes(Person("g", "손님", "ROW_1_RIGHT", true)))
     }
 }

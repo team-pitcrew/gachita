@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -18,7 +17,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.snapshotFlow
@@ -29,6 +27,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -86,20 +85,25 @@ private fun clock(at: Long) = SimpleDateFormat("HH:mm", Locale.KOREA).format(Dat
 /** Line under the title while driving (liveTranscript 2026:2308 '대화 기록 중'; paused '대화 기록 멈춤'). */
 internal fun liveChip(capturing: Boolean) = "대화 기록 ${if (capturing) "중" else "멈춤"}"
 
-/** Bubble words (Conversation / Car 36 Medium): the nearest car step, Headline 32 at Medium weight. */
-private val BubbleText = CarText.Headline.copy(fontWeight = FontWeight.Medium, letterSpacing = CarText.Body.letterSpacing)
+// C44 2019:1966 and Conversation / Car 2120:5693 text sizes (the design's own values)
+private val TitleText = CarText.Title.copy(fontSize = 48.sp, lineHeight = 60.sp) // 48 Bold, -1.5%
+private val HeadText = CarText.Label.copy(fontSize = 26.sp, lineHeight = 35.sp, fontWeight = FontWeight.Normal) // '09:32  동해고속도로'
+private val NameText = CarText.Body.copy(lineHeight = 38.sp) // 28 Medium, line 1.35
+private val BubbleText = CarText.Body.copy(fontSize = 36.sp, lineHeight = 49.sp) // 36 Medium, line 1.35
+private val TimeText = CarText.Label.copy(fontWeight = FontWeight.Normal, lineHeight = 32.sp) // 24 Regular, line 1.35
+private val ButtonText = CarText.Headline.copy(fontSize = 36.sp, fontWeight = FontWeight.SemiBold) // 하단 작업 36 SemiBold/42
 
 /**
  * C44 body. [status] is the loading/consent/error line under the list. [canPick] gates '추천 장면 고르기' (scene picking, C23).
- * '말한 사람 고치기' opens trip tools (T37 fixes). [me] is the driver's own participant id ('(나)', right side).
+ * [me] is the driver's own participant id ('(나)', right side).
  * [live] non-null = driving (liveTranscript·pausedTranscript): read only, the line under the title shows [live], the newest line is kept in
- * view, and the only control is '함께 타는 중으로' ([onBack]). Fixing speakers and picking scenes stay parked-only; the list reloads whenever
- * the tab opens. Ask lines are ordinary bubbles in the revised C44 (no '○○의 부탁' card).
+ * view, and the only control is '함께 타는 중으로' ([onBack]). Picking scenes stays parked-only; the list reloads whenever the tab opens.
+ * Ask lines are ordinary bubbles in the revised C44 (no '○○의 부탁' card).
  */
 @Composable
 internal fun TranscriptScreen(
     trip: Trip, lines: List<TranscriptLine>, places: List<TripPlace>, loading: Boolean, status: String, canPick: Boolean,
-    onFixSpeakers: () -> Unit, onPick: () -> Unit, modifier: Modifier = Modifier, live: String? = null, me: String? = null, onBack: () -> Unit = {},
+    onPick: () -> Unit, modifier: Modifier = Modifier, live: String? = null, me: String? = null, onBack: () -> Unit = {},
 ) {
     val c = MaterialTheme.colorScheme
     val scroll = rememberScrollState()
@@ -107,19 +111,15 @@ internal fun TranscriptScreen(
     if (live != null) LaunchedEffect(Unit) { snapshotFlow { scroll.maxValue }.collect { scroll.scrollTo(it) } }
     // 넓은 창(D33 2019:2052)은 1120 폭의 대화 줄을 가운데에 둔다
     Box(modifier, contentAlignment = Alignment.TopCenter) { Column(Modifier.widthIn(max = 1120.dp).fillMaxSize(), verticalArrangement = Arrangement.spacedBy(24.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(trip.title.ifBlank { "함께하는 여행" }, style = CarText.Title, maxLines = 1, overflow = TextOverflow.Ellipsis) // 시안 48 → Car/Title 40
-                Text(live ?: tripRange(trip.createdAt, lines), color = c.onSurfaceVariant, style = CarText.Body, maxLines = 1)
-            }
-            // 시안 C44에는 단추가 없다. 잘못 붙은 화자를 고치는 길(T37)만 남기고, 다시 불러오기는 탭을 열 때마다 한다
-            if (live == null) TextButton(onFixSpeakers, Modifier.heightIn(min = 56.dp)) { Text("말한 사람 고치기", style = CarText.Label) }
+        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) { // 화면 제목 2019:1974
+            Text(trip.title.ifBlank { "함께하는 여행" }, style = TitleText, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(live ?: tripRange(trip.createdAt, lines), color = c.onSurfaceVariant, style = CarText.Body, maxLines = 1)
         }
         Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(scroll), verticalArrangement = Arrangement.spacedBy(24.dp)) {
             transcriptItems(lines, emptySet(), places).forEach { item ->
                 when (item) {
                     is Said.Head -> Text(listOfNotNull(clock(item.at), item.place).joinToString("  "), Modifier.fillMaxWidth(), color = c.onSurfaceVariant,
-                        style = CarText.Label, textAlign = TextAlign.Center)
+                        style = HeadText, textAlign = TextAlign.Center)
                     is Said.Line -> Bubble(item.line, trip.people.find { it.id == item.line.participantId }, me)
                     is Said.Ask -> Bubble(item.line, trip.people.find { it.id == item.line.participantId }, me)
                 }
@@ -128,8 +128,8 @@ internal fun TranscriptScreen(
         }
         if (status.isNotEmpty()) Text(status, color = c.onSurfaceVariant, style = CarText.Label, maxLines = 2)
         // 하단 작업(시안 112 높이, accent)
-        if (live != null) CarButton("함께 타는 중으로", height = 112.dp, onClick = onBack)
-        else CarButton("추천 장면 고르기", enabled = canPick, height = 112.dp, onClick = onPick)
+        if (live != null) CarButton("함께 타는 중으로", height = 112.dp, style = ButtonText, onClick = onBack)
+        else CarButton("추천 장면 고르기", enabled = canPick, height = 112.dp, style = ButtonText, onClick = onPick)
     } }
 }
 
@@ -147,17 +147,17 @@ private fun Bubble(line: TranscriptLine, who: Person?, me: String?) {
             if (line.edited) Text("수정한 자막", color = c.onSurfaceVariant, style = CarText.Label)
         }
     }
-    val time: @Composable () -> Unit = { Text(clock(line.at), color = c.onSurfaceVariant, style = CarText.Label, maxLines = 1) }
+    val time: @Composable () -> Unit = { Text(clock(line.at), color = c.onSurfaceVariant, style = TimeText, maxLines = 1) }
     if (mine) Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text("${who!!.name} (나)", color = c.onSurfaceVariant, style = CarText.Body, maxLines = 1)
+        Text("${who!!.name} (나)", color = c.onSurfaceVariant, style = NameText, maxLines = 1)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.End), verticalAlignment = Alignment.Bottom) {
             time()
             Surface(Modifier.weight(1f, fill = false), RoundedCornerShape(28.dp, 6.dp, 28.dp, 28.dp), color = c.primaryContainer) { words() }
         }
     } else Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
-        if (who != null) Avatar(seatCharacter(who), 72.dp) else Box(Modifier.size(72.dp).clip(CircleShape).background(c.surfaceVariant))
+        if (who != null) Avatar(who, 72.dp) else Box(Modifier.size(72.dp).clip(CircleShape).background(c.surfaceVariant))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(who?.name ?: "말한 사람 미확인", color = c.onSurfaceVariant, style = CarText.Body, maxLines = 1)
+            Text(who?.name ?: "말한 사람 미확인", color = c.onSurfaceVariant, style = NameText, maxLines = 1)
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.Bottom) {
                 Surface(Modifier.weight(1f, fill = false), RoundedCornerShape(6.dp, 28.dp, 28.dp, 28.dp), color = c.surfaceVariant) { words() }
                 time()
