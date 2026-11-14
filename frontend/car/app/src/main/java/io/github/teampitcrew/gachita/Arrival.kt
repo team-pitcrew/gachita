@@ -174,11 +174,12 @@ private fun BuyCard(rows: List<BriefRow>, wide: Boolean) {
                 Text("잊지 말고 살 것", Modifier.weight(1f), fontSize = 32.sp, lineHeight = 42.sp, fontWeight = FontWeight.Bold)
                 Text("${rows.size}개", color = c.onSurfaceVariant, fontSize = 24.sp)
             }
-            if (wide) rows.chunked(2).forEach { pair ->
-                Row(horizontalArrangement = Arrangement.spacedBy(40.dp)) {
-                    pair.forEach { BriefLine(it, Modifier.weight(1f)) }
-                    if (pair.size == 1) Column(Modifier.weight(1f)) {}
+            // 넓은 창은 시안처럼 왼쪽 열을 먼저 채운다(삼겹살·귤 | 젤리·탄산수)
+            if (wide) Row(horizontalArrangement = Arrangement.spacedBy(40.dp)) {
+                rows.chunked((rows.size + 1) / 2).forEach { col ->
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(16.dp)) { col.forEach { BriefLine(it) } }
                 }
+                if (rows.size == 1) Column(Modifier.weight(1f)) {}
             } else rows.forEach { BriefLine(it) }
         }
     }
