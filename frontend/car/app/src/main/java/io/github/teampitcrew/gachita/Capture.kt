@@ -181,7 +181,7 @@ fun interface Uplink {
 /**
  * 보관함: 여행 하나의 발화를 순번(1부터)과 함께 앱 저장소에 한 줄씩 쌓는다. 줄마다 AES-GCM으로 암호화한 Base64 한 줄이다(Vault.kt, T69).
  * 앱을 다시 켜면 풀어서 이어 읽는다. 열리지 않는 줄(쓰다 끊김, 키가 바뀜)은 건너뛴다.
- * 상태 파일(.acked, 암호화)에는 서버가 1부터 빠짐없이 받았다고 한 마지막 순번(lastSeq), 여행을 만든 시각(48시간 지우기의 기준),
+ * 상태 파일(.acked, 암호화)에는 서버가 1부터 빠짐없이 받았다고 한 마지막 순번(lastSeq), 여행을 만든 시각,
  * 동의 철회로 글을 지운 경계 순번을 둔다.
  * 서버가 돌려준 값이 acked보다 작으면(DB를 백업에서 되살림) 그 값으로 내리고 그 뒤부터 다시 보낸다(ADR-0014 2절).
  * 동의 철회(서버 여행의 세대가 오름)를 알게 되면 그때까지 쌓인 순번의 글과 위치를 모두 지우고 그 경계를 남긴다. 다시 켜도 그 경계로만 지운다
@@ -239,7 +239,7 @@ class Outbox(dir: File, val trip: String, private val seal: Seal) {
     }
 
     /**
-     * 서버 여행의 동의 세대와 만든 시각. 만든 시각은 처음 한 번 상태 파일에 적는다(통신이 끊겨도 48시간을 잴 수 있게).
+     * 서버 여행의 동의 세대와 만든 시각. 만든 시각은 상태 파일에 적어 재접속 후에도 여행 정보를 유지한다.
      * 세대가 올라갔으면(동의 철회) 그때까지의 순번을 지우고 경계를 남긴다. 지운 것이 있으면 true.
      */
     @Synchronized fun see(g: Int, born: Long): Boolean {
@@ -275,7 +275,7 @@ class Outbox(dir: File, val trip: String, private val seal: Seal) {
         tmp.renameTo(file)
     }.getOrDefault(false)
 
-    /** 임시 파일에 다 쓴 뒤 이름을 바꾼다(쓰다 끊겨 만든 시각을 잃으면 그 여행이 지워지므로). */
+    /** 임시 파일에 다 쓴 뒤 이름을 바꿔 확인 순번과 철회 경계를 보존한다. */
     private fun saveState() {
         val tmp = File(stateFile.path + ".tmp")
         tmp.writeText(seal.line(JSONObject().put("acked", acked).put("createdAt", createdAt).put("wiped", wiped).toString()))

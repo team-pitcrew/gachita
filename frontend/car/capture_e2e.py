@@ -462,7 +462,7 @@ def main(apk, minutes):
     adb("shell", "am", "start", "--user", "10", "-S", "-n", f"{PKG}/.MainActivity", "--el", "keepMs", "60000"); time.sleep(5)
     ui = texts(); shot("09-expired"); note("ui", texts=ui)
     check("만든 뒤 보관 기간이 지난 여행은 다시 켤 때 차 안 사본(보관함·할 일·저장한 여행)이 지워짐", had and not trip_files(code) and e2e.making(ui), had=had)
-    # 8. 서버가 여행을 모르면(48시간이 지나 지워짐 = 404) 차 안 사본도 지운다. 새 여행을 만들고 서버 DB에서 지운다
+    # 8. 서버에서 여행을 명시적으로 지우면(404) 차 안 사본도 지운다. 새 여행을 만들고 서버 DB에서 지운다
     adb("shell", "am", "start", "--user", "10", "-S", "-n", f"{PKG}/.MainActivity"); time.sleep(4)
     e2e.tap_make(); time.sleep(4)
     ui = texts(); code2 = next((t.split()[-1] for t in ui if t.startswith("여행 코드")), None); had = trip_files(code2) if code2 else []

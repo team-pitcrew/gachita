@@ -1,14 +1,12 @@
 // 현재 참가 권한이 있는 여행의 녹취. 개인 피드나 앨범을 여행 전문으로 쓰지 않는다.
 import { h, SEAT } from "./shared.js";
 
-const KEEP_MS = 48 * 3600 * 1000;
 const date = (at) => new Date(at).toLocaleDateString("ko-KR", { month: "long", day: "numeric", weekday: "short" });
 const time = (at) => new Date(at).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
 const button = (text, onclick, className = "") => h("button", { type: "button", className, onclick }, text);
 
-export function conversationAccess(session, trip, participant, token, now = Date.now()) {
+export function conversationAccess(session, trip, participant, token) {
   if (!trip || trip.code !== session.code) return "여행이 바뀌어 이 대화를 표시할 수 없어요.";
-  if (now >= trip.createdAt + KEEP_MS) return "보관 기간이 지난 대화예요.";
   if (!participant?.consent || participant.id !== session.participantId || trip.generation !== session.generation) return "기록 동의가 바뀌어 이 대화를 표시할 수 없어요.";
   if (!token) return "이 폰의 동승 연결을 다시 확인해 주세요.";
   return "";
@@ -141,7 +139,7 @@ export function createConversations({ getTrip, getParticipant, getToken, request
       // 연결이 끊겼을 때 원문을 계속 노출하지 않는다. 뒤늦은 철회도 폴링 재개 때 다시 검증한다.
       s.lines = [];
       s.snapshot = null;
-      if (e.status === 401 || e.status === 403 || e.status === 404) return unavailable(e.status === 404 ? "지워졌거나 보관 기간이 지난 대화예요." : "지금은 이 대화를 볼 수 없어요. 기록 동의와 동승 연결을 확인해 주세요.");
+      if (e.status === 401 || e.status === 403 || e.status === 404) return unavailable(e.status === 404 ? "지워졌거나 찾을 수 없는 대화예요." : "지금은 이 대화를 볼 수 없어요. 기록 동의와 동승 연결을 확인해 주세요.");
       s.error = "연결이 끊겨 대화를 불러오지 못했어요.";
       paint(s);
     } finally {

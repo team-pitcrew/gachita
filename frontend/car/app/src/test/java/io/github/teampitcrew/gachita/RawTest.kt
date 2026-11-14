@@ -97,7 +97,7 @@ class RawTest {
         assertTrue(tmp.root.list()!!.isEmpty())
     }
 
-    @Test fun 동의_세대가_바뀌면_옛_세대_원음만_지우고_48시간은_여행_파일과_같이() {
+    @Test fun 동의_세대가_바뀌면_옛_세대_원음만_지우고_명시적_여행_삭제는_모두_지움() {
         val dir = tmp.root
         record(dir, 1, gen = 1); val now = record(dir, 1, gen = 2, start = 2_000_000)
         ClipLog(dir, "ABC234").add("m1")

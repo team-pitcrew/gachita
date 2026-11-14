@@ -30,7 +30,7 @@ fun arrivedAt(place: String, nextStop: String?) = nextStop != null && place in n
 
 /**
  * 여행 하나의 할 일. 앱 저장소의 todos-<여행 코드>.json에 통째로 암호화해 다시 쓴다(몇십 건이라 충분, Vault.kt). 메인 스레드에서만 만진다.
- * 받아 적은 말 그대로라 보관함과 같이 48시간이 지나면 지운다(sweep).
+ * 보관 기간으로 자동 만료하지 않으며, 해당 여행을 명시적으로 삭제할 때 함께 정리한다.
  * ponytail: 차 안에만 둔다. 서버 API에는 장소가 붙은 할 일이 없다(부탁에 장소 칸 없음). 서버 저장은 T39 쪽에서 정하면 옮긴다.
  */
 class Todos(dir: File, val trip: String, private val seal: Seal) {

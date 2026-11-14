@@ -61,10 +61,12 @@ private data class FeedShort(val key: String, val title: String, val durationMs:
 /** 피드는 완성된 MP4만, 제작 설정은 별도 화면에서 다룹니다. */
 @Composable
 internal fun ShortStudio(base: String, code: String, generation: Int, token: String?, tripTitle: String,
-    canRead: () -> Boolean, canPlay: () -> Boolean, onClose: () -> Unit, onLocal: () -> Unit, modifier: Modifier = Modifier) {
+    canRead: () -> Boolean, canPlay: () -> Boolean, onClose: () -> Unit, onLocal: () -> Unit,
+    onActiveChange: (Boolean) -> Unit, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val remoteAccess by rememberUpdatedState(canRead)
     val playbackAccess by rememberUpdatedState(canPlay)
+    val activeChange by rememberUpdatedState(onActiveChange)
     val api = remember(base) { Server(base) }
     val scope = rememberCoroutineScope()
     val alive = remember { AtomicBoolean(true) }
@@ -171,10 +173,11 @@ internal fun ShortStudio(base: String, code: String, generation: Int, token: Str
     }
     BackHandler { if (!busy) { if (page == ShortsPage.FEED) onClose() else { page = ShortsPage.FEED; note = "" } } }
     DisposableEffect(Unit) {
+        activeChange(true)
         CaptureService.hold(true)
         video.setOnPreparedListener { media -> player = media; media.isLooping = true; media.setVolume(if (muted) 0f else 1f, if (muted) 0f else 1f); if (page == ShortsPage.FEED && playbackAccess()) { video.start(); playing = true } else video.seekTo(1) }
         video.setOnErrorListener { _, _, _ -> playing = false; note = "영상을 재생하지 못했어요. 다른 쇼츠를 선택한 뒤 다시 열어 주세요."; true }
-        onDispose { alive.set(false); video.stopPlayback(); cache.values.forEach { it.delete() }; thumbs.clear(); if (!enteringLocal.get()) CaptureService.hold(false) }
+        onDispose { alive.set(false); video.stopPlayback(); cache.values.forEach { it.delete() }; thumbs.clear(); if (!enteringLocal.get()) CaptureService.hold(false); activeChange(false) }
     }
     LaunchedEffect(Unit) {
         try {

@@ -102,7 +102,7 @@ function plain(e) {
     : e.status === 403 && m.includes("동의한 참가자만") ? "기록에 동의한 참가자만 기록본을 볼 수 있어요."
     : e.status === 403 ? "이 참가자는 할 수 없는 일이에요."
     : e.status === 404 && m.includes("동승 연결") ? "QR이 만료됐거나 없어요. 폰에서 새로 띄워 주세요."
-    : e.status === 404 ? "여행을 찾지 못했어요. 없거나 만든 지 48시간이 지났어요."
+    : e.status === 404 ? "여행이 지워졌거나 연결한 주소를 찾을 수 없어요."
     : e.status === 409 && m.includes("동의하지 않은") ? "동의하지 않은 탑승자가 있어 기록을 켤 수 없어요."
     : e.status === 409 && m.includes("주행 중에만") ? "주행 중에만 기록할 수 있어요."
     : e.status === 409 && m.includes("이미 사용한") ? "이미 쓴 QR이에요. 폰에서 새로 띄워 주세요."
@@ -322,7 +322,7 @@ async function refresh(force = false) {
       if (next) ((trip = next), (changed = true));
     } catch (e) {
       if (e.status === 404 || e.status === 400) {
-        // 지난 여행이 없어졌다(48시간). 새로 만들게 처음 화면으로.
+        // 서버에서 여행을 찾을 수 없으면 새로 만들게 처음 화면으로.
         const why = plain(e);
         newTrip();
         setupErr = `지난 여행을 이어 가지 못했어요 · ${why}`;
@@ -411,7 +411,7 @@ function status() {
     : s === "driving" && everyone() ? ["기록 멈춤", "동의는 그대로예요 · 확장 제어에서 다시 시작해요", "wait"]
     : s === "boarding" && everyone() ? ["기록 대기", "출발하면 기록을 시작해요", "wait"]
     : s === "parked" ? ["기록 꺼짐", "다시 출발하면 이어서 기록해요", ""]
-    : s === "ended" ? ["기록 꺼짐", "여행을 마쳤어요 · 기록본은 48시간까지 볼 수 있어요", ""]
+    : s === "ended" ? ["기록 꺼짐", "여행을 마쳤어요 · 남긴 기록을 다시 볼 수 있어요", ""]
     : ["기록 꺼짐", trip.participants.some((p) => p.consent) ? "모두 동의하면 다시 기록할 수 있어요" : "주차(P)한 뒤 대화 기록 동의를 켜면 기록해요", ""];
 }
 

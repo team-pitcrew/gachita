@@ -32,7 +32,7 @@ val FAMILY = listOf(
 /** profile은 프로필로 참가한 사람(그 프로필의 목소리 등록값이 대조 후보가 됨, #65). */
 data class Person(val id: String, val name: String, val seat: String, val consent: Boolean, val profile: Boolean = false)
 
-/** generation은 동의 세대(동의 철회로 올라감), createdAt은 만든 시각(epoch ms, 보관 48시간의 기준). */
+/** generation은 동의 세대(동의 철회로 올라감), createdAt은 만든 시각(epoch ms). */
 data class Trip(
     val code: String, val title: String, val status: String, val people: List<Person>, val heldRequests: Int, val version: Int,
     val generation: Int = 1, val createdAt: Long = 0, val moments: List<Moment> = emptyList(),

@@ -1,7 +1,6 @@
 // 내 기록본과 장면 후보(T43). 앱 상태는 읽는 함수로 받고, 닫힌 화면에는 늦게 온 응답을 그리지 않는다.
 import { api, h, toast } from "./shared.js";
 
-const KEEP_MS = 48 * 3600 * 1000;
 const FEED_POLL_MS = 5000;
 const button = (label, onclick, className = "") => h("button", { type: "button", className, onclick }, label);
 const when = (at) => new Date(at).toLocaleString("ko-KR", { month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" });
@@ -36,13 +35,13 @@ export function createRecords({ getProfile, getProfileToken, getTrip, getPartici
   dialog.addEventListener("close", () => { if (!dialog.open) close(); });
   addEventListener("hashchange", close);
 
-  // 동의 철회/다른 여행/만료를 폴링에서 확인하면 이미 받은 글도 화면에서 걷는다.
+  // 동의 철회/다른 여행을 폴링에서 확인하면 이미 받은 글도 화면에서 걷는다.
   const valid = (s) => {
     if (state !== s) return false;
     if (s.mode === "feed") return getProfile()?.id === s.profileId && getProfileToken() === s.token;
     const trip = getTrip();
     const me = getParticipant();
-    return trip?.code === s.code && trip.generation === s.generation && me?.id === s.participantId && me.consent && Date.now() < trip.createdAt + KEEP_MS;
+    return trip?.code === s.code && trip.generation === s.generation && me?.id === s.participantId && me.consent;
   };
   const sync = () => {
     if (state && !valid(state)) {
@@ -129,7 +128,7 @@ export function createRecords({ getProfile, getProfileToken, getTrip, getPartici
   function feedView(s) {
     s.controls.clear();
     shell(s,
-      h("p", { className: "meta" }, "내 이름이 붙은 대화는 여행을 만든 뒤 48시간까지, 내가 고른 장면은 내 앨범에 남아요. 최근 기록 100개를 보여 드려요."),
+      h("p", { className: "meta" }, "내 이름이 붙은 대화와 내가 고른 장면을 모았어요. 최근 기록 100개를 보여 드려요."),
       s.items.length ? h("ul", { className: "records-list" }, s.items.map((item) => {
         const remove = button("내 앨범에서 지우기", () => erase(s, item, remove), "plain");
         remove.disabled = s.pending.has(item.id);
@@ -137,7 +136,7 @@ export function createRecords({ getProfile, getProfileToken, getTrip, getPartici
         return h("li", { className: "card" },
           h("div", { className: "between" }, h("span", { className: "pill" }, item.kind === "moment" ? "남긴 장면" : "내가 한 말"), h("time", { className: "meta", dateTime: new Date(item.at).toISOString() }, when(item.at))),
           h("p", { className: "what" }, item.kind === "moment" ? item.label || "이름 없는 장면" : item.text),
-          item.kind === "moment" && h("p", { className: "meta" }, "여행이 만료돼도 이 장면은 내 앨범에 남아요. 소리는 여행을 만든 뒤 48시간까지만 들을 수 있어요."),
+          item.kind === "moment" && h("p", { className: "meta" }, "이 장면은 내 앨범에 남아요. 소리를 지우거나 기록 동의를 거두면 원음은 들을 수 없어요."),
           item.kind === "moment" && remove,
         );
       })) : h("p", { className: "empty", role: "status" }, "아직 쌓인 기록이 없어요. 여행에서 장면을 고르면 내 앨범에 남아요."),
@@ -165,7 +164,6 @@ export function createRecords({ getProfile, getProfileToken, getTrip, getPartici
     const me = getParticipant();
     if (!trip || !me?.consent || !getParticipantToken()) return toast("기록에 동의한 이 폰의 참가자만 장면을 고를 수 있어요.");
     const s = { mode: "scenes", code: trip.code, generation: trip.generation, participantId: me.id, items: [], labels: new Map(), pending: new Set(), controls: new Map() };
-    if (Date.now() >= trip.createdAt + KEEP_MS) return toast("이 여행의 기록 보관 기간이 지났어요.");
     show(s);
     try {
       const { items } = await participantRequest("GET", "/scene-suggestions");

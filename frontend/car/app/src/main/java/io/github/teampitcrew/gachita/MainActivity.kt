@@ -144,6 +144,8 @@ class MainActivity : ComponentActivity() {
         }
     private enum class Destination(val label: String) { RIDE("함께 타는 중"), CONVERSATION("대화 기록"), SHORTS("쇼츠") }
     private var destination by mutableStateOf(Destination.RIDE)
+    private var shortStudioActive = false
+    private var retentionMs: Long? = null // null은 무기한. 디버그 keepMs 인자가 있을 때만 만료 시험을 한다.
     private var managing by mutableStateOf(false)
     private var conversationOpen by mutableStateOf(false)
     private data class ContentScope(val code: String, val generation: Int, val token: String)
@@ -250,7 +252,7 @@ class MainActivity : ComponentActivity() {
         private var n = 0
         override fun run() {
             val every = ++n % RESYNC_EVERY == 0
-            if (every) expire() // 앱이 며칠 켜져 있어도 48시간이 지난 사본을 지운다
+            if (every && retentionMs != null) expire()
             refresh(resync = every || !s.online, prune = every); locate()
             if (destination == Destination.CONVERSATION && !carStatus.restricted) loadTranscript()
             if (appVisible || s.recording) main.postDelayed(this, POLL_MS)
@@ -275,14 +277,23 @@ class MainActivity : ComponentActivity() {
             if (CaptureService.running) CaptureService.stop(this)
             return
         }
+        if (short != null || shortStudioActive || destination == Destination.SHORTS) {
+            CaptureService.hold(true) // 이미 있는 서비스도 재생 중에는 멈춘 상태를 유지한다.
+            return // onResume이 Compose 활성 콜백보다 먼저 와도 쇼츠 탭에서는 새 수음을 시작하지 않는다.
+        }
         if (CaptureService.running || !resumed || Live.mic == Mic.FAILED) return
-        if (short != null) return // 숏폼을 듣는 동안은 수음을 새로 열지 않는다(재생 소리가 기록에 들어가지 않게). 닫을 때 다시 맞춘다
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             if (!askedMic) { askedMic = true; askMic.launch(arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.POST_NOTIFICATIONS)) }
             else Live.set(Mic.FAILED, "마이크 권한이 없어 기록할 수 없어요")
             return
         }
         CaptureService.start(this, code)
+    }
+
+    private fun shortStudioActiveChanged(active: Boolean) {
+        shortStudioActive = active
+        // 같은 Compose 갱신에서 Studio가 교체되면 새 소유자가 먼저 활성화된 뒤 재개 여부를 판단한다.
+        if (!active) main.post { if (!isDestroyed) syncCapture() }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -296,13 +307,13 @@ class MainActivity : ComponentActivity() {
         if (debug) intent.getStringExtra("server")?.let { prefs.edit().putString("server", it).apply() }
         server = prefs.getString("server", null) ?: DEFAULT_SERVER
         device = prefs.getString("device", null) ?: UUID.randomUUID().toString().also { prefs.edit().putString("device", it).apply() }
-        // 여행을 만든 뒤 48시간이 지난 차 안 사본을 지운다(T69). 시험용으로 보관 기간을 줄이는 --el keepMs는 디버그 빌드에서만
+        // 기본값은 무기한. --el keepMs를 명시한 디버그 빌드에서만 시간에 따른 정리를 시험한다.
         val now = System.currentTimeMillis()
-        val keepMs = if (debug) intent.getLongExtra("keepMs", KEEP_MS) else KEEP_MS
-        sweep(filesDir, Live.seal(this), now, keepMs).forEach(Live::forget) // 서비스 때문에 프로세스가 살아 있던 경우
-        // 저장한 여행과 참가자 토큰도 받아 적은 말(부탁)과 인증 값이라 암호화해 둔다. 열리지 않거나(키가 바뀜) 보관 기간이 지났으면 없는 것으로
+        retentionMs = if (debug && intent.hasExtra("keepMs")) intent.getLongExtra("keepMs", -1).takeIf { it >= 0 } else null
+        sweep(filesDir, Live.seal(this), now, retentionMs).forEach(Live::forget)
+        // 여행과 참가자 토큰은 암호화한다. 열리지 않거나 명시한 디버그 시험 기간이 지났으면 없는 것으로 다룬다.
         fun unsealed(k: String) = prefs.getString(k, null)?.let { runCatching { Live.seal(this).unline(it) }.getOrNull() }
-        val saved = unsealed("trip")?.takeIf { j -> runCatching { now - parseTrip(j).createdAt <= keepMs }.getOrDefault(false) }
+        val saved = unsealed("trip")?.takeIf { j -> runCatching { !retentionExpired(parseTrip(j).createdAt, now, retentionMs) }.getOrDefault(false) }
         if (saved == null) prefs.edit().remove("trip").remove("tokens").commit()
         tokens = unsealed("tokens")?.let { j -> JSONObject(j).let { o -> o.keys().asSequence().associateWith { o.getString(it) } } }.orEmpty()
         // 앱을 다시 켜도, 서버에 닿지 않아도 마지막으로 받은 여행과 끄기 대기, 받아 적은 말과 순번을 이어 보여 준다
@@ -336,7 +347,8 @@ class MainActivity : ComponentActivity() {
                         carStatus.restricted -> SetupLocked()
                         destination == Destination.SHORTS && appVisible -> ShortStudio(server, "", 0, null, "",
                             canRead = { false }, canPlay = { appVisible && !isDestroyed && !carStatus.restricted },
-                            onClose = { destination = Destination.RIDE }, onLocal = { destination = Destination.RIDE }, modifier = Modifier.fillMaxSize())
+                            onClose = { destination = Destination.RIDE }, onLocal = { destination = Destination.RIDE },
+                            onActiveChange = ::shortStudioActiveChanged, modifier = Modifier.fillMaxSize())
                         else -> Setup()
                     }
                 }
@@ -408,7 +420,7 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * 최신 여행을 묻는다. 끄기를 서버에 아직 못 알렸으면 먼저 다시 보낸다. 서버가 여행을 모르면(48시간이 지나 지워짐) 차 안 사본도 지운다.
+     * 최신 여행을 묻는다. 끄기를 서버에 아직 못 알렸으면 먼저 다시 보낸다. 서버에서 여행이 삭제되면 차 안 사본도 지운다.
      * resync면 보낼 발화가 없어도 서버의 확인 순번을 다시 받는다(서버 DB가 백업에서 되살아나 내려갔으면 그 뒤부터 다시 보냄).
      * prune이면 이어서 참가자가 서버에서 지운 글을 차 사본에서도 지운다(T69). ponytail: 이 기기 발화 전체 목록을 받음. 순번만 주는 길이 생기면 바꾼다
      */
@@ -423,7 +435,7 @@ class MainActivity : ComponentActivity() {
             api.trip(t.code, v)
         }) { r ->
             r.onSuccess { got ->
-                if (s.trip?.code != t.code) return@onSuccess // 그사이 지운 여행(48시간·404)이나 새 여행: 늦게 온 응답으로 되살리지 않는다
+                if (s.trip?.code != t.code) return@onSuccess // 그사이 삭제된 여행이나 새 여행: 늦게 온 응답으로 되살리지 않는다
                 s = if (got == null) s.copy(online = true) else s.withTrip(keep(got))
                 upload(t, resync, prune) // 받은 여행의 동의 세대를 보관함에 반영한(철회면 글을 지운) 뒤에만 올린다
                 speakers(t) // 올릴 새 발화가 없어도 밀린 대조와 고침을 잇는다
@@ -485,18 +497,18 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** 48시간이 지난 여행의 차 안 사본을 지운다. 지금 여행이면 기록을 멈추고 처음 화면으로. */
+    /** 명시한 디버그 시험 기간이 지난 여행만 정리한다. 운영 기본값에서는 호출하지 않는다. */
     private fun expire() {
-        sweep(filesDir, Live.seal(this), System.currentTimeMillis()).forEach { code ->
+        sweep(filesDir, Live.seal(this), System.currentTimeMillis(), retentionMs).forEach { code ->
             Live.forget(code)
-            if (s.trip?.code == code) { newTrip(); error = "만든 지 48시간이 지난 여행이라 이 차에 남은 기록을 지웠어요" }
+            if (s.trip?.code == code) { newTrip(); error = "시험용 보관 기간이 지나 이 차에 남은 기록을 지웠어요" }
         }
     }
 
     /**
      * 사람이 확정한 장면(moments)의 구간을 이 차의 원음에서 16 kHz 모노 WAV로 잘라 올린다(T63 → T76 POST /recordings). 모두 동의한 동안만.
      * 구간이 끝나고 3초가 지난 장면만 본다(아직 녹음 중인 구간을 자르지 않게). 원음이 이 차에 없거나 서버가 버리라고 하면(400·404·409·413) 다시 하지 않는다.
-     * ponytail: 차 앱이 켜져 있을 때만 올린다. 폰에서 장면을 고른 뒤 차가 꺼져 있으면 다음에 앱을 켤 때(48시간 안).
+     * ponytail: 차 앱이 켜져 있을 때만 올린다. 폰에서 장면을 고른 뒤 차가 꺼져 있으면 동의가 유효한 채 다음에 앱을 켤 때.
      */
     private fun clips(t: Trip) {
         val up = tokens.minByOrNull { it.key }?.value ?: return
@@ -608,7 +620,7 @@ class MainActivity : ComponentActivity() {
         s.trip?.takeIf { it.code == u.trip }?.let(::speakers) // 바로 보내고, 못 보내면 다음 조회마다 다시
     }
 
-    /** 서버가 모르는 여행(48시간이 지나 지워짐): 기록을 멈추고 이 차의 사본(보관함·할 일)을 지운 뒤 처음 화면으로. */
+    /** 서버에서 삭제된 여행: 기록을 멈추고 이 차의 사본(보관함·할 일)을 지운 뒤 처음 화면으로. */
     private fun forget(code: String) {
         val current = s.trip?.code == code
         if (current) newTrip() // 기록을 멈추고 처음 화면으로
@@ -638,8 +650,8 @@ class MainActivity : ComponentActivity() {
             }) { r ->
                 if (s.trip?.code != t.code) return@bg // 그사이 지운 여행이나 새 여행: 늦게 온 응답은 지금 세션(새 여행 만들기의 busy 등)을 건드리지 않는다
                 r.onSuccess {
-                    // 같은 여행이어도 보관 기한(48시간)이 지났으면 되살리지 않고 이 요청의 busy만 푼다
-                    if (System.currentTimeMillis() - it.trip.createdAt > KEEP_MS) { s = s.copy(busy = false); return@onSuccess }
+                    // 디버그 만료 시험 중에는 지난 요청으로 여행을 되살리지 않는다.
+                    if (retentionExpired(it.trip.createdAt, System.currentTimeMillis(), retentionMs)) { s = s.copy(busy = false); return@onSuccess }
                     s = s.copy(busy = false).turnedOn(keep(it)); if (s.recording) car.speak("기록을 시작했어요")
                 }
                     .onFailure { s = s.copy(busy = false, online = it is ApiError, note = "기록을 시작하지 못했어요 · ${reason(it)}") }
@@ -658,7 +670,7 @@ class MainActivity : ComponentActivity() {
     private fun newTrip() {
         destination = Destination.RIDE; managing = false; conversationOpen = false; clearTranscript()
         prefs.edit().remove("trip").remove("tokens").commit()
-        sweep(filesDir, Live.seal(this), System.currentTimeMillis()).forEach(Live::forget)
+        sweep(filesDir, Live.seal(this), System.currentTimeMillis(), retentionMs).forEach(Live::forget)
         tokens = emptyMap()
         s = Session(gear = s.gear)
         offer = null; todos = null; todoList = emptyList(); brief = null; speakers = null; voiced = emptySet()
@@ -836,7 +848,11 @@ class MainActivity : ComponentActivity() {
             GLEO_RESUME -> {
                 val on = s.recording
                 if (on) { mute(false); syncCapture() } // 우리 화면이 앞으로 나오면(onResume) 수음을 시작한다
-                reply(GLEO_RESUME, on, if (on) "Recording resumed." else "Recording consent is off. Turn it on in the Gachita app while parked.")
+                reply(GLEO_RESUME, on, when {
+                    !on -> "Recording consent is off. Turn it on in the Gachita app while parked."
+                    short != null || shortStudioActive || destination == Destination.SHORTS -> "Recording will resume when the shorts screen closes."
+                    else -> "Recording resumed."
+                })
             }
         }
     }
@@ -1007,7 +1023,7 @@ class MainActivity : ComponentActivity() {
 
     private fun contentScope(): ContentScope? {
         val t = s.trip ?: return null
-        if (s.offPending || System.currentTimeMillis() - t.createdAt >= KEEP_MS) return null
+        if (s.offPending || retentionExpired(t.createdAt, System.currentTimeMillis(), retentionMs)) return null
         return viewer()?.let { ContentScope(t.code, t.generation, it) }
     }
 
@@ -1364,7 +1380,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 Spacer(Modifier.weight(1f))
-                Text("여행을 만든 뒤 48시간 동안 볼 수 있어요.", color = c.onSurfaceVariant, fontSize = 22.sp)
+                Text("기록 동의가 유효한 여행의 대화를 볼 수 있어요.", color = c.onSurfaceVariant, fontSize = 22.sp)
             } else {
                 Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(22.dp)) {
                     transcript.forEach { line ->
@@ -1393,12 +1409,18 @@ class MainActivity : ComponentActivity() {
         if (!appVisible || carStatus.restricted || t.status == "driving") return
         val scope = contentScope()
         val url = server
-        androidx.compose.runtime.key(url, t.code, t.generation, scope?.token) {
-            ShortStudio(url, t.code, t.generation, scope?.token, t.title,
-                canRead = { appVisible && !isDestroyed && s.online && !carStatus.restricted && scope != null && contentScope() == scope && server == url && s.trip?.people?.all { it.consent } == true && s.trip?.status != "driving" && handoff.state == Handoff.State.OFF },
-                canPlay = { appVisible && !isDestroyed && !carStatus.restricted && s.trip?.status != "driving" && handoff.state == Handoff.State.OFF },
-                onClose = { destination = Destination.RIDE },
-                onLocal = { destination = Destination.RIDE; showShort() }, modifier = modifier)
+        Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            if (shortNote.isNotBlank()) Text(shortNote, fontSize = 22.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (shortNote == "숏폼을 받고 있어요") {
+                LinearProgressIndicator(Modifier.fillMaxWidth())
+                Spacer(Modifier.weight(1f))
+            } else androidx.compose.runtime.key(url, t.code, t.generation, scope?.token) {
+                ShortStudio(url, t.code, t.generation, scope?.token, t.title,
+                    canRead = { appVisible && !isDestroyed && s.online && !carStatus.restricted && scope != null && contentScope() == scope && server == url && s.trip?.people?.all { it.consent } == true && s.trip?.status != "driving" && handoff.state == Handoff.State.OFF },
+                    canPlay = { appVisible && !isDestroyed && !carStatus.restricted && s.trip?.status != "driving" && handoff.state == Handoff.State.OFF },
+                    onClose = { destination = Destination.RIDE },
+                    onLocal = ::showShort, onActiveChange = ::shortStudioActiveChanged, modifier = Modifier.weight(1f).fillMaxWidth())
+            }
         }
     }
 

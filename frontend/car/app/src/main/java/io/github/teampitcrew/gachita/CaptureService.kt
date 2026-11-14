@@ -68,7 +68,7 @@ object Live {
     fun outbox(ctx: Context, trip: String): Outbox =
         box?.takeIf { it.trip == trip } ?: Outbox(ctx.filesDir, trip, seal(ctx)).also { box = it; show(it) }
 
-    /** 여행의 차 안 파일을 지웠을 때(서버가 여행을 모름, 48시간). 그 여행의 보관함을 놓는다. */
+    /** 여행의 차 안 파일을 지웠을 때(서버에서 여행 삭제 또는 디버그 만료 시험). 그 여행의 보관함을 놓는다. */
     fun forget(trip: String) {
         if (box?.trip != trip) return
         box = null; recent = emptyList(); count = 0; pending = 0
