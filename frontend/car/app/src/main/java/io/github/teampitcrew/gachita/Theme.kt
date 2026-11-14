@@ -7,7 +7,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -23,7 +22,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -51,18 +49,8 @@ import androidx.compose.ui.unit.sp
  */
 
 // 디자인 1급 문서(11/14): 상징색은 원본 캐릭터 시트의 민트, 바탕·글자는 따뜻한 미색·먹색.
-// Material 단추는 primary를 글자색(테두리 단추)으로도 쓰므로, 밝은 화면의 primary는 흰 바탕 위 글자로 읽히는 짙은 민트다
-// (밝은 민트 #60C090은 흰 바탕과 2.2:1). 어두운 화면은 밝은 민트 바탕에 검은 글자.
-// outline은 테두리 단추·칩의 경계라 바탕과 구별되게, outlineVariant는 구분선.
-private val Light = lightColorScheme(
-    background = Color(0xFFF6F4F1), surface = Color(0xFFFFFFFF), surfaceVariant = Color(0xFFF1EEE9),
-    onBackground = Color(0xFF28221B), onSurface = Color(0xFF28221B), onSurfaceVariant = Color(0xFF5A5044),
-    outline = Color(0xFFA39A8E), outlineVariant = Color(0xFFEDEAE6), surfaceContainerHighest = Color(0xFFE3DED6),
-    primary = Color(0xFF2B7A53), primaryContainer = Color(0xFFE4F4EC), onPrimary = Color(0xFFFFFFFF), onPrimaryContainer = Color(0xFF2B7A53),
-    error = Color(0xFFB3261E), errorContainer = Color(0xFFFCE8E6), onErrorContainer = Color(0xFF28221B),
-    tertiary = Color(0xFF2B7A53), tertiaryContainer = Color(0xFFE4F4EC),
-    secondary = Color(0xFF8C6400), secondaryContainer = Color(0xFFFBF1DC), onSecondaryContainer = Color(0xFF28221B),
-)
+// 차 화면은 시스템 설정과 관계없이 늘 어두운 화면이다(최종 시안의 C·D 프레임, 11/15 오너 결정). 밝은 화면 색표는 두지 않는다.
+// 어두운 화면은 밝은 민트 바탕에 검은 글자. outline은 테두리 단추·칩의 경계라 바탕과 구별되게, outlineVariant는 구분선.
 private val Dark = darkColorScheme(
     background = Color(0xFF12110F), surface = Color(0xFF1C1A17), surfaceVariant = Color(0xFF26231F),
     onBackground = Color(0xFFF4F1EC), onSurface = Color(0xFFF4F1EC), onSurfaceVariant = Color(0xFFB5ADA2),
@@ -88,7 +76,7 @@ private val CarType = Typography(
 
 @Composable
 fun GachitaTheme(content: @Composable () -> Unit) =
-    MaterialTheme(colorScheme = if (isSystemInDarkTheme()) Dark else Light, typography = CarType) {
+    MaterialTheme(colorScheme = Dark, typography = CarType) {
         ProvideTextStyle(TextStyle(fontSize = 24.sp), content)
     }
 
