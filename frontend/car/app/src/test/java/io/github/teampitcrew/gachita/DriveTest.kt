@@ -60,6 +60,13 @@ class DriveTest {
         assertEquals("끝난 여행이에요. 새 여행에서 녹음을 시작해 주세요", ended.blockStart())
     }
 
+    @Test fun narrowHeaderAlwaysShowsConnection() {
+        assertFalse(headerParkLabel(wide = false, parked = true)) // C17p·C44: 좁은 창은 주차 중에도 '연결됨'
+        assertFalse(headerParkLabel(wide = false, parked = false))
+        assertTrue(headerParkLabel(wide = true, parked = true)) // C13·C20: 넓은 창 주차 중 '주차 중  P'
+        assertFalse(headerParkLabel(wide = true, parked = false))
+    }
+
     @Test fun seatCharacterFollowsSeatOrder() {
         assertEquals(0, seatCharacter(Person("a", "아빠", "ROW_1_LEFT", true)))
         assertEquals(4, seatCharacter(Person("b", "하은", "ROW_2_RIGHT", true)))

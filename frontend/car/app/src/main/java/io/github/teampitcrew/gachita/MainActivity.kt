@@ -1925,6 +1925,7 @@ class MainActivity : ComponentActivity() {
         Card(modifier = modifier) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("여행 관리", Modifier.weight(1f), fontSize = 32.sp, fontWeight = FontWeight.Bold)
+                if (LocalConfiguration.current.screenWidthDp < 1000) WindowSize() // 좁은 창 머리 줄은 시안대로 '연결됨'만, 창 크기 안내(T112)는 여기
                 OutlinedButton({ managing = false }, Modifier.heightIn(min = 56.dp), shape = RoundedCornerShape(10.dp)) { Text("닫기") }
             }
             Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {

@@ -139,7 +139,7 @@ internal fun TranscriptScreen(
 private fun Bubble(line: TranscriptLine, who: Person?) {
     val c = MaterialTheme.colorScheme
     Row(Modifier.padding(vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-        if (who != null) Character(seatCharacter(who), 64.dp) else Box(Modifier.size(64.dp).clip(CircleShape).background(c.surfaceVariant))
+        if (who != null) Avatar(seatCharacter(who), 64.dp, RoundedCornerShape(16.dp)) else Box(Modifier.size(64.dp).clip(RoundedCornerShape(16.dp)).background(c.surfaceVariant))
         Surface(Modifier.weight(1f), RoundedCornerShape(6.dp, 18.dp, 18.dp, 18.dp), color = c.surface) {
             Column(Modifier.padding(horizontal = 24.dp, vertical = 18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(who?.name ?: "말한 사람 미확인", color = c.onSurfaceVariant, fontSize = 24.sp, lineHeight = 32.sp)

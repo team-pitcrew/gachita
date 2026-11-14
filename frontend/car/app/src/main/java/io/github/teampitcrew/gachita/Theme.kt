@@ -10,7 +10,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -27,6 +29,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.TextStyle
@@ -92,6 +97,21 @@ fun CarCard(tone: Tone = Tone.Plain, modifier: Modifier = Modifier, pad: Dp = 28
 fun Character(index: Int, size: Dp, ring: Boolean = false) {
     val ringMod = if (ring) Modifier.border(3.dp, MaterialTheme.colorScheme.onPrimaryContainer, RoundedCornerShape(16.dp)).padding(3.dp) else Modifier
     Image(painterResource(SEAT_CHARS.getOrElse(index) { SEAT_CHARS[0] }), null, Modifier.size(size).then(ringMod), contentScale = ContentScale.Fit)
+}
+
+/**
+ * 동그란(또는 둥근 네모) 캐릭터 얼굴(최종 시안 C17 일행·받아 적은 말, C44 대화 기록의 'Character / 원본' 칸). 시안처럼 칸을 캐릭터가 크게 채우게
+ * 전신 PNG를 1.45배로 키워 머리와 윗몸이 보이게 자르고, 밝은 바탕 위에 둔다(시안 조각의 밝은 파스텔 바탕). 그림 자체는 바꾸지 않는다.
+ * ring은 말하는 사람 테두리(6dp, 시안 accent-text). 전신이 필요한 곳(가족 고르기, 쇼츠 무대)은 Character를 쓴다.
+ */
+@Composable
+fun Avatar(index: Int, size: Dp, shape: Shape = CircleShape, ring: Boolean = false) {
+    val c = MaterialTheme.colorScheme
+    Box(Modifier.size(size).then(if (ring) Modifier.border(6.dp, c.onPrimaryContainer, shape) else Modifier).clip(shape).background(c.onSurface)) {
+        Image(painterResource(SEAT_CHARS.getOrElse(index) { SEAT_CHARS[0] }), null,
+            Modifier.fillMaxSize().graphicsLayer { scaleX = 1.45f; scaleY = 1.45f; transformOrigin = TransformOrigin(0.5f, 0.32f) },
+            contentScale = ContentScale.Fit)
+    }
 }
 
 /** 빈자리: 점선 동그라미. */
