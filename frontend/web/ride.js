@@ -152,12 +152,12 @@ export function rideHeading(state, { title, waiting = [], asks = null } = {}) {
   switch (state.kind) {
     case "drive": return { title: "지금은 운전에 집중하세요", sub: [trip, going].filter(Boolean).join(" / ") };
     case "paused": return { title: "기록을 잠시 멈췄어요", sub: waiting.length ? `${waiting.join(", ")} 님의 기록 동의를 기다리고 있어요.` : "대화가 더 이상 기록되지 않아요." };
-    case "near": return { title: `곧 ${state.place}에 도착해요`, sub: [state.eta != null && `도착 약 ${Math.max(1, Math.round(state.eta / 60))}분 전`, "일행이 말한 부탁"].filter(Boolean).join(" / ") };
+    case "near": return { title: `곧 ${state.place}에 도착해요`, sub: [state.eta != null && `도착 약 ${Math.max(1, Math.round(state.eta / 60))}분 전`, "가족이 말한 부탁"].filter(Boolean).join(" / ") };
     case "arrived": return { title: `${state.place}에 도착했어요`, sub: "내리기 전, 일행이 말한 부탁을 한눈에" };
     case "continue": {
       const left = todos && asksAt(todos, state.place).length;
       const done = todos == null ? `${state.place}에서 다시 출발` : left ? `${state.place}의 부탁 ${left}건 남음` : `${state.place}의 부탁은 완료`;
-      return { title: "다시, 우리의 여행", sub: [done, state.target && `${ro(state.target)} 이동`].filter(Boolean).join(" / ") };
+      return { title: "다시, 우리 가족의 여행", sub: [done, state.target && `${ro(state.target)} 이동`].filter(Boolean).join(" / ") };
     }
     case "parked": return { title: "주차했어요", sub: "이번 주행의 기록을 마감했어요." };
     case "ended": return { title: "여행을 마쳤어요", sub: "함께한 대화와 남긴 장면을 다시 볼 수 있어요." };
@@ -257,7 +257,7 @@ export function nearCard(state, asks) {
     h("h2", {}, note ? "내리기 전에 기억할 부탁" : asks.kind === "stale" ? (list.length ? "내리기 전에 기억할 부탁" : "받은 목록에는 이곳 부탁이 없어요") : list.length ? `내리기 전에 기억할 ${list.length}가지` : "이곳에서 챙길 부탁은 아직 없어요"),
     note ? h("p", {}, note) : list.length > 0 && h("ul", { className: "near-asks" }, list.map((t) => h("li", {}, askLabel(t)))),
     asks.kind === "stale" && h("p", { className: "meta" }, staleNote(asks)),
-    h("p", { className: "meta" }, "주차하면 사람별로 자세히 보여드릴게요."),
+    h("p", { className: "meta" }, "주차하면 가족별로 자세히 보여드릴게요."),
   );
 }
 
