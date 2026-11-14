@@ -1,4 +1,5 @@
 import { api, h, SEAT } from './shared.js';
+import { meEnd } from './ride.js';
 import { characterImage } from './short-film.js';
 
 const button = (label, onclick, className = '', disabled = false) => h('button', { type: 'button', onclick, className, disabled }, label);
@@ -140,7 +141,7 @@ export function createBoarding({ getProfile, getToken, consentText, consentOffMe
   function paint(s) {
     if (!valid(s)) return;
     const profile = getProfile(), me = s.joined?.participant;
-    const heading = h('header', { className: 'boarding-heading' }, button('닫기', () => s.joined ? finish(s) : close(true), 'plain', s.busy), h('strong', {}, s.joined ? '동승 연결' : '차량 QR로 참여'));
+    const heading = h('header', { className: 'boarding-heading' }, button('닫기', () => s.joined ? finish(s) : close(true), 'plain', s.busy), h('strong', {}, s.joined ? '동승 연결' : '차량 QR로 참여'), meEnd());
     let body;
     if (s.phase === 'consent') {
       body = h('section', { className: 'boarding-content' }, h('h1', {}, `${profile.name} 님,`, h('br'), '함께 탔어요'),

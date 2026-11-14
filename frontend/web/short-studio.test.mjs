@@ -11,6 +11,7 @@ const source = (await readFile(new URL('./short-studio.js', import.meta.url), 'u
   .replaceAll('"/shared.js"', JSON.stringify(new URL('./shared.js', import.meta.url).href))
   .replaceAll('"/short-generation.js"', JSON.stringify(new URL('./short-generation.js', import.meta.url).href))
   .replaceAll('"/short-film.js"', JSON.stringify(new URL('./short-film.js', import.meta.url).href))
+  .replaceAll('"/ride.js"', JSON.stringify(new URL('./ride.js', import.meta.url).href))
   .replaceAll('"/short-library.js"', JSON.stringify(library));
 const { createShortStudio } = await import(dataModule(source + '\n//# sourceURL=short-studio-under-test.js'));
 const defer = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };

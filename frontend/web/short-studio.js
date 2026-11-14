@@ -1,6 +1,7 @@
 import { api, h, toast } from "/shared.js";
 import { ShortGeneration, activeGeneration, generationState } from "/short-generation.js";
 import { characterImage } from "/short-film.js";
+import { meEnd } from "/ride.js";
 import { readShortLibrary, keepLibraryShort, removeLibraryShort, shortPoster, shortMetadata, libraryGroups, tripDate } from "/short-library.js";
 
 const remoteId = (code, job) => `${job.origin === "local-render" ? "asset" : "job"}:${code}:${job.id}`;
@@ -94,7 +95,7 @@ export function createShortStudio({ getTrip, getParticipant, getToken, getOwner,
   function header(s) {
     return h("header", { className: "reel-header" }, action("back", "닫기", close),
       h("nav", { "aria-label": "쇼츠 화면" }, button("쇼츠", () => changeView(s, "feed"), s.view === "feed" ? "is-selected" : ""), button("보관함", () => changeView(s, "library"), s.view === "library" ? "is-selected" : "")),
-      button("+ 만들기", () => begin(s), "reel-create"));
+      button("+ 만들기", () => begin(s), "reel-create"), meEnd());
   }
   function feed(s) {
     const items = records(s), item = s.selected;

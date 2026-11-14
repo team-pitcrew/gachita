@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { currentGroup, forgetIdentity } from "./profile-menu.js";
+import { createProfileMenu, currentGroup, forgetIdentity } from "./profile-menu.js";
 
 // 브라우저 Storage와 같은 모양(length·key·removeItem)만 흉내 낸다.
 const storage = (entries) => {
@@ -25,4 +25,21 @@ test("드롭다운의 현재 동승 그룹은 가족이 먼저, 없으면 첫 �
   assert.equal(currentGroup([{ kind: "guest", name: "바다" }]).name, "바다");
   assert.equal(currentGroup([]), null);
   assert.equal(currentGroup(undefined), null);
+});
+
+test("내 얼굴 단추는 프로필이 없어도 늘 있고(빈 원형 + 기본 캐릭터), 누르면 로그인·계정 만들기로 간다", async () => {
+  const el = (tag) => ({ tagName: tag, attrs: {}, kids: [], setAttribute(k, v) { this.attrs[k] = v; }, append(...k) { this.kids.push(...k); } });
+  globalThis.document = { createElement: el };
+  let profile = null;
+  const went = [];
+  const menu = createProfileMenu({ getProfile: () => profile, face: () => "얼굴", onSignIn: () => went.push("signIn"), onProfile: () => went.push("profile") });
+  const guest = menu.button();
+  assert.equal(guest.className, "me-button is-guest");
+  assert.equal(guest.attrs["aria-label"], "로그인·계정 만들기");
+  assert.deepEqual(guest.kids, ["얼굴"]);
+  await guest.onclick();
+  assert.deepEqual(went, ["signIn"]);
+  profile = { name: "민준" };
+  assert.equal(menu.button().className, "me-button");
+  delete globalThis.document;
 });

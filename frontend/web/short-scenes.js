@@ -1,5 +1,6 @@
 import { api, h, toast, SEAT } from "./shared.js";
 import { characterImage } from "./short-film.js";
+import { meEnd } from "./ride.js";
 
 const button = (label, onclick, disabled = false, className = "") => h("button", { type: "button", onclick, disabled, className }, label);
 const time = (at) => new Date(at).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -71,7 +72,7 @@ export function createScenePicker({ getTrip, getParticipant, getToken, onChoose,
   function paint(s) {
     if (!valid(s)) return;
     const trip = getTrip(), scene = current(s), moment = trip.moments.find((m) => m.id === s.momentId);
-    const top = h("header", { className: "mobile-heading" }, button(s.view === "detail" ? "장면 목록" : "닫기", () => { if (s.view === "detail") { clearAudio(s); s.view = "list"; paint(s); } else close(); }, false, "plain"), h("span", { className: "meta" }, trip.title || "함께한 여행"));
+    const top = h("header", { className: "mobile-heading" }, button(s.view === "detail" ? "장면 목록" : "닫기", () => { if (s.view === "detail") { clearAudio(s); s.view = "list"; paint(s); } else close(); }, false, "plain"), h("span", { className: "meta" }, trip.title || "함께한 여행"), meEnd());
     let body;
     if (s.view === "detail") {
       const cast = s.data?.cast || [];
