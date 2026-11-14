@@ -1,8 +1,7 @@
 // 여행 마무리 → 추천 장면 고르기 → 생성 → 완성(최종 시안 P22–P32). 화면은 대화상자 하나이고 머리와 세 탭은 ride.js를 쓴다.
 // 값은 서버가 준 것만 쓰고 지어내지 않는다. 장소(도착한 곳)는 앱이 읽는 GET /places(getPlaces), 없으면 기록본의 places(공개 여행 문서에는 없음).
-// - 전체 음성 올리기 진행률: GET /trips/{code}/audio(T132). 차가 실제로 올리는 중·다 올렸으면 그 값을 쓴다.
-//   mock: 전체 음성의 실제 업로드는 오너의 보관 결정 전까지 꺼 둔다(계획 '속도 우선' ③ — 차는 /audio를 부르지 않음).
-//   그동안 경로가 없거나(404) 차가 시작하지 않았으면(state none) P22는 시안대로 진행률을 흉내 낸다(mockUpload).
+// - 전체 음성 올리기 진행률: GET /trips/{code}/audio(T132, ADR-0024). 여행을 마치면 차가 전체 음성을 올리고 서버는 다 올린 때부터 2일 둔다.
+//   받은 바이트 / 차가 알린 전체 바이트만 퍼센트로 보이고, 경로가 없거나(404) 차가 아직 시작하지 않았으면 기다린다고만 말한다.
 // - 추천 장면: GET /scene-suggestions의 점수 상위 3개(서버 규칙, 전체 음성이 있으면 소리가 있는 구간만). 제목은 장면의 발화에서 규칙으로 뽑는다(LLM 없음).
 // - 생성: 고른 장면마다 POST /moments → 장면 소리가 생기면(차가 올리거나, A4가 붙으면 서버가 전체 음성에서 자름) → 기존 기본 영상
 //   (short-film.js exportShortFilm, 장면 길이만큼 실제로 재생하며 녹화) → POST /short-assets 보관. 서버가 만들어 주는 길은 없다.
@@ -72,18 +71,12 @@ export function audioStep(audio) {
   const waiting = { kind: "waiting", percent: null, label: "차에서 음성을 올리기를 기다리고 있어요" };
   if (!audio || audio.state === "none") return audio?.deleted ? { kind: "deleted", percent: null, label: "전체 음성을 지웠어요" } : waiting;
   if (audio.state === "ready") return { kind: "ready", percent: 100, label: "전체 음성 업로드 완료" };
+  // 다 올린 뒤 2일이 지나 서버가 지움. 다시 올리지 않는다(고른 장면의 소리와 만든 콘텐츠는 따로 남음).
+  if (audio.state === "expired") return { kind: "expired", percent: 100, label: "전체 음성 보관 기간(2일)이 지났어요" };
   if (audio.state !== "uploading") return waiting;
   const total = Number(audio.expectedBytes), got = Number(audio.receivedBytes) || 0;
   const percent = total > 0 ? Math.max(0, Math.min(99, Math.floor((got / total) * 100))) : null;
   return { kind: "uploading", percent, label: percent == null ? `전체 음성 업로드 중 · 조각 ${Number(audio.receivedParts) || 0}개 받음` : `전체 음성 업로드 중  ${percent}%` };
-}
-
-// mock: 실제 업로드가 꺼진 동안 P22에 보일 진행(시안 '전체 음성 업로드 중 82%'). 화면을 처음 연 때부터 ms 동안 0→100%,
-// 끝나면 '다 올림'. 받은 바이트는 퍼센트만 맞춘 가짜 값이라 mock 표시를 붙인다(자동으로 고르기로 넘어가지 않게).
-export const MOCK_UPLOAD_MS = 12_000;
-export function mockUpload(openedAt, now, ms = MOCK_UPLOAD_MS) {
-  const done = Math.max(0, Math.min(1, (now - openedAt) / ms));
-  return done >= 1 ? { state: "ready", mock: true } : { state: "uploading", mock: true, receivedParts: 0, receivedBytes: Math.round(done * 1000), expectedBytes: 1000 };
 }
 
 // 추천 장면: 서버 점수 상위 n개를 시각 순으로. 같은 점수면 앞선 장면.
@@ -170,7 +163,6 @@ export function createAfterTrip({ getTrip, getParticipant, getToken, request, re
   let view = null; // 보고 있는 화면 { code, generation, participantId, step: upload|select|make|done, audio, audioMissing, lines, picks, chosen, error }
   let run = null; // 만드는 일 { code, generation, participantId, items, active, paused, hidden, controller }
   let timer = null, poll = null;
-  const mockSince = new Map(); // mock: 여행·동의 세대별로 P22를 처음 연 때(다시 열어도 처음부터 다시 세지 않게)
 
   const parkedNow = (t) => t && ["parked", "ended"].includes(t.status);
   // 이 화면과 일이 아직 유효한가: 같은 여행·동의 세대·참가자, 주차·종료 상태, 이 폰의 토큰이 있음.
@@ -218,9 +210,9 @@ export function createAfterTrip({ getTrip, getParticipant, getToken, request, re
       }
     } finally { clearTimeout(timeout); }
     if (view !== s) return;
-    if (s.step === "upload" && s.audio?.state === "ready" && s.picks) s.step = "select"; // 실제로 다 올렸을 때만(mock은 넘기지 않음)
+    if (s.step === "upload" && s.audio?.state === "ready" && s.picks) s.step = "select";
     paint();
-    if (view === s && s.step === "upload") timer = setTimeout(() => tick(s), shown(s)?.mock && shown(s).state !== "ready" ? 1000 : 3000);
+    if (view === s && s.step === "upload" && s.audio?.state !== "expired") timer = setTimeout(() => tick(s), 3000); // 지난 것은 다시 묻지 않는다
   }
 
   // ---- 그리기 ----
@@ -229,23 +221,16 @@ export function createAfterTrip({ getTrip, getParticipant, getToken, request, re
   const axis = (total) => h("div", { className: "wave-axis", "aria-hidden": "true" }, h("span", {}, "00:00"), h("span", {}, clock(total * 1000)));
   const people = () => getTrip()?.participants ?? [];
   const timeline = (s) => tripClock(getTrip(), s.audio, s.lines ?? [], s.picks ?? []);
-  // 보일 올리기 상태: 차가 실제로 올리는 중이거나 다 올렸으면 그 값, 아니면(404·none) mock.
-  const shown = (s) => {
-    if (s.audio && s.audio.state !== "none") return s.audio;
-    if (s.audio === undefined && !s.audioMissing) return undefined; // 아직 묻는 중
-    if (s.audio?.deleted) return s.audio;
-    const key = `${s.code}:${s.generation}`;
-    if (!mockSince.has(key)) mockSince.set(key, Date.now());
-    return mockUpload(mockSince.get(key), Date.now());
-  };
+  // 보일 올리기 상태: 서버 값. 아직 묻는 중이면 undefined, 경로가 없으면(404) null.
+  const shown = (s) => (s.audio === undefined && !s.audioMissing ? undefined : s.audio ?? null);
 
   function uploadView(s) {
     const trip = getTrip(), time = timeline(s), audio = shown(s), step = audioStep(audio);
     const known = getPlaces();
     const arrived = [...placesOf(known.length ? known : s.places)].reverse().find((p) => p.kind === "arrived")?.name;
     const bars = densityBars(s.lines ?? [], time.origin, time.end);
-    const ratio = step.kind === "ready" ? 1 : (step.percent ?? 0) / 100;
-    const canGo = getParticipant()?.consent && (s.picks?.length > 0 || step.kind === "ready");
+    const ratio = (step.percent ?? 0) / 100;
+    const canGo = getParticipant()?.consent && (s.picks?.length > 0 || step.kind === "ready" || step.kind === "expired");
     return {
       title: "오늘의 주행을 기록했어요",
       sub: [arrived && `${arrived} 도착`, trip.status === "ended" ? "여행을 마쳤어요" : "주차 후 여행 마무리"].filter(Boolean).join(" / "),
@@ -260,6 +245,7 @@ export function createAfterTrip({ getTrip, getParticipant, getToken, request, re
         h("p", { className: "after-note" }, step.kind === "ready" ? "전체 음성을 다 올렸어요. 남기고 싶은 장면을 골라 주세요."
           : step.kind === "uploading" ? "여행 음성을 업로드하고 추천 장면을 준비하고 있어요."
           : step.kind === "deleted" ? "전체 음성이 지워져 받아 적은 대화로만 장면을 추천해요."
+          : step.kind === "expired" ? "전체 음성은 지웠어요. 이미 고른 장면의 소리와 만든 콘텐츠는 그대로 남아요."
           : "차가 여행 음성을 올리기 시작하면 여기에 진행률이 보여요. 그동안은 받아 적은 대화로 추천 장면을 준비해요."),
         !getParticipant()?.consent && h("p", { className: "after-note" }, "장면 고르기와 만들기는 기록에 동의한 사람만 할 수 있어요."),
       ],
@@ -271,7 +257,7 @@ export function createAfterTrip({ getTrip, getParticipant, getToken, request, re
     const trip = getTrip(), time = timeline(s), picks = s.picks ?? [];
     const chosen = picks.filter((p) => s.chosen.has(p.from));
     const bars = densityBars(s.lines ?? [], time.origin, time.end);
-    const fromAudio = s.audio?.state === "ready";
+    const fromAudio = s.audio?.state === "ready"; // 시안 '전체 음성에서 찾은 추천 장면 3개'는 실제로 다 올렸을 때만
     // 파형 위 번호 표식과 목록이 같은 선택을 바꾼다(시안 v2: 추천 3개는 파형과 목록에서 선택 가능)
     const flip = (key, on, focus) => { if (on) s.chosen.add(key); else s.chosen.delete(key); paint(focus); };
     const at = (ms) => offsetPct(ms, time.origin, time.end);
