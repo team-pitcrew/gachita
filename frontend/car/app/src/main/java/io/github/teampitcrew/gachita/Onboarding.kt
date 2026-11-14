@@ -2,14 +2,12 @@ package io.github.teampitcrew.gachita
 
 import android.Manifest
 import android.content.ActivityNotFoundException
+import android.view.View
 import android.content.Context
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.media.AudioFormat
-import android.media.AudioRecord
-import android.media.MediaRecorder
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
@@ -56,7 +54,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -83,7 +83,6 @@ private val BARS = listOf(40, 70, 96, 54, 84, 100, 44, 74, 92, 60, 88, 36, 80, 9
 // 시안 C04의 캐릭터 순서(안경·힐링·캡모자·기본)와 나머지. 값은 서버 character(웹과 같은 이름).
 private val CHARS = listOf("glasses" to R.drawable.char_glasses, "healing" to R.drawable.char_healing, "cap" to R.drawable.char_cap, "basic" to R.drawable.char_basic,
     "travel" to R.drawable.char_travel, "game" to R.drawable.char_game, "sport" to R.drawable.char_sport, "pet" to R.drawable.char_pet, "camping" to R.drawable.char_camping, "office" to R.drawable.char_office)
-private val TILE = listOf(Color(0xFFFCE8EF), Color(0xFFFFF4E0), Color(0xFFFFF8E6), Color(0xFFF1EEFF))
 
 fun charDrawable(key: String): Int = CHARS.firstOrNull { it.first == key.removeSuffix("-small") }?.second ?: R.drawable.char_basic
 
@@ -103,9 +102,10 @@ class Onboarding(private val context: Context, private val prefs: SharedPreferen
     var busy by mutableStateOf(false); private set
     var note by mutableStateOf(""); private set
     var heard by mutableStateOf(0.0); private set // 녹음한 초
+    var levels by mutableStateOf(DoubleArray(0)); private set // 막대 칸마다 실제로 들어온 소리 크기(VoiceMeter)
     var recordDone by mutableStateOf(false); private set
     private var photoJpeg: ByteArray? = null
-    private var recorder: Recorder? = null
+    private var recorder: VoiceRecorder? = null
     private var pcm: ByteArray? = null
     private var submitWhenStopped = false
 
@@ -218,8 +218,9 @@ class Onboarding(private val context: Context, private val prefs: SharedPreferen
         if (profile?.consent != true) { note = "기록 동의를 먼저 받아요"; step = OnboardStep.CONSENT; return }
         if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) { note = "마이크 권한이 없어 녹음할 수 없어요"; return }
         stopRecording()
-        pcm = null; heard = 0.0; recordDone = false; note = ""; submitWhenStopped = false
-        val rec = Recorder({ s -> main.post { if (recorder != null) heard = s } }) { bytes, failed ->
+        pcm = null; heard = 0.0; levels = DoubleArray(0); recordDone = false; note = ""; submitWhenStopped = false
+        val meter = VoiceMeter(BARS.size)
+        val rec = VoiceRecorder({ s, level -> meter.add(s, level); val snap = meter.snapshot(); main.post { if (recorder != null) { heard = s; levels = snap } } }) { bytes, failed ->
             main.post {
                 if (failed != null) { note = failed; step = OnboardStep.VOICE; recorder = null; return@post }
                 pcm = bytes; heard = bytes.size / 2.0 / RATE; recordDone = true; recorder = null
@@ -253,36 +254,6 @@ class Onboarding(private val context: Context, private val prefs: SharedPreferen
 
     fun close() { stopRecording(); io.shutdown() }
 
-    /**
-     * 차 마이크 15초. 수음(CaptureService)과 같은 형식(MIC, 16 kHz 2채널)을 열어 downmix의 모노를 모은다.
-     * 온보딩은 여행이 없을 때만 보이므로 수음 서비스와 마이크를 다투지 않는다.
-     */
-    private class Recorder(val progress: (Double) -> Unit, val done: (ByteArray, String?) -> Unit) {
-        @Volatile private var stop = false
-        @Volatile private var cancelled = false
-        fun start() = Thread {
-            val mask = AudioFormat.CHANNEL_IN_STEREO
-            val enc = AudioFormat.ENCODING_PCM_16BIT
-            val out = ByteArrayOutputStream()
-            val r = try {
-                AudioRecord(MediaRecorder.AudioSource.MIC, RATE, mask, enc, maxOf(AudioRecord.getMinBufferSize(RATE, mask, enc) * 4, RATE * 2))
-                    .also { check(it.state == AudioRecord.STATE_INITIALIZED) }
-            } catch (t: Throwable) { done(ByteArray(0), "지금은 마이크를 열 수 없어요"); return@Thread }
-            try {
-                r.startRecording()
-                val buf = ShortArray(CHUNK_FRAMES * 2)
-                while (!stop && !cancelled && out.size() < VOICE_SECONDS * RATE * 2) {
-                    val n = r.read(buf, 0, buf.size)
-                    if (n <= 0) continue
-                    out.write(downmix(buf, n).mono)
-                    progress(out.size() / 2.0 / RATE)
-                }
-            } finally { runCatching { r.stop() }; r.release() }
-            if (!cancelled) done(out.toByteArray().copyOf(minOf(out.size(), VOICE_SECONDS * RATE * 2)), null)
-        }.start()
-        fun finishNow() { stop = true }
-        fun cancel() { cancelled = true }
-    }
 }
 
 // ---- 화면(시안 C 토큰: 카드 반경 32, 컨트롤 24, Title 40 / Headline 32 / Body 28 / Label 24) ----
@@ -329,6 +300,7 @@ fun OnboardingScreen(o: Onboarding, gear: String?, onFamily: () -> Unit) {
                         ObCard(title = "차와 폰에서 이어지는 한 계정", detail = "가입부터 콘텐츠 보기까지 두 기기에서")
                     }
                     OnboardStep.SIGNUP -> {
+                        NoAutofill()
                         Field("이메일", o.email, { o.email = it }, KeyboardType.Email, placeholder = "minjun@example.com")
                         Field("비밀번호", o.password, { o.password = it }, KeyboardType.Password, secret = true, placeholder = "8자 이상")
                         ObCard(title = if (o.login) "처음이신가요?" else "이미 계정이 있나요?", detail = if (o.login) "새 계정을 만들어 시작해요." else "같은 계정으로 로그인해 기록을 불러와요.", onClick = o::toggleLogin)
@@ -349,7 +321,7 @@ fun OnboardingScreen(o: Onboarding, gear: String?, onFamily: () -> Unit) {
                             Row(Modifier.horizontalScroll(rememberScrollState()).padding(24.dp), horizontalArrangement = Arrangement.spacedBy(30.dp)) {
                                 CHARS.forEachIndexed { i, (key, res) ->
                                     val on = key == o.character
-                                    Box(Modifier.size(140.dp).clip(RoundedCornerShape(36.dp)).background(TILE[i % TILE.size])
+                                    Box(Modifier.size(140.dp).clip(RoundedCornerShape(36.dp)).background(c.onSurface) /* 검은 선 캐릭터가 어두운 화면에서도 보이게 밝은 바탕(테마 색) */
                                         .then(if (on) Modifier.border(4.dp, c.primary, RoundedCornerShape(36.dp)) else Modifier)
                                         .clickable { o.character = key }, contentAlignment = Alignment.Center) {
                                         Image(painterResource(res), key, Modifier.size(124.dp), contentScale = ContentScale.Fit)
@@ -361,7 +333,7 @@ fun OnboardingScreen(o: Onboarding, gear: String?, onFamily: () -> Unit) {
                         Text("캐릭터와 이름은 같은 계정의 차량과 폰에 함께 저장돼요.", color = c.onSurfaceVariant, fontSize = 24.sp)
                     }
                     OnboardStep.PHOTO -> {
-                        Box(Modifier.size(280.dp).clip(RoundedCornerShape(40.dp)).background(TILE[0]), contentAlignment = Alignment.Center) {
+                        Box(Modifier.size(280.dp).clip(RoundedCornerShape(40.dp)).background(c.onSurface), contentAlignment = Alignment.Center) {
                             val b = o.photo
                             if (b != null) Image(b.asImageBitmap(), "고른 프로필 사진", Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
                             else Image(painterResource(charDrawable(o.character)), null, Modifier.size(250.dp), contentScale = ContentScale.Fit)
@@ -381,9 +353,15 @@ fun OnboardingScreen(o: Onboarding, gear: String?, onFamily: () -> Unit) {
                             Column(Modifier.padding(start = 28.dp, end = 28.dp, top = 28.dp, bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
                                 val s = minOf(o.heard, VOICE_SECONDS.toDouble())
                                 Text(if (!rec) "목소리 등록 준비" else "${if (o.recordDone) "녹음 끝" else "녹음 중"}  ${s.toInt()} / ${VOICE_SECONDS}초", color = c.onSurfaceVariant, fontSize = 24.sp)
-                                val filled = if (rec) (s / VOICE_SECONDS * BARS.size).toInt() else BARS.size
+                                // 녹음 전은 시안 모양(모두 켬). 녹음 중·뒤는 지난 칸·지금 칸이 실제 소리 크기, 앞으로 칸은 시안의 옅은 막대.
+                                val now = if (rec) minOf(BARS.size, (s / VOICE_SECONDS * BARS.size).toInt()) else BARS.size
+                                val lv = o.levels
                                 Row(Modifier.fillMaxWidth().height(104.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                                    BARS.forEachIndexed { i, h -> Box(Modifier.width(6.dp).height(h.dp).clip(RoundedCornerShape(3.dp)).background(if (i < filled) c.primary else c.surfaceVariant)) }
+                                    BARS.forEachIndexed { i, h ->
+                                        val on = !rec || i <= now
+                                        val height = if (!rec) h else if (on) (12 + 88 * (lv.getOrNull(i) ?: 0.0)).toInt() else h
+                                        Box(Modifier.width(6.dp).height(height.dp).clip(RoundedCornerShape(3.dp)).background(if (on) c.primary else c.surfaceVariant))
+                                    }
                                 }
                                 Row(horizontalArrangement = Arrangement.spacedBy(160.dp)) {
                                     Text(if (rec) "00:%02d".format(s.toInt()) else "00:00", color = c.onSurfaceVariant, fontSize = 24.sp)
@@ -427,7 +405,7 @@ private fun ObCard(title: String, detail: String, soft: Boolean = false, face: I
     Surface(Modifier.fillMaxWidth().then(if (onClick != null) Modifier.clip(RoundedCornerShape(32.dp)).clickable(onClick = onClick) else Modifier), RoundedCornerShape(32.dp),
         color = if (soft) c.primaryContainer else c.surface, contentColor = c.onSurface) {
         Row(Modifier.padding(horizontal = 26.dp, vertical = if (tight) 26.dp else 28.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(24.dp)) {
-            if (face != null || photo != null) Box(Modifier.size(92.dp).clip(CircleShape).background(Color.White), contentAlignment = Alignment.Center) {
+            if (face != null || photo != null) Box(Modifier.size(92.dp).clip(CircleShape).background(c.onSurface), contentAlignment = Alignment.Center) {
                 if (photo != null) Image(photo.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
                 else Image(painterResource(face!!), null, Modifier.size(84.dp), contentScale = ContentScale.Fit)
             }
@@ -436,6 +414,18 @@ private fun ObCard(title: String, detail: String, soft: Boolean = false, face: I
                 Text(detail, color = c.onSurfaceVariant, fontSize = 24.sp, lineHeight = 32.sp)
             }
         }
+    }
+}
+
+// 가입·로그인 칸을 자동 완성에서 뺀다: 기기에 저장된 실제 이메일·비밀번호가 채워져 시연 영상에 보이지 않게.
+// 이 화면이 떠 있는 동안만 앱 화면 전체(Compose 뷰와 그 안의 칸)를 자동 완성 대상에서 빼고, 닫히면 되돌린다.
+@Composable
+private fun NoAutofill() {
+    val view = LocalView.current
+    DisposableEffect(view) {
+        val before = view.importantForAutofill
+        view.importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
+        onDispose { view.importantForAutofill = before }
     }
 }
 
@@ -482,7 +472,7 @@ private fun FamilyPanel(modifier: Modifier) {
             Spacer(Modifier.height(4.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
                 listOf(R.drawable.char_glasses, R.drawable.char_healing, R.drawable.char_cap, R.drawable.char_basic).forEachIndexed { i, res ->
-                    Box(Modifier.size(110.dp).clip(CircleShape).background(TILE[i]), contentAlignment = Alignment.Center) {
+                    Box(Modifier.size(110.dp).clip(CircleShape).background(c.onSurface), contentAlignment = Alignment.Center) {
                         Image(painterResource(res), null, Modifier.size(100.dp), contentScale = ContentScale.Fit)
                     }
                 }

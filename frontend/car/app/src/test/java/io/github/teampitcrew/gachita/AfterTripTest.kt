@@ -40,12 +40,9 @@ class AfterTripTest {
         assertEquals("가나…", clipText("가나다라", 3))
     }
 
-    @Test fun barsAndMockAndProgress() {
+    @Test fun barsAndProgress() {
         assertEquals(listOf(0.58f, 1f, 0.58f, 0f), afterBars(listOf(0L, 10, 15, 19, 25, 99), 0, 40, 4).map { Math.round(it * 100) / 100f })
         assertEquals(listOf(0f, 0f, 0f), afterBars(listOf(5L), 10, 10, 3))
-        assertEquals(0.82f, mockUploadProgress(0, 8_200, 10_000), 1e-6f)
-        assertEquals(1f, mockUploadProgress(0, 20_000, 10_000), 0f)
-        assertEquals(0f, mockUploadProgress(5_000, 0, 10_000), 0f)
         assertEquals(0.55f, phaseProgress(Phase.RENDER, .5f), 1e-6f)
         assertEquals(1f, phaseProgress(Phase.DONE), 0f)
     }
@@ -69,5 +66,13 @@ class AfterTripTest {
         val want = v.getJSONArray("expected").objects().map { listOf(it.getInt("number"), it.getLong("from"), it.getLong("to"), it.getString("time"), it.getString("title"), it.getString("quote"), it.optString("speakerId").ifEmpty { null }) }
         val got = afterPicks(cands, byKey, names).map { listOf(it.number, it.from, it.to, afterSpan(it.from, it.to, origin), it.title, it.quote, it.speakerId) }
         assertEquals(want, got)
+    }
+
+    // 리허설 run1: 렌더 뒤 check() 실패(IllegalStateException)가 '서버에 닿지 않아요'로만 보였다
+    @Test fun afterErrorShowsTheRealReason() {
+        assertEquals("주차 상태를 확인해 주세요", afterError(IllegalStateException("주차 상태를 확인해 주세요")))
+        assertEquals("IllegalArgumentException", afterError(IllegalArgumentException()))
+        assertEquals("서버에 닿지 않아요(SocketTimeoutException)", afterError(java.net.SocketTimeoutException("read timed out")))
+        assertEquals(failureText(ApiError(409, "x")), afterError(ApiError(409, "x")))
     }
 }

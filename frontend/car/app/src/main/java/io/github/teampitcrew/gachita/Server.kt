@@ -180,6 +180,16 @@ class Server(base: String, private val open: (URL) -> HttpURLConnection = { it.o
         call("POST", "/api/trips/$code/recordings?moment=" + java.net.URLEncoder.encode(moment, "UTF-8") + "&generation=$generation&from=$from", wav, token)
     }
 
+    /** 여행 전체 음성(T132, ADR-0024, FullAudio.kt): 올리기 상태·시작·조각·완료. 이 여행의 발화를 올린 참가자 토큰으로. */
+    fun audioStatus(code: String, token: String): JSONObject = JSONObject(call("GET", "/api/trips/$code/audio", null, token)!!)
+    fun audioStart(code: String, token: String, generation: Int, bytes: Long, seconds: Double, startedAt: Long): JSONObject =
+        JSONObject(call("POST", "/api/trips/$code/audio/start", JSONObject().put("generation", generation).put("expectedBytes", bytes).put("seconds", seconds).put("startedAt", startedAt), token)!!)
+    fun audioPart(code: String, token: String, n: Int, generation: Int, pcm: ByteArray) {
+        call("PUT", "/api/trips/$code/audio/parts/$n?generation=$generation", pcm, token, timeoutMs = 60_000, type = "application/octet-stream")
+    }
+    fun audioComplete(code: String, token: String, generation: Int, parts: Int, seconds: Double, sha256: String): JSONObject =
+        JSONObject(call("POST", "/api/trips/$code/audio/complete", JSONObject().put("generation", generation).put("parts", parts).put("seconds", seconds).put("sha256", sha256), token, timeoutMs = 120_000)!!)
+
     /** 사람이 고른 장면 남기기(POST /moments, 흐름 F5). 이 차 참가자의 토큰으로. 남긴 장면 id. */
     fun moment(code: String, token: String, at: Long, from: Long, to: Long, label: String, lat: Double?, lng: Double?): String =
         JSONObject(call("POST", "/api/trips/$code/moments", JSONObject().put("at", at).put("from", from).put("to", to).put("label", label).apply { if (lat != null && lng != null) put("lat", lat).put("lng", lng) }, token)!!).getString("id")
@@ -216,7 +226,7 @@ class Server(base: String, private val open: (URL) -> HttpURLConnection = { it.o
      * deadlineMs를 주면 호출 전체(연결·보내기·받기)의 마감이다. connect·readTimeout은 단계마다 따로 걸리고, 본문이 조금씩 오면
      * readTimeout이 매번 다시 시작해 끝없이 기다릴 수 있다. 마감에 연결을 끊으면 막힌 읽기가 바로 예외로 풀린다.
      */
-    private fun call(method: String, path: String, body: Any?, token: String? = null, timeoutMs: Int = 5000, deadlineMs: Int? = null): String? {
+    private fun call(method: String, path: String, body: Any?, token: String? = null, timeoutMs: Int = 5000, deadlineMs: Int? = null, type: String? = null): String? {
         val c = open(URL(base + path))
         val expire = deadlineMs?.let { DEADLINES.schedule({ c.disconnect() }, it.toLong(), TimeUnit.MILLISECONDS) }
         try {
@@ -227,7 +237,7 @@ class Server(base: String, private val open: (URL) -> HttpURLConnection = { it.o
             if (body != null) {
                 c.doOutput = true
                 val bytes = if (body is ByteArray) body.also { c.setFixedLengthStreamingMode(it.size) } else body.toString().toByteArray()
-                c.setRequestProperty("Content-Type", if (body is ByteArray) "audio/wav" else "application/json")
+                c.setRequestProperty("Content-Type", type ?: if (body is ByteArray) "audio/wav" else "application/json")
                 c.outputStream.use { it.write(bytes) }
             }
             val code = c.responseCode

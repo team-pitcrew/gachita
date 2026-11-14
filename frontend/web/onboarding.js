@@ -8,7 +8,8 @@ import { CHARACTER_TYPES, characterImage, characterKey } from "./short-film.js";
 import { MIN_SECONDS, startVoice, voiceBars, VOICE_SECONDS } from "./voice-meter.js";
 
 export { MIN_SECONDS, VOICE_SECONDS };
-const BARS = [10, 18, 28, 14, 24, 32, 12, 20, 30, 16, 26, 10, 22, 30, 18, 12, 24, 34, 20, 28, 14, 26, 32, 16, 22, 30, 12, 18, 26, 14];
+// 시안 P06 파형 막대 36개의 높이(px, 314×72 틀).
+const BARS = [23, 40, 57, 21, 38, 55, 19, 36, 53, 17, 34, 51, 15, 32, 49, 13, 30, 47, 11, 28, 45, 62, 26, 43, 60, 24, 41, 58, 22, 39, 56, 20, 37, 54, 18, 35];
 // 시안 P04의 앞 네 캐릭터(안경·힐링·캡모자·기본) 순서로 두고 나머지를 잇는다.
 const LABEL = Object.fromEntries(CHARACTER_TYPES);
 const ORDER = ["glasses", "healing", "cap", "basic", ...CHARACTER_TYPES.map(([key]) => key).filter((key) => !["glasses", "healing", "cap", "basic"].includes(key))];
@@ -92,7 +93,7 @@ export function createOnboarding({ getProfile, getToken, setToken, loadProfile, 
     : h("span", { className: "ob-avatar" }, characterImage(draft.character || me()?.character || "glasses"));
   const field = (label, input) => h("label", { className: "field ob-field" }, h("span", {}, label), input);
   // 녹음 전은 시안 모양(모두 켬), 녹음 중·뒤는 실제 들어온 소리 크기(voice-meter.js). 앞으로 칸은 시안처럼 옅은 막대.
-  const wave = (meter) => voiceBars(meter, { className: "ob-wave", slots: BARS.length, ready: BARS, min: 6, max: 40, upcoming: BARS });
+  const wave = (meter) => voiceBars(meter, { className: "ob-wave", slots: BARS.length, ready: BARS, min: 11, max: 62, upcoming: BARS });
   const clock = (s) => `00:${String(Math.min(99, Math.floor(s))).padStart(2, "0")}`;
 
   // P01
@@ -167,8 +168,8 @@ export function createOnboarding({ getProfile, getToken, setToken, loadProfile, 
 
   // P04. 단계 표시 01 프로필 → 02 목소리 → 03 가족.
   const profile = () => [top(),
-    title("나를 소개해 주세요"),
-    h("p", { className: "ob-steps" }, "01 프로필", h("span", { "aria-hidden": "true" }, "→"), "02 목소리", h("span", { "aria-hidden": "true" }, "→"), "03 가족"),
+    h("div", { className: "ob-title" }, h("h1", {}, "나를 소개해 주세요"),
+      h("p", { className: "ob-steps" }, "01 프로필", h("span", { "aria-hidden": "true" }, "→"), "02 목소리", h("span", { "aria-hidden": "true" }, "→"), "03 가족")),
     field("이름 또는 별명", h("input", { value: draft.name, required: true, maxLength: 20, autocomplete: "nickname", placeholder: "민준", oninput: (e) => (draft.name = e.target.value) })),
     h("fieldset", { className: "ob-chars" }, h("legend", {}, "내 캐릭터"),
       h("div", {}, ORDER.map((key) => [key, LABEL[key]]).map(([key, label]) => h("label", { className: "ob-char" },
@@ -195,7 +196,7 @@ export function createOnboarding({ getProfile, getToken, setToken, loadProfile, 
       title("프로필 사진", "사진 대신 캐릭터도 언제든 선택할 수 있어요."),
       h("div", { className: "ob-portrait" }, draft.preview || getPhoto() ? h("img", { src: draft.preview || getPhoto(), alt: "고른 프로필 사진" }) : characterImage(draft.character)),
       card("내 사진 선택", "촬영 또는 사진 보관함에서 가져오기", { onclick: () => input.click() }), input,
-      note("공유 콘텐츠에는 캐릭터를 기본으로 사용해요."),
+      h("p", { className: "ob-note body" }, "공유 콘텐츠에는 캐릭터를 기본으로 사용해요."),
       bottom(primary(busy ? "저장 중" : draft.photo ? "사진으로 계속" : "캐릭터로 계속", () => work(async () => { await saveProfile(); step = "voice"; })))];
   };
 
