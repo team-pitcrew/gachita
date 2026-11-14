@@ -983,3 +983,45 @@ button.brand-home { min-height: 44px; padding: 0 4px 0 0; background: none; colo
 .ride-view .bar button.big { min-height: 76px; }
 .bar button.secondary { min-height: 56px; background: var(--surface-2); color: var(--ink); font-weight: 700; }
 main:has(.bar .big) { padding-bottom: calc(196px + env(safe-area-inset-bottom)); }
+
+/* 가족·동승 그룹(흐름 F2, groups.js): 앱 위에 겹치는 전체 화면. 폰 시안 P09–P16·P39–P43·폰 참여의 카드·단추 모양. */
+.groups-dialog { position: fixed; inset: 0; width: 100vw; max-width: none; height: 100dvh; max-height: 100dvh; margin: 0; padding: 0; border: 0; border-radius: 0; background: var(--bg); color: var(--ink); overflow-y: auto; }
+.groups-dialog[open] { display: block; }
+.groups-dialog::backdrop { background: var(--bg); }
+.group-content { max-width: 480px; margin: 0 auto; padding: max(12px, env(safe-area-inset-top)) var(--pad) calc(120px + env(safe-area-inset-bottom)); display: grid; align-content: start; gap: 12px; }
+.group-content h1 { margin: 4px 0 0; }
+.group-top { display: flex; align-items: center; gap: 8px; min-height: 48px; }
+.group-top .meta { margin-left: auto; font-size: 13px; }
+.group-back { min-width: 32px; padding: 0 4px; font-size: 24px; background: none; color: var(--ink-2); }
+.group-card { background: var(--surface); border-radius: var(--r-card); padding: 18px 20px; display: grid; gap: 4px; }
+.group-card.soft { background: var(--accent-soft); }
+.group-card.row { grid-template-columns: auto 1fr; align-items: center; gap: 14px; text-align: left; }
+.group-card.row > div { display: grid; gap: 4px; }
+.group-card.center { justify-items: center; text-align: center; gap: 12px; }
+.group-card strong { font-size: 19px; }
+.group-card small { font-size: 15px; color: var(--ink-2); }
+.group-character { border: 0; font: inherit; color: inherit; width: 100%; }
+.group-face { width: 52px; height: 52px; border-radius: 50%; overflow: hidden; display: inline-grid; place-items: center; }
+.group-face img { width: 100%; height: 100%; object-fit: contain; }
+.group-ghost { display: grid; place-items: center; width: 100%; min-height: 52px; border-radius: var(--r-ctl); background: var(--surface-2); color: var(--ink); font: inherit; font-weight: 700; text-decoration: none; border: 0; }
+.group-content button.primary { width: 100%; min-height: 56px; }
+.group-code { font-size: 22px; letter-spacing: 0.02em; }
+/* QR은 어두운 테마에서도 흰 바탕·검은 칸(뒤집힌 QR은 읽지 못하는 카메라가 있다) */
+.group-qr { width: 140px; height: 140px; background: #fff; border-radius: 8px; }
+.group-qr path { fill: #111; }
+.group-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.group-input { box-sizing: border-box; width: 100%; min-height: 52px; padding: 0 16px; border: 0; border-radius: var(--r-ctl); background: var(--surface-2); color: var(--ink); font: inherit; }
+.group-check { display: flex; gap: 8px; align-items: flex-start; font-size: 14px; color: var(--ink-2); }
+.group-check input { flex: none; width: 20px; height: 20px; margin: 0; accent-color: var(--accent-fill); }
+.group-toast { position: fixed; left: 50%; bottom: calc(96px + env(safe-area-inset-bottom)); transform: translateX(-50%); width: min(350px, calc(100vw - 40px)); box-sizing: border-box; margin: 0; padding: 22px; border-radius: var(--r-card); background: var(--ink); color: var(--bg); text-align: center; font-weight: 700; z-index: 2; }
+.group-wave { display: flex; align-items: center; gap: 4px; height: 64px; }
+.group-wave i { flex: 1; border-radius: 3px; background: var(--accent-fill); }
+.group-ready { font-size: 13px; color: var(--accent); }
+.group-seats .seat { border: 0; font: inherit; color: inherit; }
+.group-seats .seat.picked { outline: 3px solid var(--accent); }
+.group-actions { position: fixed; left: 0; right: 0; bottom: 0; padding: 12px var(--pad) calc(12px + env(safe-area-inset-bottom)); background: linear-gradient(to top, var(--bg) 78%, transparent); }
+.group-actions > * { max-width: calc(480px - var(--pad) * 2); margin: 8px auto 0; }
+.group-actions:empty { display: none; }
+.group-share { padding: 24px 20px; display: grid; gap: 12px; }
+.group-share-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.group-share-row > * { min-height: 48px; border-radius: var(--r-ctl); background: var(--surface-2); color: var(--ink); font: inherit; font-weight: 700; border: 0; display: grid; place-items: center; text-decoration: none; }
