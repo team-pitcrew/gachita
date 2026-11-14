@@ -8,7 +8,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 /** 가치타 API(docs/api/openapi.yaml)를 부른다. 메인 스레드에서 부르지 않는다. */
-class Server(base: String) {
+class Server(base: String, private val open: (URL) -> HttpURLConnection = { it.openConnection() as HttpURLConnection }) {
     private val base = base.trim().trimEnd('/')
 
     /** 받은 여행 원문과 해석한 값. 앱은 원문을 저장해 두었다 끊겼을 때 보여 준다. */
@@ -42,6 +42,20 @@ class Server(base: String) {
 
     /** 숏폼 구성(T43, #63 계약). 녹음에 동의한 참가자의 토큰으로. */
     fun transcript(code: String, token: String): String = call("GET", "/api/trips/$code/transcript", null, token)!!
+
+    fun todos(code: String, token: String): SharedTodos = sharedTodos(call("GET", "/api/trips/$code/todos", null, token)!!)
+
+    fun todoStatus(code: String, token: String, id: String, generation: Int, expectedVersion: Int, status: String): Pair<Int, SharedTodo> {
+        require(status in setOf("pending", "done", "cancelled"))
+        val path = "/api/trips/$code/todos/" + java.net.URLEncoder.encode(id, "UTF-8")
+        return JSONObject(call("PATCH", path, JSONObject().put("generation", generation).put("expectedVersion", expectedVersion).put("status", status), token)!!)
+            .let { it.getInt("generation") to sharedTodo(it.getJSONObject("item")) }
+    }
+
+    /** 실제 차량 P 관측으로 호출하며, 서버가 확인한 주차 상태 뒤에 도착 판정을 요청합니다. */
+    fun parkedForArrival(code: String, token: String): Got = got(call("PATCH", "/api/trips/$code", JSONObject().put("status", "parked"), token)!!)
+    fun arrivalBriefing(code: String, token: String, generation: Int, observation: VehicleArrival): SharedArrival =
+        sharedArrival(call("POST", "/api/trips/$code/arrival-briefing", observation.body(generation, parked = true), token)!!)
 
     fun shortform(code: String, token: String): String = call("GET", "/api/trips/$code/shortform", null, token)!!
 
@@ -147,7 +161,7 @@ class Server(base: String) {
     }
 
     private fun call(method: String, path: String, body: Any?, token: String? = null): String? {
-        val c = URL(base + path).openConnection() as HttpURLConnection
+        val c = open(URL(base + path))
         try {
             c.requestMethod = method // 안드로이드의 HttpURLConnection은 PATCH를 받는다
             c.connectTimeout = 5000

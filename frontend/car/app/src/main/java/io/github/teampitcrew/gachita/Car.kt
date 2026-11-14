@@ -243,6 +243,16 @@ class Car(ctx: Context, private val onChange: (CarStatus) -> Unit) {
         dest.start({ d -> done(d?.name?.takeIf { it.isNotBlank() }) }) { navi.getDestinationInfo() }
     }) { navi.getWaypointInfo() }
 
+    /** T113: 다음 실제 장소 좌표를 읽습니다. 경유지가 있지만 좌표를 모르면 목적지로 대신하지 않습니다. */
+    fun nextArrivalPlace(done: (Place?) -> Unit) = wps.start({ waypoints ->
+        if (waypoints == null) return@start done(null)
+        if (waypoints.isNotEmpty()) {
+            val first = waypoints.first()
+            return@start done(arrivalPlace(first.name, first.latitude, first.longitude))
+        }
+        dest.start({ d -> done(d?.let { arrivalPlace(it.name, it.latitude, it.longitude) }) }) { navi.getDestinationInfo() }
+    }) { navi.getWaypointInfo() }
+
     /** 지금 경로에 들를 곳을 더한다. 내비가 앞으로 나오고, 반영 알림(onWaypointChanged ADD)이 오면 true. 경로 오류나 30초 넘으면 false. */
     fun addStop(p: Place, done: (Boolean) -> Unit) = stop.start({ done(it == true) }) {
         navi.addWaypoint(RequestWaypointInfo(latitude = p.lat, longitude = p.lng, poiName = p.name, waypointIndex = WaypointIndex.FIRST, poiId = "", address = p.address, poiSubId = "0"))

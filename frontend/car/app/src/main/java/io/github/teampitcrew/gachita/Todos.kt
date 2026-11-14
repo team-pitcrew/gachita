@@ -31,7 +31,7 @@ fun arrivedAt(place: String, nextStop: String?) = nextStop != null && place in n
 /**
  * 여행 하나의 할 일. 앱 저장소의 todos-<여행 코드>.json에 통째로 암호화해 다시 쓴다(몇십 건이라 충분, Vault.kt). 메인 스레드에서만 만진다.
  * 보관 기간으로 자동 만료하지 않으며, 해당 여행을 명시적으로 삭제할 때 함께 정리한다.
- * ponytail: 차 안에만 둔다. 서버 API에는 장소가 붙은 할 일이 없다(부탁에 장소 칸 없음). 서버 저장은 T39 쪽에서 정하면 옮긴다.
+ * 이전 판 파일 호환용 클래스입니다. T113 화면은 이 파일을 읽거나 합치지 않고 서버 T103 API만 정본으로 사용합니다.
  */
 class Todos(dir: File, val trip: String, private val seal: Seal) {
     private val file = File(dir, "todos-$trip.json")
@@ -69,3 +69,74 @@ class Todos(dir: File, val trip: String, private val seal: Seal) {
 /** TTS로 읽을 도착 알림. 할 일은 받아 적은 말 그대로 읽는다. */
 fun briefingLine(place: String?, open: List<Todo>): String =
     (if (place != null) "${place}에 도착했어요. " else "") + "할 일 ${open.size}건. " + open.joinToString(". ") { it.text }
+
+// T113: 서버 응답만 현재 화면의 정본입니다. 위의 이전 판 파일과 추출 함수는 호환을 위해 남기며 새 목록에 합치지 않습니다.
+data class SharedTodoSource(val device: String, val seq: Long, val at: Long, val text: String, val displayText: String, val participantId: String?)
+data class SharedTodo(val id: String, val place: String, val text: String, val status: String, val version: Int, val sources: List<SharedTodoSource>) {
+    val pending get() = status == "pending"
+}
+data class SharedTodos(val generation: Int, val method: String, val items: List<SharedTodo>)
+data class TodoScope(val server: String, val trip: String, val generation: Int, val token: String)
+data class TodoAttempt(val scope: TodoScope, val sequence: Long)
+
+fun sharedTodo(o: JSONObject): SharedTodo {
+    val status = o.getString("status"); require(status in setOf("pending", "done", "cancelled"))
+    val version = o.getInt("version"); require(version >= 0)
+    val sources = o.getJSONArray("sources")
+    return SharedTodo(o.getString("id"), o.getString("place"), o.getString("text"), status, version,
+        List(sources.length()) { i -> sources.getJSONObject(i).let { s ->
+            SharedTodoSource(s.getString("device"), s.getLong("seq"), s.getLong("at"), s.getString("text"), s.getString("displayText"),
+                if (s.isNull("participantId")) null else s.getString("participantId"))
+        } })
+}
+fun sharedTodos(json: String): SharedTodos = JSONObject(json).let { o ->
+    val a = o.getJSONArray("items")
+    SharedTodos(o.getInt("generation"), o.getString("method"), List(a.length()) { sharedTodo(a.getJSONObject(it)) })
+}
+
+/** 실패한 요청은 완료로 바꾸지 않습니다. 범위·요청 번호가 달라진 응답은 어떤 화면 상태도 되살리지 않습니다. */
+data class SharedTodoState(
+    val scope: TodoScope? = null, val sequence: Long = 0, val data: SharedTodos? = null,
+    val syncedAt: Long? = null, val loading: Boolean = false, val note: String = "",
+) {
+    val items get() = data?.items.orEmpty()
+    fun bind(next: TodoScope?) = if (scope == next) this else SharedTodoState(scope = next, sequence = sequence + 1)
+    fun begin(): Pair<SharedTodoState, TodoAttempt> {
+        check(!loading); val current = requireNotNull(scope)
+        return copy(sequence = sequence + 1, loading = true, note = "") to TodoAttempt(current, sequence + 1)
+    }
+    fun accepts(attempt: TodoAttempt) = scope == attempt.scope && sequence == attempt.sequence
+    fun received(attempt: TodoAttempt, next: SharedTodos, at: Long): SharedTodoState = when {
+        !accepts(attempt) -> this
+        next.generation != scope?.generation -> copy(data = null, syncedAt = null, loading = false, note = "동의 상태가 바뀌었어요. 다시 확인해 주세요")
+        else -> copy(data = next, syncedAt = at, loading = false, note = "")
+    }
+    fun failed(attempt: TodoAttempt, message: String, clear: Boolean = false) = if (!accepts(attempt)) this else
+        copy(data = if (clear) null else data, syncedAt = if (clear) null else syncedAt, loading = false, note = message)
+}
+
+fun vehiclePoint(lat: Double?, lng: Double?): Boolean = lat != null && lng != null && lat.isFinite() && lng.isFinite() &&
+    lat in -90.0..90.0 && lng in -180.0..180.0 && !(lat == 0.0 && lng == 0.0)
+fun arrivalPlace(name: String?, lat: Double?, lng: Double?): Place? =
+    if (name.isNullOrBlank() || !vehiclePoint(lat, lng)) null else Place(lat!!, lng!!, name)
+
+data class VehicleArrival(val place: Place, val lat: Double, val lng: Double, val observedAt: Long) {
+    fun body(generation: Int, parked: Boolean): JSONObject {
+        require(vehiclePoint(place.lat, place.lng) && vehiclePoint(lat, lng) && place.name.isNotBlank())
+        return JSONObject().put("generation", generation).put("source", "vehicle").put("parked", parked).put("observedAt", observedAt)
+            .put("place", JSONObject().put("name", place.name).put("lat", place.lat).put("lng", place.lng))
+            .put("position", JSONObject().put("lat", lat).put("lng", lng))
+    }
+}
+data class SharedArrival(val generation: Int, val eligible: Boolean, val reason: String?, val observedAt: Long, val place: Place, val items: List<SharedTodo>)
+fun sharedArrival(json: String): SharedArrival = JSONObject(json).let { o ->
+    require(o.getString("source") == "vehicle")
+    val a = o.getJSONArray("items")
+    SharedArrival(o.getInt("generation"), o.getBoolean("eligible"), if (o.isNull("reason")) null else o.getString("reason"),
+        o.getLong("observedAt"), o.getJSONObject("place").let { Place(it.getDouble("lat"), it.getDouble("lng"), it.getString("name")) }, List(a.length()) { sharedTodo(a.getJSONObject(it)) })
+}
+/** 응답 사이 출발·동의 변경·오래된 관측은 음성 안내에 쓰지 않습니다. 서버 eligible을 로컬에서 만들지 않습니다. */
+fun canReadArrival(result: SharedArrival, request: VehicleArrival, scope: TodoScope, current: TodoScope?, parked: Boolean, now: Long): Boolean =
+    scope == current && parked && result.eligible && result.generation == scope.generation && result.observedAt == request.observedAt && result.place == request.place &&
+        now - request.observedAt in 0L..60_000L && result.items.all { it.pending }
+fun sharedBriefingLine(place: String, items: List<SharedTodo>) = "${place}에 도착했어요. 할 일 ${items.size}건. " + items.joinToString(". ") { it.text }
