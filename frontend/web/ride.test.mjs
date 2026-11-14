@@ -66,6 +66,7 @@ test("제목과 부제는 시안 문구를 따르되 모르는 값은 빼고 조
   const fresh = (list) => askState({ ready: true, items: list, error: "" });
   assert.equal(rideHeading({ kind: "continue", place: "하나로마트", target: "강릉 숙소" }, { asks: fresh(items) }).sub, "하나로마트의 부탁 1건 남음 / 강릉 숙소로 이동");
   assert.equal(rideHeading({ kind: "continue", place: "하나로마트", target: "강릉 숙소" }, { asks: fresh([]) }).sub, "하나로마트의 부탁은 완료 / 강릉 숙소로 이동");
+  assert.equal(rideHeading({ kind: "continue", place: "하나로마트", target: "강릉 숙소" }, { asks: fresh([]) }).title, "다시, 우리 가족의 여행", "P21 실제 글");
   assert.equal(rideHeading({ kind: "continue", place: "하나로마트", target: "" }, { asks: askState(null) }).sub, "하나로마트에서 다시 출발", "할 일을 볼 수 없으면 완료했다고 말하지 않는다");
 });
 
