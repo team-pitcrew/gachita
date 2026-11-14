@@ -4,6 +4,7 @@
 // 토큰은 머리말로만 보내고 로그·응답에 남기지 않는다.
 
 import { setTimeout as pause } from "node:timers/promises";
+import { providerTranscript } from "./transcript.js";
 
 const MODEL = "nemo_transcribe30";
 // 상대 서버는 IP당 초당 2건이다. API 파드 둘이 한 노드(한 IP)로 나가므로 파드마다 1.1초 간격(합쳐 초당 2건 아래).
@@ -72,7 +73,7 @@ const wait = async (signal) => {
 let transcribing = 0;
 // 웹의 첫 전사(T96): Pleos 초안이나 추정 문장을 넣지 않는다. 대기까지 제한하고 공급자는 한 번만 부른다.
 // stillOk는 DB 읽기를 마친 뒤 돌아온다. 공급자 응답을 기다리는 동안 DB 연결·잠금을 점유하지 않는다.
-export async function transcribe(wav, stillOk, callerSignal) {
+export async function transcribe(wav, stillOk, callerSignal, seconds) {
   if (!asrReady()) return { reason: "unconfigured" };
   if (transcribing >= 8) return { reason: "rate_limited" };
   const configured = timeoutMs();
@@ -93,7 +94,7 @@ export async function transcribe(wav, stillOk, callerSignal) {
         chat_template_kwargs: { enable_thinking: false },
         skip_special_tokens: false,
         messages: [{ role: "user", content: [
-          { type: "text", text: "Transcribe the following audio in Korean exactly as spoken. Do not translate. Return only the spoken words. Return an empty string for silence. Do not invent dialogue or speaker names." },
+          { type: "text", text: "Transcribe the following Korean audio exactly as spoken. Do not translate or invent words or speaker names. Use anonymous <spk:N> tags with the actual start and end timestamps relative to this audio in this format: <spk:0> 00:00.00 spoken words 00:01.23. Identify speakers only within this audio. Return an empty string for silence." },
           { type: "audio_url", audio_url: { url: `data:audio/wav;base64,${wav.toString("base64")}` } },
         ] }],
       }),
@@ -111,10 +112,11 @@ export async function transcribe(wav, stillOk, callerSignal) {
     const content = choice?.message?.content;
     signal.throwIfAborted();
     if (typeof content !== "string" || choice.finish_reason === "length") return { reason: "bad_response" };
-    const clean = content.replace(/<[^>]*>/g, "").trim();
-    if (!clean) return { reason: "empty" };
-    if (clean.length > 500 || clean.includes("\0") || !clean.isWellFormed()) return { reason: "bad_response" };
-    return { text: clean };
+    if (content.length > 4096 || content.includes("\0") || !content.isWellFormed()) return { reason: "bad_response" };
+    const transcript = providerTranscript(content, seconds);
+    if (!transcript.text) return { reason: "empty" };
+    if (transcript.text.length > 500) return { reason: "bad_response" };
+    return transcript;
   } catch (e) {
     if (e?.status) throw e; // 호출 직전의 인증·동의·세대 검사를 공급자 장애로 바꾸지 않는다.
     return { reason: callerSignal?.aborted ? "cancelled" : deadline.aborted ? "timeout" : "unreachable" };

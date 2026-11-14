@@ -1,4 +1,4 @@
-// 원본 말랑 전신과 실제 장면 자막·소리로 만드는 540×960 쇼츠. 외부 영상은 사용하지 않습니다.
+// 원본 말랑 전신과 실제 장면 자막·소리로 만드는 1080×1920 쇼츠. 외부 영상은 사용하지 않습니다.
 export const CHARACTER_TYPES = [["basic", "기본"], ["cap", "캡모자"], ["glasses", "안경"], ["travel", "여행"], ["game", "게임"], ["sport", "운동"], ["pet", "반려동물"], ["camping", "캠핑"], ["office", "직장인"], ["healing", "힐링"]];
 export const CHARACTER_OPTIONS = CHARACTER_TYPES.flatMap(([key, label]) => [[key, `${label} · 큰`], [`${key}-small`, `${label} · 작은`]]);
 export const characterKey = (key) => CHARACTER_OPTIONS.some(([value]) => value === key) ? key : "basic";
@@ -23,13 +23,23 @@ export function recordingFormat(recorder = globalThis.MediaRecorder) {
 
 export function filmSpeakers(cast, scene, time) {
   const cue = scene.cues.find((c) => c.start <= time && time < c.end) ?? null;
-  const ids = [...new Set(scene.cues.map((c) => c.participantId).filter(Boolean))];
-  const people = ids.map((id) => cast.find((p) => p.participantId === id)).filter(Boolean);
   const unknown = { participantId: null, name: "말한 사람 미확인", character: "basic" };
-  const active = cue ? cast.find((p) => p.participantId === cue.participantId) ?? unknown : null;
-  const left = people[0] ?? cast[0] ?? unknown;
-  let right = people[1] ?? cast.find((p) => p.participantId !== left.participantId) ?? null;
-  if (active && active.participantId !== left.participantId && active.participantId !== right?.participantId) right = active;
+  const anonymous = new Map();
+  const person = (item) => {
+    const known = cast.find((p) => p.participantId && p.participantId === item.participantId);
+    if (known) return known;
+    if (!item.speakerScope || !item.speakerLabel) return unknown;
+    const key = `${item.speakerScope}:${item.speakerLabel}`;
+    if (!anonymous.has(key)) anonymous.set(key, { participantId: key, name: `화자 ${Number(item.speakerLabel.split(":")[1]) + 1} · 이 구간`, character: Number(item.speakerLabel.split(":")[1]) % 2 ? "basic-small" : "basic" });
+    return anonymous.get(key);
+  };
+  const active = cue ? person(cue) : null;
+  // 요청 창이 달라지면 같은 spk 번호도 다른 사람입니다. 이 장면의 현재 창에서만 나란히 표시합니다.
+  const relevant = cue?.speakerScope ? scene.cues.filter((item) => item.speakerScope === cue.speakerScope) : scene.cues;
+  const people = [...new Set(relevant.map(person))];
+  const left = people[0] || unknown;
+  let right = people[1];
+  if (active && active !== left && active !== right) right = active;
   return { cue, active, people: [left, right].filter(Boolean) };
 }
 
@@ -96,7 +106,7 @@ export function filmTextLines(text, measure, width) {
 }
 
 export function createShortFilm({ title = "함께 남긴 순간", cast = [] }) {
-  const canvas = Object.assign(document.createElement("canvas"), { width: 540, height: 960, className: "short-film" });
+  const canvas = Object.assign(document.createElement("canvas"), { width: 1080, height: 1920, className: "short-film" });
   canvas.setAttribute("role", "img");
   canvas.setAttribute("aria-label", "차량 실내의 말랑 캐릭터와 대화 자막으로 만든 쇼츠");
   const ctx = canvas.getContext("2d");
@@ -113,7 +123,7 @@ export function createShortFilm({ title = "함께 남긴 순간", cast = [] }) {
     });
     images.set(key, record); img.src = characterSource(key); return record.ready;
   };
-  const ready = Promise.all([load("basic"), ...cast.map((p) => load(personCharacter(p)))]);
+  const ready = Promise.all([load("basic"), load("basic-small"), ...cast.map((p) => load(personCharacter(p)))]);
   const round = (x, y, width, height, radius, color) => { ctx.fillStyle = color; ctx.beginPath(); ctx.roundRect(x, y, width, height, radius); ctx.fill(); };
   const label = (text, x, y, size, color = COLOR.paper, weight = 600, align = "center") => {
     ctx.font = `${weight} ${size}px ${FONT}`; ctx.fillStyle = color; ctx.textAlign = align; ctx.textBaseline = "middle"; ctx.fillText(text, x, y);
@@ -126,6 +136,7 @@ export function createShortFilm({ title = "함께 남긴 순간", cast = [] }) {
   };
   function draw(scene, seconds = 0, playing = false) {
     if (!scene) return;
+    ctx.setTransform(2, 0, 0, 2, 0, 0); // 원본 자산과 벡터를 1080p 캔버스에 직접 그린다.
     const time = Math.max(0, Math.min(seconds, scene.seconds || 0));
     const { cue, active, people } = filmSpeakers(cast, scene, time);
     ctx.fillStyle = COLOR.ink; ctx.fillRect(0, 0, 540, 960);
@@ -237,7 +248,7 @@ export async function exportShortFilm({ title, cast, scene, getAudio, signal: ca
     source = context.createBufferSource(); source.buffer = buffer; source.connect(destination); source.connect(context.destination);
     stream = new MediaStream([...canvasStream.getVideoTracks(), ...destination.stream.getAudioTracks()]);
     if (!stream.getAudioTracks().length) throw new Error("영상에 소리를 연결하지 못했어요.");
-    recorder = new MediaRecorder(stream, { mimeType: format.mime, videoBitsPerSecond: 2500000, audioBitsPerSecond: 128000 });
+    recorder = new MediaRecorder(stream, { mimeType: format.mime, videoBitsPerSecond: 8000000, audioBitsPerSecond: 128000 });
     const recorded = new Promise((resolve, reject) => {
       let problem = null;
       stopRecording = (error) => {

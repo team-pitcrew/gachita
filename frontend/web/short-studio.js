@@ -3,6 +3,7 @@ import { ShortGeneration, activeGeneration, generationState } from "/short-gener
 import { characterImage } from "/short-film.js";
 import { readShortLibrary, keepLibraryShort, removeLibraryShort, shortPoster, shortMetadata, libraryGroups, tripDate } from "/short-library.js";
 
+const remoteId = (code, job) => `${job.origin === "local-render" ? "asset" : "job"}:${code}:${job.id}`;
 const clock = (seconds = 0) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
 const button = (label, action, className = "", disabled = false) => h("button", { type: "button", onclick: action, className, disabled }, label);
 const icon = (name) => {
@@ -48,15 +49,17 @@ export function createShortStudio({ getTrip, getParticipant, getToken, getOwner,
     finally { s.busy = false; if (session === s) { sync(); if (session === s) paint(s); } }
   }
   const records = (s) => {
-    const savedIds = new Set(s.saved.map((x) => x.id));
-    return [...(s.model?.items || []).filter((j) => j.state === "completed" && !savedIds.has(`job:${s.code}:${j.id}`)).map((job) => ({ id: `job:${s.code}:${job.id}`, job, remote: true, poster: s.posters.get(job.id), title: getTrip()?.moments.find((m) => m.id === job.momentId)?.label || s.title, tripCode: s.code, tripTitle: s.title, tripCreatedAt: s.createdAt, momentId: job.momentId, seconds: job.result?.seconds || 0, subtitle: s.model.catalog?.templates.find((t) => t.id === job.templateId)?.name || "이번 여행" })), ...s.saved];
+    const remote = (s.model?.items || []).filter((j) => j.state === "completed").map((job) => ({ id: remoteId(s.code, job), job, remote: true, poster: s.posters.get(job.id), title: getTrip()?.moments.find((m) => m.id === job.momentId)?.label || s.title, tripCode: s.code, tripTitle: s.title, tripCreatedAt: s.createdAt, momentId: job.momentId, seconds: job.result?.seconds || 0, subtitle: job.origin === "local-render" ? "우리 목소리 · 서버에 보관" : "AI 쇼츠 · 서버에 보관" }));
+    const ids = new Set(remote.map((item) => item.id));
+    return [...remote, ...s.saved.filter((item) => !ids.has(item.id)).map((item) => ({ ...item, subtitle: "이 기기에 저장한 사본" }))];
   };
   async function verify(s, item) {
     if (session !== s || getOwner() !== s.owner) throw new Error("보관함을 다시 열어 주세요.");
     if (item.remote) {
       if (!s.model || !remoteValid(s)) throw new Error("여행 기록을 다시 확인해 주세요.");
-      const job = await s.model.call("GET", s.model.path(`/short-generations/${encodeURIComponent(item.job.id)}`));
-      if (job.state !== "completed") throw Object.assign(new Error("영상이 취소되었어요."), { status: 409 });
+      await s.model.refresh();
+      const job = s.model.items.find((entry) => entry.id === item.job.id && entry.origin === item.job.origin);
+      if (job?.state !== "completed") throw Object.assign(new Error("영상이 취소되었어요."), { status: 409 });
     }
   }
   async function select(s, item) {
@@ -68,8 +71,9 @@ export function createShortStudio({ getTrip, getParticipant, getToken, getOwner,
       if (item.remote) {
         const response = await fetch(s.model.filePath(item.job), { headers: { authorization: `Bearer ${s.token}` }, signal: s.model.abort.signal, cache: "no-store" });
         if (!response.ok) throw Object.assign(new Error("영상을 불러오지 못했어요. 다시 확인해 주세요."), { status: response.status });
-        if (!response.headers.get("content-type")?.startsWith("video/mp4")) throw new Error("영상 형식을 확인해 주세요.");
-        file = new File([await response.blob()], "gachita-short.mp4", { type: "video/mp4" });
+        const type = response.headers.get("content-type")?.split(";")[0];
+        if (!["video/mp4", "video/webm"].includes(type)) throw new Error("영상 형식을 확인해 주세요.");
+        file = new File([await response.blob()], `gachita-short.${type === "video/mp4" ? "mp4" : "webm"}`, { type });
       }
       await verify(s, item);
       if (session !== s || s.load !== load) return;
@@ -113,12 +117,12 @@ export function createShortStudio({ getTrip, getParticipant, getToken, getOwner,
       }
       stage.append(s.video, s.video.pausedLabel);
     } else stage.append(h("div", { className: "reel-loading", role: "status" }, s.loading ? "쇼츠를 불러오고 있어요" : button("다시 시도", () => select(s, item), "reel-secondary", !item || s.busy)));
-    const isSaved = s.saved.some((i) => i.id === item?.id);
+    const isSaved = item?.remote || s.saved.some((i) => i.id === item?.id);
     const tools = h("aside", { className: "reel-tools", "aria-label": "쇼츠 작업" },
       action("sound", "소리", () => { if (s.video) { s.video.muted = !s.video.muted; toast(s.video.muted ? "소리를 껐어요" : "소리를 켰어요"); } }, !s.file),
-      action("save", isSaved ? "보관됨" : "보관", () => run(s, async () => { await verify(s, item); await keepFile(s.file, { ...item, verify: () => verify(s, item) }); s.saved = await readShortLibrary(s.owner); s.selected = s.saved.find((i) => i.id === item.id); toast("이 기기 보관함에 저장했어요."); }), !s.file || isSaved || s.busy),
+      action("save", item?.remote ? "서버 보관" : isSaved ? "기기 사본" : "보관", () => run(s, async () => { await verify(s, item); await keepFile(s.file, { ...item, verify: () => verify(s, item) }); s.saved = await readShortLibrary(s.owner); s.selected = s.saved.find((i) => i.id === item.id); toast("이 기기 보관함에 저장했어요."); }), !s.file || isSaved || s.busy),
       action("download", "내려받기", () => run(s, async () => { await verify(s, item); const link = h("a", { href: s.url, download: s.file.name || "gachita-short.mp4" }); document.body.append(link); link.click(); link.remove(); }), !s.file || s.busy),
-      action("share", "공유", () => run(s, async () => { await verify(s, item); const file = new File([s.file], "gachita-short.mp4", { type: s.file.type }); if (!navigator.canShare?.({ files: [file] })) throw new Error("영상을 내려받은 뒤 다른 앱에서 공유해 주세요."); try { await navigator.share({ files: [file], title: item.title }); } catch (e) { if (e.name !== "AbortError") throw e; } }), !s.file || s.busy));
+      action("share", "공유", () => run(s, async () => { await verify(s, item); const file = new File([s.file], s.file.name || `gachita-short.${s.file.type.startsWith("video/webm") ? "webm" : "mp4"}`, { type: s.file.type }); if (!navigator.canShare?.({ files: [file] })) throw new Error("영상을 내려받은 뒤 다른 앱에서 공유해 주세요."); try { await navigator.share({ files: [file], title: item.title }); } catch (e) { if (e.name !== "AbortError") throw e; } }), !s.file || s.busy));
     const at = items.findIndex((i) => i.id === item?.id);
     stage.append(tools, h("footer", { className: "reel-caption" }, h("p", {}, [item?.tripTitle, tripDate(item || {})].filter(Boolean).join(" · ") || (item?.remote ? "이번 여행" : "이 기기에 보관")), h("h2", {}, item?.title || "우리 여행의 쇼츠"), h("p", {}, `${item?.subtitle || "우리 목소리"} · ${clock(item?.seconds)}`)),
       h("div", { className: "reel-pager" }, action("up", "이전", () => step(s, -1), at <= 0), h("span", {}, `${Math.max(at + 1, 1)} / ${items.length}`), action("down", "다음", () => step(s, 1), at >= items.length - 1)));
@@ -130,11 +134,11 @@ export function createShortStudio({ getTrip, getParticipant, getToken, getOwner,
       const poster = item.poster ? h("img", { src: posterUrl(s, item), alt: item.title }) : h("div", { className: "reel-unopened" }, icon("play"), h("span", {}, item.remote ? "이번 여행" : "보관한 영상"));
       const tile = button("", () => select(s, item), "reel-tile");
       tile.append(h("div", { className: "reel-cover" }, poster, h("span", { className: "reel-duration" }, clock(item.seconds))), h("strong", {}, item.title), h("small", {}, item.remote ? "이번 여행" : "이 기기에 보관"));
-      return h("article", {}, tile, !item.remote && button("삭제", () => { s.deleting = item; changeView(s, "delete"); }, "reel-delete"));
+      return h("article", {}, tile, (!item.remote || item.job.origin === "local-render" && item.job.createdBy === s.participant) && button("삭제", () => { s.deleting = item; changeView(s, "delete"); }, "reel-delete"));
     }))));
-    return h("section", { className: "reel-library" }, h("h1", {}, "보관함"), h("p", { className: "meta" }, "보관한 영상은 여행이 끝나도 이 기기에 남아요."),
+    return h("section", { className: "reel-library" }, h("h1", {}, "보관함"), h("p", { className: "meta" }, "같은 여행에 참여한 휴대폰과 차량에서 같은 쇼츠를 볼 수 있어요. 내려받은 기기 사본도 함께 표시합니다."),
       records(s).length ? h("input", { type: "search", placeholder: "장면·여행 이름·날짜로 찾기", value: s.query || "", onchange: (e) => { s.query = e.target.value; paint(s); }, "aria-label": "보관함 검색" }) : null,
-      items.length ? gallery : h("div", { className: "reel-library-empty" }, icon("grid"), h("h2", {}, s.query ? "찾는 쇼츠가 없어요" : "아직 보관한 쇼츠가 없어요"), h("p", {}, s.query ? "다른 여행 이름이나 날짜로 찾아보세요." : "마음에 드는 쇼츠에서 보관을 누르세요.")),
+      items.length ? gallery : h("div", { className: "reel-library-empty" }, icon("grid"), h("h2", {}, s.query ? "찾는 쇼츠가 없어요" : "아직 보관한 쇼츠가 없어요"), h("p", {}, s.query ? "다른 여행 이름이나 날짜로 찾아보세요." : "대화 장면으로 첫 쇼츠를 만들어 보세요.")),
       (s.model?.items || []).some((j) => j.state !== "completed") ? h("section", { className: "reel-work" }, h("h2", {}, "제작 현황"), s.model.items.filter((j) => j.state !== "completed").map((job) => h("div", { className: "reel-work-row" }, h("div", {}, h("strong", {}, generationState(job)), h("p", { className: "meta" }, activeGeneration(job) ? `${job.progress.completedShots}/${job.progress.totalShots} 장면` : "이번 여행")), activeGeneration(job) ? button("취소", () => run(s, () => s.model.cancel(job.id)), "reel-delete", s.busy) : null))) : null);
   }
   function begin(s) {
@@ -171,7 +175,7 @@ export function createShortStudio({ getTrip, getParticipant, getToken, getOwner,
     const keys = new Set(records(s).map((i) => i.id));
     for (const [key, poster] of s.posterUrls) if (!keys.has(key)) { URL.revokeObjectURL(poster.url); s.posterUrls.delete(key); }
     s.dialog.classList.toggle("is-feed", s.view === "feed");
-    const body = s.view === "feed" ? feed(s) : s.view === "library" ? library(s) : s.view === "delete" ? h("section", { className: "reel-form" }, h("h1", {}, "보관한 쇼츠를 삭제할까요?"), h("p", {}, s.deleting.title), h("p", { className: "meta" }, "이 기기 보관함에서 삭제해요. 따로 내려받은 파일은 남아요."), button("이 기기에서 삭제", () => run(s, async () => { await removeLibraryShort(s.owner, s.deleting.id); if (s.selected?.id === s.deleting.id) { clearVideo(s); s.selected = null; } s.saved = await readShortLibrary(s.owner); s.view = "library"; }), "reel-danger", s.busy), button("돌아가기", () => changeView(s, "library"), "reel-secondary")) : creation(s);
+    const body = s.view === "feed" ? feed(s) : s.view === "library" ? library(s) : s.view === "delete" ? h("section", { className: "reel-form" }, h("h1", {}, "보관한 쇼츠를 삭제할까요?"), h("p", {}, s.deleting.title), h("p", { className: "meta" }, s.deleting.remote ? "서버 보관함에서 삭제하면 같은 여행의 모든 기기에서 사라져요. 내려받은 사본은 남습니다." : "이 기기 사본을 삭제해요. 서버 보관함은 그대로예요."), button(s.deleting.remote ? "서버에서 삭제" : "이 기기에서 삭제", () => run(s, async () => { if (s.deleting.remote) await s.model.cancel(s.deleting.job.id); else await removeLibraryShort(s.owner, s.deleting.id); if (s.selected?.id === s.deleting.id) { clearVideo(s); s.selected = null; } s.saved = await readShortLibrary(s.owner); s.view = "library"; }), "reel-danger", s.busy), button("돌아가기", () => changeView(s, "library"), "reel-secondary")) : creation(s);
     s.body.replaceChildren(header(s), body, ...(status(s) ? [status(s)] : []));
     if (s.view === "feed" && !s.selected && records(s).length && !s.loading) select(s, records(s)[0]);
   }

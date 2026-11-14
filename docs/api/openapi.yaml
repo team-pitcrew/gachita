@@ -1373,12 +1373,35 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [text, seconds, generation]
+                required: [text, seconds, generation, providerText, segments, diarization]
                 additionalProperties: false
                 properties:
-                  text: { type: string, minLength: 1, maxLength: 500, description: 공급자의 전사에서 특수 태그만 뺀 글 }
+                  text: { type: string, minLength: 1, maxLength: 500, description: 공급자의 전사에서 화자 태그와 확인된 양끝 시각을 뺀 글. 문장 안의 숫자와 시각 표현은 유지 }
                   seconds: { type: number, minimum: 0.5, maximum: 10, description: 받은 WAV의 표본 수로 잰 길이 }
                   generation: { type: integer, minimum: 1, description: 요청과 결과 반환 때 확인한 동의 세대 }
+                  providerText: { type: string, maxLength: 4096, description: 공급자가 반환한 원문. 메타데이터가 잘못되어도 원문은 유지하며 서버에 저장하지 않음 }
+                  segments:
+                    type: [array, "null"]
+                    description: 공급자가 실제 반환한 구간만. 모든 구간이 유효할 때 배열이며, 태그·시각 누락 또는 하나라도 잘못되면 null. 실제 겹침은 허용하고 시각을 추정·보정하지 않음
+                    items:
+                      type: object
+                      required: [start, end, text, speakerLabel]
+                      additionalProperties: false
+                      properties:
+                        start: { type: number, minimum: 0, description: 입력 WAV 시작에서 잰 초 }
+                        end: { type: number, exclusiveMinimum: 0, maximum: 10, description: start보다 크고 seconds 이하인 실제 끝 시각 }
+                        text: { type: string, minLength: 1 }
+                        speakerLabel: { type: string, pattern: '^spk:[0-9]{1,4}$', description: 이 요청 안에서만 구분한 익명 화자. 참가자 신원이 아님 }
+                  diarization:
+                    type: object
+                    required: [method, scope, requestId, status]
+                    additionalProperties: false
+                    properties:
+                      method: { type: string, const: provider-window }
+                      scope: { type: string, const: request }
+                      requestId: { type: string, format: uuid, description: 결과마다 새 UUID. 서로 다른 요청의 같은 화자 번호를 동일인으로 연결하지 않음 }
+                      status: { type: string, enum: [available, unavailable, invalid] }
+                      reason: { type: string, enum: [missing_speaker_tags, missing_timestamps, unexpected_text, invalid_speaker_label, empty_segment, out_of_bounds, malformed_segment], description: unavailable 또는 invalid일 때의 원인 }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
@@ -1476,7 +1499,7 @@ paths:
       description: |
         클립이 올라온 장면마다 소리 주소·자막 큐·말한 사람을 줍니다(T43, ADR-0021). 웹은 9:16 화면에, 차는 그 자리에서 이 데이터로 재생하고, 기기에서 영상 파일로도 만듭니다(ADR-0022). 서버가 만드는 영상은 `/short-generations`입니다.
         소리는 `clip`(같은 출처의 `/api/trips/{code}/recordings/{id}`)을 참가자 토큰 머리말로 받습니다 — 웹은 `fetch` → blob → `<audio>`. 자막 큐의 시각은 클립 첫 표본에서 잰 초입니다.
-        발화의 `at`을 말 시작으로 보고, 끝은 글자 수로 어림합니다(글자당 0.15초, 1~6초). 다음 자막에서 자르되 1초는 남기고(겹칠 수 있음) 클립 끝은 넘지 않습니다.
+        발화의 `at`과 실제 `endAt`가 있으면 그 구간과 겹침을 보존하고 클립 양끝에서 자릅니다. `endAt`가 없으면 끝을 글자 수로 어림합니다(글자당 0.15초, 1~6초). 추정 구간은 다음 자막에서 자르되 1초를 남기고 클립 끝을 넘지 않습니다.
         말한 사람은 화자 대조(T38)로 붙은 프로필의 참가자만 채우고, 아니면 `participantId: null`과 좌석 구역만 줍니다(자리만으로 이름을 붙이지 않음). 녹음에 동의한 참가자만 읽습니다.
       security: [{ participantToken: [] }]
       responses:
@@ -1519,7 +1542,10 @@ paths:
                             required: [start, end, text, raw, device, seq, editVersion, editedText, participantId, seatArea]
                             properties:
                               start: { type: number, description: 클립 안의 초 }
-                              end: { type: number }
+                              end: { type: number, description: endAt가 있으면 실제 끝을 클립 끝으로 제한. 없으면 기존 글자 수 추정. 실제 겹침은 유지 }
+                              endAt: { type: integer, description: 실제 발화 끝(epoch ms). 입력에 있을 때만 }
+                              speakerLabel: { type: string, pattern: '^spk:[0-9]{1,4}$' }
+                              speakerScope: { type: string, format: uuid, description: 화자 라벨을 비교할 수 있는 단일 전사 요청. 다른 요청과 동일인으로 연결하지 않음 }
                               text: { type: string, description: 수동 수정본(T80) → ASR(T75) → Pleos 원문 순 }
                               raw: { type: string, description: Pleos 원문 }
                               device: { type: string }
@@ -2005,6 +2031,9 @@ components:
       properties:
         seq: { type: integer, minimum: 1, maximum: 1000000000, description: 기기가 매기는 순번 }
         at: { type: integer, description: epoch 밀리초. 지금 세대 발화에는 꼭 있음(옛 세대는 seq·generation만) }
+        endAt: { type: [integer, "null"], description: 실제 발화 끝(epoch ms). 선택 칸이며 at보다 크고 at+10000 이하. 없으면 기존 차량 입력과 같음 }
+        speakerLabel: { type: [string, "null"], pattern: '^spk:[0-9]{1,4}$', description: 공급자의 요청 범위 익명 화자. speakerScope와 함께 있을 때만 허용하며 참가자 신원을 배정하지 않음 }
+        speakerScope: { type: [string, "null"], format: uuid, description: /transcriptions의 diarization.requestId. speakerLabel과 함께 있어야 함. 다른 요청의 같은 번호는 동일인이 아님 }
         text: { type: string, minLength: 1, maxLength: 500, description: 지금 세대 발화에는 꼭 있음 }
         seatArea: { anyOf: [{ $ref: "#/components/schemas/Seat" }, { type: "null" }], description: 좌석 구역(T37). 모르면 null이나 생략 }
         generation: { type: integer, minimum: 1, description: 발화를 만들 때의 동의 세대(올릴 때만). 없으면 본문의 generation }
@@ -2041,6 +2070,9 @@ components:
         kind: { type: string, enum: [utterance, moment] }
         tripCode: { type: string }
         at: { type: integer }
+        endAt: { type: integer, description: 실제 발화 끝(epoch ms). 입력에 있을 때만 }
+        speakerLabel: { type: string, pattern: '^spk:[0-9]{1,4}$' }
+        speakerScope: { type: string, format: uuid, description: 단일 전사 요청 범위. 참가자 신원과 별개 }
         text: { type: string, description: kind가 utterance일 때 }
         seatArea: { anyOf: [{ $ref: "#/components/schemas/Seat" }, { type: "null" }] }
         id: { type: string, description: kind가 moment일 때 }
