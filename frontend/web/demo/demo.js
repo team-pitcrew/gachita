@@ -6,12 +6,13 @@ import { characterImage } from '/short-film.js';
 import { createCaptions } from '/captions.js';
 import { RATE, LIMIT, wav, decodeInput, microphone } from './audio-input.js';
 import { windows, processCapture, saveCapture, loadCapture, deleteCapture, beginCapture, saveRawCapture, createCaptureFence, combineSamples } from './capture-session.js';
+import { editingText, serialRefresh } from './view-state.js';
 
 const $ = (id) => document.getElementById(id), KEY = 'gachita-demo';
 const button = (label, onclick, className = '', disabled = false) => h('button', { type: 'button', onclick, className, disabled }, label);
 const field = (label, input) => h('label', { className: 'field' }, h('span', {}, label), input);
 let car; try { car = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch { car = null; }
-let trip, tab = 'capture', busy = false, online = false, error = '', rows = [], todos = [], requestSignature = '', reading = false;
+let trip, tab = 'capture', busy = false, online = false, error = '', rows = [], todos = [], requestSignature = '';
 let job, input, inputName = '', recording, recordingAt, frames = [], frameCount = 0, paused = false, processing, progress = '', draftLoaded = '';
 let audioURL, sourceAudio, waveform, clock, recordButton, statusNode, feedback, fileRange = { from: 0, to: 30 };
 let inputAt, routeObservedAt, lifecycle = 0, actionEpoch = 0, pendingCapture, finishing, unsavedAudio = false;
@@ -26,6 +27,12 @@ const captureScope = () => ({ owner: owner(), code: car?.code, generation: trip?
 const validScope = (scope) => owner() === scope.owner && car?.token === scope.token && trip?.generation === scope.generation && allConsent() && !!who();
 const fixedRequest = (scope) => (method, suffix, data, signal) => api(method, `/trips/${scope.code}${suffix}`, data, scope.token, signal ? AbortSignal.any([signal, AbortSignal.timeout(20000)]) : AbortSignal.timeout(20000));
 const captureFence = createCaptureFence(validScope);
+const refresh = serialRefresh(readTrip);
+const picker = $('capture-file');
+picker.onchange = () => {
+  const file = picker.files?.[0];
+  if (file) act(() => importFile(file)).finally(() => { picker.value = ''; });
+};
 async function changeRecording(scope, data, signal) {
   const updated = await fixedRequest(scope)('PATCH', '', data, signal);
   if (car?.code === scope.code && car?.token === scope.token && (!trip || updated.version >= trip.version)) trip = updated;
@@ -42,9 +49,12 @@ async function act(work) {
   const action = ++actionEpoch;
   busy = true; error = ''; render();
   try { await work(); } catch (e) { if (action === actionEpoch) { error = e.message; toast(e.message); } }
-  finally { if (action === actionEpoch) { busy = false; if (car) await refresh(true); else render(); } }
+  finally { if (action === actionEpoch) { busy = false; render(); if (car) await refresh(true); } }
 }
-function revokeAudio() { sourceAudio?.pause(); if (audioURL) URL.revokeObjectURL(audioURL); audioURL = null; }
+function revokeAudio() {
+  if (sourceAudio) { sourceAudio.pause(); sourceAudio.removeAttribute('src'); sourceAudio.load(); sourceAudio = null; }
+  if (audioURL) URL.revokeObjectURL(audioURL); audioURL = null;
+}
 function stopDevice() { captureFence.cancel(); recording?.stop(); recording = null; pendingCapture = null; paused = false; }
 async function invalidateDraft(message) {
   const previous = job?.owner || captureFence.current?.scope.owner || owner(), previousId = job?.captureId;
@@ -89,9 +99,8 @@ async function cancelStarting() {
   render();
 }
 
-async function refresh(force = false) {
-  if (!car || reading) return;
-  reading = true;
+async function readTrip(force = false) {
+  if (!car) return;
   try {
     const requested = car;
     let next = await api('GET', `/trips/${requested.code}`, null, requested.token, AbortSignal.timeout(20000));
@@ -124,7 +133,7 @@ async function refresh(force = false) {
       if (car !== requested || scope.generation !== trip?.generation) return;
       if (transcript.generation === trip.generation) {
         const sig = JSON.stringify(transcript);
-        if (sig !== requestSignature) { rows = transcript.utterances || []; todos = transcript.todos || []; requestSignature = sig; if (!busy && !processing && !recording && !document.activeElement?.matches('input,textarea,select')) renderBody(); }
+        if (sig !== requestSignature) { rows = transcript.utterances || []; todos = transcript.todos || []; requestSignature = sig; if (!busy && !processing && !recording) renderBody(); }
       }
     } else { rows = []; todos = []; }
     if (changed || force) render(); else updateStatus();
@@ -133,7 +142,7 @@ async function refresh(force = false) {
     // 새 동의 상태를 확인할 수 없으면 마이크를 멈춥니다. 이미 받은 원음은 명시적으로 지우거나 재시도할 수 있습니다.
     if (recording && !paused) await pauseRecording(false).catch((failure) => { error += ` · ${failure.message}`; });
     updateStatus(); if (force || !trip) render();
-  } finally { reading = false; }
+  }
 }
 
 function viewer(view) {
@@ -178,7 +187,7 @@ function updateStatus() {
 function renderBody() {
   if (!trip) return;
   // 파일 선택과 입력 중인 좌표는 정기 조회로 바꾸지 않습니다.
-  if (document.activeElement?.matches('input,textarea,select') && document.activeElement.closest('#workspace-body')) return;
+  if (editingText(document.activeElement, $('workspace-body'))) return;
   $('workspace-body').replaceChildren(tab === 'route' ? routes() : captureView());
   updateStatus();
 }
@@ -188,7 +197,6 @@ function captureView() {
   statusNode = h('span', { className: 'capture-status', role: 'status' }); feedback = h('p', { className: 'capture-feedback', role: 'status' });
   recordButton = mediaButton('record', '마이크 녹음 시작', () => act(toggleRecording), 'record-control'); recordButton.disabled = busy || !!processing || !!finishing || !online || !allConsent();
   const finish = mediaButton('stop', pendingCapture ? '마이크 시작 취소' : '녹음 마치기', () => pendingCapture ? cancelStarting().catch((e) => { error = e.message; render(); }) : act(finishRecording)); finish.disabled = !pendingCapture && ((!recording && !(job?.rawOnly && input)) || busy);
-  const picker = h('input', { type: 'file', accept: 'audio/*,video/*', hidden: true, onchange: (e) => act(() => importFile(e.target.files?.[0])) });
   const actions = h('div', { className: 'capture-actions' });
   if (input && !recording) {
     const from = h('input', { type: 'number', min: 0, max: Math.max(0, input.length / RATE - .5), step: .1, value: fileRange.from, disabled: !!processing || !!job && !job.rawOnly, 'aria-label': '선택 구간 시작 초', oninput: (e) => fileRange.from = Number(e.target.value) });
@@ -199,11 +207,14 @@ function captureView() {
   }
   const preview = h('div', { className: 'source-preview' });
   if (input && !recording) {
-    if (!audioURL) audioURL = URL.createObjectURL(wav(input));
-    sourceAudio = h('audio', { src: audioURL, controls: true, preload: 'metadata', 'aria-label': '입력 원음 듣기' }); sourceAudio.ontimeupdate = updateStatus; preview.append(sourceAudio);
+    if (!audioURL) {
+      audioURL = URL.createObjectURL(wav(input));
+      sourceAudio = h('audio', { src: audioURL, controls: true, preload: 'metadata', 'aria-label': '입력 원음 듣기' }); sourceAudio.ontimeupdate = updateStatus;
+    }
+    preview.append(sourceAudio);
   }
   const consentHint = !allConsent() && h('p', { className: 'capture-footnote' }, '모두 기록에 동의하면 녹음을 시작할 수 있어요. ', button('동의와 동승자 확인', people));
-  const panel = h('section', { className: 'capture-panel' }, h('div', { className: 'capture-head' }, h('div', {}, h('h2', {}, '우리의 대화'), h('p', { className: 'capture-source' }, inputName || '마이크 또는 가지고 있는 영상·음성')), statusNode), clock, waveform, h('div', { className: 'capture-transport' }, recordButton, finish), preview, h('div', { className: 'capture-upload' }, h('p', {}, '녹음한 원음은 이 브라우저에 임시 보관합니다. 받아 적을 때 음성을 서버로 보내고, 장면으로 남긴 구간만 함께 저장해요.'), button('영상·음성 선택', () => picker.click(), '', busy || !!recording || !!processing || !online || !allConsent()), picker), actions, feedback);
+  const panel = h('section', { className: 'capture-panel' }, h('div', { className: 'capture-head' }, h('div', {}, h('h2', {}, '우리의 대화'), h('p', { className: 'capture-source' }, inputName || '마이크 또는 가지고 있는 영상·음성')), statusNode), clock, waveform, h('div', { className: 'capture-transport' }, recordButton, finish), preview, h('div', { className: 'capture-upload' }, h('p', {}, '녹음한 원음은 이 브라우저에 임시 보관합니다. 받아 적을 때 음성을 서버로 보내고, 장면으로 남긴 구간만 함께 저장해요.'), button('영상·음성 선택', () => picker.click(), '', busy || !!recording || !!processing || !online || !allConsent())), actions, feedback);
   return h('div', {}, panel, consentHint, h('div', { className: 'section-heading' }, h('h2', {}, `함께 나눈 이야기 ${rows.length}`), h('div', { className: 'actions' }, button('전체 대화', () => viewer('conversation')), button('자막 보정', () => captions.open(), '', !rows.length))),
     h('div', { className: 'live-lines' }, rows.slice(-8).map((line) => {
       const person = trip.participants.find((p) => p.id === line.participantId);
@@ -320,7 +331,7 @@ async function transcribe() {
       if (!Number.isFinite(from) || !Number.isFinite(to) || from < 0 || to > input.length || to - from < RATE / 2 || to - from > RATE * 45) throw new Error('0.5초에서 45초 사이의 원음 구간을 골라 주세요.');
       const samples = input.slice(from, to), now = Date.now();
       job = { captureId: job.captureId, revision: job.revision, owner: scope.owner, code: scope.code, generation: scope.generation, name: inputName, samples, at: inputAt ? inputAt + from / RATE * 1000 : now - samples.length / RATE * 1000, device: `web-${crypto.randomUUID().replaceAll('-', '')}`, seq: 0, parts: windows(samples.length) };
-      input = samples; revokeAudio();
+      input = samples; revokeAudio(); renderBody();
     }
     const current = job;
     await saveCapture(current, () => valid(current));
@@ -333,7 +344,7 @@ async function transcribe() {
         : '전사와 화자 대조를 마쳤어요. 자막과 말한 사람을 확인한 뒤 장면으로 남겨 주세요.';
     }
   } catch (e) { if (epoch === lifecycle) progress = '이미 임시 보관된 원음은 유지했어요. 다시 처리하면 저장이 확인된 구간부터 이어집니다.'; throw e; }
-  finally { if (processing === controller) processing = null; }
+  finally { if (processing === controller) { processing = null; renderBody(); } }
 }
 async function keepMoment() {
   if (!job?.complete || !validJob(job)) throw new Error('전사 결과와 기록 동의를 먼저 확인해 주세요.');
