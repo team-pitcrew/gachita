@@ -346,7 +346,7 @@ class MainActivity : ComponentActivity() {
                         carStatus.restricted -> SetupLocked()
                         destination == Destination.SHORTS && appVisible -> ShortStudio(server, "", 0, null, "",
                             canRead = { false }, canPlay = { appVisible && !isDestroyed && !carStatus.restricted },
-                            onClose = { destination = Destination.RIDE }, onLocal = { destination = Destination.RIDE },
+                            onClose = { destination = Destination.RIDE },
                             onActiveChange = ::shortStudioActiveChanged, modifier = Modifier.fillMaxSize())
                         else -> Setup()
                     }
@@ -1606,7 +1606,7 @@ class MainActivity : ComponentActivity() {
                     canRead = { appVisible && !isDestroyed && s.online && !carStatus.restricted && scope != null && contentScope() == scope && server == url && s.trip?.people?.all { it.consent } == true && s.trip?.status != "driving" && handoff.state == Handoff.State.OFF },
                     canPlay = { appVisible && !isDestroyed && !carStatus.restricted && s.trip?.status != "driving" && handoff.state == Handoff.State.OFF },
                     onClose = { destination = Destination.RIDE },
-                    onLocal = ::showShort, onActiveChange = ::shortStudioActiveChanged, modifier = Modifier.weight(1f).fillMaxWidth())
+                    onActiveChange = ::shortStudioActiveChanged, participantId = tokens.entries.singleOrNull { it.value == scope?.token }?.key, modifier = Modifier.weight(1f).fillMaxWidth())
             }
         }
     }

@@ -8,7 +8,7 @@ import org.json.JSONObject
 /** 자막 한 줄. start·end는 클립 처음부터의 초. who는 말한 사람 이름, 못 붙였으면 자리 구역, 둘 다 없으면 빈 글자. */
 data class Cue(val start: Double, val end: Double, val text: String, val who: String, val participantId: String? = null)
 
-data class Scene(val label: String, val clip: String, val seconds: Double, val cues: List<Cue>)
+data class Scene(val label: String, val clip: String, val seconds: Double, val cues: List<Cue>, val momentId: String = "")
 
 data class ShortCast(val participantId: String, val name: String, val character: String, val seat: String)
 
@@ -36,6 +36,7 @@ fun parseShort(json: String): Short {
             val cs = s.getJSONArray("cues")
             Scene(
                 label = s.optString("label"),
+                momentId = s.optString("momentId"),
                 clip = s.getString("clip"),
                 seconds = s.getDouble("seconds"),
                 cues = List(cs.length()) { j ->
