@@ -133,6 +133,14 @@ data class Session(
      * 여행 조회가 실패했다(T122). 서버가 답했으면(거절·잠깐 못 받음) 그 이유를 적고, 닿지 않았으면 연결 끊김으로만 보이고 문구는 그대로 둔다.
      * ponytail: 502·503·504도 전처럼 연결된 것으로 센다. 연결 대기로 세면 쇼츠 화면이 보던 영상을 비우는 등 다른 화면도 함께 바뀐다(T122 리뷰).
      */
+    /**
+     * 최신 동의를 확인하지 못한 지(여행 조회가 성공한 뒤로) sinceMs가 지났다. 5분이 넘으면 녹음을 멈춘다(ADR-0007, T17:
+     * '최신 동의를 확인할 수 없으면 기록을 멈춘다') — 그사이 누군가 폰에서 철회했어도 차는 알 수 없기 때문이다.
+     * 자동으로 다시 켜지 않는다: 명시적 시작(started)을 내리므로 연결된 뒤 사람이 '녹음 시작'을 다시 누른다.
+     */
+    fun consentUnseen(sinceMs: Long): Session =
+        if (recording && sinceMs >= CONSENT_FRESH_MS) copy(started = false, note = "동의를 5분 넘게 확인하지 못해 녹음을 멈췄어요. 연결된 뒤 다시 시작해 주세요") else this
+
     fun pollFailed(e: Throwable): Session {
         if (e !is ApiError) return copy(online = false)
         val why = failureText(e) + if (e.transient) ". 다시 시도할게요" else ""

@@ -11,6 +11,7 @@
 !backend/api/boarding-invites.js
 !backend/api/profile-lifecycle.js
 !backend/api/accounts.js
+!backend/api/groups.js
 !backend/api/result-shares.js
 !backend/api/rest-stops.js
 !backend/api/rest-stops.json
