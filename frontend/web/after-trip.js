@@ -146,7 +146,6 @@ export function generationStages(items, paused = "") {
 
 // ---- 화면 ----
 
-const PHASE = { moment: "장면 남기는 중", voice: "음성 구간 기다리는 중", render: "만드는 중", save: "저장 중", done: "완성", failed: "만들지 못함" };
 const button = (text, onclick, className = "", disabled = false) => h("button", { type: "button", className, onclick, disabled }, text);
 const keyed = (el, key) => (el.setAttribute("data-key", key), el);
 const sleep = (ms, signal) => new Promise((ok, no) => {
@@ -156,8 +155,8 @@ const sleep = (ms, signal) => new Promise((ok, no) => {
 
 // getTrip/getParticipant/getToken: 지금 여행·이 폰의 참가자·참가자 토큰. request(method, path, body, signal): 이 폰의 참가자 토큰으로 /trips/{code}{path}.
 // remember(key, value?): 이 폰에 남긴 생성 계획 읽기·쓰기(null이면 지움). avatar(person): 얼굴. onContents(selectedId?): 콘텐츠 기록(쇼츠 보관함).
-// onPick(): 옛 장면 고르기(직접 고르기 → 힉스필드 템플릿까지 그대로). onTalk(): 대화 기록.
-export function createAfterTrip({ getTrip, getParticipant, getToken, request, remember, avatar, getPlaces = () => [], isOnline = () => true, onHome, onTalk, onContents, onPick }) {
+// onTalk(): 대화 기록. (옛 '직접 고르기'·장면 고르기 입구는 11/15 시안 수렴에서 뺐다)
+export function createAfterTrip({ getTrip, getParticipant, getToken, request, remember, avatar, getPlaces = () => [], isOnline = () => true, onHome, onTalk, onContents }) {
   const dialog = h("dialog", { className: "after-dialog", "aria-labelledby": "after-title" });
   document.body.append(dialog);
   let view = null; // 보고 있는 화면 { code, generation, participantId, step: upload|select|make|done, audio, audioMissing, lines, picks, chosen, error }
@@ -269,17 +268,13 @@ export function createAfterTrip({ getTrip, getParticipant, getToken, request, re
       ];
     });
     const card = (pick, i) => {
-      const { title, quote } = sceneTitle(pick, people());
+      const { title } = sceneTitle(pick, people());
       const on = s.chosen.has(pick.from);
       return h("section", { className: `scene-pick${on ? " on" : ""}` },
         h("label", {},
           keyed(h("input", { type: "checkbox", checked: on, onchange: (e) => flip(pick.from, e.target.checked, String(pick.from)) }), pick.from),
-          h("span", { className: "pick-copy" }, h("strong", {}, `${i + 1}. ${title}`), h("span", { className: "pick-time" }, spanLabel(pick.from, pick.to, time.origin)))),
-        // 대사 한 줄이 미리 보기의 손잡이다(누르면 그 구간의 받아 적은 글)
-        keyed(h("details", { open: s.opened.has(pick.from), ontoggle: (e) => (e.target.open ? s.opened.add(pick.from) : s.opened.delete(pick.from)) },
-          h("summary", { "aria-label": `${i + 1}번 장면 대화 미리 보기` }, h("span", { className: "pick-quote" }, quote || "대화 미리 보기")),
-          h("ol", { className: "pick-lines" }, (pick.lines ?? []).slice(0, 8).map((l) => h("li", {}, h("span", { className: "meta" }, people().find((p) => p.id === l.participantId)?.name ?? "말한 사람 미확인"), " ", said(l)))),
-          h("p", { className: "meta" }, "소리는 장면으로 남긴 뒤에 받을 수 있어 만든 영상에서 들어요.")), pick.from));
+          h("span", { className: "pick-copy" }, h("strong", {}, `${i + 1}. ${title}`), h("span", { className: "pick-time" }, spanLabel(pick.from, pick.to, time.origin)))));
+      // 시안 P23–P30: 장면 카드는 번호·제목·구간만(대사 미리 보기는 뺐다 — 11/15 오너 '시안에 맞춰 수렴')
     };
     return {
       title: "남기고 싶은 순간을 골라요",
@@ -290,9 +285,8 @@ export function createAfterTrip({ getTrip, getParticipant, getToken, request, re
           h("div", { className: "wave-pick" }, wave(bars, () => false, () => true), marks),
           h("div", { className: "wave-axis", "aria-hidden": "true" }, h("span", {}, "00:00"), h("span", {}, axisLabel(time.seconds * 500)), h("span", {}, axisLabel(time.seconds * 1000)))),
         ...picks.map(card),
-        s.picks && !picks.length && h("p", { className: "after-note" }, "대화가 더 쌓이면 다시 찾아요. 대화 기록에서 직접 고를 수도 있어요."),
+        s.picks && !picks.length && h("p", { className: "after-note" }, "대화가 더 쌓이면 다시 찾아요."),
         s.error && h("p", { className: "after-note", role: "alert" }, s.error),
-        button("직접 고르기", () => { close(); onPick(); }, "plain after-pick"),
       ],
       actions: [chosen.length ? button(`선택한 ${chosen.length}개 생성`, () => start(s, chosen), "primary") : button("장면을 선택해 주세요", null, "primary", true)],
     };
@@ -308,15 +302,14 @@ export function createAfterTrip({ getTrip, getParticipant, getToken, request, re
         h("section", { className: "after-summary", role: "status" }, h("strong", {}, stage.voice), h("p", {}, stage.step)),
         h("section", { className: "after-card" },
           h("p", { className: "after-label" }, stage.content),
-          wave(bars, (i) => i < Math.round(stage.overall * bars.length)), axis(time.seconds),
-          h("ol", { className: "make-items" }, r.items.map((item) => h("li", {}, h("span", {}, item.label), h("span", { className: "meta" }, item.phase === "render" ? `${PHASE.render} ${Math.floor((item.progress || 0) * 100)}%` : item.error ? `${PHASE.failed} · ${item.error}` : PHASE[item.phase] ?? "대기"))))),
-        h("p", { className: "after-note" }, "이 화면을 나가도 완성되면 알려드려요. 영상은 이 폰에서 소리를 재생하며 만들어서, 폰 화면을 끄거나 앱을 나가면 멈췄다가 돌아오면 남은 장면부터 이어서 만들어요."),
+          wave(bars, (i) => i < Math.round(stage.overall * bars.length)), axis(time.seconds)),
+        // 시안 P31: 장면별 진행 줄·'멈추기'는 뺐다(11/15 수렴). 만들다 멈춘 계획은 이 폰에 남아 다시 열면 남은 장면부터 잇는다.
+        h("p", { className: "after-note" }, "이 화면을 나가도 완성되면 알려드려요."),
       ],
       actions: [
         r.paused && !r.active && button("이어서 만들기", () => go(r), "primary"),
         button("콘텐츠 기록으로", () => { close(); onContents(); }, r.paused && !r.active ? "secondary" : "primary"),
-        r.active ? button("멈추기", () => { r.stopped = true; r.controller?.abort(); }, "plain")
-          : button("다른 장면 새로 고르기", () => { forget(r); run = null; s.step = "select"; s.chosen.clear(); paint(); tick(s); }, "plain"),
+        !r.active && button("다른 장면 새로 고르기", () => { forget(r); run = null; s.step = "select"; s.chosen.clear(); paint(); tick(s); }, "plain"), // 멈추거나 실패했을 때만(상태 화면)
       ],
     };
   }
@@ -493,7 +486,7 @@ export function createAfterTrip({ getTrip, getParticipant, getToken, request, re
     if (step === "select" && !p.consent) return toast("기록에 동의한 사람만 장면을 고를 수 있어요.");
     stop();
     const r = restore();
-    view = { code: t.code, generation: t.generation ?? 1, participantId: p.id, step: r ? "make" : step, chosen: new Set(), opened: new Set(), audio: undefined };
+    view = { code: t.code, generation: t.generation ?? 1, participantId: p.id, step: r ? "make" : step, chosen: new Set(), audio: undefined };
     paint();
     if (!dialog.open) dialog.showModal();
     tick(view);

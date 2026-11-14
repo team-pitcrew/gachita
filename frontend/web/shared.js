@@ -9,7 +9,6 @@ export const SEATS = [
   ["ROW_2_RIGHT", "뒤 오른쪽"],
 ];
 export const SEAT = Object.fromEntries(SEATS);
-export const WHEN = { now: "다음에 쉴 때", return: "돌아가는 길에", before_arrival: "도착하기 전에", after_parking: "주차한 뒤에" };
 // 부탁 상태: [글자, 배지 색]
 export const REQ = {
   held: ["보관", ""],
@@ -19,7 +18,6 @@ export const REQ = {
   done: ["완료", "ok"],
   cancelled: ["취소됨", ""],
 };
-export const CLOSED = ["done", "cancelled"];
 
 // API 부르기. token이 있으면 Authorization: Bearer로 보낸다(프로필 토큰이나 참가자 토큰). Blob 본문(사진)은 그대로 보낸다.
 // 실패하면 Error에 status를 붙여 던진다. 서버에 닿지 않았으면 status 0.

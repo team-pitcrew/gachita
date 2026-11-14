@@ -21,7 +21,7 @@ const fresh = (items) => askState({ ready: true, items, error: "" });
 const fakeDom = () => {
   const el = (tag) => ({ tag, kids: [], append(...k) { this.kids.push(...k); }, setAttribute() {} });
   globalThis.document = { createElement: el };
-  const walk = (n, out = []) => { if (n == null || n === false) return out; if (Array.isArray(n)) n.forEach((k) => walk(k, out)); else if (typeof n !== "object") out.push(String(n)); else n.kids?.forEach((k) => walk(k, out)); return out; };
+  const walk = (n, out = []) => { if (n == null || n === false) return out; if (Array.isArray(n)) n.forEach((k) => walk(k, out)); else if (typeof n !== "object") out.push(String(n)); else if (n.tag === "img") out.push(n.src.split("/").pop().replace(".svg", "")); else n.kids?.forEach((k) => walk(k, out)); return out; };
   return (node) => walk(node).join("|");
 };
 
@@ -45,8 +45,8 @@ test("경유지 도착(P20): 먼저 할 일 하나, 잊지 말고 살 것은 물
   assert.deepEqual(g.buy.map((r) => [r.emoji, r.name, r.who, r.qty]), [["🥩", "삼겹살", "엄마 요청", "600g"], ["🍊", "귤", "엄마 요청", "1봉지"], ["🍬", "젤리", "서준이 요청", "1봉지"], ["🥤", "탄산수", "아빠 요청", "2병"]]);
   const text = fakeDom();
   const shown = text(arrivalBrief({ kind: "arrived", place: "하나로마트 강릉점" }, fresh(mart), people));
-  assert.match(shown, /먼저 할 일\|🚻\|화장실 먼저 다녀오기\|하은이 요청/);
-  assert.match(shown, /🛒\|잊지 말고 살 것\|4개\|🥩\|삼겹살\|600g/); // 시안 P20: 살 것 줄에는 요청한 사람을 쓰지 않는다
+  assert.match(shown, /먼저 할 일\|1f6bb\|화장실 먼저 다녀오기\|하은이 요청/);
+  assert.match(shown, /1f6d2\|잊지 말고 살 것\|4개\|1f969\|삼겹살\|600g/); // 시안 P20: 살 것 줄에는 요청한 사람을 쓰지 않는다
   assert.deepEqual(arrivalMove({ final: false }), ["계속", "driving"]);
   delete globalThis.document;
 });
@@ -55,8 +55,8 @@ test("최종 목적지(finalBrief): 먼저 할 일 / 잊지 말기 / 챙길 것 
   const text = fakeDom();
   const shown = text(arrivalBrief({ kind: "arrived", place: "강릉 숙소", final: true }, fresh(lodge), people));
   assert.ok(shown.indexOf("먼저 할 일") < shown.indexOf("잊지 말기") && shown.indexOf("잊지 말기") < shown.indexOf("챙길 것"), shown);
-  assert.match(shown, /🧊\|고기는 바로 냉장 보관\|엄마 요청/);
-  assert.match(shown, /🧳\|체크인하고 가방 내리기\|아빠 요청/);
+  assert.match(shown, /1f9ca\|고기는 바로 냉장 보관\|엄마 요청/);
+  assert.match(shown, /1f9f3\|체크인하고 가방 내리기\|아빠 요청/);
   assert.deepEqual(arrivalMove({ final: true }), ["여행 마치고 기록 보기", "ended"]);
   delete globalThis.document;
 });
@@ -75,7 +75,7 @@ test("곧 도착(P19): '도착하면 할 일' 목록(먼저 할 일 한 줄씩, 
   assert.deepEqual(items.map((t) => nearLine(t, people)), ["하은 화장실", "고기와 과일", "간식과 음료"]);
   const text = fakeDom();
   const shown = text(nearBrief({ kind: "near", place: "하나로마트" }, fresh(items), people));
-  assert.match(shown, /도착하면 할 일\|🚻\|화장실 먼저 다녀오기\|🛒\|장보기\|정차하면 자세히 보여드릴게요/);
+  assert.match(shown, /도착하면 할 일\|1f6bb\|화장실 먼저 다녀오기\|1f6d2\|장보기\|정차하면 자세히 보여드릴게요/);
   assert.equal(shown.match(/장보기/g).length, 1); // 살 것 둘이어도 한 줄
   assert.doesNotMatch(text(nearBrief({ kind: "near", place: "하나로마트" }, askState({ ready: true, items, error: "연결이 끊겼어요." }), people)), /3가지/);
   assert.match(text(nearBrief({ kind: "near", place: "하나로마트" }, askState(null), people)), /동의하고 이 폰에서 연결한 사람만/);

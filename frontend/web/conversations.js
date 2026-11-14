@@ -21,7 +21,7 @@ export function transcriptLines(data) {
     .sort((a, b) => a.at - b.at || a.seq - b.seq || String(a.device).localeCompare(String(b.device)));
 }
 
-export function createConversations({ getTrip, getParticipant, getToken, request, avatar, isOnline = () => true, onHome, onCaptions, onShorts, onScenes }) {
+export function createConversations({ getTrip, getParticipant, getToken, request, avatar, isOnline = () => true, onHome, onShorts, onScenes }) {
   const dialog = h("dialog", { className: "conversations-dialog", "aria-labelledby": "conversation-title" });
   document.body.append(dialog);
   let state = null;
@@ -107,7 +107,6 @@ export function createConversations({ getTrip, getParticipant, getToken, request
       scroll,
       h("footer", { className: "conversation-bottom" },
         s.unavailable ? h("span", { className: "meta" }, "기록은 화면에 남기지 않았어요") : !ready && h("span", { className: "meta" }, "차에서 받아 적은 대화예요"),
-        ready && button("자막 수정", () => { close(); onCaptions(); }),
         ready && onScenes && button("추천 장면 고르기", () => { close(); onScenes(); }, "primary"),
       ),
     );
