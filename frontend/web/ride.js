@@ -225,6 +225,8 @@ const button = (text, onclick, className = "") => h("button", { type: "button", 
 // 머리: 가치타(누르면 처음 화면), 서버 연결 상태, 오른쪽 끝 내 얼굴 단추(app.js가 setAppBarEnd로 정함, docs/design.md §5).
 let appBarEnd = () => null;
 export const setAppBarEnd = (fn) => { appBarEnd = fn; };
+// appBar를 쓰지 않고 화면 전체를 덮는 대화상자(차량 QR 참여·장면 고르기·우리 쇼츠·추천 쇼츠)의 머리 오른쪽 끝에 같은 얼굴을 둔다.
+export const meEnd = () => h("span", { className: "app-bar-end" }, appBarEnd());
 export const appBar = ({ online, onHome }) => h("div", { className: "top app-bar" },
   h("button", { type: "button", className: "brand brand-home", "aria-label": "가치타 처음 화면으로", onclick: onHome }, "가치타"),
   h("span", { className: "app-bar-end" },

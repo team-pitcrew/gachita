@@ -225,12 +225,15 @@ const contents = createContents({
 const openContents = () => contents.open();
 
 // 오른쪽 위 내 얼굴과 프로필 드롭다운(시안 C17m을 폰 톤으로, docs/design.md §5). 다른 창 위에서도 열리므로 고른 곳으로 가기 전에 열린 창을 닫는다.
-const closeOverlays = () => [conversations, contents, afterTrip, groups, studio, scenes].forEach((x) => x.close());
+// 차량 QR 참여는 자기 '닫기'처럼 받은 초대도 잊는다 — 남기면 다음 그리기의 boarding.resume()이 고른 화면 위로 다시 연다.
+const closeOverlays = () => { [conversations, contents, afterTrip, groups, studio, scenes].forEach((x) => x.close()); boarding.close(true); if (short) closeShort(); };
 const profileMenu = createProfileMenu({
   getProfile: () => profile,
   face: () => avatar(profile, photo),
   loadGroups: async () => (await mine("GET", "/groups")).items,
   onProfile: () => { closeOverlays(); location.hash = "me"; },
+  // 로그인 전·손님의 기본 얼굴 → 로그인·계정 만들기(P02). 이미 #start면 주소가 안 바뀌어 직접 그린다.
+  onSignIn: () => { closeOverlays(); onboarding.open("signup"); if (location.hash === "#start") render(); else location.hash = "start"; },
   onGroups: () => { closeOverlays(); groups.openAt("groups"); },
   onSeats: () => { closeOverlays(); groups.openAt("assign"); },
   onGallery: () => { closeOverlays(); openContents(); },
@@ -241,7 +244,6 @@ setAppBarEnd(profileMenu.button);
 // 로그아웃(로그아웃 확인 2220:5864): 이 폰이 기억하는 신원을 모두 잊고 시작 화면(P01)으로. 서버 토큰은 남는다(profile-menu.js).
 function logout() {
   closeOverlays();
-  boarding.close();
   forgetIdentity(identityStorage, identityPrefix);
   profile = null;
   trip = null;
@@ -999,7 +1001,7 @@ function shortView() {
     ? button("동승자에게 장면 카드 공유", () => { const id = s.scenes[s.at].momentId; closeShort(); shares.openCompose({ momentId: id }); }, "short-existing-share") : null;
   return [h("section", { className: "short", "aria-label": "가공한 쇼츠 재생과 공유" },
     h("div", { className: "short-shell" },
-      h("header", { className: "short-top" }, h("span", { className: "what" }, "추천 쇼츠"), count, mediaButton("back", "쇼츠 닫기", () => closeShort(), "short-close")),
+      h("header", { className: "short-top" }, h("span", { className: "what" }, "추천 쇼츠"), count, mediaButton("back", "쇼츠 닫기", () => closeShort(), "short-close"), profileMenu.button()),
       h("div", { className: "segs", "aria-hidden": "true" }, segs),
       movie,
       h("div", { className: "short-controls" },
