@@ -652,7 +652,8 @@ function tripView(me) {
     journeyTabs("ride", { talk: () => conversations.open(), contents: launchShort }),
     h("div", { className: "ride-title" }, h("h1", {}, heading.title), heading.sub && h("p", { className: "sub" }, heading.sub)),
     ...now,
-    todos.card(),
+    // 곧 도착·도착에서는 위의 행동 항목이 같은 할 일을 보이므로 할 일 카드를 겹쳐 두지 않는다(v2 시안 P19·P20, T141)
+    !["near", "arrived"].includes(state.kind) && todos.card(),
     h(
       "section",
       { className: "card" },
