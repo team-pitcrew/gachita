@@ -162,6 +162,21 @@ class TripTest {
         assertTrue(next.startRecording().recording)
     }
 
+    @Test fun `동의를 5분 넘게 확인하지 못하면 녹음을 멈추고 저절로 다시 켜지 않는다`() {
+        val on = Session(gear = "P").withTrip(trip(true, true)).startRecording()
+        assertTrue(on.consentUnseen(CONSENT_FRESH_MS - 1).recording) // 5분 안에는 잇는다
+        val stopped = on.pollFailed(java.io.IOException()).consentUnseen(CONSENT_FRESH_MS)
+        assertFalse(stopped.recording); assertFalse(stopped.started)
+        assertEquals("동의를 5분 넘게 확인하지 못해 녹음을 멈췄어요. 연결된 뒤 다시 시작해 주세요", stopped.note)
+        assertFalse("끊긴 동안에는 다시 시작하지 못함", stopped.startRecording().recording)
+        val back = stopped.withTrip(trip(true, true)).copy(online = true) // 다시 닿아도 동의만 확인될 뿐
+        assertFalse(back.recording); assertTrue(back.waiting)
+        assertTrue("사람이 다시 눌러야 켜짐", back.startRecording().recording)
+        // 녹음 중이 아니면 문구도 바꾸지 않는다
+        val idle = Session(gear = "P", note = "x").withTrip(trip(true, false))
+        assertEquals(idle, idle.consentUnseen(CONSENT_FRESH_MS * 10))
+    }
+
     @Test fun `조회가 성공하면 지난 조회 실패 문구만 지운다(T122)`() {
         val failed = Session(note = "").pollFailed(ApiError(502, "error code: 502"))
         assertEquals("서버가 잠깐 응답하지 않아요. 다시 시도할게요", failed.note)
