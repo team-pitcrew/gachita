@@ -7,6 +7,7 @@ import { createCaptions } from '/captions.js';
 import { RATE, LIMIT, wav, decodeInput, microphone } from './audio-input.js';
 import { windows, processCapture, saveCapture, loadCapture, deleteCapture, beginCapture, saveRawCapture, createCaptureFence, combineSamples } from './capture-session.js';
 import { editingText, serialRefresh } from './view-state.js';
+import { joinedTrip, sameJoinedTrip, verifyJoinedTrip } from './continue-trip.js';
 
 const $ = (id) => document.getElementById(id), KEY = 'gachita-demo';
 const button = (label, onclick, className = '', disabled = false) => h('button', { type: 'button', onclick, className, disabled }, label);
@@ -157,14 +158,29 @@ function viewer(view) {
 $('viewer-close').onclick = () => $('viewer').close();
 $('viewer').addEventListener('close', () => { $('viewer-frame').src = 'about:blank'; });
 
+function joinedChoice(candidate = joinedTrip(localStorage)) {
+  return h('section', { id: 'joined-trip-choice', className: 'joined-trip-choice', hidden: !candidate },
+    candidate && h('p', {}, '휴대폰 화면에서 참여한 여행이 있어요. 같은 대화와 쇼츠를 여기서 이어 보세요.'),
+    candidate && button(busy ? '참여 연결 확인 중' : '참여한 여행 이어가기', () => act(() => continueJoined(candidate)), 'primary', busy));
+}
+async function continueJoined(candidate) {
+  const expectedCar = car, expectedTrip = trip, epoch = lifecycle, profile = localStorage.getItem('gachita:profile');
+  const valid = () => car === expectedCar && trip === expectedTrip && lifecycle === epoch && localStorage.getItem('gachita:profile') === profile;
+  const result = await verifyJoinedTrip(candidate, { request: api, current: () => joinedTrip(localStorage), valid, signal: AbortSignal.timeout(20000) });
+  if (!valid() || !sameJoinedTrip(candidate, joinedTrip(localStorage))) throw new Error('참여한 여행이 바뀌었어요. 다시 선택해 주세요.');
+  // Commit only the demo context. The phone profile, participant keys and consent stay with the phone UI.
+  localStorage.setItem(KEY, JSON.stringify(result.car));
+  lifecycle++; car = result.car; trip = result.trip; tab = 'capture'; rows = []; todos = []; requestSignature = ''; draftLoaded = '';
+}
 function welcome() {
+  const candidate = joinedTrip(localStorage);
   const title = h('input', { required: true, maxLength: 80, value: '함께하는 여행', autocomplete: 'off' });
   const name = h('input', { required: true, maxLength: 20, placeholder: '운전자의 이름', autocomplete: 'given-name' });
   return h('form', { className: 'welcome', onsubmit: (e) => { e.preventDefault(); act(async () => {
     const created = await api('POST', '/trips', { title: title.value.trim() });
     const driver = await api('POST', `/trips/${created.code}/participants`, { name: name.value.trim(), seat: 'ROW_1_LEFT', consent: false });
     car = { code: created.code, id: driver.id, token: driver.token }; saveCar();
-  }); } }, h('img', { className: 'welcome-mark', src: '/icons/gachita-192.png', alt: '가치타 캐릭터' }), h('h2', {}, '함께 탄 이야기,', h('br'), '목소리 그대로.'), h('p', {}, '차량에서 시작한 여행을 웹에서도 이어 갑니다. 참석 QR로 일행을 초대하고, 모두의 동의를 받은 뒤 대화를 남겨 보세요.'), field('여행 이름', title), field('내 이름', name), h('button', { type: 'submit', className: 'primary', disabled: busy }, busy ? '여행 만드는 중' : '여행 시작하기'), error && h('p', { role: 'alert', className: 'error-text' }, error));
+  }); } }, h('img', { className: 'welcome-mark', src: '/icons/gachita-192.png', alt: '가치타 캐릭터' }), h('h2', {}, '함께 탄 이야기,', h('br'), '목소리 그대로.'), h('p', {}, '차량에서 시작한 여행을 웹에서도 이어 갑니다. 참석 QR로 일행을 초대하고, 모두의 동의를 받은 뒤 대화를 남겨 보세요.'), joinedChoice(candidate), h('details', { className: 'welcome-new', open: !candidate }, h('summary', {}, '새 여행 만들기'), field('여행 이름', title), field('내 이름', name), h('button', { type: 'submit', className: 'primary', disabled: busy }, busy ? '여행 만드는 중' : '여행 시작하기')), error && h('p', { role: 'alert', className: 'error-text' }, error));
 }
 function render() {
   updateStatus();
@@ -435,6 +451,7 @@ addEventListener('pagehide', () => {
 });
 addEventListener('pageshow', (event) => { if (event.persisted) { lifecycle++; stopDevice(); processing = null; job = input = null; frames = []; frameCount = 0; draftLoaded = ''; refresh(true); } });
 addEventListener('storage', (event) => {
+  if (!trip && event.key?.startsWith('gachita:')) { $('joined-trip-choice')?.replaceWith(joinedChoice()); return; }
   if (event.key !== KEY || event.newValue === JSON.stringify(car)) return;
   invalidateDraft().catch((e) => { error = e.message; }).finally(() => { try { car = JSON.parse(event.newValue || 'null'); } catch { car = null; } trip = null; rows = []; draftLoaded = ''; render(); refresh(true); });
 });
