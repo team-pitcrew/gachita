@@ -5,7 +5,13 @@ import org.json.JSONObject
 import java.io.File
 import java.io.OutputStream
 import java.net.HttpURLConnection
+import java.net.SocketTimeoutException
 import java.net.URL
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** 가치타 API(docs/api/openapi.yaml)를 부른다. 메인 스레드에서 부르지 않는다. */
 class Server(base: String, private val open: (URL) -> HttpURLConnection = { it.openConnection() as HttpURLConnection }) {
@@ -160,12 +166,31 @@ class Server(base: String, private val open: (URL) -> HttpURLConnection = { it.o
             JSONObject().put("participantId", participantId ?: JSONObject.NULL), token)
     }
 
-    private fun call(method: String, path: String, body: Any?, token: String? = null): String? {
+    /**
+     * 지금 위치·진행 방향과 내비 목적지·남은 길로 고른 경로 위 휴게소(T97), 좋은 순. 위치는 본문으로만 보낸다.
+     * 제안이 늦지 않게(요청 끝에서 제안까지 p95 5초 목표) 연결부터 본문 끝까지 모두 2초만 기다린다(deadlineMs). 넘으면 연결을 끊어
+     * 공용 실행기(io)를 풀고 던진다. 실패하면 부른 쪽이 고정 목록으로 간다.
+     */
+    fun restStops(lat: Double, lng: Double, heading: Double?, to: Place?, remain: Int?): List<Place> {
+        val from = JSONObject().put("lat", lat).put("lng", lng)
+        heading?.let { from.put("heading", (it % 360 + 360) % 360) }
+        val body = JSONObject().put("from", from).put("limit", 3)
+        to?.let { body.put("to", JSONObject().put("lat", it.lat).put("lng", it.lng)) }
+        remain?.let { body.put("remainMeters", it) }
+        return restStopsOf(call("POST", "/api/rest-stops", body, timeoutMs = 2000, deadlineMs = 2000)!!)
+    }
+
+    /**
+     * deadlineMs를 주면 호출 전체(연결·보내기·받기)의 마감이다. connect·readTimeout은 단계마다 따로 걸리고, 본문이 조금씩 오면
+     * readTimeout이 매번 다시 시작해 끝없이 기다릴 수 있다. 마감에 연결을 끊으면 막힌 읽기가 바로 예외로 풀린다.
+     */
+    private fun call(method: String, path: String, body: Any?, token: String? = null, timeoutMs: Int = 5000, deadlineMs: Int? = null): String? {
         val c = open(URL(base + path))
+        val expire = deadlineMs?.let { DEADLINES.schedule({ c.disconnect() }, it.toLong(), TimeUnit.MILLISECONDS) }
         try {
             c.requestMethod = method // 안드로이드의 HttpURLConnection은 PATCH를 받는다
-            c.connectTimeout = 5000
-            c.readTimeout = 5000
+            c.connectTimeout = timeoutMs
+            c.readTimeout = timeoutMs
             token?.let { c.setRequestProperty("Authorization", "Bearer $it") } // 토큰은 머리말로만(주소에 넣지 않음, Pleos 보안 가이드)
             if (body != null) {
                 c.doOutput = true
@@ -180,8 +205,12 @@ class Server(base: String, private val open: (URL) -> HttpURLConnection = { it.o
             // 여행 경로에서 서버가 그 여행을 모른다고 할 때만 Gone(프록시의 404 쪽이나 '없는 참가자'로는 지우지 않음)
             if (code == 404 && error in TRIP_GONE && path.startsWith("/api/trips/")) throw Gone(path.split("/")[3])
             if (code >= 400) throw ApiError(code, error ?: text)
+            if (expire?.isDone == true) throw SocketTimeoutException("${deadlineMs}ms 마감") // 끊긴 연결에서 잘린 본문을 쓰지 않는다
             return text
+        } catch (e: java.io.IOException) {
+            throw if (expire?.isDone == true) SocketTimeoutException("${deadlineMs}ms 마감") else e
         } finally {
+            expire?.cancel(false)
             c.disconnect()
         }
     }
@@ -213,6 +242,22 @@ fun <T> retryTransient(waits: List<Long> = listOf(500, 1000), sleep: (Long) -> U
 }
 
 /** 서버(withTrip)가 여행을 모를 때의 404 문구. 이것만 여행이 없어진 것으로 본다. */
+/** 호출 마감(deadlineMs)에 연결을 끊는 타이머. 데몬 스레드 하나를 모든 Server가 함께 쓴다. */
+private val DEADLINES = Executors.newSingleThreadScheduledExecutor { Thread(it, "gachita-deadline").apply { isDaemon = true } }
+
+/**
+ * work를 exec에서 돌리되 deadlineMs가 지나면 그 일이 끝났든 아니든 실패(TimeoutException)로 한 번만 확정한다. 늦게 온 답은 버린다.
+ * 휴게소 추천용(Astra #317 3차): DNS 조회는 끊을 수 없어 연결을 끊는 마감(deadlineMs)만으로는 부른 쪽이 계속 기다린다.
+ * done은 exec나 마감 스레드에서 한 번 불린다. exec가 막혀 있어도(앞의 늦은 DNS) 마감은 제때 온다.
+ */
+fun <T> within(exec: ExecutorService, deadlineMs: Long, work: () -> T, done: (Result<T>) -> Unit) {
+    if (exec.isShutdown) return
+    val settled = AtomicBoolean()
+    fun settle(r: Result<T>) { if (settled.compareAndSet(false, true)) done(r) }
+    val expire = DEADLINES.schedule({ settle(Result.failure(TimeoutException("${deadlineMs}ms 안에 답이 없음"))) }, deadlineMs, TimeUnit.MILLISECONDS)
+    exec.execute { val r = runCatching(work); expire.cancel(false); settle(r) }
+}
+
 private val TRIP_GONE = setOf("없는 여행 코드", "보관 기간이 지난 여행")
 
 /** 서버가 여행을 모른다(404: 삭제되었거나 없음). 차 안 사본도 지운다(T69). */

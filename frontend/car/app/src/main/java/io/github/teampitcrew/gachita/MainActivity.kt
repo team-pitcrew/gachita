@@ -23,6 +23,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.size
@@ -36,6 +37,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -58,6 +60,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -100,6 +103,7 @@ private const val OFFER_MS = 30_000L // 제안에 답이 없으면 보관으로 
 
 class MainActivity : ComponentActivity() {
     private val io = Executors.newSingleThreadExecutor()
+    private val stopsIo = Executors.newSingleThreadExecutor() // 휴게소 추천 전용: 늦은 DNS가 공용 io를 막지 않게(Astra #317 3차)
     private val recordingIo = Executors.newSingleThreadExecutor()
     private var cancelRecordingStart: (() -> Unit)? = null
     private val clipIo = Executors.newSingleThreadExecutor() // 장면 클립 올리기(T63). 동의 끄기 요청이 클립 묶음 뒤에 서지 않게 따로
@@ -350,7 +354,7 @@ class MainActivity : ComponentActivity() {
         if (savedInstanceState == null) gleo(intent) // 다시 만들어진 화면이 지난 호출에 또 답하지 않게
         setContent {
             GachitaTheme {
-                // ponytail: 에뮬레이터는 창을 나누지 않아 반쪽 창을 --ei widthDp 841로 흉내 낸다. 실제 분할 창 확인은 실차에서
+                // ponytail: --ei widthDp 841은 창을 나누지 않고 반쪽 너비만 흉내 낸다(e2e.py). 실제 반쪽 창은 Pleos 창 바(⋮)로 나눈다(README)
                 val w = if (debug) intent.getIntExtra("widthDp", 0) else 0
                 Surface(if (w > 0) Modifier.fillMaxHeight().width(w.dp) else Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     val t = s.trip
@@ -407,7 +411,7 @@ class MainActivity : ComponentActivity() {
         main.removeCallbacksAndMessages(null) // 조회, 제안 시간 초과, 결과 카드 닫기
         if (Live.onHeard == ::heard) Live.onHeard = null
         if (!isChangingConfigurations) { handoff.stop(); CaptureService.stop(this) } // 동의를 확인할 화면이 없어지면 수음도 멈춘다
-        car.stop(); io.shutdown(); clipIo.shutdownNow(); shortPreviewIo.shutdownNow(); shortPreviewCloseIo.shutdown(); shortExportIo.shutdownNow(); shortExportCheckIo.shutdownNow(); super.onDestroy()
+        car.stop(); io.shutdown(); stopsIo.shutdownNow(); clipIo.shutdownNow(); shortPreviewIo.shutdownNow(); shortPreviewCloseIo.shutdown(); shortExportIo.shutdownNow(); shortExportCheckIo.shutdownNow(); super.onDestroy()
     }
 
     /** 통신은 한 줄로 차례대로 돌리고 결과만 메인 스레드로 돌려받는다. */
@@ -657,7 +661,7 @@ class MainActivity : ComponentActivity() {
     /** 기록 중이면 내비에 지금 위치를 물어 둔다. 발화에 붙인다(FIX_MS). 휴게소를 찾는 중이면 그 물음을 끊지 않게 묻지 않는다. */
     private fun locate() {
         if (!s.recording || offer?.stage == Offer.Stage.FINDING || arrivalLoading) return
-        car.here { la, ln -> if (la != null && ln != null) Live.fix = Fix(la, ln, System.currentTimeMillis()) }
+        car.here { la, ln, _ -> if (la != null && ln != null) Live.fix = Fix(la, ln, System.currentTimeMillis()) }
     }
 
     /** 터치와 음성 모두 같은 최신 동의·주차 검사로 시작하며, 늦은 응답은 수음을 켜지 않는다. */
@@ -806,19 +810,48 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** 아직 지나치지 않은 가장 가까운 휴게소와 그곳까지의 거리·시간을 내비에 묻고 제안한다. 화면은 넘어가지 않는다. 답이 없으면 30초 뒤 보관. */
+    /**
+     * 지금 경로에서 들를 휴게소를 고르고 그곳까지의 거리·시간을 내비에 묻고 제안한다. 화면은 넘어가지 않는다. 답이 없으면 30초 뒤 보관.
+     * 후보는 서버 추천(T97: 내비의 지금 위치·진행 방향·목적지·남은 길로 고름). 서버가 꺼졌거나 닿지 않거나 위치를 모르면 고정 목록(nextStop).
+     * 서버가 빈 목록으로 답하면 앞에 들를 곳이 없는 것이다(고정 목록으로 가면 다른 길의 휴게소를 제안하게 됨).
+     */
     private fun propose(o: Offer, u: Utterance) {
-        car.here { lat, lng ->
-            val stop = nextStop(lat, lng)
-            if (stop == null) { Log.i(TAG, "남은 휴게소 없음 · 부탁은 보관"); if (offer?.id == o.id) offer = null; return@here }
-            car.distanceTo(stop) { m, sec ->
-                val cur = offer?.takeIf { it.id == o.id } ?: return@distanceTo
-                offer = cur.copy(stop = stop, meters = m, seconds = sec, stage = Offer.Stage.ASKING)
-                Log.i(TAG, "제안 ${stop.name} 부탁 ${cur.requests.size}건 · 최종 결과에서 ${System.currentTimeMillis() - u.endedAt}ms · 위치 ${lat != null}")
-                car.speak("${stop.spoken}에 들를까요?")
-                mark(cur.trip, cur.requests, "proposed")
-                main.postDelayed({ offer?.takeIf { it.id == o.id && it.stage == Offer.Stage.ASKING }?.let { later(it, timedOut = true) } }, OFFER_MS)
+        car.here { lat, lng, heading ->
+            car.destination { to, remain ->
+                val url = server
+                val known = lat != null && lng != null && !(lat == 0.0 && lng == 0.0)
+                // 2초 안에 답이 없으면 통신이 끝나지 않았어도 고정 목록으로 간다. 늦게 온 답은 within이 버린다.
+                within(stopsIo, 2_000, { if (known) Server(url).restStops(lat!!, lng!!, heading, to, remain) else throw IllegalStateException("위치 모름") }) { r -> main.post post@{
+                    if (isDestroyed) return@post
+                    r.exceptionOrNull()?.let { Log.w(TAG, "휴게소 추천을 받지 못함 · 고정 목록으로", it) }
+                    val stops = stopsFrom(r, lat, lng)
+                    Log.i(TAG, "휴게소 후보 ${stops.size}곳 · ${if (r.isSuccess) "추천 서버" else "고정 목록"} · 목적지 ${to != null} · 남은 길 ${remain != null}")
+                    if (stops.isEmpty()) { Log.i(TAG, "남은 휴게소 없음 · 부탁은 보관"); if (offer?.id == o.id) offer = null; return@post }
+                    ask(o, u, stops, lat, lng, remain)
+                } }
             }
+        }
+    }
+
+    /**
+     * 후보를 차례로 내비에 물어(requestTrip, 화면 그대로 0.1~0.2초) 길 위 거리가 지금 길에서 들르는 곳으로 보이는 첫 곳을 제안한다(onRoad).
+     * 모두 아니면 첫 후보를 제안한다. 위치를 모르면 거르지 않는다.
+     */
+    private fun ask(o: Offer, u: Utterance, stops: List<Place>, lat: Double?, lng: Double?, remain: Int?, i: Int = 0, first: Triple<Place, Int?, Int?>? = null) {
+        val stop = stops[i]
+        car.distanceTo(stop) { m, sec ->
+            val cur = offer?.takeIf { it.id == o.id } ?: return@distanceTo
+            val straight = if (lat != null && lng != null) meters(lat, lng, stop.lat, stop.lng) else null
+            val here = Triple(stop, m, sec)
+            val fits = straight == null || onRoad(straight, m, remain)
+            if (!fits) Log.i(TAG, "${stop.name}: 길 위 ${m}m, 직선 ${straight?.toInt()}m · 지금 길에서 들르는 곳이 아님")
+            if (!fits && i + 1 < stops.size) return@distanceTo ask(o, u, stops, lat, lng, remain, i + 1, first ?: here)
+            val (pick, pm, ps) = if (fits) here else first ?: here
+            offer = cur.copy(stop = pick, meters = pm, seconds = ps, stage = Offer.Stage.ASKING)
+            Log.i(TAG, "제안 ${pick.name} 부탁 ${cur.requests.size}건 · 최종 결과에서 ${System.currentTimeMillis() - u.endedAt}ms · 위치 ${lat != null}")
+            car.speak("${pick.spoken}에 들를까요?")
+            mark(cur.trip, cur.requests, "proposed")
+            main.postDelayed({ offer?.takeIf { it.id == o.id && it.stage == Offer.Stage.ASKING }?.let { later(it, timedOut = true) } }, OFFER_MS)
         }
     }
 
@@ -951,7 +984,7 @@ class MainActivity : ComponentActivity() {
         car.nextArrivalPlace place@{ place ->
             if (!current()) return@place
             if (place == null) { failed("내비의 다음 장소 좌표를 확인하지 못했어요. 도착 안내를 보류했어요"); return@place }
-            car.here position@{ lat, lng ->
+            car.here position@{ lat, lng, _ ->
                 if (!current()) return@position
                 if (!vehiclePoint(lat, lng)) { failed("현재 위치를 확인하지 못했어요. 도착 안내를 보류했어요"); return@position }
                 val observed = VehicleArrival(place, lat!!, lng!!, System.currentTimeMillis())
@@ -1474,7 +1507,10 @@ class MainActivity : ComponentActivity() {
         val c = MaterialTheme.colorScheme
         Column(Modifier.fillMaxSize().padding(32.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
             AppBar(TITLE, listening = false, *pills(online = null))
-            OutlinedButton(onClick = { destination = Destination.SHORTS }, shape = RoundedCornerShape(10.dp)) { Text("저장한 쇼츠", fontSize = 24.sp) }
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                OutlinedButton(onClick = { destination = Destination.SHORTS }, shape = RoundedCornerShape(10.dp)) { Text("저장한 쇼츠", fontSize = 24.sp) }
+                WindowSize()
+            }
             Spacer(Modifier.height(8.dp))
             Text("누구랑 같이 타나요?", fontSize = 40.sp, fontWeight = FontWeight.Bold)
             Text("같이 타는 가족을 골라 주세요", color = c.onSurfaceVariant)
@@ -1490,6 +1526,26 @@ class MainActivity : ComponentActivity() {
                 Text(if (s.busy) "여행을 만들고 있어요" else "${picked.size}명으로 여행 만들기", fontSize = 30.sp, fontWeight = FontWeight.Bold)
             }
         }
+    }
+
+    /**
+     * 창 크기 단추(T112). 창의 자리와 크기는 Pleos가 정하고 운전자가 창 바(⋮)로 바꾼다. 앱은 바꾸지 못한다
+     * (11/14 에뮬레이터: 방향 요청은 레터박스, setLaunchBounds·FLAG_ACTIVITY_LAUNCH_ADJACENT는 무시). 그래서 누르면 창 바 쓰는 법을 알린다.
+     * 반쪽 창(1000dp 미만)은 '전체화면', 넓은 창은 '반쪽 창'. 토스트는 Pleos가 띄우지 않아 대화 상자로 보인다. 주행 중에는 숨긴다.
+     */
+    @Composable
+    private fun WindowSize() {
+        if (carStatus.restricted) return
+        val wide = LocalConfiguration.current.screenWidthDp >= 1000
+        var open by remember { mutableStateOf(false) }
+        OutlinedButton({ open = true }, shape = RoundedCornerShape(10.dp)) { Text(if (wide) "반쪽 창" else "전체화면", fontSize = 24.sp, maxLines = 1) }
+        if (open) AlertDialog({ open = false }, confirmButton = { TextButton({ open = false }) { Text("확인", fontSize = 24.sp) } },
+            title = { Text(if (wide) "내비 옆 반쪽 창으로 보기" else "전체화면으로 보기", fontSize = 28.sp, fontWeight = FontWeight.Bold) },
+            text = { // 대화 상자 본문 기본 줄 높이(20sp)는 24sp 글자에 겹친다
+                Text(if (wide) "오른쪽 끝 ⋮를 왼쪽으로 끌면 화면이 둘로 나뉘어요. 가운데 ⋮를 누르면 내비가 왼쪽, 가치타가 오른쪽으로 바뀌어요."
+                    // ponytail: 좌우는 다시 열거나 운전자가 바꿔 앱이 모르므로 두 경우를 함께 적는다. 쓴 동작(누르기·왼쪽 끝으로 끌기)은 11/14 실측한 것만
+                    else "가치타가 오른쪽이면 가운데 ⋮를 왼쪽 끝까지 끌면 넓어져요. 왼쪽이면 먼저 가운데 ⋮를 눌러 오른쪽으로 옮겨요. 창의 자리와 크기는 차량 화면이 정해서 앱이 바꿀 수 없어요.", fontSize = 24.sp, lineHeight = 34.sp)
+            })
     }
 
     /** 가족 한 사람(C6). 누르면 같이 탐·안 탐을 바꾼다(체크 상태라 화면 트리에 checked로 보인다). */
@@ -1554,6 +1610,7 @@ class MainActivity : ComponentActivity() {
                 }
                 Pill(if (parked) "주차 중" else "주행 중")
                 Pill(if (s.online) "서버 연결됨" else "연결 대기", ok = s.online)
+                WindowSize()
             }
             Row(Modifier.fillMaxWidth().height(68.dp).clip(RoundedCornerShape(12.dp)).background(c.surfaceVariant).padding(5.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 Destination.entries.forEach { tab ->
@@ -1929,52 +1986,75 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** 서버 목록과 서버가 선정한 도착 항목만 표시합니다. 상태 변경은 응답을 받은 뒤 반영합니다. */
+    /**
+     * 서버 목록과 서버가 선정한 도착 항목만 표시합니다. 상태 변경은 응답을 받은 뒤 반영합니다.
+     * 겉모습은 시안 C3(알약 → 제목 → 부제 → 할 일 줄 → 닫기). 시안에 없는 동기화 줄·원문·취소·다시 열기·도착 확인은 T113에 필요해 남깁니다.
+     */
     @Composable
     private fun BriefCard(b: Brief, modifier: Modifier) {
         val items = b.arrivalItems ?: todoList
         val c = MaterialTheme.colorScheme
-        Card(Tone.Accent, modifier) {
-            Text(if (b.place != null) "${b.place}에서 할 일" else "장소별 할 일", fontSize = 32.sp, fontWeight = FontWeight.Bold)
-            val synced = todoState.syncedAt?.let { java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.KOREA).format(java.util.Date(it)) }
-            Text(when {
-                todoState.scope == null -> "탑승자 모두의 기록 동의와 참가자 연결이 필요해요"
-                todoState.loading -> "서버 목록을 갱신하고 있어요"
-                synced != null -> "마지막 동기화 $synced · 서버 기록"
-                else -> "아직 서버 목록을 확인하지 못했어요"
-            }, color = c.onSurfaceVariant, fontSize = 18.sp)
-            if (todoState.note.isNotEmpty()) Text(todoState.note, color = c.error, fontSize = 18.sp)
-            if (arrivalNote.isNotEmpty()) Text(arrivalNote, color = c.onSurfaceVariant, fontSize = 18.sp)
-            Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        val ctl = RoundedCornerShape(24.dp)
+        // 시안 C3의 크기는 넓은 창의 큰 칸 기준입니다. 기본인 반쪽 창의 낮은 초점 칸에서는 제목이 목록을 밀어내지 않게 기존 크기를 씁니다(시안에 좁은 도착 프레임 없음).
+        BoxWithConstraints(modifier) {
+        val roomy = maxHeight >= 600.dp
+        CarCard(Tone.Accent, Modifier.fillMaxSize(), pad = if (roomy) 40.dp else 28.dp, gap = if (roomy) 20.dp else 10.dp) {
+            Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(if (roomy) 20.dp else 12.dp)) {
+                if (b.place != null) Pill("도착 브리핑")
+                Text(if (b.place != null) "${b.place}에 도착했어요" else "장소별 할 일", fontSize = if (roomy) 56.sp else 32.sp, lineHeight = if (roomy) 64.sp else 40.sp, fontWeight = FontWeight.Bold)
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("${if (b.place != null) "여기서 " else ""}할 일 ${items.count { it.pending }}건 · 오는 길에 나온 말로 모았어요", color = c.onSurfaceVariant, fontSize = if (roomy) 28.sp else 22.sp, lineHeight = if (roomy) 40.sp else 30.sp)
+                    val synced = todoState.syncedAt?.let { java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.KOREA).format(java.util.Date(it)) }
+                    Text(when {
+                        todoState.scope == null -> "탑승자 모두의 기록 동의와 참가자 연결이 필요해요"
+                        todoState.loading -> "서버 목록을 갱신하고 있어요"
+                        synced != null -> "마지막 동기화 $synced · 서버 기록"
+                        else -> "아직 서버 목록을 확인하지 못했어요"
+                    }, color = c.onSurfaceVariant, fontSize = 18.sp)
+                    if (todoState.note.isNotEmpty()) Text(todoState.note, color = c.error, fontSize = 18.sp)
+                    if (arrivalNote.isNotEmpty()) Text(arrivalNote, color = c.onSurfaceVariant, fontSize = 18.sp)
+                }
                 if (items.isEmpty() && todoState.data != null && !todoState.loading) Text("이 목록에 할 일이 없어요", color = c.onSurfaceVariant)
+                val enabled = !todoState.loading && s.online && vehicleParked() && todoState.scope == todoScope()
                 items.forEach { item ->
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text("${item.place} · ${item.text}", fontSize = 24.sp)
-                        Text("원문 ${item.sources.size}개 · " + when (item.status) { "done" -> "완료"; "cancelled" -> "취소"; else -> "미완료" }, color = c.onSurfaceVariant, fontSize = 16.sp)
-                        var sourceOpen by remember(item.id) { mutableStateOf(false) }
-                        TextButton({ sourceOpen = !sourceOpen }) { Text(if (sourceOpen) "원문 접기" else "원문 보기") }
-                        if (sourceOpen) item.sources.forEach { source ->
-                            val at = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.KOREA).format(java.util.Date(source.at))
-                            val speaker = s.trip?.people?.find { it.id == source.participantId }?.name ?: "화자 미확인"
-                            Text("$at · $speaker", color = c.onSurfaceVariant, fontSize = 16.sp)
-                            Text(source.text, fontSize = 18.sp)
-                            if (source.displayText != source.text) Text("보정 · ${source.displayText}", color = c.onSurfaceVariant, fontSize = 18.sp)
-                        }
-                        val enabled = !todoState.loading && s.online && vehicleParked() && todoState.scope == todoScope()
-                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            if (item.pending) {
-                                OutlinedButton({ changeTodo(item, "done") }, enabled = enabled, modifier = Modifier.heightIn(min = 56.dp), shape = RoundedCornerShape(10.dp)) { Text("완료") }
-                                OutlinedButton({ changeTodo(item, "cancelled") }, enabled = enabled, modifier = Modifier.heightIn(min = 56.dp), shape = RoundedCornerShape(10.dp)) { Text("취소") }
-                            } else OutlinedButton({ changeTodo(item, "pending") }, enabled = enabled, modifier = Modifier.heightIn(min = 56.dp), shape = RoundedCornerShape(10.dp)) { Text("다시 열기") }
+                    // 서버가 화자를 확인한 원발화만 이름과 캐릭터로 보입니다. 확인되지 않았으면 빈 동그라미와 '말한 사람 미확인'.
+                    val speakers = item.sources.mapNotNull { src -> s.trip?.people?.find { it.id == src.participantId } }.distinct()
+                    val who = speakers.singleOrNull()
+                    var sourceOpen by remember(item.id) { mutableStateOf(false) }
+                    Surface(Modifier.fillMaxWidth(), ctl, color = c.surfaceVariant) {
+                        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+                                if (who != null) Character(runCatching { Seat.valueOf(who.seat).ordinal }.getOrDefault(0), 56.dp)
+                                else Box(Modifier.size(56.dp).clip(CircleShape).background(c.surface))
+                                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Text(if (b.place != null) item.text else "${item.place} · ${item.text}", fontSize = 28.sp, lineHeight = 40.sp, fontWeight = FontWeight.Medium)
+                                    Text((if (speakers.isEmpty()) "말한 사람 미확인" else speakers.joinToString("·") { it.name } + "의 말") +
+                                        when (item.status) { "done" -> " · 완료"; "cancelled" -> " · 취소"; else -> "" }, color = c.onSurfaceVariant)
+                                }
+                                OutlinedButton({ changeTodo(item, if (item.pending) "done" else "pending") }, enabled = enabled, modifier = Modifier.height(72.dp), shape = ctl,
+                                    contentPadding = PaddingValues(horizontal = 36.dp)) { Text(if (item.pending) "완료" else "다시 열기") }
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                TextButton({ sourceOpen = !sourceOpen }, Modifier.heightIn(min = 56.dp)) { Text(if (sourceOpen) "원문 접기" else "원문 ${item.sources.size}개 보기") }
+                                if (item.pending) TextButton({ changeTodo(item, "cancelled") }, Modifier.heightIn(min = 56.dp), enabled = enabled) { Text("취소") }
+                            }
+                            if (sourceOpen) item.sources.forEach { source ->
+                                val at = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.KOREA).format(java.util.Date(source.at))
+                                val speaker = s.trip?.people?.find { it.id == source.participantId }?.name ?: "화자 미확인"
+                                Text("$at · $speaker", color = c.onSurfaceVariant, fontSize = 16.sp)
+                                Text(source.text, fontSize = 18.sp)
+                                if (source.displayText != source.text) Text("보정 · ${source.displayText}", color = c.onSurfaceVariant, fontSize = 18.sp)
+                            }
                         }
                     }
                 }
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedButton({ loadTodos(force = true) }, enabled = !todoState.loading, modifier = Modifier.weight(1f).heightIn(min = 56.dp), shape = ctl) { Text("새로고침") }
+                    OutlinedButton(::arrive, enabled = vehicleParked() && !arrivalLoading && todoScope() != null, modifier = Modifier.weight(1f).heightIn(min = 56.dp), shape = ctl) { Text("도착 확인") }
+                }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedButton({ loadTodos(force = true) }, enabled = !todoState.loading, modifier = Modifier.heightIn(min = 56.dp), shape = RoundedCornerShape(10.dp)) { Text("새로고침") }
-                OutlinedButton(::arrive, enabled = vehicleParked() && !arrivalLoading && todoScope() != null, modifier = Modifier.heightIn(min = 56.dp), shape = RoundedCornerShape(10.dp)) { Text("도착 확인") }
-                OutlinedButton({ brief = null }, Modifier.heightIn(min = 56.dp), shape = RoundedCornerShape(10.dp)) { Text("닫기") }
-            }
+            OutlinedButton({ brief = null }, Modifier.fillMaxWidth().height(if (roomy) 80.dp else 56.dp), shape = ctl) { Text("닫기", fontSize = if (roomy) 32.sp else 24.sp, fontWeight = FontWeight.Bold) }
+        }
         }
     }
 
@@ -2017,5 +2097,5 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun Card(tone: Tone = Tone.Plain, modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) = CarCard(tone, modifier, content)
+    private fun Card(tone: Tone = Tone.Plain, modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) = CarCard(tone, modifier, content = content)
 }

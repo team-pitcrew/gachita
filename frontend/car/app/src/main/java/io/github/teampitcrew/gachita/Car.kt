@@ -49,6 +49,24 @@ data class CarStatus(
 data class Place(val lat: Double, val lng: Double, val name: String, val address: String = "")
 
 /**
+ * 같은 내비 조회를 기다리는 여럿에게 한 답을 함께 준다(메인 스레드). 휴게소 추천의 목적지 조회가 도착 알림의 목적지 조회를
+ * null로 끝내 할 일 알림이 빠지지 않게(Astra #317). 차례 번호로 늦게 온 시간 초과가 다음 차례를 끊지 않게 한다.
+ */
+class Shared<T> {
+    private val waiting = mutableListOf<(T?) -> Unit>()
+    private var round = 0
+
+    /** 기다리는 쪽을 더한다. 새로 물어야 하면 이번 차례 번호, 이미 묻는 중이면 null(같은 답을 받는다). */
+    fun join(done: (T?) -> Unit): Int? { waiting += done; return if (waiting.size == 1) ++round else null }
+
+    /** 기다리던 모두에게 답한다. at을 주면 그 차례가 아직 열려 있을 때만(시간 초과·호출 실패용). */
+    fun answer(v: T?, at: Int? = null) {
+        if (at != null && at != round) return
+        val all = waiting.toList(); waiting.clear(); all.forEach { it(v) }
+    }
+}
+
+/**
  * Pleos Connect SDK를 감싼다: Vehicle(기어), NaviHelper(순정 내비), TextToSpeech. 주행 제한 값은 AAOS CarUxRestrictionsManager에서 받는다.
  * 차박지도 앱(chabak-map/car, 11/10)의 Car.kt에서 옮겼다. 콜백은 모두 메인 스레드로 넘긴다.
  */
@@ -121,7 +139,7 @@ class Car(ctx: Context, private val onChange: (CarStatus) -> Unit) {
     private val here = Wait<CurrentLocationInfo>(2_000)
     private val trip = Wait<TripInfo>(3_000)
     private val stop = Wait<Boolean>(30_000) // onWaypointChanged까지 11/13 7.6초, 11/13 밤 9.9~12.9초
-    private val dest = Wait<DestinationInfo>(2_000)
+    private val dest = Shared<DestinationInfo>() // 휴게소 추천(destination)과 도착 알림(nextStopName·nextArrivalPlace)이 함께 쓴다
     private val wps = Wait<List<WaypointInfo>>(2_000)
 
     private val naviListener = object : NaviHelperEventListener {
@@ -227,8 +245,21 @@ class Car(ctx: Context, private val onChange: (CarStatus) -> Unit) {
     /** 받아 적은 말이 우리 TTS 소리일 수 있는지: 첫 중간 결과가 우리가 말하는 동안(끝난 뒤 0.3초까지) 왔다. */
     fun ownVoice(firstPartialAt: Long) = overlapsSpeech(firstPartialAt, ttsFrom, ttsTo)
 
-    /** 내비가 아는 지금 위치. 화면은 넘어가지 않는다(0.1~0.2초, 11/12). 모르면 null, null. */
-    fun here(done: (Double?, Double?) -> Unit) = here.start({ done(it?.latitude, it?.longitude) }) { navi.getCurrentLocationInfo() }
+    /** 내비가 아는 지금 위치와 진행 방향(도, 북 = 0). 화면은 넘어가지 않는다(0.1~0.2초, 11/12). 모르면 null. */
+    fun here(done: (Double?, Double?, Double?) -> Unit) = here.start({ done(it?.latitude, it?.longitude, it?.heading) }) { navi.getCurrentLocationInfo() }
+
+    /** 내비의 목적지 좌표와 남은 길(m). 안내 중이 아니거나 좌표가 0이면 목적지는 null. 화면은 넘어가지 않는다. */
+    fun destination(done: (Place?, Int?) -> Unit) = destinationInfo { d ->
+        done(d?.takeIf { it.latitude != 0.0 || it.longitude != 0.0 }?.let { Place(it.latitude, it.longitude, "목적지") }, d?.remainDistance?.takeIf { it > 0 })
+    }
+
+    /** 목적지 조회. 이미 묻는 중이면 다시 묻지 않고 같은 답을 함께 받는다(Wait처럼 앞의 기다림을 끊지 않음). 2초 안에 없으면 null. */
+    private fun destinationInfo(done: (DestinationInfo?) -> Unit) {
+        if (!status.navi) return done(null)
+        val round = dest.join(done) ?: return
+        main.postDelayed({ dest.answer(null, round) }, 2_000)
+        runCatching { navi.getDestinationInfo() }.onFailure { Log.w(TAG, "내비 호출 실패", it); dest.answer(null, round) }
+    }
 
     /** 그곳까지의 거리(m)와 시간(초). 들르면 늘어나는 시간이 아니다. 화면은 넘어가지 않는다. */
     fun distanceTo(p: Place, done: (Int?, Int?) -> Unit) =
@@ -240,7 +271,7 @@ class Car(ctx: Context, private val onChange: (CarStatus) -> Unit) {
      */
     fun nextStopName(done: (String?) -> Unit) = wps.start({ w ->
         w?.map { it.name }?.firstOrNull { !it.isNullOrBlank() }?.let { return@start done(it) }
-        dest.start({ d -> done(d?.name?.takeIf { it.isNotBlank() }) }) { navi.getDestinationInfo() }
+        destinationInfo { d -> done(d?.name?.takeIf { it.isNotBlank() }) }
     }) { navi.getWaypointInfo() }
 
     /** T113: 다음 실제 장소 좌표를 읽습니다. 경유지가 있지만 좌표를 모르면 목적지로 대신하지 않습니다. */
@@ -250,7 +281,7 @@ class Car(ctx: Context, private val onChange: (CarStatus) -> Unit) {
             val first = waypoints.first()
             return@start done(arrivalPlace(first.name, first.latitude, first.longitude))
         }
-        dest.start({ d -> done(d?.let { arrivalPlace(it.name, it.latitude, it.longitude) }) }) { navi.getDestinationInfo() }
+        destinationInfo { d -> done(d?.let { arrivalPlace(it.name, it.latitude, it.longitude) }) }
     }) { navi.getWaypointInfo() }
 
     /** 지금 경로에 들를 곳을 더한다. 내비가 앞으로 나오고, 반영 알림(onWaypointChanged ADD)이 오면 true. 경로 오류나 30초 넘으면 false. */

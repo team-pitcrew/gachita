@@ -7,6 +7,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.net.InetAddress
+import java.net.SocketTimeoutException
 import java.net.ServerSocket
 import kotlin.concurrent.thread
 
@@ -65,5 +66,37 @@ class ServerTest {
             assertTrue(runCatching { retryTransient<Unit>(sleep = {}) { n++; throw e } }.exceptionOrNull() === e)
             assertEquals(1, n)
         }
+    }
+
+    /** 머리말은 바로 보내고 본문은 dripMs마다 한 바이트씩(readTimeout이 매번 다시 시작되는 느린 서버). */
+    private fun drip(body: String, dripMs: Long, test: (String) -> Unit) {
+        val sock = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
+        thread(isDaemon = true) {
+            runCatching {
+                sock.accept().use { c ->
+                    val r = c.getInputStream().bufferedReader()
+                    while (r.readLine().orEmpty().isNotEmpty()) Unit
+                    val b = body.toByteArray()
+                    val out = c.getOutputStream()
+                    out.write("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: ${b.size}\r\nConnection: close\r\n\r\n".toByteArray()); out.flush()
+                    for (x in b) { Thread.sleep(dripMs); out.write(x.toInt()); out.flush() }
+                }
+            }
+        }
+        try { test("http://127.0.0.1:${sock.localPort}/") } finally { sock.close() }
+    }
+
+    private val stops = """{"items":[{"name":"덕평휴게소","route":"영동선","lat":37.24133,"lng":127.389428,"meters":11500}],"source":"x"}"""
+
+    @Test fun `휴게소 추천은 답이 빠르면 그대로 받는다`() = drip(stops, 0) { url ->
+        assertEquals(listOf("덕평휴게소"), Server(url).restStops(37.2459, 127.26, 80.0, null, null).map { it.name })
+    }
+
+    @Test fun `휴게소 추천은 본문이 조금씩 와도 전체 2초에 끊는다`() = drip(stops, 300) { url ->
+        val t0 = System.currentTimeMillis()
+        val e = runCatching { Server(url).restStops(37.2459, 127.26, 80.0, null, null) }.exceptionOrNull()
+        val took = System.currentTimeMillis() - t0
+        assertTrue("마감 예외여야 함: $e", e is SocketTimeoutException)
+        assertTrue("2초 마감인데 ${took}ms 걸림", took in 1900..3000) // 본문 전체를 다 받으려면 한 바이트 300ms라 수십 초
     }
 }

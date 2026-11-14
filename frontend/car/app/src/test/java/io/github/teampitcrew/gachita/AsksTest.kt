@@ -2,8 +2,14 @@ package io.github.teampitcrew.gachita
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 
 class AsksTest {
     private fun u(text: String, zone: Int?) = Utterance(1, "T", 0, 0, text, 0, 0, 1, seatZone = zone)
@@ -31,6 +37,46 @@ class AsksTest {
         assertEquals(Answer.UNCLEAR, answerOf("나 안 졸려"))
         assertEquals(Answer.UNCLEAR, answerOf("네 동생은?"))
         assertEquals(Answer.UNCLEAR, answerOf("용인휴게소에 들를지 다시 말해 주세요")) // 다시 묻는 말이 마이크로 돌아와도 답이 아니다
+    }
+
+    @Test fun routedStopsFromServer() {
+        val json = """{"items":[{"name":"덕평휴게소","route":"영동선","lat":37.24133,"lng":127.389428,"meters":11500},
+            {"name":"여주휴게소 강릉방향","route":"영동선","lat":37.238548,"lng":127.569035,"meters":27400}],"source":"한국도로공사"}"""
+        val stops = restStopsOf(json)
+        assertEquals(listOf("덕평휴게소", "여주휴게소"), stops.map { it.spoken })
+        assertEquals(37.238548, stops[1].lat, 1e-9)
+        assertEquals(emptyList<Place>(), restStopsOf("""{"items":[],"source":"x"}"""))
+    }
+
+    @Test fun onRoadByNaviDistance() {
+        assertTrue(onRoad(11_500.0, 13_000, 160_000)) // 같은 길 앞쪽: 길 위 거리가 직선과 비슷
+        assertFalse(onRoad(13_000.0, 30_000, 160_000)) // 나란한 고속도로: 분기점을 돌아 두 배 넘게 김
+        assertFalse(onRoad(5_000.0, 9_000, 8_000)) // 목적지보다 멀다
+        assertTrue(onRoad(5_000.0, null, null)) // 내비가 답하지 않으면 막지 않는다
+        assertTrue(onRoad(1_000.0, 3_400, null)) // 가까운 곳은 나들목 진입 거리(2 km)까지 봐준다
+    }
+
+    @Test fun fixedListOnlyWhenServerUnusable() {
+        val routed = listOf(Place(37.53, 127.21, "하남드림휴게소"))
+        assertEquals(routed, stopsFrom(Result.success(routed), 37.39, 127.11))
+        assertEquals(emptyList<Place>(), stopsFrom(Result.success(emptyList()), 37.4, 127.1)) // 서버가 '앞에 없음'이라 하면 고정 목록으로 가지 않는다
+        assertEquals(listOf("용인휴게소"), stopsFrom(Result.failure(java.io.IOException("꺼짐")), 37.2, 127.1).map { it.spoken })
+        assertEquals(REST_STOPS.first(), stopsFrom(Result.failure(IllegalStateException("위치 모름")), null, null).single())
+    }
+
+    @Test fun sharedLookupAnswersEveryWaiter() {
+        val d = Shared<String>()
+        val got = mutableListOf<String?>()
+        val round = d.join { got += "도착:$it" } // 도착 알림이 먼저 목적지를 묻는다
+        assertEquals(1, round)
+        assertEquals(null, d.join { got += "추천:$it" }) // 그동안 휴게소 추천이 물어도 다시 묻지 않고 끊지도 않는다
+        d.answer("마트")
+        assertEquals(listOf("도착:마트", "추천:마트"), got)
+        val next = d.join { got += "다음:$it" }!!
+        d.answer(null, round) // 앞 차례의 늦은 시간 초과는 다음 차례를 끊지 않는다
+        assertEquals(2, got.size)
+        d.answer(null, next)
+        assertEquals("다음:null", got.last())
     }
 
     @Test fun onlyFrontRowOrUnknownAccepts() {
@@ -64,5 +110,26 @@ class AsksTest {
         assertEquals("15 km · 30분", distanceLabel(14766, 1780))
         assertEquals("800 m · 1분", distanceLabel(800, 20))
         assertEquals("", distanceLabel(null, null))
+    }
+
+    @Test fun `추천 통신이 막혀도 2초에 고정 목록으로 넘어가고 늦은 답은 버린다(Astra 3차)`() {
+        val exec = Executors.newSingleThreadExecutor()
+        val dns = CountDownLatch(1) // DNS처럼 끊을 수 없는 대기
+        val got = LinkedBlockingQueue<Pair<Result<List<Place>>, Long>>()
+        val t0 = System.nanoTime()
+        within(exec, 2_000, { dns.await(); listOf(Place(37.5, 127.2, "늦게 온 추천")) }) { got += it to (System.nanoTime() - t0) / 1_000_000 }
+
+        val (r, ms) = got.poll(3, TimeUnit.SECONDS)!!
+        assertTrue(r.exceptionOrNull() is TimeoutException)
+        assertTrue("$ms ms", ms in 1_900..2_500)
+        assertEquals(listOfNotNull(nextStop(37.39, 127.11)), stopsFrom(r, 37.39, 127.11)) // 고정 목록
+        dns.countDown()
+        assertNull(got.poll(500, TimeUnit.MILLISECONDS)) // 늦게 온 답으로 다시 확정하지 않는다
+
+        // 제때 온 답은 그대로, 한 번만(마감이 뒤에 다시 부르지 않음)
+        within(exec, 300, { listOf(Place(1.0, 2.0, "추천")) }) { got += it to 0L }
+        assertEquals("추천", got.poll(1, TimeUnit.SECONDS)!!.first.getOrThrow().single().name)
+        assertNull(got.poll(600, TimeUnit.MILLISECONDS))
+        exec.shutdown()
     }
 }
