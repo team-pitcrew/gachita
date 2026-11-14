@@ -259,6 +259,8 @@ fun FamilyFlow(server: String, token: String?, onClose: () -> Unit, onStart: (St
                             (adults + kids).forEach { m -> Row2 { Face(m.character, 64); Column { Text(m.name, fontSize = 28.sp, fontWeight = FontWeight.Bold); Text(if (m.role == "child") "아이 프로필 / ${if (m.hasVoice) "목소리 등록 완료" else "목소리 등록 전"}" else "계정 연결 완료", color = c.onSurfaceVariant) } } }
                             Ghost("가족 계정 초대하기", !busy) { act { issue(ensureFamily()) } }
                             Ghost("아이 프로필 만들기", !busy) { view = FamilyView.CHILD }
+                            // 자리 없는 구성원이 있으면 처음에 이 화면으로 열리므로, 좌석 지도로 가는 길을 둔다(폰과 같음).
+                            if (family()?.members.orEmpty().size > 1) Ghost("우리 가족 좌석 보기", !busy) { groupId = family()?.id; saved = false; view = FamilyView.GROUP }
                             Info("가족 그룹은 한 번만", "저장한 구성원과 좌석을 다음 여행에도 사용")
                         }
                         FamilyView.INVITE -> InviteBody(current(), invite, ::copy, ::link, ctx)
