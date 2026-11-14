@@ -68,8 +68,9 @@ private fun JSONObject.optLongOrNull(k: String) = if (has(k) && !isNull(k)) getL
  * 기록 동의 규칙(T7, T68):
  * - 기본값은 꺼짐. 참가자는 동의 꺼짐으로 만든다.
  * - 켜기는 기어 P이고 서버에 닿을 때만. 차가 켜는 것은 이 차가 참가시킨 사람(ours, 참가자 토큰을 가진 사람)의 동의뿐이다.
- *   폰으로 들어온 사람은 자기 폰에서 켠다(그때까지 '동의 대기'). 서버에서 모두 동의한 뒤에야 '기록 중'이 된다.
- * - 기록은 주차(P) 중에만 시작한다(started). 주행 중에 모두의 동의가 다시 채워지면(폰에서 다시 켬) '기록 대기'로 두고 P가 되면 시작한다.
+ *   폰으로 들어온 사람은 자기 폰에서 켠다. 차에서도 각 사람이 자기 동의만 확인한다.
+ * - 모두 동의해도 녹음은 시작하지 않는다. 주차(P) 중 명시적으로 시작한 뒤(started)에만 주행 중에도 이어 간다.
+ * - 동의 철회나 세대 변경은 시작 표시도 취소한다. 다시 동의해도 시작 버튼을 눌러야 한다.
  * - 끄기는 바로 멈춘다. 서버에 아직 못 알렸으면 offPending으로 꺼 두고, 서버 값이 꺼짐이 될 때까지 다시 보낸다.
  *   offPending과 started는 앱이 다시 켜져도 이어지게 저장한다(restore).
  * - 폰에서 누가 동의를 끄면(서버 값) 기록도 멈춘다.
@@ -83,6 +84,7 @@ data class Session(
     val busy: Boolean = false,
     val note: String = "",
     val ours: Set<String> = emptySet(),
+    val withdrawn: Set<String> = emptySet(), // 철회 전송 대기. 비어 있는 offPending은 이전 판의 전원 철회와 호환한다.
 ) {
     val consented: Boolean get() = trip != null && trip.people.isNotEmpty() && trip.people.all { it.consent }
 
@@ -99,43 +101,58 @@ data class Session(
     val agreed: Boolean get() = consented && !offPending
     val recording: Boolean get() = agreed && started
 
-    /** 모두 동의했지만 주행 중에 채워져 주차하면 시작하는 상태. */
+    /** 모두 동의했고 사용자의 명시적인 녹음 시작을 기다리는 상태. */
     val waiting: Boolean get() = agreed && !started
 
-    /** 동의가 빠지면 시작 표시를 풀고, 모두 동의한 채로 P면 시작한다. */
-    private fun settle() = copy(started = agreed && (started || gear == "P"))
+    private fun settle() = copy(started = agreed && started)
+
+    fun blockStart(): String? = when {
+        busy -> "처리하고 있어요"
+        !agreed -> "탑승자 모두의 녹음 동의가 필요해요"
+        !online -> "연결을 확인한 뒤 녹음을 시작해 주세요"
+        gear != "P" -> "주차(P)한 뒤 녹음을 시작할 수 있어요"
+        else -> null
+    }
+
+    fun startRecording(): Session = if (blockStart() == null) copy(started = true, note = "") else this
 
     /** 동의를 켤 수 없으면 그 이유. 켤 수 있으면 null. */
     fun blockOn(): String? = when {
         trip == null -> "여행이 없어요"
         busy -> "처리하고 있어요"
         trip.people.none { it.id in ours } -> "이 차에서 참가시킨 사람이 없어 켤 수 없어요"
-        !online -> "연결이 끊겨 기록을 시작할 수 없어요"
-        gear == null -> "기어를 확인할 수 없어 기록을 시작하지 않았어요"
+        offPending -> "동의 철회를 서버에 알리고 있어요"
+        !online -> "연결을 확인한 뒤 동의할 수 있어요"
+        gear == null -> "기어를 확인할 수 없어 동의를 켤 수 없어요"
         gear != "P" -> "주차(P)한 뒤에 켤 수 있어요"
         else -> null
     }
 
     /** 서버에서 받은 최신 여행을 반영한다. 서버도 모두 꺼짐이면 끄기 대기를 푼다. */
-    fun withTrip(t: Trip) = copy(trip = t, online = true, offPending = offPending && t.people.any { it.consent }).settle()
+    fun withTrip(t: Trip): Session {
+        val pending = offPending && t.people.any { it.consent && (withdrawn.isEmpty() || it.id in withdrawn) }
+        return copy(trip = t, online = true, offPending = pending, withdrawn = if (pending) withdrawn else emptySet(),
+            started = started && trip?.generation == t.generation).settle()
+    }
 
     fun withGear(g: String?) = copy(gear = g).settle()
 
     /** 켜기: 서버가 모두의 동의를 저장한 뒤의 여행으로 부른다. 앞서 남은 끄기 대기는 지운다. */
-    fun turnedOn(t: Trip) = copy(offPending = false).withTrip(t)
+    fun turnedOn(t: Trip) = withTrip(t)
 
     /** 끄기: 서버 응답을 기다리지 않고 바로 멈춘다. */
-    fun turnOff() = copy(offPending = true).settle()
+    fun turnOff(id: String? = null) = copy(offPending = true,
+        withdrawn = if (id == null || offPending && withdrawn.isEmpty()) emptySet() else withdrawn + id).settle()
 
     /** 다음 조회에서 동의 끄기를 다시 보낼 참가자. 끄기 대기일 때만. */
-    val offTargets: List<String> get() = if (offPending) trip?.people?.map { it.id }.orEmpty() else emptyList()
+    val offTargets: List<String> get() = if (offPending) trip?.people?.map { it.id }?.filter { withdrawn.isEmpty() || it in withdrawn }.orEmpty() else emptyList()
 
     /** 다음 조회에 붙일 version. 끄기 대기면 304로 놓치지 않게 붙이지 않는다. */
     val pollVersion: Int? get() = if (offPending) null else trip?.version
 
     companion object {
         /** 앱을 다시 켤 때: 저장한 마지막 여행과 두 표시로 되살린다. 연결은 아직 모르는 것으로 둔다. */
-        fun restore(tripJson: String?, offPending: Boolean, started: Boolean, ours: Set<String> = emptySet()) =
-            Session(trip = tripJson?.let { runCatching { parseTrip(it) }.getOrNull() }, online = false, offPending = offPending, started = started, ours = ours).settle()
+        fun restore(tripJson: String?, offPending: Boolean, started: Boolean, ours: Set<String> = emptySet(), withdrawn: Set<String> = emptySet()) =
+            Session(trip = tripJson?.let { runCatching { parseTrip(it) }.getOrNull() }, online = false, offPending = offPending, started = started, ours = ours, withdrawn = withdrawn).settle()
     }
 }
