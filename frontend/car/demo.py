@@ -19,6 +19,8 @@
   다음 단계에 필요한 것(여행·구성원)은 실제 API나 develop에 있는 옛 경로로 만들고 '대체'로 적는다. 목업(--es f4 등)은 쓰지 않는다.
 - 시드는 실제 API만(DB에 직접 쓰지 않음). 같은 폴더로 다시 돌리면 같은 계정·그룹을 다시 쓴다(OUT/demo-state.json, 저장소에 넣지 않음).
 - 대사는 macOS say(Yuna) 합성 음성이다(cap.say, 사람마다 음높이만 다름). 목소리 등록도 같은 합성 음성이라 차 안 화자 식별이 맞는다.
+  실제 녹음을 쓰려면 OUT/inputs/에 talk·mart·lodge·enroll-아빠·enroll-엄마·enroll-서준·enroll-하은.wav(16 kHz 2채널, 왼쪽 = 앞줄)를
+  같은 이름의 .json 없이 미리 둔다. 그러면 합성하지 않고 그 녹음을 넣고, 목소리 값(API)도 그 enroll 녹음으로 만든다.
 - 에뮬레이터 내비의 지금 위치는 판교에 고정이다(waypoint_e2e.py 머리 주석). 도착 장면은 그 근처 좌표에 시안의 장소 이름
   ('하나로마트', '강릉 숙소')을 붙인 시연 경로로 만들고(--es route/stops, 디버그 빌드), 남은 시간·도착 판정은 앱과 서버가 실제로 한다.
 - 창 크기는 앱이 못 바꾼다(T112). 16→17과 24→25는 운전자의 창 바(⋮) 손짓을 adb로 흉내 낸다. 앱을 다시 열면(경로 바꾸기)
@@ -121,10 +123,26 @@ def save():
     STATE.write_text(json.dumps(st, ensure_ascii=False, indent=1))
 
 
+def supplied(name):
+    """미리 둔 실제 녹음인지: OUT/inputs/<name>.wav가 있고, 합성(cap.fixture)이 늘 함께 남기는 설명 파일(<name>.json)이 없다(옛 T13 demo.py와 같은 규칙).
+    녹음은 16 kHz 2채널 16비트(왼쪽 = 앞줄, 오른쪽 = 뒷줄)여야 한다. 저장소에는 넣지 않는다."""
+    wav = OUT / "inputs" / f"{name}.wav"
+    if not wav.exists() or (OUT / "inputs" / f"{name}.json").exists(): return False
+    with wave.open(str(wav)) as w:
+        if (w.getframerate(), w.getnchannels(), w.getsampwidth()) != (cap.R, 2, 2):
+            raise SystemExit(f"{wav.name}는 16 kHz 2채널 16비트여야 합니다(지금 {w.getframerate()} Hz {w.getnchannels()}채널 {8 * w.getsampwidth()}비트)")
+    return True
+
+
 def voice_wav(who):
-    """그 사람의 등록 문장을 합성(cap.say, 음높이만 다름) → 16 kHz 모노 WAV 바이트. 서버가 같은 임베더로 값을 만든다(1~20초)."""
+    """목소리 값을 만들 16 kHz 모노 WAV 바이트(서버가 같은 임베더로 값을 만든다, 1~20초). 미리 둔 실제 녹음(enroll-<이름>.wav)이 있으면
+    그 두 채널을 섞어 쓰고 — 주행 대사도 실제 목소리면 등록도 같은 목소리여야 차 안 화자 식별이 맞는다 — 없으면 등록 문장을 합성한다."""
     import numpy as np
-    x = np.concatenate([np.concatenate([cap.say(s, PEOPLE[who][0]), np.zeros(cap.R // 3, "<i2")]) for s in READ[who]])[: cap.R * 18]
+    if supplied(f"enroll-{who}"):
+        with wave.open(str(OUT / "inputs" / f"enroll-{who}.wav")) as w: st2 = np.frombuffer(w.readframes(w.getnframes()), "<i2").reshape(-1, 2)
+        x = st2.astype(np.int32).sum(axis=1).clip(-32768, 32767)[: cap.R * 18]; note("voice.given", who=who, seconds=round(len(x) / cap.R, 1))
+    else:
+        x = np.concatenate([np.concatenate([cap.say(s, PEOPLE[who][0]), np.zeros(cap.R // 3, "<i2")]) for s in READ[who]])[: cap.R * 18]
     path = OUT / "inputs" / f"voice-{PEOPLE[who][0]}.wav"; path.parent.mkdir(exist_ok=True)  # API용 모노(가상 마이크용 enroll-*.wav는 2채널)
     with wave.open(str(path), "wb") as w: w.setnchannels(1); w.setsampwidth(2); w.setframerate(cap.R); w.writeframes(x.astype("<i2").tobytes())
     return path.read_bytes()
@@ -279,6 +297,8 @@ def type_into(i, value):
     if len(fields) <= i or (not value.isascii() and keys is None): return False
     x1, y1, x2, y2 = fields[i][4]
     adb("shell", "input", "tap", str((x1 + x2) // 2), str((y1 + y2) // 2)); time.sleep(1)
+    # 칸에 남은 글(자동 완성으로 채워진 계정·저장된 비밀번호 등)을 먼저 지운다: 끝으로 가서 지우기 60번
+    adb("shell", "input", "keyevent", "KEYCODE_MOVE_END"); adb("shell", "input", "keyevent", *["KEYCODE_DEL"] * 60); time.sleep(0.5)
     if keys is None: adb("shell", "input", "text", shlex.quote(value).replace(" ", "%s"))
     else:
         for k in keys: adb("shell", "input", "tap", *map(str, KEYS[k])); time.sleep(0.3)
@@ -365,6 +385,7 @@ def prepare():
     if not grpc_is_ours():
         note("say.off", why=f"gRPC {os.environ['GACHITA_GRPC_PORT']}이 {os.environ['ANDROID_SERIAL']}의 것이 아님(-grpc로 켜지 않았거나 다른 에뮬레이터) — 대사를 넣지 않음"); return
     for name, lines in FIXTURES.items():
+        if supplied(name): note("fixture.given", name=name); continue  # 미리 둔 실제 녹음은 덮어쓰지 않는다
         cap.fixture(name, [(PEOPLE[w][0], t) for w, t in lines], seconds=13 if name.startswith("enroll-") else None, lead=0.5, tail=1.0)  # 등록 녹음(15초)이 닫히기 전에 끝나게
     try: inj = cap.Injector()
     except SystemExit as e: note("say.off", why=str(e))
