@@ -44,7 +44,7 @@ if "GACHITA_GRPC_PORT" not in os.environ:  # 소리 넣기: 그 에뮬레이터�
         _kv = dict(l.split("=", 1) for l in _ini.read_text().splitlines() if "=" in l)
         if "emulator-" + _kv.get("port.serial", "") == os.environ["ANDROID_SERIAL"] and _kv.get("grpc.port"): os.environ["GACHITA_GRPC_PORT"] = _kv["grpc.port"]
     os.environ.setdefault("GACHITA_GRPC_PORT", "0")
-if "GACHITA_VC_URL" not in os.environ and sys.argv[1:2] not in (["--plan"], ["--seed"]):  # Virtual Console(기기 안 8088)을 빈 포트로 이어 둔다
+if "GACHITA_VC_URL" not in os.environ and sys.argv[1:2] not in (["--plan"], ["--seed"], ["--check"]):  # Virtual Console(기기 안 8088)을 빈 포트로 이어 둔다
     _port = subprocess.run(_ADB + ["forward", "tcp:0", "tcp:8088"], capture_output=True, text=True).stdout.strip()
     if _port.isdigit(): os.environ["GACHITA_VC_URL"] = f"http://127.0.0.1:{_port}"
 import e2e, capture_e2e as cap  # noqa: E402  같은 폴더의 E2E 도구(adb, 화면 트리, 기어, 소리 넣기)
@@ -99,6 +99,10 @@ STEPS = [
     (10, "엄마 참여 확인", "D10 2007:1615", "전체", "F2"), (11, "서준 프로필", "D11 2007:1658", "전체", "F2"), (12, "서준 목소리", "D12 2007:1699", "전체", "F2"),
     (13, "다음 구성원", "D13 2007:1802", "전체", "F2"), (14, "하은 프로필", "D14 2007:1845", "전체", "F2"), (15, "하은 목소리", "D15 2007:1886", "전체", "F2"),
     (16, "가족 좌석 / 출발", "D16 2007:1989", "전체", "F2"),
+    # 그룹 화면 여섯(#458, Figma eZ2xsOXkrszqdP489kduCs, 시연판 D16*): 16에서 '전체 그룹'으로 들어가 동승 그룹·초대·가족 상세·좌석 배정·구성원 선택을 거쳐 출발
+    ("16L", "전체 그룹", "D16L 2097:4582 · C16L 2097:4631", "전체", "F2"), ("16G", "동승 그룹 상세", "D16G 2094:4367 · C16G 2094:4746", "전체", "F2"),
+    ("16I", "구성원 초대", "D16I 2095:4735 · C16I 2095:4786", "전체", "F2"), ("16A", "그룹 상세", "C16A 2094:4566", "전체", "F2"),
+    ("16B", "좌석 배정", "C16B 2094:4626", "전체", "F2"), ("16C", "구성원 선택", "D16C 2094:4307 · C16C 2094:4686", "전체", "F2"),
     (17, "주행 / 기록 중", "D17 2007:2042", "좁은 창", "F3"), (18, "기록 중지", "D17p 2014:1327", "좁은 창", "F3"), (19, "기록 재개", "D補 resumed 2026:1969", "좁은 창", "F3"),
     (20, "마트 도착 전", "D18 2007:2082", "좁은 창", "F4"), (21, "마트 도착 브리핑", "D19 2007:2110", "좁은 창", "F4"), (22, "여행 계속", "D20 2007:2145", "좁은 창", "F3"),
     (23, "숙소 도착 전", "D補 finalNear 2043:1835", "좁은 창", "F4"), (24, "최종 목적지 브리핑", "D補 finalBrief 2043:1890", "좁은 창", "F4"),
@@ -226,10 +230,26 @@ def children():
     return g
 
 
+GUEST = "주말 바다 친구들"  # 동승 그룹(C16G·C16I·C16L의 시연 데이터, F2 담당이 정한 시드)
+
+
+def guest_group():
+    """동승 그룹 '주말 바다 친구들': 만든 아빠 혼자 운전석, 초대 코드 하나(POST /groups {kind:guest} → PUT seats → POST invites). 있으면 그대로 쓴다."""
+    d = st["dad"]["token"]
+    g = next((g for g in api("GET", "/groups", token=d)["items"] if g["kind"] == "guest" and g["name"] == GUEST), None) \
+        or api("POST", "/groups", {"name": GUEST, "kind": "guest"}, d)
+    if not any(m["profileId"] == st["dad"]["id"] and m["seat"] == "ROW_1_LEFT" for m in g["members"]):
+        g = api("PUT", f"/groups/{g['id']}/seats", {"seats": {st["dad"]["id"]: "ROW_1_LEFT"}}, d)
+    if not g.get("invite"): g["invite"] = api("POST", f"/groups/{g['id']}/invites", {}, d)
+    st["guest"] = g["id"]; save()
+    note("seed.guest", name=g["name"], members=[(m["name"], m["seat"]) for m in g["members"]], invite=(g.get("invite") or {}).get("code"))
+    return g
+
+
 def seed():
-    """시연 가족 전부(차 화면 01–16 없이): 엄마·아빠 계정, 동의, 목소리, 그룹, 엄마 참여, 아이 둘, 좌석."""
+    """시연 가족 전부(차 화면 01–16 없이): 엄마·아빠 계정, 동의, 목소리, 그룹, 엄마 참여, 아이 둘, 좌석, 동승 그룹."""
     ready_profile("mom", "엄마"); ready_profile("dad", "아빠")
-    mom_joins(); return children()
+    mom_joins(); g = children(); guest_group(); return g
 
 
 def trip_tokens(code):
@@ -550,9 +570,47 @@ def family_steps():
             adb("shell", "input", "keyevent", "4"); mark(12 + 3 * i, "대체", f"{kid} 아이 프로필·목소리를 API로(차 화면은 이름 입력 단계)")
             child(kid); open_family()  # 가족 화면은 열 때만 그룹을 읽는다
         if i == 0: step(13, ["까지 준비됐어요"])
-    children(); open_family()  # 좌석(시안 16)을 실제 API로 맞추고 다시 읽는다 → 모두 자리가 있으면 '우리 가족' 좌석 지도
+    children(); guest_group(); open_family()  # 좌석(시안 16)과 동승 그룹을 실제 API로 맞추고 다시 읽는다 → 모두 자리가 있으면 '우리 가족' 좌석 지도
     step(16, ["이 가족과 출발", "좌석을 눌러 변경"])
-    return tap("이 가족과 출발")
+    return group_screens()
+
+
+def group_screens():
+    """16 '우리 가족'에서 그룹 화면 여섯(#458)을 거쳐 '이 그룹과 출발'. 화면이 없으면(옛 판) 16의 '이 가족과 출발'로 떠난다."""
+    if not tap("전체 그룹", timeout=4):
+        for n in ("16L", "16G", "16I", "16A", "16B", "16C"): mark(n, "없음", "'전체 그룹' 단추가 없음 — " + flow_state("F2"))
+        return tap("이 가족과 출발")
+    step("16L", ["내 동승 그룹", "+ 새 그룹 만들기"], note_=f"우리 가족 + 시드 동승 그룹 '{GUEST}'")
+    tap(GUEST); step("16G", ["초대 코드, QR 또는 링크로 함께할 사람을 초대해 주세요."], note_="아빠 혼자인 동승 그룹(시드)")
+    tap("동승자 초대하기"); step("16I", ["초대 코드와 링크를 만들었어요"], note_="TRIP- 초대 코드(서버가 고름)")
+    tap("그룹으로 돌아가기"); tap("전체 그룹 보기", timeout=4)
+    tap("우리 가족 보기"); step("16A", ["오늘 함께 탈 가족과 좌석을 확인해 주세요."])
+    tap("좌석 배정"); step("16B", ["좌석을 누르고 앉을 사람을 선택해 주세요."])
+    tap("빈자리"); step("16C", ["누가 앉나요?", "선택한 좌석"], note_="뒤 가운데 빈자리를 눌러 가족 목록만 보이고 바꾸지 않음")
+    tap("좌석 배정으로"); tap("그룹으로")  # 시안 좌석 그대로 두고 상세로
+    return tap("이 그룹과 출발", "이 가족과 출발")
+
+
+# 스크립트가 누르거나 기다리는 차 화면 글. --check가 앱 소스에 그대로 있는지 본다(에뮬레이터 없이 화면 글이 바뀐 것을 잡음).
+TAPS = {"Onboarding.kt": ["가치타 시작하기", "가입하고 계속", "로그인하고 계속", "동의하고 계속", "목소리 등록하기", "녹음 시작", "녹음 완료", "가족 그룹 만들기"],
+        "Family.kt": ["가족 계정 초대하기", "아이 프로필 만들기", "참여 확인", "동의하고 목소리 등록", "가족 그룹에 저장", "이 가족과 출발", "전체 그룹", "내 동승 그룹",
+                      "+ 새 그룹 만들기", "초대 코드, QR 또는 링크로 함께할 사람을 초대해 주세요.", "동승자 초대하기", "초대 코드와 링크를 만들었어요", "그룹으로 돌아가기",
+                      "전체 그룹 보기", "우리 가족 보기", "오늘 함께 탈 가족과 좌석을 확인해 주세요.", "좌석 배정", "좌석을 누르고 앉을 사람을 선택해 주세요.", "빈자리",
+                      "누가 앉나요?", "좌석 배정으로", "그룹으로", "이 그룹과 출발", "좌석을 눌러 변경", "우리 가족 추가", "코드 복사"],
+        "Drive.kt": ["아래 버튼으로 언제든 멈출 수 있어요", "같은 버튼을 누르면 다시 기록해요", "중지한 지점부터 이어서 기록해요", "기록 중지", "기록 재개", "도착까지 약"],
+        "Arrival.kt": ["먼저 할 일과 살 것을 모았어요", "장보고 여행 계속", "여행 마치고 기록 보기", "내리기 전, 이 세 가지만 기억하세요"],
+        "AfterTrip.kt": ["오늘의 주행을 기록했어요", "남기고 싶은 순간을 골라요", "장면을 선택해 주세요", "콘텐츠를 만들어요", "순간이 완성됐어요", "콘텐츠 기록 보기"],
+        "Contents.kt": ["우리 가족 / 차량과 폰에서 이어보기", "날짜를 따라 다시 보는 우리 가족", "지도에서 보기", "어디에서 나눈 이야기였을까요?", "장면 확대하기",
+                        "이 장면 보기", "영상 내보내기", "공유할 준비가 됐어요", "콘텐츠 기록으로"]}
+
+
+def check_labels():
+    """TAPS의 글이 앱 소스(frontend/car/app/src/main)에 있는지. 없으면 그 글과 파일을 적고 종료 코드 1."""
+    src = pathlib.Path(__file__).resolve().parent / "app/src/main/java/io/github/teampitcrew/gachita"
+    missing = [(f, t) for f, ts in TAPS.items() for t in ts if t not in (src / f).read_text()]
+    for f, t in missing: print(f"없음: {f}: {t!r}")
+    print(f"화면 글 {sum(map(len, TAPS.values()))}개 중 없는 것 {len(missing)}개")
+    return not missing
 
 
 def open_family():
@@ -876,5 +934,6 @@ if __name__ == "__main__":
     OUT.mkdir(parents=True, exist_ok=True)
     st.update(json.loads(STATE.read_text()) if STATE.exists() else {})
     if sys.argv[1] == "--plan": print(table())
-    elif sys.argv[1] == "--seed": seed(); print(json.dumps({k: v for k, v in st.items() if k in ("group", "trip")}, ensure_ascii=False))
+    elif sys.argv[1] == "--seed": seed(); print(json.dumps({k: v for k, v in st.items() if k in ("group", "guest", "trip")}, ensure_ascii=False))
+    elif sys.argv[1] == "--check": sys.exit(0 if check_labels() else 1)
     else: main(sys.argv[1])
