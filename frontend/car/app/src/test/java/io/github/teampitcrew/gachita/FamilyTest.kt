@@ -41,6 +41,7 @@ class FamilyTest {
         val sit = seatPick(g.members, SeatPick("girl", null), SeatPick(null, "ROW_2_RIGHT"))
         assertEquals(listOf("ROW_1_LEFT", "ROW_2_LEFT", "ROW_2_RIGHT"), sit.members!!.map { it.seat })
         assertEquals("하은을 뒤 오른쪽에 앉혔어요.", sit.note)
+        assertEquals("서준과 하은의 뒷자리 위치를 바꿨어요.", seatPick(sit.members!!, SeatPick("son", "ROW_2_LEFT"), SeatPick("girl", "ROW_2_RIGHT")).note)
         val swap = seatPick(g.members, SeatPick("dad", "ROW_1_LEFT"), SeatPick("son", "ROW_2_LEFT"))
         assertEquals(listOf("ROW_2_LEFT", "ROW_1_LEFT", null), swap.members!!.map { it.seat })
         assertEquals("아빠와 서준의 자리 위치를 바꿨어요.", swap.note)

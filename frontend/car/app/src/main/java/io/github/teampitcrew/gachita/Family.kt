@@ -124,7 +124,7 @@ fun seatPick(members: List<GroupMember>, pick: SeatPick?, target: SeatPick): Sea
     }
     if (seatOf(who) != null) { // 앉은 사람끼리 맞바꿈
         val a = name(who)
-        return SeatResult(swapSeats(members, who, other), null, "$a${if (batchim(a)) "과" else "와"} ${name(other)}의 자리 위치를 바꿨어요.")
+        return SeatResult(swapSeats(members, who, other), null, "$a${if (batchim(a)) "과" else "와"} ${name(other)}의 ${if (seatOf(who)?.startsWith("ROW_2_") == true && target.seat.startsWith("ROW_2_")) "뒷자리" else "자리"} 위치를 바꿨어요.") // 시안 C14: 둘 다 뒷줄이면 '뒷자리'
     }
     return SeatResult(null, pick, "앉은 사람이 있는 자리예요. 빈자리를 눌러 주세요.") // 자리 없는 사람은 빈자리에만
 }
