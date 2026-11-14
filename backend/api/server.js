@@ -95,7 +95,7 @@ export function classify(e) {
 // 로그의 경로 틀: 정한 낱말이 아닌 마디(여행 코드, id, 초대 코드)는 :p로 가린다. 웹 파일은 /(web) 하나로.
 const ROUTE_WORDS = new Set(["api", "config", "trips", "participants", "requests", "moments", "utterances", "transcript", "transcriptions", "captions", "voice-match", "voice-prints", "recordings", "scene-suggestions", "shortform", "short-templates", "short-plans", "short-generations", "file", "profiles", "me", "links", "google", "feed", "tokens", "photo", "voice", "groups", "members", "invites", "j"]);
 for (const word of ["todos", "arrival-briefing"]) ROUTE_WORDS.add(word);
-for (const word of ["short-assets", "source"]) ROUTE_WORDS.add(word);
+for (const word of ["short-assets", "source", "short-worker", "claim", "jobs", "audio", "result", "fail"]) ROUTE_WORDS.add(word);
 ROUTE_WORDS.add("places");
 ROUTE_WORDS.add("contents");
 ROUTE_WORDS.add("rest-stops");
@@ -1509,7 +1509,7 @@ async function handle(trip, { req, m, sub, id, leaf, b, query, profile }, client
   if (sub === "shortform") {
     // 숏폼 구성(T43, ADR-0021·ADR-0022): 클립이 올라온 장면마다 소리 주소와 자막 큐와 말한 사람을 준다.
     // 웹 9:16 화면과 주차 중 차가 이 데이터로 재생하고 기기에서 영상 파일로도 만듭니다. 공용 보관은 short-assets(T107)입니다.
-    // 서버의 힉스필드 생성(T85, 꺼서 배포)은 short-generations.js. 말한 사람은 화자 대조(T38)로 붙은 프로필만 — 자리만으로 이름을 붙이지 않는다.
+    // 서버 생성(T157, 꺼서 배포)은 short-generations.js와 맥의 생성 일꾼(ADR-0025). 말한 사람은 화자 대조(T38)로 붙은 프로필만 — 자리만으로 이름을 붙이지 않는다.
     const all = await lines();
     return [200, await composition(trip, client, all)];
   }
@@ -1630,6 +1630,12 @@ export const server = createServer(async (req, res) => {
       const binary = req.method === "POST" && (seg.at(-1) === "voice" || (seg[1] === "trips" && (["voice-match", "recordings", "transcriptions"].includes(seg[3]) || (seg[3] === "short-assets" && !seg[4]))));
       const json = req.method === "POST" || req.method === "PATCH" || (req.method === "PUT" && seg[1] === "groups"); // 그룹 자리 바꾸기는 PUT(JSON)
       const body = !binary && json ? await readBody(req, big ? 1_000_000 : MAX_BODY) : {};
+      // 생성 일꾼(운영자 맥, ADR-0025)이 작업을 받아 가고 결과 MP4를 PUT으로 올린다. 일꾼 토큰만 받는다.
+      if (seg[1] === "short-worker") {
+        const r = await shortService.worker(req, seg.slice(2), body);
+        if (Buffer.isBuffer(r[1])) return void sendRaw(r[0], r[1], r[2]);
+        return send(...r);
+      }
       if (seg[1] === "rest-stops" && !seg[2]) {
         if (req.method !== "POST") fail(405, "POST만 됨");
         return send(200, restStopsOf(body));

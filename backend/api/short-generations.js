@@ -1,32 +1,32 @@
-import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
+// 쇼츠 서버 생성(T157, ADR-0025). API는 작업을 받아 큐(short_generations)에 두기만 하고, 만들기는 밖의 생성 일꾼(운영자 맥,
+// backend/api/shorts-worker)이 한다. 일꾼은 밖으로만 연결해 /api/short-worker/*로 작업을 임대받고 결과 MP4를 올린다.
+// 앱 계약(short-plans, short-generations, …/file, 콘텐츠 기록)은 T85 그대로다.
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { tripsDb } from "./db.js";
-import {
-  planShort,
-  templates,
-  fingerprint,
-  shotPrompt,
-} from "./short-templates.js";
-import { higgsfield, higgsfieldReady } from "./providers/higgsfield.js";
-import {
-  shortMedia,
-  mediaReady,
-  downloadVideo,
-} from "./providers/short-media.js";
+import { planShort, templates, fingerprint } from "./short-templates.js";
+import { shortMedia, mediaReady } from "./providers/short-media.js";
+import { ASSET_MAX_BYTES, inspectVideo } from "./providers/short-asset-probe.js";
 import { clipStore } from "./providers/clips.js";
-import { renderShort, audioSlice } from "./short-render.js";
 import { log } from "./log.js";
 const fail = (status, error) => {
   throw { status, error };
 };
+// ponytail: 임대 60분 고정. Codex xhigh 한 편이 이보다 길어지면 심장박동(연장) 경로를 더한다.
+const LEASE = "60 minutes";
+const workerToken = () => process.env.SHORTS_WORKER_TOKEN ?? "";
 const enabled = () =>
-  process.env.SHORTS_ENABLED === "true" && higgsfieldReady() && mediaReady();
+  process.env.SHORTS_ENABLED === "true" &&
+  workerToken().length >= 32 &&
+  mediaReady();
 const terminal = new Set([
   "completed",
   "failed",
   "canceled",
   "submission_unknown",
 ]);
+const uuid = (id) =>
+  typeof id === "string" &&
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id);
 export const generationView = (r) => ({
   id: r.id,
   state: r.state,
@@ -57,17 +57,15 @@ export const generationView = (r) => ({
 const view = generationView;
 export const shortTemplateCatalog = () => ({
   enabled: enabled(),
-  provider: "higgsfield",
+  provider: "openai-codex",
   templates: templates.map(({ direction, ...t }) => t),
 });
 
 export function shortGenerations(ctx, overrides = {}) {
   const db = overrides.db ?? tripsDb;
   const media = () => overrides.media ?? shortMedia();
-  const provider = () => overrides.provider ?? higgsfield();
   const ready = overrides.ready ?? enabled;
-  const compose = overrides.render ?? renderShort;
-  const download = overrides.download ?? downloadVideo;
+  const probe = overrides.probe ?? inspectVideo;
   const sourceAudio = async (key) =>
     overrides.audio ? overrides.audio(key) : clipStore()?.get(key);
   const ensureTrip = (trip, caller) => {
@@ -90,7 +88,7 @@ export function shortGenerations(ctx, overrides = {}) {
     return { plan: p, sourceKey: rows[0].object_key };
   }
   async function valid(row) {
-    if ((row.expires_at != null && new Date(row.expires_at).getTime() <= Date.now()))
+    if (row.expires_at != null && new Date(row.expires_at).getTime() <= Date.now())
       fail(410, "보관 기간이 지났어요");
     return ctx.withTrip(row.trip_code, false, async (trip, client) => {
       const caller =
@@ -108,6 +106,11 @@ export function shortGenerations(ctx, overrides = {}) {
       return true;
     });
   }
+  const cancel = (id, code = "source_changed") =>
+    db().query(
+      "UPDATE short_generations SET state='canceled',cleanup_pending=true,error_code=$2,updated_at=now() WHERE id=$1",
+      [id, code],
+    );
   async function request(req, code, sub, id, leaf, body) {
     if (leaf && !id) fail(404, "없는 생성 경로");
     if (sub === "short-plans") {
@@ -117,7 +120,7 @@ export function shortGenerations(ctx, overrides = {}) {
         return [200, (await plan(trip, client, body)).plan];
       });
     }
-    if (id && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id)) fail(404, "없는 생성 작업");
+    if (id && !uuid(id)) fail(404, "없는 생성 작업");
     if (leaf && leaf !== "file") fail(404, "없는 생성 경로");
     const methods = !id ? ["GET", "POST"] : leaf ? ["GET"] : ["GET", "DELETE"];
     if (!methods.includes(req.method)) fail(405, "지원하지 않는 요청 방식이에요");
@@ -141,7 +144,6 @@ export function shortGenerations(ctx, overrides = {}) {
           const requestHash = fingerprint({
             momentId: body.momentId ?? null,
             templateId: body.templateId ?? null,
-            audioReference: body.audioReference === true,
             planHash: body.planHash,
             generation: body.generation,
           });
@@ -170,11 +172,15 @@ export function shortGenerations(ctx, overrides = {}) {
             usage.seconds + prepared.plan.estimatedGenerationSeconds > daily
           )
             fail(429, "오늘의 영상 생성 한도를 모두 사용했어요");
-          const active = await client.query(
-            "SELECT count(*)::int AS n FROM short_generations WHERE trip_code=$1 AND state NOT IN ('completed','failed','canceled','submission_unknown')",
-            [trip.code],
+          const {
+            rows: [made],
+          } = await client.query(
+            "SELECT count(*)::int AS n, count(*) FILTER (WHERE state NOT IN ('completed','failed','canceled','submission_unknown'))::int AS active FROM short_generations WHERE trip_code=$1 AND generation=$2",
+            [trip.code, trip.generation ?? 1],
           );
-          if (active.rows[0].n >= 2)
+          if (made.n >= Number(process.env.SHORTS_TRIP_JOBS ?? 3))
+            fail(429, "이 여행에서 만들 수 있는 영상 수를 모두 썼어요");
+          if (made.active >= 2)
             fail(429, "이 여행의 영상 두 개를 만들고 있어요");
           const row = await client.query(
             `INSERT INTO short_generations(id,trip_code,participant_id,generation,moment_id,idempotency_key,request_hash,plan,source_key,shots,expires_at)
@@ -252,209 +258,165 @@ export function shortGenerations(ctx, overrides = {}) {
       fail(410, "영상이 삭제됐어요");
     return [200, data, "video/mp4"];
   }
-  async function update(row, changes) {
-    Object.assign(row, changes);
-    const r = await db().query(
-      `UPDATE short_generations SET state=$2,shots=$3,object_keys=$4,result_key=$5,bytes=$6,error_code=$7,cleanup_pending=$8,next_attempt_at=now()+interval '8 seconds',updated_at=now() WHERE id=$1 AND state<>'canceled' RETURNING *`,
+
+  // ---- 생성 일꾼 계약(docs/api/short-generation.md). 사람 토큰이 아니라 일꾼 토큰 하나로만 들어온다. ----
+  function authorize(req) {
+    const want = Buffer.from(workerToken());
+    const got = Buffer.from(
+      String(req.headers.authorization ?? "").replace(/^Bearer /, ""),
+    );
+    if (
+      want.length < 32 ||
+      got.length !== want.length ||
+      !timingSafeEqual(want, got)
+    )
+      fail(401, "생성 일꾼 토큰이 필요해요");
+  }
+  async function leased(id) {
+    if (!uuid(id)) fail(404, "없는 생성 작업");
+    const row =
+      (await db().query("SELECT * FROM short_generations WHERE id=$1", [id]))
+        .rows[0] ?? fail(404, "없는 생성 작업");
+    if (row.state !== "generating" || row.cleanup_pending)
+      fail(410, "이 작업은 취소됐거나 임대가 끝났어요");
+    return row;
+  }
+  async function readVideo(req) {
+    if (String(req.headers["content-type"] ?? "").split(";")[0].trim() !== "video/mp4")
+      fail(400, "video/mp4 파일을 보내 주세요");
+    const chunks = [];
+    let bytes = 0;
+    for await (const chunk of req) {
+      bytes += chunk.length;
+      if (bytes > ASSET_MAX_BYTES) fail(413, "영상은 64MB까지 받아요");
+      chunks.push(chunk);
+    }
+    return Buffer.concat(chunks);
+  }
+  async function worker(req, seg, body) {
+    // 경로·방식을 먼저 가리고(404·405) 그다음 토큰을 본다.
+    const claim = seg[0] === "claim" && seg.length === 1;
+    const leaf = seg[0] === "jobs" && seg.length === 3 ? seg[2] : null;
+    const method = claim ? "POST" : new Map([["audio", "GET"], ["fail", "POST"], ["result", "PUT"]]).get(leaf);
+    if (!method) fail(404, "없는 일꾼 경로");
+    if (req.method !== method) fail(405, `${method}만 가능해요`);
+    authorize(req);
+    if (claim) {
+      if (!ready()) return [204];
+      const row = (
+        await db().query(
+          `UPDATE short_generations SET state='generating',next_attempt_at=now()+interval '${LEASE}',updated_at=now()
+           WHERE id=(SELECT id FROM short_generations WHERE state='queued' AND NOT cleanup_pending ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED)
+           RETURNING *`,
+        )
+      ).rows[0];
+      if (!row) return [204];
+      try {
+        await valid(row);
+      } catch (e) {
+        if (![403, 404, 409, 410].includes(e.status)) throw e;
+        await cancel(row.id);
+        return [204];
+      }
+      const t = templates.find((x) => x.id === row.plan.templateId);
+      log("info", "short_job_claimed", { id: row.id });
+      return [
+        200,
+        {
+          id: row.id,
+          leaseUntil: row.next_attempt_at,
+          template: { id: t.id, name: t.name, direction: t.direction },
+          plan: row.plan,
+          audio: `/api/short-worker/jobs/${row.id}/audio`,
+          result: `/api/short-worker/jobs/${row.id}/result`,
+        },
+      ];
+    }
+    const row = await leased(seg[1]);
+    if (leaf === "audio") {
+      const wav = await sourceAudio(row.source_key);
+      if (!wav) fail(410, "장면 원음이 없어요");
+      return [200, wav, "audio/wav"];
+    }
+    if (leaf === "fail") {
+      const code = /^[a-z0-9_]{1,40}$/.test(body?.errorCode ?? "")
+        ? body.errorCode
+        : "worker_failed";
+      await db().query(
+        "UPDATE short_generations SET state='failed',error_code=$2,next_attempt_at=now()+interval '60 seconds',updated_at=now() WHERE id=$1 AND state='generating'",
+        [row.id, `worker_${code}`.slice(0, 48)],
+      );
+      log("warn", "short_job_failed", { id: row.id, code });
+      return [200, { id: row.id, state: "failed" }];
+    }
+    const data = await readVideo(req);
+    // 실제 파일을 본다: 9:16, 영상·소리 하나씩, 길이가 장면과 1초 안(short-assets와 같은 검사).
+    const measured = await probe(data, "video/mp4", row.plan.seconds);
+    // 만드는 사이 동의 철회·자막 수정이 있었으면 결과를 받지 않고 작업을 취소한다.
+    const still = () =>
+      valid(row).catch(async (e) => {
+        if ([403, 404, 409, 410].includes(e.status)) await cancel(row.id);
+        throw e;
+      });
+    await still();
+    const key = `shorts/${row.id}/final.mp4`;
+    // 키를 먼저 적어 둔다. 올리는 사이 취소돼도 정리 작업이 이 키를 지운다.
+    await db().query(
+      "UPDATE short_generations SET object_keys=object_keys || to_jsonb($2::text) WHERE id=$1 AND NOT object_keys ? $2",
+      [row.id, key],
+    );
+    await media().put(key, data, "video/mp4");
+    await still();
+    const done = await db().query(
+      `UPDATE short_generations SET state='completed',result_key=$2,bytes=$3,shots=$4,next_attempt_at=now()+interval '60 seconds',updated_at=now()
+       WHERE id=$1 AND state='generating' AND NOT cleanup_pending RETURNING *`,
       [
         row.id,
-        row.state,
-        JSON.stringify(row.shots),
-        JSON.stringify(row.object_keys),
-        row.result_key,
-        row.bytes,
-        row.error_code,
-        row.cleanup_pending,
+        key,
+        data.length,
+        JSON.stringify(row.shots.map((s) => ({ ...s, state: "completed" }))),
       ],
     );
-    if (!r.rowCount) throw Error("job_canceled");
-    return r.rows[0];
+    if (!done.rows[0]) fail(410, "올리는 사이 작업이 취소됐어요");
+    log("info", "short_job_completed", {
+      id: row.id,
+      bytes: data.length,
+      seconds: measured.seconds,
+    });
+    return [200, view(done.rows[0])];
   }
-  async function put(row, key, body, type) {
-    if (!row.object_keys.includes(key)) {
-      row.object_keys.push(key);
-      await update(row, {});
-    }
-    await media().put(key, body, type);
-    return key;
-  }
+
   async function cleanup(row) {
     for (const key of row.object_keys) await media().remove(key);
-    let pending = false;
-    for (const shot of row.shots) {
-      if (!shot.request || shot.providerDeleted) continue;
-      try {
-        const status = await provider().status(shot.request);
-        if (status.status === "queued") {
-          await provider().cancel(shot.request);
-          pending = true;
-        } else if (status.status === "in_progress") pending = true;
-        else {
-          await provider().remove(shot.request);
-          shot.providerDeleted = true;
-        }
-      } catch (e) {
-        if (e.code === "provider_http_404") shot.providerDeleted = true;
-        else pending = true;
-      }
-    }
     await db().query(
-      "UPDATE short_generations SET cleanup_pending=$2,shots=$3,object_keys='[]',source_key='',plan=jsonb_build_object('templateId',plan->'templateId','templateVersion',plan->'templateVersion','estimatedGenerationSeconds',plan->'estimatedGenerationSeconds'),result_key=NULL,next_attempt_at=now()+interval '30 seconds' WHERE id=$1",
-      [row.id, pending, JSON.stringify(row.shots)],
+      "UPDATE short_generations SET cleanup_pending=false,object_keys='[]',source_key='',plan=jsonb_build_object('templateId',plan->'templateId','templateVersion',plan->'templateVersion','estimatedGenerationSeconds',plan->'estimatedGenerationSeconds'),result_key=NULL,next_attempt_at=now()+interval '30 seconds' WHERE id=$1",
+      [row.id],
     );
   }
+  // 서버 안에서 도는 것은 지키기뿐이다: 동의 철회·원본 변경을 다시 보고, 끝난 임대를 실패로 돌리고, 취소된 결과를 지운다.
   async function runJob(row) {
     if (row.cleanup_pending) return cleanup(row);
     try {
       await valid(row);
     } catch (e) {
-      if ([403, 404, 409, 410].includes(e.status)) {
-        await db().query(
-          "UPDATE short_generations SET state='canceled',cleanup_pending=true,error_code='source_changed' WHERE id=$1",
-          [row.id],
-        );
-        return;
-      }
+      if ([403, 404, 409, 410].includes(e.status)) return cancel(row.id);
       throw e;
     }
-    // Off: keep re-checking consent and sources so withdrawals still clean up, but send nothing to the provider.
-    if (terminal.has(row.state) || !ready()) {
+    if (row.state === "generating") {
+      // 고른 행의 next_attempt_at이 지났다 = 일꾼이 임대 안에 결과도 실패도 알리지 않았다. 다시 주지 않는다.
       await db().query(
-        "UPDATE short_generations SET next_attempt_at=now()+interval '60 seconds' WHERE id=$1",
+        "UPDATE short_generations SET state='failed',error_code='worker_timeout',updated_at=now(),next_attempt_at=now()+interval '60 seconds' WHERE id=$1 AND state='generating'",
         [row.id],
       );
       return;
     }
-    // No request id after a previous worker died: don't send another paid request.
-    if (row.state === "submitting") {
-      await update(row, {
-        state: "submission_unknown",
-        error_code: "submission_unconfirmed",
-      });
-      return;
-    }
-    const index = row.shots.findIndex((s) => s.state !== "completed");
-    if (index >= 0) {
-      const shot = row.shots[index],
-        spec = row.plan.shots[index];
-      if (shot.state === "pending") {
-        const refs = [];
-        for (let i = 0; i < 2; i++) {
-          const key = `shorts/${row.id}/reference-${i}.png`;
-          await put(
-            row,
-            key,
-            await readFile(
-              new URL(
-                `../../frontend/web/chars/${row.plan.cast[i].character}.png`,
-                import.meta.url,
-              ),
-            ),
-            "image/png",
-          );
-          refs.push(await media().sign(key));
-        }
-        const input = {
-          prompt: shotPrompt(row.plan, spec),
-          image_urls: refs,
-          duration: spec.generationSeconds,
-          resolution: row.plan.resolution,
-          aspect_ratio: "9:16",
-          output_format: "mp4",
-          generate_audio: row.plan.audioReference,
-        };
-        if (row.plan.audioReference) {
-          const wav = await sourceAudio(row.source_key);
-          if (!wav) throw Error("source_audio_missing");
-          const key = `shorts/${row.id}/voice-${index}.wav`;
-          await put(row, key, await audioSlice(wav, spec), "audio/wav");
-          input.audio_urls = [await media().sign(key)];
-        }
-        await valid(row);
-        await update(row, { state: "submitting" });
-        let request;
-        try {
-          request = await provider().submit(row.plan.model, input);
-        } catch (e) {
-          await update(row, {
-            state: e.uncertain ? "submission_unknown" : "failed",
-            error_code: e.uncertain
-              ? "submission_unconfirmed"
-              : (e.code ?? "provider_rejected"),
-          });
-          return;
-        }
-        shot.request = request;
-        shot.state = "generating";
-        // Persist the provider id even if cancellation raced with submission, so cleanup can find it.
-        await db().query(
-          "UPDATE short_generations SET shots=$2,state=CASE WHEN state='canceled' THEN state ELSE 'generating' END,updated_at=now(),next_attempt_at=now()+interval '8 seconds' WHERE id=$1",
-          [row.id, JSON.stringify(row.shots)],
-        );
-        return;
-      }
-      const status = await provider().status(shot.request);
-      if (["failed", "nsfw", "canceled"].includes(status.status)) {
-        await update(row, {
-          state: "failed",
-          error_code: `provider_${status.status}`,
-        });
-        return;
-      }
-      if (status.status !== "completed") {
-        await update(row, { state: "generating" });
-        return;
-      }
-      const video = await download(status.videoUrl);
-      await valid(row);
-      shot.key = await put(
-        row,
-        `shorts/${row.id}/shot-${index}.mp4`,
-        video,
-        "video/mp4",
-      );
-      shot.state = "completed";
-      await update(row, { state: "generating" });
-      return;
-    }
-    await update(row, { state: "composing" });
-    const wav = await sourceAudio(row.source_key);
-    if (!wav) throw Error("source_audio_missing");
-    const videos = await Promise.all(row.shots.map((s) => media().get(s.key)));
-    const controller = new AbortController();
-    const timer = setInterval(() => {
-      db()
-        .query("SELECT state FROM short_generations WHERE id=$1", [row.id])
-        .then((r) => {
-          if (r.rows[0]?.state === "canceled") controller.abort();
-        })
-        .catch(() => controller.abort());
-    }, 1000);
-    timer.unref();
-    let output;
-    try {
-      output = await compose(row.plan, videos, wav, {
-        signal: controller.signal,
-      });
-    } finally {
-      clearInterval(timer);
-    }
-    await valid(row);
-    const key = await put(
-      row,
-      `shorts/${row.id}/final.mp4`,
-      output,
-      "video/mp4",
+    await db().query(
+      "UPDATE short_generations SET next_attempt_at=now()+interval '60 seconds' WHERE id=$1",
+      [row.id],
     );
-    await valid(row);
-    await update(row, {
-      state: "completed",
-      result_key: key,
-      bytes: output.length,
-    });
   }
   async function tick() {
-    if (!ready() && !mediaReady()) return;
+    if (!mediaReady() && !overrides.media) return;
     const client = await db().connect();
     let locked = false;
     try {
@@ -462,40 +424,20 @@ export function shortGenerations(ctx, overrides = {}) {
         await client.query("SELECT pg_try_advisory_lock(74629) AS held")
       ).rows[0].held;
       if (!locked) return;
-      // 취소 행도 멱등 키를 보존합니다. 무기한 여행의 늦은 재전송이 유료 작업을 다시 만들지 않게 합니다.
+      // 취소 행도 멱등 키를 보존합니다. 무기한 여행의 늦은 재전송이 작업을 다시 만들지 않게 합니다.
       const r = await client.query(
-        "SELECT * FROM short_generations WHERE next_attempt_at<=now() AND (state<>'canceled' OR cleanup_pending) ORDER BY cleanup_pending DESC,(state NOT IN ('completed','failed','submission_unknown')) DESC,next_attempt_at LIMIT 1",
+        "SELECT * FROM short_generations WHERE next_attempt_at<=now() AND (state<>'canceled' OR cleanup_pending) ORDER BY cleanup_pending DESC,next_attempt_at LIMIT 1",
       );
       if (!r.rows[0]) return;
       const row = r.rows[0];
       try {
         await runJob(row);
-      } catch (e) {
-        if (e.message === "job_canceled" || e.name === "AbortError") return;
-        const transient =
-          e.code?.startsWith("provider_http_5") ||
-          e.code === "provider_http_429" ||
-          e.code === "provider_connection";
-        if (transient) {
-          await db().query(
-            "UPDATE short_generations SET next_attempt_at=now()+interval '30 seconds' WHERE id=$1",
-            [row.id],
-          );
-          return;
-        }
-        // Off: only valid() ran, so an unexpected error there must not fail a paid job for good.
-        if (row.cleanup_pending || !ready()) {
-          await db().query(
-            "UPDATE short_generations SET next_attempt_at=now()+interval '30 seconds' WHERE id=$1",
-            [row.id],
-          );
-          return;
-        }
+      } catch {
         await db().query(
-          "UPDATE short_generations SET state='failed',error_code='generation_failed',next_attempt_at=now()+interval '60 seconds' WHERE id=$1 AND state<>'canceled'",
+          "UPDATE short_generations SET next_attempt_at=now()+interval '30 seconds' WHERE id=$1",
           [row.id],
         );
-        log("warn", "short_generation_failed", { stage: row.state });
+        log("warn", "short_generation_check_failed", { stage: row.state });
       }
     } finally {
       if (locked)
@@ -517,5 +459,5 @@ export function shortGenerations(ctx, overrides = {}) {
     timer.unref();
     return () => clearInterval(timer);
   }
-  return { request, tick, start, valid };
+  return { request, worker, tick, start, valid };
 }

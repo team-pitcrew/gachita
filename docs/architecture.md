@@ -84,7 +84,7 @@ Pleos는 주행 중 내비가 아닌 앱의 CPU를 5% 미만, RAM을 400 MB 이�
 | 7 | 장면 후보 | 차(`Scenes.kt`)와 API(`scenes.js`, 폰이 `GET /scene-suggestions`로 씀). 같은 규칙 | LLM 계약 전이라 규칙으로 고름(11/14). 받아 적은 말이 있는 차에서도 같은 후보를 고르게 두 구현을 `backend/api/scene-vectors.json` 하나로 맞춤(T144) | 서버 있음(#181, 합성 대화 시험). 차 규칙과 같은 값 시험(T144). 차 화면 연결은 아직 없음 |
 | 8 | 사람이 고른 장면의 클립 | 차가 고른 구간만 올림. 그때까지 차 안에 암호화해 둠(기간 제한 없음, T90 — 원음 지우기·동의 철회 때 지움) | 원음 전체는 차 밖으로 보내지 않음([ADR-0007](adr/0007-voice-processing-flow.md)). 클립은 기존 API 주소에서 참가자 토큰을 확인하고 내줌([ADR-0021](adr/0021-shortform-as-composition-data.md), ADR-0020의 `media` 하위 도메인은 두지 않음) | 서버와 클립 버킷 있음(#163·#167), 차에서 고른 구간 잘라 올리기 있음(에뮬레이터, 가짜 S3, #222). 실제 버킷으로는 확인 전 |
 | 9 | 고른 클립 다시 받아 적기 | API → 재전사 서버. 고른 클립만, 서버에 설정이 있을 때만 | Pleos 초안이 짧은 물음에서 틀린 것을 자막에서 고침. 동의 화면에 밝힘 | 서버 있음(#183, 실패하면 원문 자막. 서버에 설정이 있을 때만, 길은 #191) |
-| 10 | 숏폼 | 폰 9:16 재생 페이지, 주차 중 차 | 클립·자막·말한 사람을 이어 틈([ADR-0021](adr/0021-shortform-as-composition-data.md)). 영상 파일은 기기에서 만들고, 서버의 힉스필드 생성은 꺼서 배포([ADR-0022](adr/0022-shortform-video-on-device-and-server-generation-off.md)) | 폰 있음(#185, 브라우저). 차는 주차 중 재생 있음(에뮬레이터, #233). #239부터 폰·차 모두 전신 캐릭터와 자막을 그리는 세로 쇼츠 화면. 영상 만들기: 웹은 MP4 또는 WebM 내려받기·공유, 차는 MP4를 갤러리에 저장(#239·#244·#245, 코드와 단위 시험). 서버 생성(T85·T86)은 `SHORTS_ENABLED=false`라 503이고 부르는 화면이 없음 |
+| 10 | 숏폼 | 폰 9:16 재생 페이지, 주차 중 차 | 클립·자막·말한 사람을 이어 틈([ADR-0021](adr/0021-shortform-as-composition-data.md)). 영상 파일은 기기에서 만들고, 서버 생성은 맥의 Codex 일꾼이 하며 꺼서 배포([ADR-0025](adr/0025-shorts-generation-worker-codex-skill.md)) | 폰 있음(#185, 브라우저). 차는 주차 중 재생 있음(에뮬레이터, #233). #239부터 폰·차 모두 전신 캐릭터와 자막을 그리는 세로 쇼츠 화면. 영상 만들기: 웹은 MP4 또는 WebM 내려받기·공유, 차는 MP4를 갤러리에 저장(#239·#244·#245, 코드와 단위 시험). 서버 생성(T157)은 `SHORTS_ENABLED=false`라 503이고 부르는 화면이 없음 |
 
 ## 외부 API
 
@@ -102,7 +102,7 @@ Pleos는 주행 중 내비가 아닌 앱의 CPU를 5% 미만, RAM을 400 MB 이�
 | 화자 대조 | API 서버 | 같은 좌석 구역 안의 사람 구분 | 서버 안의 참조 임베더로 만듦([ADR-0019](adr/0019-speaker-matching.md)). 학습된 모델은 정확도 표 뒤(T38). 말소리는 대조에만 쓰고 버림 |
 | LLM(Claude API) | API 서버 | 장면 고르기 | 쓰지 않음. 장면 후보는 규칙으로 고름(T43, #181) |
 | 재전사(Nemotron ASR, 외부 서버) | API 서버 | 고른 장면 클립의 자막 다시 받아 적기 | 있음(T75, #183). 서버에 `ASR_URL`·토큰이 있을 때만, 실패하면 원문 자막. 나가는 길은 #191 |
-| 힉스필드(Seedance 2.5) | API 서버 | 쇼츠의 두 캐릭터 반응 장면 생성 | 배포했으나 꺼짐(T85·T86, `SHORTS_ENABLED=false`). 부르는 화면 없음. 보내는 것과 남은 위험은 [ADR-0022](adr/0022-shortform-video-on-device-and-server-generation-off.md) |
+| OpenAI(Codex 구독) | 운영자 맥의 생성 일꾼(API에 밖으로만 연결) | 쇼츠의 장면 그림(youtube-shorts-factory 스킬, 캐릭터 그림 투사) | 꺼짐(T157, `SHORTS_ENABLED=false`). 보내는 것과 남은 위험은 [ADR-0025](adr/0025-shorts-generation-worker-codex-skill.md) |
 | Cloudflare | 가장자리 | 주소 `gachita.mangowhois.ai`, 서버로 가는 길, 요청 수 제한 | 동작(11/13부터, [ADR-0010](adr/0010-domain-and-cloudflare-edge.md)). 길·격리·포트는 [ADR-0013](adr/0013-network-edge-and-isolation.md)과 그 1·3절을 대신한 [ADR-0015](adr/0015-split-nodes-private-subnets-alb.md). 클립과 서버가 만든 영상(꺼 둠)은 같은 주소의 API가 내줌([ADR-0021](adr/0021-shortform-as-composition-data.md), [ADR-0022](adr/0022-shortform-video-on-device-and-server-generation-off.md)) |
 
 ## 아직 없는 것

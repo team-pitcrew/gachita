@@ -1,0 +1,14 @@
+{
+  "name": "gachita-shorts-worker",
+  "private": true,
+  "type": "module",
+  "description": "운영자 맥에서 도는 쇼츠 생성 일꾼(ADR-0025). API 이미지에 들어가지 않는다.",
+  "engines": { "node": ">=22.1" },
+  "scripts": {
+    "start": "node --env-file=${SHORTS_ENV:-$HOME/.config/gachita/shorts-worker.env} worker.mjs",
+    "once": "node --env-file=${SHORTS_ENV:-$HOME/.config/gachita/shorts-worker.env} worker.mjs --once"
+  },
+  "dependencies": {
+    "@openai/codex-sdk": "0.169.0"
+  }
+}
