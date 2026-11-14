@@ -46,7 +46,7 @@ def main(apk):
     adb("shell", "am", "force-stop", "--user", "10", PKG); adb("shell", "pm", "clear", "--user", "10", PKG)
     for perm in ("RECORD_AUDIO", "POST_NOTIFICATIONS"): adb("shell", "pm", "grant", "--user", "10", PKG, f"android.permission.{perm}")
     n0 = len(app_log)
-    adb("shell", "am", "start", "--user", "10", "-n", f"{PKG}/.MainActivity", "--es", "server", f"http://10.0.2.2:{cap.PORT}", "--es", "route", shlex.quote(GANGNEUNG))
+    adb("shell", "am", "start", "--user", "10", "-n", f"{PKG}/.MainActivity", "--es", "server", f"http://10.0.2.2:{cap.PORT}", "--ez", "onboarding", "false", "--es", "route", shlex.quote(GANGNEUNG))
     check("앱이 내비 목적지를 강릉역으로(onRouteStarted)", wait_log("경로 시작 강릉역", n0, 30))
     time.sleep(2); front_app(); e2e.tap_make(); time.sleep(4)
     ui = texts(); code = next((t.split()[-1] for t in ui if t.startswith("여행 코드")), None); note("trip", code=code)
