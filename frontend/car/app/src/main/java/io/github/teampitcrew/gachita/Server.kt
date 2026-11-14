@@ -141,12 +141,25 @@ class Server(base: String) {
             JSONObject().put("participantId", participantId ?: JSONObject.NULL), token)
     }
 
-    private fun call(method: String, path: String, body: Any?, token: String? = null): String? {
+    /**
+     * 지금 위치·진행 방향과 내비 목적지·남은 길로 고른 경로 위 휴게소(T97), 좋은 순. 위치는 본문으로만 보낸다.
+     * 제안이 늦지 않게(요청 끝에서 제안까지 p95 5초 목표) 2초만 기다린다. 실패하면 부른 쪽이 고정 목록으로 간다.
+     */
+    fun restStops(lat: Double, lng: Double, heading: Double?, to: Place?, remain: Int?): List<Place> {
+        val from = JSONObject().put("lat", lat).put("lng", lng)
+        heading?.let { from.put("heading", (it % 360 + 360) % 360) }
+        val body = JSONObject().put("from", from).put("limit", 3)
+        to?.let { body.put("to", JSONObject().put("lat", it.lat).put("lng", it.lng)) }
+        remain?.let { body.put("remainMeters", it) }
+        return restStopsOf(call("POST", "/api/rest-stops", body, timeoutMs = 2000)!!)
+    }
+
+    private fun call(method: String, path: String, body: Any?, token: String? = null, timeoutMs: Int = 5000): String? {
         val c = URL(base + path).openConnection() as HttpURLConnection
         try {
             c.requestMethod = method // 안드로이드의 HttpURLConnection은 PATCH를 받는다
-            c.connectTimeout = 5000
-            c.readTimeout = 5000
+            c.connectTimeout = timeoutMs
+            c.readTimeout = timeoutMs
             token?.let { c.setRequestProperty("Authorization", "Bearer $it") } // 토큰은 머리말로만(주소에 넣지 않음, Pleos 보안 가이드)
             if (body != null) {
                 c.doOutput = true

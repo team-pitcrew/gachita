@@ -33,6 +33,23 @@ class AsksTest {
         assertEquals(Answer.UNCLEAR, answerOf("용인휴게소에 들를지 다시 말해 주세요")) // 다시 묻는 말이 마이크로 돌아와도 답이 아니다
     }
 
+    @Test fun routedStopsFromServer() {
+        val json = """{"items":[{"name":"덕평휴게소","route":"영동선","lat":37.24133,"lng":127.389428,"meters":11500},
+            {"name":"여주휴게소 강릉방향","route":"영동선","lat":37.238548,"lng":127.569035,"meters":27400}],"source":"한국도로공사"}"""
+        val stops = restStopsOf(json)
+        assertEquals(listOf("덕평휴게소", "여주휴게소"), stops.map { it.spoken })
+        assertEquals(37.238548, stops[1].lat, 1e-9)
+        assertEquals(emptyList<Place>(), restStopsOf("""{"items":[],"source":"x"}"""))
+    }
+
+    @Test fun onRoadByNaviDistance() {
+        assertTrue(onRoad(11_500.0, 13_000, 160_000)) // 같은 길 앞쪽: 길 위 거리가 직선과 비슷
+        assertFalse(onRoad(13_000.0, 30_000, 160_000)) // 나란한 고속도로: 분기점을 돌아 두 배 넘게 김
+        assertFalse(onRoad(5_000.0, 9_000, 8_000)) // 목적지보다 멀다
+        assertTrue(onRoad(5_000.0, null, null)) // 내비가 답하지 않으면 막지 않는다
+        assertTrue(onRoad(1_000.0, 3_400, null)) // 가까운 곳은 나들목 진입 거리(2 km)까지 봐준다
+    }
+
     @Test fun onlyFrontRowOrUnknownAccepts() {
         assertTrue(canAccept(u("응", null)))
         assertTrue(canAccept(u("응", 0)))

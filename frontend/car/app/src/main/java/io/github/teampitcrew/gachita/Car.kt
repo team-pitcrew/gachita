@@ -227,8 +227,13 @@ class Car(ctx: Context, private val onChange: (CarStatus) -> Unit) {
     /** 받아 적은 말이 우리 TTS 소리일 수 있는지: 첫 중간 결과가 우리가 말하는 동안(끝난 뒤 0.3초까지) 왔다. */
     fun ownVoice(firstPartialAt: Long) = overlapsSpeech(firstPartialAt, ttsFrom, ttsTo)
 
-    /** 내비가 아는 지금 위치. 화면은 넘어가지 않는다(0.1~0.2초, 11/12). 모르면 null, null. */
-    fun here(done: (Double?, Double?) -> Unit) = here.start({ done(it?.latitude, it?.longitude) }) { navi.getCurrentLocationInfo() }
+    /** 내비가 아는 지금 위치와 진행 방향(도, 북 = 0). 화면은 넘어가지 않는다(0.1~0.2초, 11/12). 모르면 null. */
+    fun here(done: (Double?, Double?, Double?) -> Unit) = here.start({ done(it?.latitude, it?.longitude, it?.heading) }) { navi.getCurrentLocationInfo() }
+
+    /** 내비의 목적지 좌표와 남은 길(m). 안내 중이 아니거나 좌표가 0이면 목적지는 null. 화면은 넘어가지 않는다. */
+    fun destination(done: (Place?, Int?) -> Unit) = dest.start({ d ->
+        done(d?.takeIf { it.latitude != 0.0 || it.longitude != 0.0 }?.let { Place(it.latitude, it.longitude, "목적지") }, d?.remainDistance?.takeIf { it > 0 })
+    }) { navi.getDestinationInfo() }
 
     /** 그곳까지의 거리(m)와 시간(초). 들르면 늘어나는 시간이 아니다. 화면은 넘어가지 않는다. */
     fun distanceTo(p: Place, done: (Int?, Int?) -> Unit) =
