@@ -1,5 +1,6 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { tripsDb } from "./db.js";
+import { withActiveProfile } from "./profile-lifecycle.js";
 
 const fail = (status, error) => { throw { status, error }; };
 const hash = (value) => createHash("sha256").update(value).digest();
@@ -36,7 +37,7 @@ export async function rideLinks(req, path, { profileOf }) {
   const link = rows[0] ?? fail(404, "없거나 만료된 동승 연결");
   const view = { id: link.id, status: link.trip_code ? "linked" : "pending", expiresAt: link.expires_at.getTime() };
   if (!link.trip_code) return [200, view];
-  const { rows: trips } = await db.query("SELECT doc FROM trips WHERE code=$1 AND created_at > now() - interval '48 hours'", [link.trip_code]);
+  const { rows: trips } = await db.query("SELECT doc FROM trips WHERE code=$1", [link.trip_code]);
   const participant = trips[0]?.doc.participants.find((p) => p.id === link.participant_id && p.profileId === me.id);
   if (!participant) fail(404, "연결된 여행을 찾을 수 없음");
   return [200, { ...view, tripCode: link.trip_code, participant: publicParticipant(participant) }];
@@ -46,35 +47,37 @@ export async function redeemRideLink(req, tripCode, body, { profileById, seats }
   if (req.method !== "POST") fail(405, "POST만 됨");
   if (typeof body.code !== "string" || !tokenShape.test(body.code)) fail(400, "code: 동승 연결 QR의 코드");
   if (!seats.includes(body.seat)) fail(400, "seat: 사용할 수 있는 자리");
-  const client = await tripsDb().connect();
-  try {
-    await client.query("BEGIN");
-    const { rows } = await client.query("SELECT *, expires_at > clock_timestamp() AS alive FROM ride_links WHERE code_hash=$1 FOR UPDATE", [hash(body.code)]);
-    const link = rows[0];
-    if (!link || !link.alive) fail(404, "없거나 만료된 동승 연결");
-    if (link.trip_code) fail(409, "이미 사용한 동승 연결");
-    const me = (await profileById(link.profile_id)) ?? fail(404, "프로필을 찾을 수 없음");
-    const { rows: trips } = await client.query("SELECT doc FROM trips WHERE code=$1 AND created_at > now() - interval '48 hours' FOR UPDATE", [String(tripCode).toUpperCase()]);
-    const trip = trips[0]?.doc ?? fail(404, "없거나 보관 기간이 지난 여행");
-    if (!["boarding", "parked"].includes(trip.status)) fail(409, "주차 중에만 동승자를 연결할 수 있음");
-    if (trip.participants.some((p) => p.profileId === me.id)) fail(409, "이미 참가한 프로필");
-    if (trip.participants.some((p) => p.seat === body.seat)) fail(409, "이미 다른 사람이 앉은 자리");
-    // 폰에게만 미리 준 토큰의 해시를 참가자에 옮긴다. 차는 동의를 켤 자격을 받지 않는다.
-    const participant = { id: randomUUID().slice(0, 8), profileId: me.id, name: me.name, character: me.character,
-      seat: body.seat, consent: false, tokenHash: link.participant_token_hash };
-    trip.participants.push(participant);
-    trip.recording = false;
-    trip.version++;
-    const updated = await client.query("UPDATE trips SET doc=$2 WHERE code=$1 AND created_at > clock_timestamp()-interval '48 hours'", [trip.code, trip]);
-    if (!updated.rowCount) fail(404, "보관 기간이 지난 여행");
-    const consumed = await client.query("UPDATE ride_links SET trip_code=$2, participant_id=$3, expires_at=clock_timestamp()+interval '5 minutes' WHERE id=$1 AND expires_at > clock_timestamp()", [link.id, trip.code, participant.id]);
-    if (!consumed.rowCount) fail(404, "만료된 동승 연결");
-    await client.query("COMMIT");
-    return [201, { tripCode: trip.code, participant: publicParticipant(participant) }];
-  } catch (e) {
-    await client.query("ROLLBACK").catch(() => {});
-    throw e;
-  } finally {
-    client.release();
-  }
+  // 첫 조회는 잠그지 않습니다. 공통 프로필 → 연결 → 여행 순서로 잠근 뒤 다시 읽습니다.
+  const { rows: candidates } = await tripsDb().query("SELECT profile_id FROM ride_links WHERE code_hash=$1", [hash(body.code)]);
+  const candidate = candidates[0] ?? fail(404, "없거나 만료된 동승 연결");
+  return withActiveProfile(candidate.profile_id, db => profileById(candidate.profile_id, db), async (me, client) => {
+    try {
+      await client.query("BEGIN");
+      const { rows } = await client.query("SELECT *, expires_at > clock_timestamp() AS alive FROM ride_links WHERE code_hash=$1 FOR UPDATE", [hash(body.code)]);
+      const link = rows[0];
+      if (!link || !link.alive) fail(404, "없거나 만료된 동승 연결");
+      if (link.trip_code) fail(409, "이미 사용한 동승 연결");
+      if (link.profile_id !== me.id) fail(404, "프로필을 찾을 수 없음");
+      const { rows: trips } = await client.query("SELECT doc FROM trips WHERE code=$1 FOR UPDATE", [String(tripCode).toUpperCase()]);
+      const trip = trips[0]?.doc ?? fail(404, "없는 여행");
+      if (!["boarding", "parked"].includes(trip.status)) fail(409, "주차 중에만 동승자를 연결할 수 있음");
+      if (trip.participants.some((p) => p.profileId === me.id)) fail(409, "이미 참가한 프로필");
+      if (trip.participants.some((p) => p.seat === body.seat)) fail(409, "이미 다른 사람이 앉은 자리");
+      // 폰에게만 미리 준 토큰의 해시를 참가자에 옮긴다. 차는 동의를 켤 자격을 받지 않는다.
+      const participant = { id: randomUUID().slice(0, 8), profileId: me.id, name: me.name, character: me.character,
+        seat: body.seat, consent: false, tokenHash: link.participant_token_hash };
+      trip.participants.push(participant);
+      trip.recording = false;
+      trip.version++;
+      const updated = await client.query("UPDATE trips SET doc=$2 WHERE code=$1", [trip.code, trip]);
+      if (!updated.rowCount) fail(404, "없는 여행");
+      const consumed = await client.query("UPDATE ride_links SET trip_code=$2, participant_id=$3, expires_at=clock_timestamp()+interval '5 minutes' WHERE id=$1 AND expires_at > clock_timestamp()", [link.id, trip.code, participant.id]);
+      if (!consumed.rowCount) fail(404, "만료된 동승 연결");
+      await client.query("COMMIT");
+      return [201, { tripCode: trip.code, participant: publicParticipant(participant) }];
+    } catch (e) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw e;
+    }
+  });
 }

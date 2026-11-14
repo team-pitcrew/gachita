@@ -11,6 +11,7 @@ import { createServer } from "node:http";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { profilesDb, tripsDb } from "./db.js";
+import { withActiveProfile, withDeletingProfiles } from "./profile-lifecycle.js";
 import { createShare, sharedResults } from "./result-shares.js";
 import { errFields, log } from "./log.js";
 import { asrReady, contextOf, retranscribe, toWav } from "./providers/asr.js";
@@ -35,9 +36,8 @@ const GROUPS_SQL = fileURLToPath(new URL("profiles-4-groups.sql", import.meta.ur
 const VOICE_SQL = fileURLToPath(new URL("profiles-5-voice.sql", import.meta.url));
 const NO_PREFS_SQL = fileURLToPath(new URL("profiles-6-no-prefs.sql", import.meta.url));
 const PHOTO_MAX = 1_000_000; // 프로필 사진 상한. 형식은 매직 바이트로만 확인한다(다시 그리기는 T46 화면, ADR-0009 위험)
-const TTL_MS = 48 * 60 * 60 * 1000; // 기획서 v4가 초기 제안으로 적은 보관 기간
 const MAX_BODY = 10_000;
-// ponytail: 여행 하나의 발화는 2만 줄까지(3시간 여행 ≈ 2,500줄). 48시간 지우기 한 번이 2초 제한(T26) 안에 끝나게 묶는다.
+// ponytail: 여행 하나의 발화는 2만 줄까지(3시간 여행 ≈ 2,500줄). 명시적 삭제 한 번이 2초 제한(T26) 안에 끝나게 묶는다.
 const MAX_TRIP_UTTERANCES = 20_000;
 const CODE_CHARS = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"; // 0·O·1·I·L은 헷갈려서 뺌
 
@@ -113,6 +113,7 @@ export async function migrate() {
   await tripsDb().query(await readFile(CAPTIONS_SQL, "utf8"));
   await tripsDb().query(await readFile(new URL("trips-7-result-shares.sql", import.meta.url), "utf8"));
   await tripsDb().query(await readFile(new URL("trips-8-short-generations.sql", import.meta.url), "utf8"));
+  await tripsDb().query(await readFile(new URL("trips-9-retention.sql", import.meta.url), "utf8"));
   await profilesDb().query(await readFile(PROFILES_SQL, "utf8"));
   await profilesDb().query(await readFile(LINKS_SQL, "utf8"));
   await profilesDb().query(await readFile(ALBUM_SQL, "utf8"));
@@ -156,7 +157,7 @@ async function issueToken(profileId, device = "", token = randomBytes(32).toStri
 }
 
 // 여행 문서의 참가자를 API가 돌려주는 모양으로 바꾼다. 참가자 토큰 해시는 절대 나가지 않는다.
-// prefs는 좌석·공조 선호를 걷어내기(T68) 전에 만든 여행 문서에만 있다(48시간 보관 시계와 함께 사라짐).
+// prefs는 좌석·공조 선호를 걷어내기(T68) 전에 만든 여행 문서에만 있다(응답에서는 제외함).
 const asParticipant = ({ tokenHash, olderTokenHashes, prefs, ...p }) => p;
 const tripView = (trip) => ({ ...trip, participants: trip.participants.map(asParticipant) });
 
@@ -204,8 +205,8 @@ const asUtterance = (r) => ({
   ...(r.asr_text ? { asrText: r.asr_text } : {}), // 재전사(T75)한 글. 읽어 온 질의에 있을 때만
 });
 
-async function profileById(id) {
-  const { rows } = await profilesDb().query(
+async function profileById(id, db = profilesDb()) {
+  const { rows } = await db.query(
     "SELECT id, name, consent_default, provider, character, (photo IS NOT NULL) AS has_photo FROM profiles WHERE id = $1",
     [id]
   );
@@ -215,12 +216,12 @@ async function profileById(id) {
 // Authorization: Bearer <토큰>. 머리말이 없으면 null(손님), 틀린 토큰이면 401.
 // 토큰은 기기마다 하나씩(tokens 표, T45) — 한 프로필을 차량과 폰에서 함께 쓴다(ADR-0009).
 // 옛 칸 profiles.token_hash도 본다: 배포 중 옛 파드가 만든 프로필이 다음 기동 전까지도 읽히게.
-async function profileOf(req) {
+async function profileOf(req, db = profilesDb()) {
   const header = req.headers.authorization;
   if (header === undefined) return null;
   const m = /^Bearer ([A-Za-z0-9_-]{40,})$/.exec(header);
   const { rows } = m
-    ? await profilesDb().query(
+    ? await db.query(
         `SELECT p.id, p.name, p.consent_default, p.provider, p.character, (p.photo IS NOT NULL) AS has_photo
          FROM profiles p WHERE p.id = (SELECT profile_id FROM tokens WHERE token_hash = $1) OR p.token_hash = $1`,
         [tokenHash(m[1])]
@@ -278,7 +279,7 @@ async function profiles(req, seg, b) {
     const utterances = await tripsDb().query(
       `SELECT u.trip_code, u.at, u.text, u.seat_area FROM utterances u
        JOIN trips t ON t.code = u.trip_code
-       WHERE u.profile_id = $1 AND u.text <> '' AND t.created_at > now() - interval '48 hours'
+       WHERE u.profile_id = $1 AND u.text <> ''
        ORDER BY u.at DESC LIMIT 100`,
       [me.id]
     );
@@ -354,11 +355,7 @@ async function profiles(req, seg, b) {
   if (m === "GET") return [200, me];
   if (m === "DELETE") {
     // 내가 대표인 그룹과, 내가 만든 계정 없는 구성원(아이)의 프로필도 함께 지운다(ADR-0009).
-    await inProfilesTx(async (db) => {
-      const { rows: owned } = await db.query("SELECT id FROM groups WHERE owner_id = $1", [me.id]);
-      await deleteGroups(db, owned.map((r) => r.id));
-      await deleteProfiles(db, [me.id]);
-    });
+    await deleteProfiles(me.id);
     return [204];
   }
   const next = {
@@ -470,7 +467,7 @@ async function voicePrint(req, m, profileId) {
 }
 
 // 여행 참가자의 목소리 등록(T38). 차의 가족은 손님 참가자라 프로필 등록값이 없다 — 여행마다 둔다.
-// 본인의 참가자 토큰으로, 녹음에 동의한 동안만. 값은 동의가 꺼지거나 여행이 지워질 때(48시간) 함께 지운다.
+// 본인의 참가자 토큰으로, 녹음에 동의한 동안만. 값은 동의가 꺼지거나 여행이 지워질 때 함께 지운다.
 async function participantVoice(code, id, req) {
   if (req.method !== "POST") fail(405, "POST만 됨");
   const check = (trip) => {
@@ -783,54 +780,48 @@ async function retranscribeClip({ code, momentId }) {
   log("info", "clip_retranscribed", { lines: todo, fixed, fellBack: todo - fixed, reasons, changed, ms: Date.now() - started });
 }
 
-// 지우기는 프로필 DB의 한 트랜잭션에서 한다 — 중간에 실패해도 토큰만 지워지고 프로필이 남는 일이 없게.
-async function inProfilesTx(fn) {
-  const client = await profilesDb().connect();
-  try {
-    await client.query("BEGIN");
-    const result = await fn(client);
-    await client.query("COMMIT");
-    return result;
-  } catch (e) {
-    await client.query("ROLLBACK").catch(() => {}); // 끊긴 연결이면 되돌릴 것도 없다. 원래 오류를 가리지 않게
-    throw e;
-  } finally {
-    client.release();
-  }
-}
-
-// 프로필과 거기 딸린 것(앨범, 기기 토큰, 그룹 자리)을 지운다. 목소리 값은 외래 키로 함께 지워진다(ADR-0019). 그 프로필이 만든 아이 프로필도 함께 —
-// 아이 프로필은 토큰이 없어 대표가 아니면 지울 사람이 없다(ADR-0009). 두 DB라 여행 쪽 발화는 48시간 시계로 지워진다.
-async function deleteProfiles(db, ids) {
-  const { rows } = await db.query("SELECT id FROM profiles WHERE managed_by = ANY($1::uuid[])", [ids]);
-  const all = [...ids, ...rows.map((r) => r.id)];
-  await db.query("DELETE FROM profile_moments WHERE profile_id = ANY($1::uuid[])", [all]);
-  await db.query("DELETE FROM tokens WHERE profile_id = ANY($1::uuid[])", [all]);
-  await db.query("DELETE FROM group_members WHERE profile_id = ANY($1::uuid[])", [all]);
-  await db.query("DELETE FROM profiles WHERE id = ANY($1::uuid[])", [all]);
-}
-
-// 그룹을 지운다. 대표가 만든 아이 프로필은 함께 지운다.
-async function deleteGroups(db, ids) {
-  const { rows: kids } = await db.query(
-    `SELECT p.id FROM group_members m JOIN profiles p ON p.id = m.profile_id JOIN groups g ON g.id = m.group_id
-     WHERE m.group_id = ANY($1::text[]) AND p.managed_by = g.owner_id`,
-    [ids]
-  );
-  await deleteProfiles(db, kids.map((r) => r.id));
-  await db.query("DELETE FROM group_members WHERE group_id = ANY($1::text[])", [ids]);
-  await db.query("DELETE FROM invites WHERE group_id = ANY($1::text[])", [ids]);
-  await db.query("DELETE FROM groups WHERE id = ANY($1::text[])", [ids]);
+// T90: 48시간 자동 정리에 기대지 않고 명시적 삭제를 끝냅니다. 그룹 생성·관리
+// 경로는 폐기되었지만 기존 관리 프로필과 그룹 자료는 함께 지웁니다.
+async function deleteProfiles(id) {
+  const { rows } = await profilesDb().query(
+    `WITH RECURSIVE owned AS (
+       SELECT id FROM profiles WHERE id=$1
+       UNION SELECT p.id FROM profiles p JOIN owned o ON p.managed_by=o.id
+     ) SELECT id FROM owned`, [id]);
+  const all = [...new Set([id, ...rows.map(r => r.id)])];
+  await withDeletingProfiles(all, async lockedClient => {
+    const affected = await lockedClient.query("SELECT code FROM trips WHERE EXISTS (SELECT 1 FROM jsonb_array_elements(doc->'participants') p WHERE p->>'profileId' = ANY($1::text[])) ORDER BY code", [all]);
+    for (const { code } of affected.rows) await withTrip(code, true, async (trip, client) => {
+      const removed = trip.participants.filter(p => all.includes(p.profileId));
+      if (!removed.length) return;
+      trip.recording = false;
+      await bumpGeneration(trip, client);
+      await client.query("DELETE FROM trip_voice_prints WHERE trip_code=$1 AND participant_id=ANY($2::text[])", [code, removed.map(p => p.id)]);
+      trip.participants = trip.participants.filter(p => !all.includes(p.profileId));
+      trip.requests = trip.requests.filter(r => !removed.some(p => p.id === r.by));
+      trip.version++;
+    }, lockedClient);
+    await lockedClient.query("DELETE FROM ride_links WHERE profile_id=ANY($1::uuid[])", [all]);
+  }, async db => {
+    const { rows: owned } = await db.query("SELECT id FROM groups WHERE owner_id=ANY($1::uuid[])", [all]);
+    const groups = owned.map(r => r.id);
+    await db.query("DELETE FROM group_members WHERE group_id=ANY($1::text[]) OR profile_id=ANY($2::uuid[])", [groups, all]);
+    await db.query("DELETE FROM invites WHERE group_id=ANY($1::text[])", [groups]);
+    await db.query("DELETE FROM groups WHERE id=ANY($1::text[])", [groups]);
+    await db.query("DELETE FROM profile_moments WHERE profile_id=ANY($1::uuid[])", [all]);
+    await db.query("DELETE FROM tokens WHERE profile_id=ANY($1::uuid[])", [all]);
+    await db.query("DELETE FROM profiles WHERE id=ANY($1::uuid[])", [all]);
+  });
+  void sweepClips();
 }
 
 // 여행 한 줄을 읽어 fn에 넘긴다. 바꾸는 요청이면 그 줄을 잠그고, 끝나면 문서를 다시 쓴다.
-async function withTrip(code, write, fn) {
-  const client = await tripsDb().connect();
+async function withTrip(code, write, fn, lockedClient) {
+  const client = lockedClient ?? await tripsDb().connect();
   try {
     await client.query("BEGIN");
     const { rows } = await client.query(`SELECT doc, created_at FROM trips WHERE code = $1 ${write ? "FOR UPDATE" : ""}`, [String(code).toUpperCase()]);
     if (!rows[0]) fail(404, "없는 여행 코드");
-    if (Date.now() - rows[0].created_at.getTime() > TTL_MS) fail(404, "보관 기간이 지난 여행");
     const trip = rows[0].doc;
     const before = trip.version;
     const result = await fn(trip, client);
@@ -841,7 +832,7 @@ async function withTrip(code, write, fn) {
     await client.query("ROLLBACK").catch(() => {}); // 끊긴 연결이면 되돌릴 것도 없다. 원래 오류를 가리지 않게
     throw e;
   } finally {
-    client.release();
+    if (!lockedClient) client.release();
   }
 }
 
@@ -902,27 +893,17 @@ async function trips(req, [code, sub, id, leaf, ...rest], b, query) {
   if (sub === "participants" && m === "POST" && !id && b.profileId !== undefined) fail(410, RETIRED_GROUP);
   if (leaf === "voice") return participantVoice(code, id, req);
   const profile = sub === "participants" && m === "POST" && !id ? await profileOf(req) : null;
-  const result = await withTrip(code, m !== "GET", (trip, client) => handle(trip, { req, m, sub, id, leaf, b, query, profile }, client));
+  const act = (activeProfile, lockedClient) => withTrip(code, m !== "GET", (trip, client) => handle(trip, { req, m, sub, id, leaf, b, query, profile: activeProfile }, client), lockedClient);
+  const result = profile ? await withActiveProfile(profile.id, db => profileOf(req, db), act) : await act(null);
   if (sub === "participants" && m === "PATCH") void sweepClips(); // 동의 철회가 적은 클립을 커밋 뒤에 버킷에서 지운다
   // 커밋 뒤에: 클립보다 늦게 온 발화를 다시 받아 적는다(T75)
   if (sub === "utterances" && m === "POST") requeueRetranscribe(String(code).toUpperCase()).catch((e) => log("warn", "clip_retranscribe_failed", { err: errFields(e) }));
   return result;
 }
 
-// 48시간 지난 여행과 그 발화·확인 순번·클립을 한 문장으로 지운다. 지운 여행의 코드로만 찾으니(기본 키 앞부분)
-// 발화 표 전체를 훑지 않는다 — 질의 하나는 2초에서 끊긴다(T26).
-// 한 번에 여행 5개(발화 최대 10만 줄)까지. 여행을 만들 때와 10분마다 도니 밀린 것도 곧 따라잡는다.
-// 잠긴 여행(올리는 중)은 건너뛴다 — 기다리지 않고, 그 사이 남긴 클립 줄을 놓치지 않게.
-// 클립은 지울 키만 적고 버킷은 기다리지 않고 비운다(sweepClips). 실패해도 던지지 않는다 — 다음에 다시 한다.
+// 직접 삭제·동의 철회로 적어 둔 원음만 정리합니다. 여행의 나이로 데이터를 지우지 않습니다.
 export async function sweep() {
-  await tripsDb()
-    .query(`WITH gone AS (DELETE FROM trips WHERE code IN (SELECT code FROM trips WHERE created_at < now() - interval '48 hours' LIMIT 5 FOR UPDATE SKIP LOCKED) RETURNING code),
-      u AS (DELETE FROM utterances WHERE trip_code IN (SELECT code FROM gone)),
-      a AS (DELETE FROM utterance_acks WHERE trip_code IN (SELECT code FROM gone)),
-      r AS (DELETE FROM recordings WHERE trip_code IN (SELECT code FROM gone) RETURNING object_key, deleted_at)
-      INSERT INTO clip_trash (object_key) SELECT object_key FROM r WHERE deleted_at IS NULL ON CONFLICT DO NOTHING`)
-    .catch((e) => log("warn", "trip_cleanup_failed", { err: errFields(e) }));
-  void sweepClips();
+  await sweepClips();
 }
 
 async function handle(trip, { req, m, sub, id, leaf, b, query, profile }, client) {

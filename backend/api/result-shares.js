@@ -27,16 +27,16 @@ export async function createShare(client, trip, caller, b) {
   const { rows: counts } = await client.query("SELECT count(*)::int AS n FROM result_shares WHERE trip_code = $1", [trip.code]);
   if (counts[0].n >= 500) fail(409, "이 여행의 공유가 너무 많아요. 이전 공유를 회수해 주세요");
   const id = randomUUID();
-  // 잠금을 기다리다 48시간을 넘긴 경우도 쓰지 않는다. 원음·토큰·여행 코드를 payload에 넣지 않는다.
+  // 원음·토큰·여행 코드를 payload에 넣지 않습니다. 명시적으로 회수하기 전까지 보관합니다.
   const { rows } = await client.query(
     `INSERT INTO result_shares (id, trip_code, moment_id, sender_id, recipient_ids, generation, payload, expires_at)
-     SELECT $1, code, $3, $4, $5, $6, $7, created_at + interval '48 hours' FROM trips
-     WHERE code = $2 AND created_at > clock_timestamp() - interval '48 hours'
+     SELECT $1, code, $3, $4, $5, $6, $7, NULL FROM trips
+     WHERE code = $2
      RETURNING created_at, expires_at`,
     [id, trip.code, b.momentId, caller.profileId, recipients.map((p) => p.profileId), trip.generation ?? 1, payload]
   );
-  if (!rows[0]) fail(404, "보관 기간이 지난 여행");
-  return [201, { id, ...payload, createdAt: rows[0].created_at.getTime(), expiresAt: rows[0].expires_at.getTime(), recipientCount: recipients.length }];
+  if (!rows[0]) fail(404, "없는 여행");
+  return [201, { id, ...payload, createdAt: rows[0].created_at.getTime(), expiresAt: rows[0].expires_at?.getTime() ?? null, recipientCount: recipients.length }];
 }
 
 export async function sharedResults(me, method, id) {
@@ -50,8 +50,8 @@ export async function sharedResults(me, method, id) {
   if (method !== "GET") fail(405, "GET만 됨");
   const { rows } = await tripsDb().query(
     `SELECT s.*, t.doc FROM result_shares s JOIN trips t ON t.code = s.trip_code
-     WHERE (s.sender_id = $1 OR $1 = ANY(s.recipient_ids)) AND s.expires_at > now()
-       AND t.created_at > now() - interval '48 hours' AND s.generation = COALESCE((t.doc->>'generation')::int, 1)
+     WHERE (s.sender_id = $1 OR $1 = ANY(s.recipient_ids)) AND (s.expires_at IS NULL OR s.expires_at > now())
+       AND s.generation = COALESCE((t.doc->>'generation')::int, 1)
      ORDER BY s.created_at DESC LIMIT 200`, [me.id]
   );
   if (!rows.length) return [200, { items: [] }];
@@ -68,7 +68,7 @@ export async function sharedResults(me, method, id) {
     if (!recipients.length || (me.id !== r.sender_id && !recipients.includes(me.id))) continue;
     items.push({ id: r.id, direction: me.id === r.sender_id ? "sent" : "received", sender: person(byId.get(r.sender_id)),
       ...(me.id === r.sender_id ? { recipients: recipients.map((id) => person(byId.get(id))) } : {}),
-      ...r.payload, createdAt: r.created_at.getTime(), expiresAt: r.expires_at.getTime() });
+      ...r.payload, createdAt: r.created_at.getTime(), expiresAt: r.expires_at?.getTime() ?? null });
   }
   return [200, { items }];
 }

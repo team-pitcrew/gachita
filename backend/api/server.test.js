@@ -511,7 +511,7 @@ test("발화를 기록본으로 저장하고 프로필 피드로 읽는다(T39)"
   // 지운 글은 같은 순번이 늦게 다시 올라와도 되살아나지 않는다(순번에 빈자리가 있던 기기의 재전송)
   await call("POST", `${t}/utterances`, { device: "car", generation: 2, items: [{ seq: 5, at: at(11), text: "다시 시작" }] }, freshA);
   assert.deepEqual((await call("GET", `${t}/transcript`, null, freshA))[1].utterances.map((u) => u.text), ["응 좋아", "다음"]);
-  // 여행 하나의 발화는 2만 줄까지(48시간 지우기가 2초 안에 끝나게)
+  // 여행 하나의 발화는 2만 줄까지(명시적 삭제가 2초 안에 끝나게)
   await tripsDb().query(
     "INSERT INTO utterances (trip_code, device, seq, at, text, generation) SELECT $1, 'bulk', g, g, 'x', 2 FROM generate_series(1, 19999) g",
     [trip.code]
@@ -519,7 +519,8 @@ test("발화를 기록본으로 저장하고 프로필 피드로 읽는다(T39)"
   assert.equal((await call("POST", `${t}/utterances`, { device: "car", generation: 2, items: [{ seq: 8, at: at(14), text: "넘침" }] }, freshA))[0], 409);
   await tripsDb().query("DELETE FROM utterances WHERE trip_code = $1 AND device = 'bulk'", [trip.code]);
 
-  // 48시간이 지나면 발화와 확인 순번은 지워지고 앨범에 확정해 둔 장면만 남는다(기준 문서: 선택한 장면만 개인 앨범에)
+  await tripsDb().query("UPDATE utterances SET profile_id=$2 WHERE trip_code=$1", [trip.code, meA.id]);
+  // 오래된 여행도 발화와 확인 순번, 개인 피드가 유지됩니다.
   const [, mom2] = await call("POST", `${t}/moments`, { label: "바다" }, freshA);
   await tripsDb().query("UPDATE trips SET created_at = now() - interval '49 hours' WHERE code = $1", [trip.code]);
   await call("POST", "/api/trips", {}); // 여행 만들기가 묵은 여행과 발화를 치운다
@@ -527,10 +528,11 @@ test("발화를 기록본으로 저장하고 프로필 피드로 읽는다(T39)"
     "SELECT (SELECT count(*) FROM utterances WHERE trip_code = $1)::int AS u, (SELECT count(*) FROM utterance_acks WHERE trip_code = $1)::int AS a",
     [trip.code]
   );
-  assert.deepEqual(left.rows[0], { u: 0, a: 0 }, "발화는 여행과 같은 시계에 지워짐");
-  assert.equal((await call("GET", `${t}/utterances`, null, freshA))[0], 404, "여행이 닫혔다");
+  assert.ok(left.rows[0].u > 0 && left.rows[0].a > 0, "시간 경과로 발화와 순번을 지우지 않습니다");
+  assert.equal((await call("GET", `${t}/utterances`, null, freshA))[0], 200);
   const [, feedA5] = await call("GET", "/api/profiles/me/feed", null, meA.token);
-  assert.deepEqual(feedA5.items.map((i) => i.id), [mom2.id]);
+  assert.ok(feedA5.items.some((i) => i.id === mom2.id));
+  assert.ok(feedA5.items.some((i) => i.kind === "utterance" || i.text));
 });
 
 // 이전 이미지가 이미 저장한 그룹 자료다. 종료된 API로 새로 만들지 않고 DB에 넣어 호환성을 시험한다.
@@ -886,14 +888,17 @@ test("녹음 클립: 고른 장면의 원음을 받고, 재생하고, 바로 지
   await sweep();
   assert.ok(await gone(), "다음 치우기가 지움");
 
-  // 48시간: 여행을 치울 때 그 여행의 클립도 버킷에서 지운다
+  // 49시간 뒤에도 원음은 남고, 명시적으로 동의를 철회하면 지웁니다.
   await call("PATCH", `${t}/participants/${son.id}`, { consent: true }, son.token);
   const [, m6] = await call("POST", `${t}/moments`, {});
   assert.equal((await up(m6.id, clip, mom.token, 4)).status, 201);
   await tripsDb().query("UPDATE trips SET created_at = now() - interval '49 hours' WHERE code = $1", [trip.code]);
   await sweep();
-  assert.ok(await gone(), "치운 여행의 클립이 버킷에 남지 않음");
-  assert.equal((await tripsDb().query("SELECT (SELECT count(*) FROM recordings WHERE trip_code = $1) + (SELECT count(*) FROM clip_trash) AS n", [trip.code])).rows[0].n, "0");
+  assert.equal(s3.objects.size, 1, "오래된 여행의 원음 보존");
+  assert.equal((await fetch(`${base}${t}/recordings/${m6.id}`, {headers: {authorization: `Bearer ${mom.token}`}})).status, 200);
+  await call("PATCH", `${t}/participants/${son.id}`, { consent: false });
+  assert.ok(await gone(), "철회한 원음 정리");
+  assert.equal((await tripsDb().query("SELECT (SELECT count(*) FROM recordings WHERE trip_code = $1 AND deleted_at IS NULL) + (SELECT count(*) FROM clip_trash) AS n", [trip.code])).rows[0].n, "0");
 });
 
 test("사람이 지운 클립은 철회·다시 동의 뒤에도 받지 않고, 지우는 사이 새로 올라온 클립은 건드리지 않는다(T76)", async () => {
@@ -1200,7 +1205,7 @@ test("짧은 말도 초안과 글자가 절반 넘게 다르면 원문으로 남
 });
 
 test("손님 참가자도 여행에 목소리를 등록하면 화자가 붙는다(T38·T37)", async () => {
-  // 차의 가족은 손님 참가자다(프로필 없음). 등록값은 여행에 두고, 동의를 끄거나 48시간이 지나면 지운다.
+  // 차의 가족은 손님 참가자다(프로필 없음). 등록값은 여행에 두고, 동의를 끄면 지운다.
   const [, trip] = await call("POST", "/api/trips", {});
   const t = `/api/trips/${trip.code}`;
   const [, a] = await join(trip.code, "아빠", "ROW_1_LEFT", true);
@@ -1263,10 +1268,12 @@ test("손님 참가자도 여행에 목소리를 등록하면 화자가 붙는�
   assert.equal((await late.done).status, 409);
   assert.equal(await prints(c.id), 0, "철회 전에 시작한 등록은 저장되지 않음");
 
-  // 48시간이 지나면 대조에 쓰이지 않고(여행이 읽히지 않음), 여행을 치울 때 함께 지워진다(외래 키 — 옛 판의 치우기도)
+  // 오래된 여행의 목소리 등록은 유지하고 동의 철회 때 지웁니다.
   await tripsDb().query("UPDATE trips SET created_at = now() - interval '49 hours' WHERE code = $1", [trip.code]);
-  assert.equal((await postRaw(`${t}/voice-match?row=1`, wav(210, 1.5), a.token)).status, 404);
-  for (let i = 0; i < 3 && (await prints(a.id)); i++) await call("POST", "/api/trips", {});
+  assert.equal((await postRaw(`${t}/voice-match?row=1`, wav(210, 1.5), a.token)).status, 200);
+  await sweep();
+  assert.equal(await prints(a.id), 1);
+  await call("PATCH", `${t}/participants/${a.id}`, { consent: false });
   assert.deepEqual([await prints(a.id), await prints(c.id)], [0, 0]);
 });
 
@@ -1494,7 +1501,7 @@ test("명세(docs/api/openapi.yaml)와 서버의 경로가 같다", async () => 
   }
 });
 
-test("수동 자막은 동의한 여행 참가자만 고치며 동시 수정·세대·만료를 구분한다(T80)", async () => {
+test("수동 자막은 동의한 여행 참가자만 고치며 동시 수정·세대를 검사하고 오래된 여행도 보존한다(T80)", async () => {
   const [, trip] = await call("POST", "/api/trips", {});
   const t = `/api/trips/${trip.code}`;
   const [, a] = await join(trip.code, "지우", "ROW_1_LEFT");
@@ -1543,10 +1550,10 @@ test("수동 자막은 동의한 여행 참가자만 고치며 동시 수정·�
   const second = `${t}/captions/${encodeURIComponent(device)}/2`;
   assert.equal((await call("PATCH", second, { text: "만료 대상", expectedVersion: 0, generation: 2 }, b.token))[0], 200);
   await tripsDb().query("UPDATE trips SET created_at = now() - interval '49 hours' WHERE code = $1", [trip.code]);
-  assert.equal((await call("PATCH", second, { text: "만료 뒤", expectedVersion: 1, generation: 2 }, b.token))[0], 404);
-  assert.equal((await call("GET", `${t}/transcript`, null, a.token))[0], 404);
+  assert.equal((await call("PATCH", second, { text: "오래된 여행", expectedVersion: 1, generation: 2 }, b.token))[0], 200);
+  assert.equal((await call("GET", `${t}/transcript`, null, a.token))[0], 200);
   await sweep();
-  assert.equal((await tripsDb().query("SELECT count(*)::int AS n FROM utterances WHERE trip_code = $1", [trip.code])).rows[0].n, 0);
+  assert.equal((await tripsDb().query("SELECT count(*)::int AS n FROM utterances WHERE trip_code = $1", [trip.code])).rows[0].n, 1);
 });
 
 test("늦은 ASR은 수동 자막을 덮지 않고 초기화·자기 글 삭제는 숏폼에도 반영한다(T80)", async () => {
@@ -1697,4 +1704,31 @@ test('생성을 꺼 둔 동안에도 동의 철회는 원음 사본과 결과를
   // Cleanup may delete provider results, but never sends a new paid request.
   row=await tickShort(off.worker,job.id);assert.equal(row.cleanup_pending,false);assert.equal(row.result_key,null);assert.equal(on.objects.size,0);assert.equal(paid,0);
  }finally{delete process.env.SHORTS_ENABLED;delete process.env.HF_CREDENTIALS;delete process.env.SHORTS_DAILY_SECONDS;}
+});
+
+
+test('90일 전 여행의 새 영상과 이전 48시간 기한을 가진 영상은 보존하고 철회하면 삭제합니다(T90)', async()=> {
+ Object.assign(process.env,{SHORTS_ENABLED:'true',HF_CREDENTIALS:'test:secret',SHORTS_DAILY_SECONDS:'120'});
+ try {
+  const f=await shortFixture();
+  await tripsDb().query("UPDATE trips SET created_at=now()-interval '90 days', doc=jsonb_set(doc,'{createdAt}',to_jsonb((extract(epoch FROM now()-interval '90 days')*1000)::bigint)) WHERE code=$1",[f.trip.code]);
+  const [status,job]=await call('POST',`${f.path}/short-generations`,shortBody(f,'retained-video'),f.a.token);
+  assert.equal(status,202); assert.equal(job.expiresAt,null);
+  await tripsDb().query("UPDATE short_generations s SET expires_at=to_timestamp((t.doc->>'createdAt')::double precision/1000)+interval '48 hours' FROM trips t WHERE s.trip_code=t.code AND s.id=$1",[job.id]);
+  await migrate(); await migrate();
+  const stored=(await tripsDb().query('SELECT expires_at,state FROM short_generations WHERE id=$1',[job.id])).rows[0];
+  assert.equal(stored.expires_at,null); assert.equal(stored.state,'queued');
+  const w=shortWorker(); let row;
+  for(let i=0;i<5;i++)row=await tickShort(w.worker,job.id);
+  assert.equal(row.state,'completed'); assert.equal(w.submissions(),2);
+  await sweep();
+  const req={method:'GET',headers:{authorization:`Bearer ${f.a.token}`}};
+  assert.equal((await w.worker.request(req,f.trip.code,'short-generations',job.id,'file',{}))[1].toString(),'final MP4');
+  await call('PATCH',`${f.path}/participants/${f.b.id}`,{consent:false});
+  row=await tickShort(w.worker,job.id); assert.equal(row.state,'canceled');
+  await tickShort(w.worker,job.id); assert.equal(w.objects.size,0);
+  await tripsDb().query("UPDATE short_generations SET updated_at=now()-interval '90 days' WHERE id=$1",[job.id]);
+  await w.worker.tick();
+  assert.equal((await tripsDb().query('SELECT count(*)::int AS n FROM short_generations WHERE id=$1',[job.id])).rows[0].n,1);
+ } finally {delete process.env.SHORTS_ENABLED;delete process.env.HF_CREDENTIALS;delete process.env.SHORTS_DAILY_SECONDS;}
 });
