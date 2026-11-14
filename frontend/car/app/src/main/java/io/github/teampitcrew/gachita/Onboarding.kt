@@ -16,7 +16,6 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -34,8 +33,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
@@ -50,19 +47,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.input.VisualTransformation
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.io.ByteArrayOutputStream
@@ -304,8 +295,8 @@ fun OnboardingScreen(o: Onboarding, gear: String?, onFamily: () -> Unit) {
                     }
                     OnboardStep.SIGNUP -> {
                         NoAutofill()
-                        Field("이메일", o.email, { o.email = it }, KeyboardType.Email, placeholder = "minjun@example.com")
-                        Field("비밀번호", o.password, { o.password = it }, KeyboardType.Password, secret = true, placeholder = "8자 이상")
+                        CarField("이메일", o.email, { o.email = it }, KeyboardType.Email, placeholder = "minjun@example.com")
+                        CarField("비밀번호", o.password, { o.password = it }, KeyboardType.Password, secret = true, placeholder = "8자 이상")
                         ObCard(title = if (o.login) "처음이신가요?" else "이미 계정이 있나요?", detail = if (o.login) "새 계정을 만들어 시작해요." else "같은 계정으로 로그인해 기록을 불러와요.", onClick = o::toggleLogin)
                     }
                     OnboardStep.CONSENT -> {
@@ -318,7 +309,7 @@ fun OnboardingScreen(o: Onboarding, gear: String?, onFamily: () -> Unit) {
                             color = c.onSurfaceVariant, fontSize = 20.sp, lineHeight = 28.sp)
                     }
                     OnboardStep.PROFILE -> {
-                        Field("이름 또는 별명", o.name, { o.name = it.take(20) }, KeyboardType.Text, placeholder = "민준")
+                        CarField("이름 또는 별명", o.name, { o.name = it.take(20) }, KeyboardType.Text, placeholder = "민준")
                         Text("내 캐릭터", color = c.onSurfaceVariant, fontSize = 24.sp)
                         Surface(Modifier.fillMaxWidth(), RoundedCornerShape(32.dp), color = c.surface) {
                             Row(Modifier.horizontalScroll(rememberScrollState()).padding(24.dp), horizontalArrangement = Arrangement.spacedBy(30.dp)) {
@@ -421,23 +412,6 @@ private fun NoAutofill() {
         val before = view.importantForAutofill
         view.importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
         onDispose { view.importantForAutofill = before }
-    }
-}
-
-@Composable
-private fun Field(label: String, value: String, change: (String) -> Unit, type: KeyboardType, secret: Boolean = false, placeholder: String = "") {
-    val c = MaterialTheme.colorScheme
-    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        Text(label, color = c.onSurfaceVariant, fontSize = 24.sp)
-        BasicTextField(value, change, Modifier.fillMaxWidth().height(84.dp), singleLine = true,
-            textStyle = TextStyle(color = c.onSurface, fontSize = 28.sp), cursorBrush = SolidColor(c.primary),
-            keyboardOptions = KeyboardOptions(keyboardType = type), visualTransformation = if (secret) PasswordVisualTransformation() else VisualTransformation.None,
-            decorationBox = { inner ->
-                Box(Modifier.fillMaxSize().clip(RoundedCornerShape(42.dp)).background(c.surfaceVariant).padding(horizontal = 24.dp), contentAlignment = Alignment.CenterStart) {
-                    if (value.isEmpty()) Text(placeholder, color = c.onSurfaceVariant.copy(alpha = 0.6f), fontSize = 28.sp)
-                    inner()
-                }
-            })
     }
 }
 
