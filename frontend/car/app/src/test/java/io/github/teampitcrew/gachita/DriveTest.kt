@@ -80,7 +80,15 @@ class DriveTest {
         assertEquals("00:38:14", recordClock(2_294_000)) // A D20
         assertEquals("01:02:03", recordClock(3_723_000))
         assertEquals("00:00:00", recordClock(-5))
-        assertEquals(WAVE_BARS, DESIGN_WAVE.size) // 시안 wave/live 2107:5463 막대 60개
+    }
+
+    @Test fun waveBarsScrollNewestRight() {
+        // 막대 하나 = 0.1초 조각 하나. 새 것이 오른쪽 끝, 모자란 왼쪽은 0(가장 낮은 막대), 범위 밖 값은 0..1로
+        assertEquals(List(WAVE_BARS - 3) { 0f } + listOf(0.2f, 0.5f, 1f), waveBars(listOf(0.2f, 0.5f, 1.4f)))
+        val long = List(75) { it / 100f } // 6초(60조각)보다 길면 마지막 60개만
+        assertEquals(long.takeLast(WAVE_BARS), waveBars(long))
+        assertEquals(List(WAVE_BARS) { 0f }, waveBars(emptyList()))
+        assertEquals(listOf(0f, 0f, 0.3f), waveBars(listOf(-1f, 0.3f), 3))
     }
 
     @Test fun briefFoldsAsksIntoShortActions() {

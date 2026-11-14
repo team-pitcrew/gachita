@@ -187,9 +187,12 @@ internal fun recordClock(ms: Long): String = (ms.coerceAtLeast(0) / 1000).let { 
 /** Bars of the waveform: 6 s of 0.1 s chunk levels. */
 internal const val WAVE_BARS = 60
 
-/** Bar heights of the design's wave/live (2107:5463) over its 140 box. Only the debug demo draws it; the real screen draws captured levels. */
-internal val DESIGN_WAVE = listOf(8, 47, 23, 23, 12, 24, 71, 11, 105, 44, 60, 25, 20, 75, 15, 123, 47, 77, 41, 11, 35, 14, 70, 27, 48, 29, 15, 10, 10, 31,
-    16, 36, 28, 22, 17, 10, 45, 24, 79, 63, 54, 51, 9, 48, 26, 108, 81, 77, 77, 17, 16, 16, 72, 53, 55, 54, 17, 17, 9, 28).map { it / 140f }
+/**
+ * The [n] bar heights (0..1) of a scrolling recorder waveform, oldest left and newest right: each bar is one 0.1 s chunk's level
+ * (Live.levels, RMS on meterLevel's dB scale), the way AudioRecordView and compose-audiowaveform draw one spike per amplitude and
+ * Apple Voice Memos scrolls its live bars. Slots older than the captured history are 0 (drawn at the minimum height).
+ */
+internal fun waveBars(levels: List<Float>, n: Int = WAVE_BARS): List<Float> = List(n) { i -> levels.getOrNull(levels.size - n + i)?.coerceIn(0f, 1f) ?: 0f }
 
 internal data class NearRow(val icon: BriefIcon, val text: String)
 
@@ -287,7 +290,7 @@ internal data class LastLine(val who: String, val text: String)
  */
 @Composable
 internal fun RecordView(
-    status: DriveStatus, paused: Boolean, note: String, time: String, wave: List<Float>,
+    status: DriveStatus, paused: Boolean, note: String, time: String, wave: () -> List<Float>,
     people: List<Person>, seats: List<List<Seat>>, occupied: Set<String>, speaking: String?, consentNote: (Person) -> Pair<String, Color>?,
     last: LastLine?, near: Pair<Approach, List<NearRow>>?, control: DriveButton, onControl: () -> Unit, modifier: Modifier = Modifier,
 ) {
@@ -336,18 +339,19 @@ internal fun RecordView(
 }
 
 /**
- * wave/live (2107:5463): 60 red bars 5 wide, corner 3, one per 0.1 s level (newest right, at least 8); wave/paused (2107:5524): 60 bars 6 high
- * in the line colour. The levels are those captured up to the newest heard line (Live.wave), so the shape changes when new text comes in.
+ * wave/live (2107:5463): 60 red bars 5 wide, corner 3, one per 0.1 s chunk (newest right, at least 8), redrawn on every chunk so the bars
+ * scroll left as the car hears (waveBars). wave/paused (2107:5524): 60 bars 6 high in the line colour.
+ * [levels] is read while drawing, so a new chunk only redraws this canvas. ponytail: steps once per 0.1 s chunk; no in-between scroll animation (AudioRecordView's soft transition) — add it only if the step looks jerky.
  */
 @Composable
-internal fun Wave(levels: List<Float>, live: Boolean, modifier: Modifier) {
+internal fun Wave(levels: () -> List<Float>, live: Boolean, modifier: Modifier) {
     val c = MaterialTheme.colorScheme
     Canvas(modifier) {
+        val bars = waveBars(levels()) // 그리는 단계에서 읽어 0.1초마다 이 칸만 다시 그린다(화면 전체를 다시 구성하지 않음)
         val w = 5.dp.toPx()
         val gap = (size.width - w * WAVE_BARS) / (WAVE_BARS - 1)
-        val pad = WAVE_BARS - levels.size
         for (i in 0 until WAVE_BARS) {
-            val h = if (live) maxOf(8.dp.toPx(), (levels.getOrNull(i - pad) ?: 0f).coerceIn(0f, 1f) * size.height) else 6.dp.toPx()
+            val h = if (live) maxOf(8.dp.toPx(), bars[i] * size.height) else 6.dp.toPx()
             drawRoundRect(if (live) c.error else c.outlineVariant, Offset(i * (w + gap), (size.height - h) / 2), Size(w, h), CornerRadius(3.dp.toPx()))
         }
     }
