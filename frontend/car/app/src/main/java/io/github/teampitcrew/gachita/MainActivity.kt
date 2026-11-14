@@ -1925,8 +1925,6 @@ class MainActivity : ComponentActivity() {
                     o != null -> OfferCard(o, m)
                     enrolling != null && parked -> EnrollCard(t, m)
                     nearAsks != null -> NearCard(nearAsks.first, nearLine(nearAsks.second, if (mock != null) F4Mock.people else t.people), m)
-                    // mock: 주행 시연(C17·C17p·resumed·C21, --es f4 drive…)은 시안의 받아 적은 말 두 줄과 '42건'(frames-text.md)
-                    mock != null && mock.startsWith("drive") -> HeardCard(if (mockPaused) "멈추기 전 마지막 대화" else "방금 받아 적은 말 42건", "", F4Mock.heard(mock), dim = mockPaused, modifier = m)
                     else -> HeardCard(
                         if (s.recording && muted || ended) "멈추기 전 마지막 대화" else "방금 받아 적은 말 ${Live.count}건",
                         // 시안 C17은 제목만 둔다(부탁·할 일 수는 도착 전 카드·장소별 할 일에서). 주차 중 미전송 수는 원음을 잃지 않게 남긴다
