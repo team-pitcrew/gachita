@@ -19,6 +19,7 @@ import { googleIdentity, googlePublicConfig } from "./providers/google.js";
 import { cues, momentSpan, suggest } from "./scenes.js";
 import { embed, matchThreshold, similarity, wavMono } from "./providers/voice.js";
 import { rideLinks, redeemRideLink } from "./ride-links.js";
+import { shortGenerations, shortTemplateCatalog } from "./short-generations.js";
 
 const WEB = fileURLToPath(new URL("../../frontend/web/", import.meta.url));
 const TRIPS_SQL = fileURLToPath(new URL("trips.sql", import.meta.url));
@@ -63,7 +64,7 @@ const fail = (status, error) => {
 };
 
 // 오류 종류(T71): 응답의 type과 로그의 err.type. 상태에서 정하는 닫힌 목록이라 클라이언트는 문장이 아니라 종류로 가른다.
-const ERROR_TYPE = { 400: "invalid", 401: "unauthenticated", 403: "forbidden", 404: "not_found", 405: "method_not_allowed", 409: "conflict", 410: "gone", 413: "too_large", 502: "unavailable", 503: "unavailable", 504: "unavailable" };
+const ERROR_TYPE = { 400: "invalid", 401: "unauthenticated", 403: "forbidden", 404: "not_found", 405: "method_not_allowed", 409: "conflict", 410: "gone", 413: "too_large", 429: "rate_limited", 502: "unavailable", 503: "unavailable", 504: "unavailable" };
 // DB에 닿지 않거나(연결 끊김·거절, 연결 수 초과) 질의 시간 제한(57014, T26)에 걸린 것: 다시 해도 되는 503.
 // Postgres 오류 번호 08xxx 연결, 53xxx 자원 부족, 57014 질의 취소, 57P0x 서버 종료·시작 중.
 const DB_DOWN = /^(08|53|57014|57P0)/;
@@ -76,7 +77,7 @@ export function classify(e) {
 }
 
 // 로그의 경로 틀: 정한 낱말이 아닌 마디(여행 코드, id, 초대 코드)는 :p로 가린다. 웹 파일은 /(web) 하나로.
-const ROUTE_WORDS = new Set(["api", "config", "trips", "participants", "requests", "moments", "utterances", "transcript", "captions", "voice-match", "recordings", "scene-suggestions", "shortform", "profiles", "me", "links", "google", "feed", "tokens", "photo", "voice", "groups", "members", "invites", "j"]);
+const ROUTE_WORDS = new Set(["api", "config", "trips", "participants", "requests", "moments", "utterances", "transcript", "captions", "voice-match", "recordings", "scene-suggestions", "shortform", "short-templates", "short-plans", "short-generations", "file", "profiles", "me", "links", "google", "feed", "tokens", "photo", "voice", "groups", "members", "invites", "j"]);
 const routeOf = (pathname) =>
   pathname === "/healthz" ? pathname : pathname.startsWith("/api/") ? `/${pathname.split("/").filter(Boolean).map((s) => (ROUTE_WORDS.has(s) ? s : ":p")).join("/")}` : "/(web)";
 // ALB가 붙이는 추적 id(X-Amzn-Trace-Id)를 그대로 쓴다. 없거나 모양이 이상하면 새로.
@@ -111,6 +112,7 @@ export async function migrate() {
   await tripsDb().query(await readFile(TRIP_VOICE_SQL, "utf8"));
   await tripsDb().query(await readFile(CAPTIONS_SQL, "utf8"));
   await tripsDb().query(await readFile(new URL("trips-7-result-shares.sql", import.meta.url), "utf8"));
+  await tripsDb().query(await readFile(new URL("trips-8-short-generations.sql", import.meta.url), "utf8"));
   await profilesDb().query(await readFile(PROFILES_SQL, "utf8"));
   await profilesDb().query(await readFile(LINKS_SQL, "utf8"));
   await profilesDb().query(await readFile(ALBUM_SQL, "utf8"));
@@ -867,6 +869,7 @@ async function trips(req, [code, sub, id, leaf, ...rest], b, query) {
       if (rowCount) return [201, trip];
     }
   }
+  if ((sub === "short-plans" || sub === "short-generations") && !rest.length) return shortService.request(req, code, sub, id, leaf, b);
   if (rest.length || (leaf !== undefined && !(sub === "participants" && leaf === "voice") && sub !== "utterances" && sub !== "captions")) fail(404, "없는 경로");
   if (sub === "captions") {
     if (!id || !leaf || rest.length) fail(404, "자막 경로에 기기와 순번이 필요함");
@@ -1207,12 +1210,24 @@ async function handle(trip, { req, m, sub, id, leaf, b, query, profile }, client
     // 숏폼 구성(T43, ADR-0021): 영상 파일을 만들지 않고, 클립이 올라온 장면마다 소리 주소와 자막 큐와 말한 사람을 준다.
     // 웹은 9:16 화면에, 차는 그 자리에서 이 데이터로 재생한다. 말한 사람은 화자 대조(T38)로 붙은 프로필만 — 자리만으로 이름을 붙이지 않는다.
     const all = await lines();
-    const { rows: clips } = await client.query("SELECT moment_id, start_at, seconds FROM recordings WHERE trip_code = $1 AND deleted_at IS NULL ORDER BY start_at", [trip.code]);
+    return [200, await composition(trip, client, all)];
+  }
+
+  fail(404, "없는 경로");
+}
+
+
+async function composition(trip, client, all) {
+  if (!all) {
+    const { rows } = await client.query("SELECT * FROM utterances WHERE trip_code=$1 AND generation=$2 AND text<>'' ORDER BY at", [trip.code, trip.generation ?? 1]);
+    all = rows.map(asUtterance);
+  }
+    const { rows: clips } = await client.query("SELECT moment_id, start_at, seconds FROM recordings WHERE trip_code = $1 AND generation = $2 AND deleted_at IS NULL ORDER BY start_at", [trip.code, trip.generation ?? 1]);
     const ids = trip.participants.map((p) => p.profileId).filter(Boolean);
     const { rows: chars } = ids.length ? await profilesDb().query("SELECT id, character FROM profiles WHERE id = ANY($1::uuid[])", [ids]) : { rows: [] };
     const character = new Map(chars.map((r) => [r.id, r.character]));
     const byProfile = new Map(trip.participants.filter((p) => p.profileId).map((p) => [p.profileId, p.id]));
-    return [200, {
+    return {
       title: trip.title,
       generation: trip.generation ?? 1,
       cast: trip.participants.map((p) => ({ participantId: p.id, name: p.name, character: character.get(p.profileId) ?? "", seat: p.seat })),
@@ -1231,11 +1246,11 @@ async function handle(trip, { req, m, sub, id, leaf, b, query, profile }, client
           ...(moment.lat !== undefined ? { lat: moment.lat, lng: moment.lng } : {}),
         }];
       }),
-    }];
-  }
-
-  fail(404, "없는 경로");
+    };
 }
+
+export const shortServiceContext = { withTrip, participantOf, composition };
+const shortService = shortGenerations(shortServiceContext);
 
 // 확장자 없는 주소는 화면이다: 그 폴더의 index.html(/demo), 없으면 웹앱 첫 화면 — Google 로그인 콜백처럼 웹앱이 주소를 읽는다.
 // 웹 파일은 쓸 때마다 다시 확인하게 한다(no-cache + ETag). 지시가 없으면 Cloudflare가 4시간 캐시해
@@ -1300,6 +1315,10 @@ export const server = createServer(async (req, res) => {
         if (req.method !== "GET") fail(405, "GET만 됨");
         return send(200, googlePublicConfig());
       }
+      if (seg[1] === "short-templates" && !seg[2]) {
+        if (req.method !== "GET") fail(405, "GET만 됨");
+        return send(200, shortTemplateCatalog());
+      }
       // 발화 묶음은 본문이 커서 그 경로만 따로 한도를 둔다(docs/api/voice.md).
       const big = seg[1] === "trips" && seg[3] === "utterances";
       // 목소리 등록(…/voice)·발화 대조는 이진 본문(WAV)이다 — JSON으로 먼저 읽지 않는다.
@@ -1346,5 +1365,6 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   process.on("uncaughtException", crash("uncaught_exception"));
   process.on("unhandledRejection", crash("unhandled_rejection"));
   server.listen(port, () => log("info", "listening", { port }));
+  shortService.start();
   setInterval(sweep, 10 * 60_000).unref(); // 여행을 아무도 만들지 않아도 묵은 여행과 클립을 치운다
 }

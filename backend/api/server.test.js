@@ -7,7 +7,9 @@ import { createConnection } from "node:net";
 import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
-import { classify, migrate, server, sweep, verifyGoogleLink } from "./server.js";
+import { classify, migrate, server, sweep, verifyGoogleLink, shortServiceContext } from "./server.js";
+import { shortGenerations } from "./short-generations.js";
+import { HiggsfieldError } from "./providers/higgsfield.js";
 import { captureLog } from "./log.js";
 import { cues, suggest } from "./scenes.js";
 import { endStores, profilesDb, tripsDb } from "./db.js";
@@ -111,6 +113,7 @@ before(async () => {
   await migrate(); // 여러 번 실행해도 같아야 한다
   // 예전에 한 DB에 같이 두던 표가 남았으면 치운다.
   await tripsDb().query("DROP TABLE IF EXISTS voice_prints, profiles"); // make run(한 DB)이면 목소리 값이 프로필을 가리킨다(외래 키째 다시 만들어짐)
+  await tripsDb().query("TRUNCATE short_generations");
   await tripsDb().query("TRUNCATE trips CASCADE"); // 여행 목소리 값(trip_voice_prints)과 여행에 딸린 공유 표는 외래 키로 함께
   await profilesDb().query("TRUNCATE profiles CASCADE"); // 목소리 값(voice_prints)은 외래 키로 함께
   await new Promise((ok) => server.listen(0, () => ok((base = `http://localhost:${server.address().port}`))));
@@ -1597,4 +1600,84 @@ test("늦은 ASR은 수동 자막을 덮지 않고 초기화·자기 글 삭제�
     asr.onCall = null;
     delete process.env.ASR_URL; delete process.env.ASR_TOKEN; delete process.env.ASR_GAP_MS;
   }
+});
+
+async function shortFixture() {
+  const [,trip]=await call('POST','/api/trips',{title:'영상 시험'});
+  const path=`/api/trips/${trip.code}`;
+  const [,a]=await join(trip.code,'동승자','ROW_1_LEFT');
+  const [,b]=await join(trip.code,'친구','ROW_1_RIGHT');
+  const at=Date.now();
+  const [,moment]=await call('POST',`${path}/moments`,{at,from:at,to:at+15_000,label:'우리 대화'});
+  await call('POST',`${path}/utterances`,{device:'short-test',items:[{seq:1,at,text:'함께 떠나니 좋다',generation:1}]},a.token);
+  const clip=wav(200,15);
+  assert.equal((await fetch(`${base}${path}/recordings?moment=${moment.id}&generation=1&from=${at}`,{method:'POST',headers:{authorization:`Bearer ${a.token}`},body:clip})).status,201);
+  await call('PATCH',path,{status:'parked'});
+  const [status,plan]=await call('POST',`${path}/short-plans`,{},a.token);assert.equal(status,200);
+  return {trip,path,a,b,plan,clip};
+}
+const shortBody=(f,key)=>({momentId:f.plan.momentId,templateId:f.plan.templateId,planHash:f.plan.planHash,generation:1,idempotencyKey:key,externalGenerationConsent:true});
+const shortWorker=(extra={})=>{
+ const objects=new Map();let submissions=0,removals=0;
+ const provider={submit:async()=>({id:`request-${++submissions}`,statusUrl:'https://api.higgsfield.ai/requests/test/status',cancelUrl:'https://api.higgsfield.ai/requests/test/cancel'}),status:async()=>({status:'completed',videoUrl:'https://cdn.higgsfield.ai/test.mp4'}),remove:async()=>{removals++;},cancel:async()=>{}};
+ const worker=shortGenerations(shortServiceContext,{ready:()=>true,provider,media:{put:async(k,b)=>{objects.set(k,b);},get:async k=>objects.get(k),sign:async k=>`https://media.example/${k}`,remove:async k=>{objects.delete(k);}},download:async()=>Buffer.from('video'),audio:async()=>Buffer.from('original audio'),render:async()=>Buffer.from('final MP4'),...extra});
+ return {worker,objects,submissions:()=>submissions,removals:()=>removals};
+};
+async function tickShort(worker,id){await tripsDb().query("UPDATE short_generations SET next_attempt_at=CASE WHEN id=$1 THEN now()-interval '1 hour' ELSE now()+interval '1 hour' END",[id]);await worker.tick();return (await tripsDb().query('SELECT * FROM short_generations WHERE id=$1',[id])).rows[0];}
+
+test('생성 API: 계획 확인·멱등·한도·자막 변경·철회와 다운로드 권한(T85)',async()=>{
+ Object.assign(process.env,{SHORTS_ENABLED:'true',HF_CREDENTIALS:'test:secret',SHORTS_DAILY_SECONDS:'120'});
+ try{
+  const f=await shortFixture();const body=shortBody(f,'same-request-key');
+  assert.equal((await call('GET','/api/short-templates'))[1].templates.length,2);
+  assert.equal((await call('GET',`${f.path}/short-generations/${'-'.repeat(36)}`,null,f.a.token))[0],404);
+  assert.equal((await call('POST',`${f.path}/short-generations`,body))[0],401);
+  assert.equal((await call('POST',`${f.path}/short-generations`,{...body,externalGenerationConsent:false},f.a.token))[0],400);
+  await call('PATCH',f.path,{status:'driving'});
+  assert.equal((await call('POST',`${f.path}/short-generations`,body,f.a.token))[0],409);
+  await call('PATCH',f.path,{status:'parked'});
+  const pair=await Promise.all([call('POST',`${f.path}/short-generations`,body,f.a.token),call('POST',`${f.path}/short-generations`,body,f.a.token)]);
+  assert.deepEqual(pair.map(x=>x[0]).sort(),[200,202]);assert.equal(pair[0][1].id,pair[1][1].id);
+  const id=pair[0][1].id;const job=`${f.path}/short-generations/${id}`;
+  assert.equal((await call('POST',`${f.path}/short-generations`,{...body,audioReference:true},f.a.token))[0],409);
+  const other=await shortFixture();assert.equal((await call('GET',job,null,other.a.token))[0],401);
+  assert.equal((await call('DELETE',job,null,f.b.token))[0],403);
+  process.env.SHORTS_DAILY_SECONDS='1';assert.equal((await call('POST',`${f.path}/short-generations`,{...body,idempotencyKey:'next-request-key'},f.a.token))[0],429);process.env.SHORTS_DAILY_SECONDS='120';
+  const w=shortWorker();let row;
+  for(let i=0;i<5;i++)row=await tickShort(w.worker,id);
+  assert.equal(row.state,'completed');assert.equal(w.submissions(),2);assert.equal(row.bytes,9);
+  assert.equal((await call('GET',job,null,f.a.token))[1].result.url,`${job}/file`);
+  const req={method:'GET',headers:{authorization:`Bearer ${f.a.token}`}};
+  const downloaded=await w.worker.request(req,f.trip.code,'short-generations',id,'file',{});assert.equal(downloaded[1].toString(),'final MP4');
+  await call('PATCH',`${f.path}/captions/short-test/1`,{generation:1,expectedVersion:0,text:'고친 자막'},f.a.token);
+  assert.equal((await call('GET',job,null,f.a.token))[0],409);
+  await tickShort(w.worker,id);row=await tickShort(w.worker,id);assert.equal(row.state,'canceled');assert.equal(row.cleanup_pending,false);assert.equal(w.objects.size,0);assert.equal(w.removals(),2);
+  // Two jobs and their rounded generation seconds remain budgeted after deletion.
+  assert.equal(row.plan.estimatedGenerationSeconds,16);
+  const [,plan2]=await call('POST',`${f.path}/short-plans`,{},f.a.token);
+  const [,next]=await call('POST',`${f.path}/short-generations`,{...body,planHash:plan2.planHash,idempotencyKey:'after-edit-key'},f.a.token);
+  await call('PATCH',`${f.path}/participants/${f.b.id}`,{consent:false});
+  assert.equal((await call('GET',`${f.path}/short-generations/${next.id}`,null,f.a.token))[0],403);
+  assert.equal((await tickShort(w.worker,next.id)).state,'canceled');await tickShort(w.worker,next.id);
+ }finally{delete process.env.SHORTS_ENABLED;delete process.env.HF_CREDENTIALS;delete process.env.SHORTS_DAILY_SECONDS;}
+});
+
+test('작업자는 중복 결제·제출 불명확 재시도·합성 중 삭제를 막습니다(T85)',async()=>{
+ Object.assign(process.env,{SHORTS_ENABLED:'true',HF_CREDENTIALS:'test:secret',SHORTS_DAILY_SECONDS:'120'});
+ try{
+  const f=await shortFixture();const [,job]=await call('POST',`${f.path}/short-generations`,shortBody(f,'worker-cancel-test'),f.a.token);
+  const w=shortWorker({render:async()=>{await call('DELETE',`${f.path}/short-generations/${job.id}`,null,f.a.token);return Buffer.from('late result');}});
+  // Both replicas compete for the same database advisory lock.
+  await tripsDb().query("UPDATE short_generations SET next_attempt_at=now()+interval '1 hour'");await tripsDb().query('UPDATE short_generations SET next_attempt_at=now() WHERE id=$1',[job.id]);
+  await Promise.all([w.worker.tick(),w.worker.tick()]);assert.equal(w.submissions(),1);
+  for(let i=0;i<4;i++)await tickShort(w.worker,job.id);
+  let row=await tickShort(w.worker,job.id);assert.equal(row.state,'canceled');assert.equal(row.result_key,null);assert.equal(w.objects.size,0);
+  const [,uncertain]=await call('POST',`${f.path}/short-generations`,shortBody(f,'worker-unknown-test'),f.a.token);
+  let count=0;const u=shortWorker({provider:{submit:async()=>{count++;throw new HiggsfieldError('provider_connection',true);}}});
+  row=await tickShort(u.worker,uncertain.id);assert.equal(row.state,'submission_unknown');
+  for(let i=0;i<3;i++)await tickShort(u.worker,uncertain.id);assert.equal(count,1);
+  // A restarted worker with a saved 'submitting' state also stops without another charge.
+  await tripsDb().query("UPDATE short_generations SET state='submitting' WHERE id=$1",[uncertain.id]);row=await tickShort(u.worker,uncertain.id);assert.equal(row.state,'submission_unknown');assert.equal(count,1);
+  await call('DELETE',`${f.path}/short-generations/${uncertain.id}`,null,f.a.token);await tickShort(u.worker,uncertain.id);
+ }finally{delete process.env.SHORTS_ENABLED;delete process.env.HF_CREDENTIALS;delete process.env.SHORTS_DAILY_SECONDS;}
 });

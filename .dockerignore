@@ -8,6 +8,9 @@
 !backend/api/scenes.js
 !backend/api/ride-links.js
 !backend/api/result-shares.js
+!backend/api/short-generations.js
+!backend/api/short-templates.js
+!backend/api/short-render.js
 !backend/api/providers
 !backend/api/*.sql
 !frontend/web
