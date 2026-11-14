@@ -10,6 +10,17 @@ import { appBar, hhmm, journeyTabs } from "./ride.js";
 const monthDay = (at) => new Date(at).toLocaleDateString("ko-KR", { month: "long", day: "numeric" });
 export const clock = (seconds = 0) => `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
 const secondsLabel = (s) => `${Math.round(Number(s) || 0)}초`;
+// 표지 아래·목록의 짧은 길이 '0:32'와 날짜 '11.14', 머리의 '2026년 11월 14일'(시안 eZ2xs P33–P38)
+export const shortClock = (s = 0) => `${Math.floor((Number(s) || 0) / 60)}:${String(Math.round(Number(s) || 0) % 60).padStart(2, "0")}`;
+const dot = (at) => { const d = new Date(at); return `${d.getMonth() + 1}.${d.getDate()}`; };
+const fullDay = (at) => new Date(at).toLocaleDateString("ko-KR", { year: "numeric", month: "long", day: "numeric" });
+// 여행의 처음과 끝: 출발 기록(없으면 시작·만든 시각)부터 마지막 도착(없으면 마지막 콘텐츠)까지.
+export function tripSpan(t) {
+  const places = (Array.isArray(t?.places) ? t.places : []).filter((p) => Number.isFinite(p.at)).sort((a, b) => a.at - b.at);
+  const from = places.find((p) => p.kind === "start")?.at ?? t?.startedAt ?? t?.createdAt;
+  const to = places.findLast((p) => p.kind === "arrived")?.at ?? [...(t?.contents ?? [])].map((c) => c.at).filter(Number.isFinite).sort((a, b) => a - b).at(-1);
+  return [from, Number.isFinite(to) && to >= from ? to : from];
+}
 const button = (text, onclick, className = "") => h("button", { type: "button", className, onclick }, text);
 const named = (p) => p && typeof p.name === "string" && p.name.trim();
 
@@ -124,6 +135,27 @@ export function createContents({ getProfileToken, getTrip, getParticipant, getPa
   const go = (s, view, extra = {}) => { if (s.view === "player" && view !== "player" && view !== "export") s.video?.pause(); Object.assign(s, { view, ...extra }); paint(s); };
 
   // ---- 조각 ----
+  // 장면 표지(시안 'Archive / 썸네일·listPhone·pin·playerPhone·exportPhone'): 한 모양을 크기만 바꿔 쓴다. 속 글자·간격은 표지 폭에
+  // 비례한다(style.css의 cqi). 위 '11.14 여행 이름', 큰 글은 장면의 말, 가운데 일행 캐릭터, 아래 한 줄은 장소, 끝은 '가치타 ▶ 0:32'.
+  const poster = (c, trip, i, { tall = false, line } = {}) => h("span", { className: `content-poster${tall ? " tall" : ""}`, "aria-hidden": "true" },
+    h("span", { className: `poster-card tone-${i % 2}` },
+      h("span", { className: "poster-top" }, `${dot(c.at)}  ${trip?.title || "함께 탄 여행"}`),
+      h("strong", { className: "poster-title" }, line ?? c.title),
+      h("span", { className: "poster-cast" }, castOf(c, trip).map(face)),
+      h("span", { className: "poster-caption" }, c.place || headline(c)),
+      h("span", { className: "poster-foot" }, h("span", {}, "가치타"), h("span", {}, `▶ ${shortClock(c.seconds)}`))));
+  // 여행 머리(시안 P33·P34): '2026년 11월 14일' / 여행 이름 / '09:20 — 10:28'
+  const tripHead = (g) => {
+    const [from, to] = tripSpan(g.trip);
+    return h("div", { className: "content-trip-head" }, Number.isFinite(from) && h("p", {}, fullDay(from)), h("h2", {}, g.trip.title || "함께 탄 여행"), Number.isFinite(from) && h("p", {}, `${hhmm(from)} — ${hhmm(to)}`));
+  };
+  // 목록 줄(시안 P35·P36): 작은 표지 + 제목(17/26)·'장소  0:32'
+  const listRow = (c, trip, i, className = "content-row") => {
+    const row = button("", () => open(s0(), c.id), className);
+    row.append(poster(c, trip, i), h("span", {}, h("strong", {}, c.title), h("small", {}, [c.place, shortClock(c.seconds)].filter(Boolean).join("  "))));
+    return row;
+  };
+  const s0 = () => state;
   const seg = (s) => h("div", { className: "contents-seg", role: "tablist", "aria-label": "콘텐츠 보기" },
     [["gallery", "갤러리"], ["timeline", "타임라인"], ["map", "지도"]].map(([id, label]) => {
       const b = button(label, () => go(s, id), s.view === id ? "selected" : "");
@@ -131,24 +163,35 @@ export function createContents({ getProfileToken, getTrip, getParticipant, getPa
     }));
   const title = (text, sub, extra) => h("div", { className: "conversation-title contents-title" }, h("div", { className: "between" }, h("h1", { id: "contents-title" }, text), extra), sub && h("p", { className: "sub" }, sub));
 
+  // 갤러리(시안 P33): 여행 머리 아래 두 줄 칸 — 표지, 제목(15/22), '09:32  장소'
   function gallery(s) {
     return contentGroups(s.trips).map((g) => h("section", { className: "content-group" },
-      h("h2", {}, g.title),
+      tripHead(g),
       h("div", { className: "content-grid" }, g.items.map((c, i) => {
-        const tile = button("", () => open(s, c.id), `content-tile tone-${i % 2}`);
-        tile.append(h("span", { className: "content-cast" }, castOf(c, g.trip).map(face)), h("strong", {}, c.title), h("small", {}, `${secondsLabel(c.seconds)} / ${hhmm(c.at)}`));
+        const tile = button("", () => open(s, c.id), "content-tile");
+        tile.setAttribute("aria-label", `${c.title} 보기`);
+        tile.append(poster(c, g.trip, i), h("strong", {}, headline(c)), h("small", {}, [hhmm(c.at), c.place].filter(Boolean).join("  ")));
         return tile;
       }))));
   }
 
+  // 타임라인(시안 P34): '09:20  출발', 장면마다 [시각 | 작은 표지 | 제목·장소 0:32], 끝에 '10:28  강릉 숙소 도착'
   function timeline(s) {
-    return contentGroups(s.trips).map((g) => h("section", { className: "content-group" },
-      h("div", { className: "content-trip" }, h("h2", {}, g.title), tripLine(g.trip.places) && h("p", {}, tripLine(g.trip.places))),
-      g.items.map((c) => {
-        const row = button("", () => open(s, c.id), "content-row");
-        row.append(face(castOf(c, g.trip)[1] ?? castOf(c, g.trip)[0]), h("span", {}, h("strong", {}, `${hhmm(c.at)}  ${c.title}`), h("small", {}, [secondsLabel(c.seconds), c.place].filter(Boolean).join(" / "))));
-        return row;
-      })));
+    return contentGroups(s.trips).map((g) => {
+      const [from, to] = tripSpan(g.trip);
+      const last = (g.trip.places ?? []).filter((p) => p.kind === "arrived" && named(p)).sort((a, b) => a.at - b.at).at(-1);
+      return h("section", { className: "content-group" },
+        tripHead(g),
+        h("div", { className: "content-steps" },
+          Number.isFinite(from) && h("p", { className: "content-step" }, `${hhmm(from)}  출발`),
+          g.items.map((c, i) => {
+            const row = button("", () => open(s, c.id), "content-row timed");
+            row.setAttribute("aria-label", `${hhmm(c.at)} ${c.title} 보기`);
+            row.append(h("span", { className: "content-at" }, hhmm(c.at)), poster(c, g.trip, i), h("span", {}, h("strong", {}, headline(c)), h("small", {}, [c.place, shortClock(c.seconds)].filter(Boolean).join("  "))));
+            return row;
+          }),
+          last && h("p", { className: "content-step" }, `${hhmm(to)}  ${last.name.trim()} 도착`)));
+    });
   }
 
   // 지도: 경로(초록 선)와 콘텐츠 핀. 시안의 도로·바다는 배경 무늬이고 실제 지형이 아니다.
@@ -173,21 +216,25 @@ export function createContents({ getProfileToken, getTrip, getParticipant, getPa
       const pin = button("", () => { s.pin = item.id; paint(s); }, `content-pin tone-${i % 2}${s.pin === item.id ? " selected" : ""}`);
       pin.style.left = `${(x / W) * 100}%`; pin.style.top = `${(y / H) * 100}%`;
       pin.setAttribute("aria-label", `${item.title} 장면`);
-      pin.append(face(castOf(item, trip)[1] ?? castOf(item, trip)[0]), h("span", {}, pinLabel(item.title, (item.cast ?? []).map((p) => p.name))));
+      pin.append(poster(item, trip, i)); // 시안 'Archive / pin': 작은 표지를 바탕색 틀에 얹는다
       box.append(pin);
     });
     if (!project) box.append(h("p", { className: "content-map-empty" }, "기록한 위치가 없어 길을 그리지 못했어요."));
-    return h("section", { className: "content-map-card" }, box, trip && placeChain(trip.places) && h("p", { className: "meta" }, placeChain(trip.places)));
+    return h("section", { className: "content-map-card" }, box);
+  }
+  // 지도 아래(시안 P35·P36): 여행 이름(19/28), '11월 14일  09:20 — 10:28', 장면 목록
+  function tripList(s, pairs) {
+    const trip = pairs[0]?.trip;
+    if (!trip) return [];
+    const [from, to] = tripSpan(trip);
+    return [h("div", { className: "content-trip-list" }, h("h2", {}, trip.title || "함께 탄 여행"), Number.isFinite(from) && h("p", { className: "meta" }, `${monthDay(from)}  ${hhmm(from)} — ${hhmm(to)}`)),
+      ...pairs.map(({ item, trip: t }, i) => listRow(item, t, i))];
   }
 
   function detail(s) {
     const picked = find(s, s.pin) ?? all(s).find(({ item }) => Number.isFinite(item.lat)) ?? all(s)[0];
     const near = picked ? all(s).filter(({ item, trip }) => trip === picked.trip && item.place === picked.item.place) : [];
-    return [map(s, true), ...near.map(({ item, trip }) => {
-      const row = button("", () => open(s, item.id), "content-row picked");
-      row.append(face(castOf(item, trip)[1] ?? castOf(item, trip)[0]), h("span", {}, h("strong", {}, [hhmm(item.at), item.place].filter(Boolean).join(" / ")), h("small", {}, `${item.title} / ${secondsLabel(item.seconds)}`)));
-      return row;
-    })];
+    return [map(s, true), ...tripList(s, near)];
   }
 
   function player(s) {
@@ -200,10 +247,9 @@ export function createContents({ getProfileToken, getTrip, getParticipant, getPa
       oninput: (e) => { if (s.video) { s.video.currentTime = Number(e.target.value); paint(s); } } });
     const play = button(`${s.video && !s.video.paused ? "❚❚" : "▶"}  ${clock(t)} / ${clock(total)}`, () => toggle(s), "content-play");
     play.setAttribute("aria-label", s.video && !s.video.paused ? "일시정지" : "재생");
+    // 시안 P37: 큰 표지(250×444) 하나 — 표지의 큰 글이 지금 들리는 말. 아래에 재생·위치(시안에는 글만 있는 조작).
     return [h("section", { className: "content-player" },
-      h("h2", {}, headline(item)),
-      h("div", { className: "content-cast big" }, castOf(item, trip).map(face)),
-      said && h("p", { className: "content-line" }, said.name && h("span", {}, `${said.name}  `), `“${said.text}”`),
+      poster(item, trip, all(s).findIndex((x) => x.item.id === item.id), { tall: true, line: said ? said.text : item.title }),
       play, seek,
       s.loading && h("p", { className: "meta", role: "status" }, "영상을 불러오고 있어요"),
       s.error && h("p", { className: "meta", role: "status" }, s.error))];
@@ -214,7 +260,13 @@ export function createContents({ getProfileToken, getTrip, getParticipant, getPa
     if (!item) return [];
     const save = button("", () => saveFile(s), "content-save");
     save.append(h("strong", {}, "내 계정으로 폰에 저장"), h("small", {}, s.saved ? "저장했어요. 콘텐츠 기록에서도 같은 영상을 볼 수 있어요" : "콘텐츠 기록에서 같은 영상을 바로 확인"));
-    return [h("section", { className: "content-row picked static" }, face(castOf(item, trip)[1] ?? castOf(item, trip)[0]), h("span", {}, h("strong", {}, `${styleLabel(item)} / 9:16`), h("small", {}, `${s.mime === "video/webm" ? "WebM" : "MP4"} / 세로 영상 ${secondsLabel(item.seconds)}`))),
+    // 시안 P38: 표지(180×320) 아래 제목 19/28, 'MP4  /  9:16  /  32초', '캐릭터와 우리 목소리 그대로', 안내
+    return [h("section", { className: "content-export" },
+      poster(item, trip, all(s).findIndex((x) => x.item.id === item.id), { tall: true }),
+      h("h2", {}, headline(item)),
+      h("p", { className: "meta" }, `${s.mime === "video/webm" ? "WebM" : "MP4"}  /  9:16  /  ${secondsLabel(item.seconds)}`),
+      h("p", {}, "캐릭터와 우리 목소리 그대로"),
+      h("p", { className: "meta" }, "내 계정의 콘텐츠 기록에서 폰으로 저장하고 공유할 수 있어요.")),
       save, s.error && h("p", { className: "meta", role: "status" }, s.error)];
   }
 
@@ -274,9 +326,7 @@ export function createContents({ getProfileToken, getTrip, getParticipant, getPa
 
   // ---- 그리기 ----
   const FOOT = {
-    gallery: (s) => [button("우리 가족 프로필", () => { close(); onProfile(); }, "primary")],
-    timeline: (s) => [button("지도에서 보기", () => go(s, "map"), "primary")],
-    map: (s) => [button("장면 확대하기", () => go(s, "detail"), "primary")],
+    // 시안 P33–P35(eZ2xs)에는 아래 단추가 없다(갤러리·타임라인·지도는 위 보기 전환으로 오간다). 지도의 '자세히'는 본문 끝의 글 단추.
     detail: (s) => [button("지도로 돌아가기", () => go(s, "map")), button("이 장면 보기", () => { const p = find(s, s.pin) ?? all(s).find(({ item }) => Number.isFinite(item.lat)) ?? all(s)[0]; if (p) open(s, p.item.id); }, "primary")],
     // 하단 작업(2026:3146): '콘텐츠 기록'(보조) + '영상 내보내기'(주)
     player: (s) => [button("콘텐츠 기록", () => go(s, "gallery")), button("영상 내보내기", () => go(s, "export"), "primary")],
@@ -290,15 +340,15 @@ export function createContents({ getProfileToken, getTrip, getParticipant, getPa
     const picked = find(s, s.selected)?.item;
     const studio = onStudio && button("쇼츠 만들기·보관함", () => { close(); onStudio(); }, "plain contents-studio");
     let head, body;
-    if (view === "player" && picked) { head = title(picked.title, [`${monthDay(picked.at)} ${hhmm(picked.at)}`, picked.place].filter(Boolean).join(" / ")); body = player(s); }
-    else if (view === "export" && picked) { head = title("공유할 준비가 됐어요", "캐릭터와 우리 목소리가 담긴 짧은 영상"); body = exporter(s); }
+    if (view === "player" && picked) { head = title(headline(picked), [`${monthDay(picked.at)} ${hhmm(picked.at)}`, picked.place].filter(Boolean).join("  ")); body = player(s); }
+    else if (view === "export" && picked) { head = title("영상이 준비됐어요", "내 계정에 저장한 가족의 숏폼"); body = exporter(s); }
     else if (view === "detail") { head = title("이 길에서 나눈 이야기", "지도에서 선택한 우리 가족의 장면"); body = detail(s); }
     else {
-      const sub = { gallery: "우리 가족 / 차량과 폰에서 이어보기", timeline: "날짜를 따라 다시 보는 우리 가족", map: "어디에서 나눈 이야기였을까요?", empty: "우리 가족 / 차량과 폰에서 이어보기" }[view] ?? "";
-      head = title("콘텐츠 기록", sub, studio);
+      // 시안 P33–P35(eZ2xs): 제목 '콘텐츠 기록'만(부제 없음)
+      head = title("콘텐츠 기록", view === "empty" ? "우리 가족 / 차량과 폰에서 이어보기" : "", studio);
       body = !s.ready ? [h("p", { className: "meta", role: "status" }, s.error || "콘텐츠 기록을 불러오고 있어요")]
         : empty ? [h("p", { className: "content-empty" }, "아직 생성한 콘텐츠가 없어요.", h("br"), "여행을 마친 뒤 대화에서 장면을 골라 보세요.")]
-        : [seg(s), ...(view === "timeline" ? timeline(s) : view === "map" ? [map(s)] : gallery(s))];
+        : [seg(s), ...(view === "timeline" ? timeline(s) : view === "map" ? [map(s), ...tripList(s, all(s).filter(({ trip }) => trip === (all(s).find(({ item }) => Number.isFinite(item.lat))?.trip ?? all(s)[0]?.trip))), button("주행 지도 자세히 보기 →", () => go(s, "detail"), "plain content-more")] : gallery(s))];
     }
     const scroll = h("div", { className: "conversation-body contents-body" }, head, body);
     dialog.replaceChildren(
