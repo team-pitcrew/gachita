@@ -724,7 +724,7 @@ class MainActivity : ComponentActivity() {
             bg({ Server(url).agree(trip.code, id, token) }) { result -> // 켜기는 한 번만, 뒤의 조회만 다시 묻는다(T122)
                 if (s.trip?.code != trip.code || server != url) return@bg
                 result.onSuccess { s = s.copy(busy = false, note = "본인의 동의를 저장했어요. 녹음은 홈에서 시작해 주세요").withTrip(keep(it)) }
-                    .onFailure { s = s.copy(busy = false, online = it is ApiError && !it.transient, note = "동의를 저장하지 못했어요 · ${reason(it)}" + if (it is ApiError && it.transient) ". 잠시 뒤 다시 눌러 주세요" else "") }
+                    .onFailure { s = s.agreeFailed(it) }
             }
         }
     }

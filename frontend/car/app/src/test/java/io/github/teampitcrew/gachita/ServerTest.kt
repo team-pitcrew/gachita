@@ -50,6 +50,7 @@ class ServerTest {
     @Test fun `앞단 502는 거절이 아니라 잠깐 못 받은 것으로 보이고 본문을 붙이지 않는다(T122)`() = serve(502, "error code: 502") { url ->
         val e = runCatching { Server(url).trip("AB23CD") }.exceptionOrNull()
         assertTrue(e is ApiError && e.transient)
+        assertEquals(listOf(502, 503, 504), (499..506).filter { ApiError(it, "x").transient }) // 500·501·505는 거절로 본다
         assertEquals("서버가 잠깐 응답하지 않아요", failureText(e!!))
         assertEquals("서버가 거절했어요(409 이미 다른 사람이 앉은 자리)", failureText(ApiError(409, "이미 다른 사람이 앉은 자리")))
         assertEquals("서버에 닿지 않아요", failureText(java.io.IOException()))

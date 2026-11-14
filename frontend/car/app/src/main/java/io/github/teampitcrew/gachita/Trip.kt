@@ -130,13 +130,23 @@ data class Session(
     }
 
     /**
-     * 여행 조회가 실패했다(T122). 서버가 거절했으면 그 이유를 적는다. 잠깐 못 받은 응답(502·503·504)은 '서버 연결됨'으로 세지 않고,
-     * 다음 조회에서 다시 묻는다고 적는다. 닿지 않았으면 연결 끊김으로만 보이고 문구는 그대로 둔다.
+     * 여행 조회가 실패했다(T122). 서버가 답했으면(거절·잠깐 못 받음) 그 이유를 적고, 닿지 않았으면 연결 끊김으로만 보이고 문구는 그대로 둔다.
+     * ponytail: 502·503·504도 전처럼 연결된 것으로 센다. 연결 대기로 세면 쇼츠 화면이 보던 영상을 비우는 등 다른 화면도 함께 바뀐다(T122 리뷰).
      */
     fun pollFailed(e: Throwable): Session {
         if (e !is ApiError) return copy(online = false)
         val why = failureText(e) + if (e.transient) ". 다시 시도할게요" else ""
-        return copy(online = !e.transient, note = why, pollNote = why)
+        return copy(online = true, note = why, pollNote = why)
+    }
+
+    /**
+     * 본인 동의 켜기가 실패했다. 잠깐 못 받은 응답이면 동의 PATCH가 닿았는지 모르니 '확인하지 못했어요'로 적고, 다음 조회가 실제 동의를
+     * 보이면서 그 문구를 지우게 한다(T122). 거절과 통신 실패는 저장하지 못한 것이라 사용자가 다시 누를 때까지 남긴다.
+     */
+    fun agreeFailed(e: Throwable): Session {
+        val unsure = e is ApiError && e.transient
+        val why = (if (unsure) "동의 저장을 확인하지 못했어요 · " else "동의를 저장하지 못했어요 · ") + failureText(e)
+        return copy(busy = false, online = e is ApiError, note = why, pollNote = if (unsure) why else pollNote)
     }
 
     /** 여행 조회가 성공했다. 지난 조회 실패 문구만 지우고, 그사이 사용자가 한 일의 결과 문구(동의 저장 등)는 둔다. */
