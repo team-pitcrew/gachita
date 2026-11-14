@@ -1355,6 +1355,7 @@ paths:
         이진 본문(WAV 16 kHz 16비트 PCM, 모노·스테레오 모두 — 스테레오는 합쳐 모노로). 1~20초, 1.5 MB까지.
         **원본 음성은 어디에도 저장하지 않고** 대조용 값(벡터)만 남깁니다(ADR-0019). 다시 등록하면 값을 바꿉니다.
         `Content-Type: application/json`이면 기기가 같은 임베더로 계산한 값만 받습니다(ADR-0023) — 소리는 기기를 떠나지 않습니다.
+        말소리가 없는 소리(무음처럼 로그멜 묶음의 길이가 0인 값)는 음성으로든 값으로든 400입니다(`/participants/{id}/voice`도 같음).
       security: [{ profileToken: [] }]
       requestBody:
         required: true

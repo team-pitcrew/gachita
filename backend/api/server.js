@@ -494,7 +494,7 @@ async function enrollment(req) {
   const seconds = samples.length / 16000;
   // ponytail: 임베딩이 이벤트 루프에서 동기로 돈다(20초 ≈ 65 ms). 등록은 문장 몇 개면 되므로 20초로 묶는다.
   if (seconds < 1 || seconds > 20) fail(400, "등록 음성은 1~20초");
-  return { vector: embed(samples), seconds };
+  return { vector: checkVector(embed(samples)), seconds }; // 값 등록과 같은 기준: 말소리가 없으면 400
 }
 const enrolled = ({ vector, seconds }) => [200, { seconds: Math.round(seconds * 10) / 10, dims: vector.length }];
 
