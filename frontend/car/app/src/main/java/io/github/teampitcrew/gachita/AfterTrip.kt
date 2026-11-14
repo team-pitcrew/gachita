@@ -218,7 +218,8 @@ internal fun AfterTrip(trip: Trip, lines: List<AfterLine>, base: String, token: 
     val mine = FullAudio.key == "${trip.code}:${trip.generation}"
     val audio = if (mine) FullAudio.state else AudioState.IDLE
     val upload = if (!mine) 0f else if (audio == AudioState.READY || audio == AudioState.EXPIRED) 1f else FullAudio.progress
-    val seconds = (end - origin) / 1000
+    // 받아 적은 말이 없으면(이 차가 받아 적지 못함) 올린 전체 음성의 길이로 주행 시간과 눈금을 보인다
+    val seconds = ((end - origin) / 1000).takeIf { it > 0 } ?: (if (mine) FullAudio.seconds.toLong() else 0L)
 
     Column(modifier, verticalArrangement = Arrangement.spacedBy(20.dp)) {
         val (title, sub) = when (step) {

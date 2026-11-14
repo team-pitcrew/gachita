@@ -64,13 +64,16 @@ internal object FullAudio {
         private set
     var progress by mutableStateOf(0f)
         private set
+    var seconds by mutableStateOf(0.0) // 올리는·올린 전체 음성의 길이(C22의 주행 시간·눈금, 받아 적은 말이 없을 때)
+        private set
     private val io = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
     @Volatile private var busy = false
     @Volatile private var retryAt = 0L
-    @Volatile private var settled = "" // 끝났거나(다 올림·지남·없음) 멈춘(409·410) 여행·세대: 다시 하지 않는다
+    @Volatile private var settled = "" // 지났거나(expired) 멈춘(404·409·410) 여행·세대: 다시 하지 않는다
+    private val uploaded = HashMap<String, Long>() // 여행·세대 → 다 올린 바이트. 원음이 늘면(다시 출발 뒤 주차) 새로 올린다(서버는 앞의 것을 새것이 끝날 때까지 둔다)
 
-    private fun show(k: String, st: AudioState, p: Float) = main.post { key = k; state = st; progress = p }
+    private fun show(k: String, st: AudioState, p: Float, sec: Double? = null) = main.post { key = k; state = st; progress = p; if (sec != null) seconds = sec }
 
     /** 10초 조회마다 부른다. 이미 도는 중이거나 끝났거나 1분 안에 실패했으면 아무것도 하지 않는다. canUpload는 조각마다 다시 본다. */
     fun start(dir: File, seal: Seal, base: String, code: String, generation: Int, token: String, canUpload: () -> Boolean) {
@@ -89,19 +92,24 @@ internal object FullAudio {
     }
 
     private fun upload(dir: File, seal: Seal, api: Server, code: String, generation: Int, token: String, canUpload: () -> Boolean, k: String) {
-        val now = api.audioStatus(code, token)
-        when {
-            now.optString("state") == "ready" && now.optInt("generation", generation) == generation -> { settled = k; show(k, AudioState.READY, 1f); return }
-            now.optString("state") == "expired" -> { settled = k; show(k, AudioState.EXPIRED, 1f); return }
-            now.optBoolean("deleted") -> { settled = k; show(k, AudioState.STOPPED, 0f); return }
-        }
         val files = RawFile.of(dir, code).filter { it.generation == generation }.sortedBy { it.startedAt }
         val spans = files.map { it.startedAt to it.endsAt }
-        val plan = audioPlan(spans) ?: run { settled = k; show(k, AudioState.NONE, 0f); return }
+        val plan = audioPlan(spans)
+        if (plan != null && uploaded[k] == plan.bytes) return // 이 앱에서 이미 다 올림(원음이 그대로)
+        val now = api.audioStatus(code, token)
+        val same = plan != null && now.optLong("expectedBytes") == plan.bytes && now.optLong("startedAt") == plan.startedAt
+        when {
+            now.optString("state") == "expired" -> { settled = k; show(k, AudioState.EXPIRED, 1f, now.optDouble("seconds", 0.0)); return }
+            now.optBoolean("deleted") -> { settled = k; show(k, AudioState.STOPPED, 0f); return }
+            now.optString("state") == "ready" && now.optInt("generation", generation) == generation && (plan == null || same) -> {
+                plan?.let { uploaded[k] = it.bytes }; show(k, AudioState.READY, 1f, now.optDouble("seconds", 0.0)); return
+            }
+        }
+        if (plan == null) { settled = k; show(k, AudioState.NONE, 0f); return }
         val started = api.audioStart(code, token, generation, plan.bytes, plan.seconds, plan.startedAt)
         val have = started.optJSONArray("partNumbers")?.let { a -> (0 until a.length()).map(a::getInt).toSet() } ?: emptySet()
         val sha = MessageDigest.getInstance("SHA-256")
-        show(k, AudioState.UPLOADING, 0f)
+        show(k, AudioState.UPLOADING, 0f, plan.seconds)
         for (n in 0 until plan.parts) {
             if (!canUpload()) { retryAt = System.currentTimeMillis() + 60_000; show(k, AudioState.IDLE, n.toFloat() / plan.parts); return } // 다시 출발·동의 철회
             val bytes = audioPart(plan, n, spans) { i, a, b -> files[i].cut(seal, a, b) }
@@ -110,7 +118,7 @@ internal object FullAudio {
             show(k, AudioState.UPLOADING, (n + 1f) / plan.parts * .99f)
         }
         api.audioComplete(code, token, generation, plan.parts, plan.seconds, sha.digest().joinToString("") { "%02x".format(it) })
-        settled = k; show(k, AudioState.READY, 1f)
+        uploaded[k] = plan.bytes; show(k, AudioState.READY, 1f)
         Log.i("GachitaAudio", "전체 음성 ${plan.parts}조각 ${plan.bytes}바이트 올림")
     }
 }
