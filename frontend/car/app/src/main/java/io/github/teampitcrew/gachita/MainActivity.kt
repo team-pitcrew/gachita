@@ -23,6 +23,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.size
@@ -1928,52 +1929,75 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** 서버 목록과 서버가 선정한 도착 항목만 표시합니다. 상태 변경은 응답을 받은 뒤 반영합니다. */
+    /**
+     * 서버 목록과 서버가 선정한 도착 항목만 표시합니다. 상태 변경은 응답을 받은 뒤 반영합니다.
+     * 겉모습은 시안 C3(알약 → 제목 → 부제 → 할 일 줄 → 닫기). 시안에 없는 동기화 줄·원문·취소·다시 열기·도착 확인은 T113에 필요해 남깁니다.
+     */
     @Composable
     private fun BriefCard(b: Brief, modifier: Modifier) {
         val items = b.arrivalItems ?: todoList
         val c = MaterialTheme.colorScheme
-        Card(Tone.Accent, modifier) {
-            Text(if (b.place != null) "${b.place}에서 할 일" else "장소별 할 일", fontSize = 32.sp, fontWeight = FontWeight.Bold)
-            val synced = todoState.syncedAt?.let { java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.KOREA).format(java.util.Date(it)) }
-            Text(when {
-                todoState.scope == null -> "탑승자 모두의 기록 동의와 참가자 연결이 필요해요"
-                todoState.loading -> "서버 목록을 갱신하고 있어요"
-                synced != null -> "마지막 동기화 $synced · 서버 기록"
-                else -> "아직 서버 목록을 확인하지 못했어요"
-            }, color = c.onSurfaceVariant, fontSize = 18.sp)
-            if (todoState.note.isNotEmpty()) Text(todoState.note, color = c.error, fontSize = 18.sp)
-            if (arrivalNote.isNotEmpty()) Text(arrivalNote, color = c.onSurfaceVariant, fontSize = 18.sp)
-            Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        val ctl = RoundedCornerShape(24.dp)
+        // 시안 C3의 크기는 넓은 창의 큰 칸 기준입니다. 기본인 반쪽 창의 낮은 초점 칸에서는 제목이 목록을 밀어내지 않게 기존 크기를 씁니다(시안에 좁은 도착 프레임 없음).
+        BoxWithConstraints(modifier) {
+        val roomy = maxHeight >= 600.dp
+        CarCard(Tone.Accent, Modifier.fillMaxSize(), pad = if (roomy) 40.dp else 28.dp, gap = if (roomy) 20.dp else 10.dp) {
+            Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(if (roomy) 20.dp else 12.dp)) {
+                if (b.place != null) Pill("도착 브리핑")
+                Text(if (b.place != null) "${b.place}에 도착했어요" else "장소별 할 일", fontSize = if (roomy) 56.sp else 32.sp, lineHeight = if (roomy) 64.sp else 40.sp, fontWeight = FontWeight.Bold)
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("${if (b.place != null) "여기서 " else ""}할 일 ${items.count { it.pending }}건 · 오는 길에 나온 말로 모았어요", color = c.onSurfaceVariant, fontSize = if (roomy) 28.sp else 22.sp, lineHeight = if (roomy) 40.sp else 30.sp)
+                    val synced = todoState.syncedAt?.let { java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.KOREA).format(java.util.Date(it)) }
+                    Text(when {
+                        todoState.scope == null -> "탑승자 모두의 기록 동의와 참가자 연결이 필요해요"
+                        todoState.loading -> "서버 목록을 갱신하고 있어요"
+                        synced != null -> "마지막 동기화 $synced · 서버 기록"
+                        else -> "아직 서버 목록을 확인하지 못했어요"
+                    }, color = c.onSurfaceVariant, fontSize = 18.sp)
+                    if (todoState.note.isNotEmpty()) Text(todoState.note, color = c.error, fontSize = 18.sp)
+                    if (arrivalNote.isNotEmpty()) Text(arrivalNote, color = c.onSurfaceVariant, fontSize = 18.sp)
+                }
                 if (items.isEmpty() && todoState.data != null && !todoState.loading) Text("이 목록에 할 일이 없어요", color = c.onSurfaceVariant)
+                val enabled = !todoState.loading && s.online && vehicleParked() && todoState.scope == todoScope()
                 items.forEach { item ->
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text("${item.place} · ${item.text}", fontSize = 24.sp)
-                        Text("원문 ${item.sources.size}개 · " + when (item.status) { "done" -> "완료"; "cancelled" -> "취소"; else -> "미완료" }, color = c.onSurfaceVariant, fontSize = 16.sp)
-                        var sourceOpen by remember(item.id) { mutableStateOf(false) }
-                        TextButton({ sourceOpen = !sourceOpen }) { Text(if (sourceOpen) "원문 접기" else "원문 보기") }
-                        if (sourceOpen) item.sources.forEach { source ->
-                            val at = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.KOREA).format(java.util.Date(source.at))
-                            val speaker = s.trip?.people?.find { it.id == source.participantId }?.name ?: "화자 미확인"
-                            Text("$at · $speaker", color = c.onSurfaceVariant, fontSize = 16.sp)
-                            Text(source.text, fontSize = 18.sp)
-                            if (source.displayText != source.text) Text("보정 · ${source.displayText}", color = c.onSurfaceVariant, fontSize = 18.sp)
-                        }
-                        val enabled = !todoState.loading && s.online && vehicleParked() && todoState.scope == todoScope()
-                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            if (item.pending) {
-                                OutlinedButton({ changeTodo(item, "done") }, enabled = enabled, modifier = Modifier.heightIn(min = 56.dp), shape = RoundedCornerShape(10.dp)) { Text("완료") }
-                                OutlinedButton({ changeTodo(item, "cancelled") }, enabled = enabled, modifier = Modifier.heightIn(min = 56.dp), shape = RoundedCornerShape(10.dp)) { Text("취소") }
-                            } else OutlinedButton({ changeTodo(item, "pending") }, enabled = enabled, modifier = Modifier.heightIn(min = 56.dp), shape = RoundedCornerShape(10.dp)) { Text("다시 열기") }
+                    // 서버가 화자를 확인한 원발화만 이름과 캐릭터로 보입니다. 확인되지 않았으면 빈 동그라미와 '말한 사람 미확인'.
+                    val speakers = item.sources.mapNotNull { src -> s.trip?.people?.find { it.id == src.participantId } }.distinct()
+                    val who = speakers.singleOrNull()
+                    var sourceOpen by remember(item.id) { mutableStateOf(false) }
+                    Surface(Modifier.fillMaxWidth(), ctl, color = c.surfaceVariant) {
+                        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+                                if (who != null) Character(runCatching { Seat.valueOf(who.seat).ordinal }.getOrDefault(0), 56.dp)
+                                else Box(Modifier.size(56.dp).clip(CircleShape).background(c.surface))
+                                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Text(if (b.place != null) item.text else "${item.place} · ${item.text}", fontSize = 28.sp, lineHeight = 40.sp, fontWeight = FontWeight.Medium)
+                                    Text((if (speakers.isEmpty()) "말한 사람 미확인" else speakers.joinToString("·") { it.name } + "의 말") +
+                                        when (item.status) { "done" -> " · 완료"; "cancelled" -> " · 취소"; else -> "" }, color = c.onSurfaceVariant)
+                                }
+                                OutlinedButton({ changeTodo(item, if (item.pending) "done" else "pending") }, enabled = enabled, modifier = Modifier.height(72.dp), shape = ctl,
+                                    contentPadding = PaddingValues(horizontal = 36.dp)) { Text(if (item.pending) "완료" else "다시 열기") }
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                TextButton({ sourceOpen = !sourceOpen }, Modifier.heightIn(min = 56.dp)) { Text(if (sourceOpen) "원문 접기" else "원문 ${item.sources.size}개 보기") }
+                                if (item.pending) TextButton({ changeTodo(item, "cancelled") }, Modifier.heightIn(min = 56.dp), enabled = enabled) { Text("취소") }
+                            }
+                            if (sourceOpen) item.sources.forEach { source ->
+                                val at = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.KOREA).format(java.util.Date(source.at))
+                                val speaker = s.trip?.people?.find { it.id == source.participantId }?.name ?: "화자 미확인"
+                                Text("$at · $speaker", color = c.onSurfaceVariant, fontSize = 16.sp)
+                                Text(source.text, fontSize = 18.sp)
+                                if (source.displayText != source.text) Text("보정 · ${source.displayText}", color = c.onSurfaceVariant, fontSize = 18.sp)
+                            }
                         }
                     }
                 }
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedButton({ loadTodos(force = true) }, enabled = !todoState.loading, modifier = Modifier.weight(1f).heightIn(min = 56.dp), shape = ctl) { Text("새로고침") }
+                    OutlinedButton(::arrive, enabled = vehicleParked() && !arrivalLoading && todoScope() != null, modifier = Modifier.weight(1f).heightIn(min = 56.dp), shape = ctl) { Text("도착 확인") }
+                }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedButton({ loadTodos(force = true) }, enabled = !todoState.loading, modifier = Modifier.heightIn(min = 56.dp), shape = RoundedCornerShape(10.dp)) { Text("새로고침") }
-                OutlinedButton(::arrive, enabled = vehicleParked() && !arrivalLoading && todoScope() != null, modifier = Modifier.heightIn(min = 56.dp), shape = RoundedCornerShape(10.dp)) { Text("도착 확인") }
-                OutlinedButton({ brief = null }, Modifier.heightIn(min = 56.dp), shape = RoundedCornerShape(10.dp)) { Text("닫기") }
-            }
+            OutlinedButton({ brief = null }, Modifier.fillMaxWidth().height(if (roomy) 80.dp else 56.dp), shape = ctl) { Text("닫기", fontSize = if (roomy) 32.sp else 24.sp, fontWeight = FontWeight.Bold) }
+        }
         }
     }
 
@@ -2016,5 +2040,5 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun Card(tone: Tone = Tone.Plain, modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) = CarCard(tone, modifier, content)
+    private fun Card(tone: Tone = Tone.Plain, modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) = CarCard(tone, modifier, content = content)
 }
