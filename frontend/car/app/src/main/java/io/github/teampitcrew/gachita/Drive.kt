@@ -69,7 +69,7 @@ internal fun driveStatus(
         else -> DriveStatus("기록 준비 중", "마이크를 켜고 있어요", Hero.PLAIN)
     }
     offPending -> DriveStatus("동의 철회", "원음과 대화를 지우고 있어요", Hero.PLAIN)
-    waiting -> DriveStatus("기록 준비됨", if (inPark) "모두 동의했어요. 아래 버튼으로 기록을 시작해요" else "주차(P)한 뒤 기록을 시작해 주세요", Hero.PLAIN)
+    waiting -> DriveStatus("기록 준비됨", if (inPark) "모두 동의했어요. 출발하면 자동으로 기록해요" else "곧 자동으로 기록을 시작해요", Hero.PLAIN)
     else -> DriveStatus("동의 대기", if (waitingFor.isEmpty()) "동승자를 확인해 주세요" else "${waitingFor.joinToString(", ")} · 녹음 동의가 필요해요", Hero.PLAIN)
 }
 
@@ -79,17 +79,16 @@ internal enum class Press { STOP, GO, OFF }
 internal data class DriveButton(val label: String, val press: Press, val enabled: Boolean)
 
 /**
- * The one big control (C17 '기록 중지', C17p '기록 재개', ended '새 여행 시작'). Otherwise it runs the same action the old status card did
- * (MainActivity.recordingAction): pause and resume keep consent, starting needs park and everyone's consent, and without consent it opens
- * passenger setup while parked. An ended trip never records again (Session.withTrip); a new trip is started while parked.
+ * The one big control (C17 '기록 중지', C17p '기록 재개', ended '새 여행 시작'). Recording starts by itself once the trip turns to driving with
+ * everyone's consent (Session.autoStart, C03·C13), so there is no start button: before that the button only says so. Pause and resume keep
+ * consent; without consent it opens passenger setup while parked. An ended trip never records again; a new trip is started while parked.
  */
-internal fun driveButton(recording: Boolean, muted: Boolean, agreed: Boolean, restricted: Boolean, canStart: Boolean, ended: Boolean = false): DriveButton = when {
+internal fun driveButton(recording: Boolean, muted: Boolean, agreed: Boolean, restricted: Boolean, ended: Boolean = false): DriveButton = when {
     ended && restricted -> DriveButton("주차한 뒤 새 여행을 시작해요", Press.OFF, false)
     ended -> DriveButton("새 여행 시작", Press.GO, true)
     recording && !muted -> DriveButton("기록 중지", Press.STOP, true)
     recording -> DriveButton("기록 재개", Press.GO, true)
-    agreed && restricted -> DriveButton("주차한 뒤 기록을 시작해요", Press.OFF, false)
-    agreed -> DriveButton("기록 시작", if (canStart) Press.GO else Press.OFF, canStart)
+    agreed -> DriveButton("출발하면 자동으로 기록해요", Press.OFF, false)
     restricted -> DriveButton("주차한 뒤 동의할 수 있어요", Press.OFF, false)
     else -> DriveButton("동승자 설정", Press.GO, true)
 }

@@ -31,4 +31,18 @@ class ScenesTest {
             assertEquals(c.getString("name"), want, got)
         }
     }
+
+    @Test fun sameCuesAsServer() {
+        // 서버 시험(backend/api/cue-vectors.test.js)이 만든 파일.
+        val cues = JSONObject(File("../../../backend/api/cue-vectors.json").readText()).getJSONArray("cases").objects()
+        assertEquals(6, cues.size)
+        for (c in cues) {
+            val lines = c.getJSONArray("lines").objects().map {
+                CueLine(it.getLong("seq"), it.getLong("at"), it.getString("text"), it.text("displayText") ?: it.text("asrText") ?: it.getString("text"), it.long("endAt"))
+            }
+            val want = c.getJSONArray("expected").objects().map { CueTiming(it.getLong("seq"), it.getDouble("start"), it.getDouble("end"), it.getString("text")) }
+            assertEquals(c.getString("name"), want, cuesOf(lines, c.getLong("startAt"), c.getDouble("seconds")))
+        }
+    }
 }
+

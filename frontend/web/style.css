@@ -1197,3 +1197,4 @@ button.after-pick { justify-self: center; min-height: 44px; color: var(--ink-2);
 .wave-mark { position: absolute; top: 0; min-width: 34px; min-height: 26px; padding: 0 10px; transform: translateX(-50%); border-radius: 8px; background: var(--surface-2); color: var(--ink); font-size: 13px; font-weight: 500; line-height: 26px; }
 .wave-mark.on { background: var(--accent-fill); color: var(--on-accent); }
 .wave-mark::after { content: ""; position: absolute; inset: -9px -5px; } /* 손가락 크기(44px) */
+.ob-face img[src*="/chars/"], .ob-avatar img[src*="/chars/"], .ob-portrait img[src*="/chars/"] { object-fit: contain; } /* 캐릭터 전신은 자르지 않는다(사진만 꽉 채움) */
