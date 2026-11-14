@@ -261,6 +261,9 @@ class Car(ctx: Context, private val onChange: (CarStatus) -> Unit) {
         runCatching { navi.getDestinationInfo() }.onFailure { Log.w(TAG, "내비 호출 실패", it); dest.answer(null, round) }
     }
 
+    /** 장소 기록(T131): 내비 목적지의 이름·좌표. 안내 중이 아니거나 이름·좌표를 모르면 null. 화면은 넘어가지 않는다. */
+    fun destinationNamed(done: (Place?) -> Unit) = destinationInfo { d -> done(d?.let { arrivalPlace(it.name, it.latitude, it.longitude) }) }
+
     /** 그곳까지의 거리(m)와 시간(초). 들르면 늘어나는 시간이 아니다. 화면은 넘어가지 않는다. */
     fun distanceTo(p: Place, done: (Int?, Int?) -> Unit) =
         trip.start({ done(it?.distance, it?.eta) }) { navi.requestTrip(TripRequest(latitude = p.lat, longitude = p.lng, poiId = "", poiName = p.name, poiSubId = "0")) }
