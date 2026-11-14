@@ -192,6 +192,9 @@ class MainActivity : ComponentActivity() {
     private var offer by mutableStateOf<Offer?>(null) // 지금 보이는 경유지 제안(T9)
     private var debug = false
     private var pendingRoute: List<String>? = null // 내비에 붙으면 보낼 목적지(디버그 인자)
+    private var pendingStops: List<Place> = emptyList() // 그 목적지 앞에 들를 곳(디버그 인자 --es stops, 시연 T150)
+    private var etaSeen = "" // 마지막으로 로그에 남긴 다음 장소·남은 시간(디버그)
+    private var approachLimit = APPROACH_SECONDS // 도착 전 카드를 띄울 남은 시간(초). 디버그 인자 --ei approachSeconds로만 바꾼다(시연 T150)
     private var offers = 0L // 제안 번호. 늦게 온 콜백이 다른 제안을 건드리지 않게
     private var todoState by mutableStateOf(SharedTodoState())
     private var todosRequestedAt = 0L
@@ -426,6 +429,9 @@ class MainActivity : ComponentActivity() {
 
     /** 시연·E2E: --es route "위도,경도,이름"으로 내비에 목적지를 넣는다(디버그 빌드). 실제로는 운전자가 내비에서 정한다. */
     private fun routeFrom(i: Intent?) {
+        if (debug && i?.hasExtra("route") == true) pendingStops = demoStops(i.getStringExtra("stops")) // 경로마다 새로(없으면 빈 목록)
+        // 에뮬레이터 GPS는 움직이지 않아 남은 시간이 줄지 않는다. 시연 경로가 길로 5분을 넘으면 이 값으로 카드를 띄운다(디버그 빌드만)
+        if (debug && i?.hasExtra("approachSeconds") == true) approachLimit = i.getIntExtra("approachSeconds", APPROACH_SECONDS).coerceIn(1, 3600)
         if (debug) pendingRoute = i?.getStringExtra("route")?.split(",")?.takeIf { it.size == 3 } ?: pendingRoute
         // mock: 화면 확인용 시연 데이터(drive·drivePaused·driveResumed·driveContinue·near·nearPaused·finalNear·finalPaused·mart·final, 빈 값이면 끔). 디버그 빌드에서만
         if (debug && i?.hasExtra("f4") == true) f4Mock = i.getStringExtra("f4")?.takeIf { it.isNotBlank() }
@@ -435,7 +441,9 @@ class MainActivity : ComponentActivity() {
     private fun routeIfReady() {
         val (la, ln, name) = pendingRoute?.takeIf { carStatus.navi } ?: return
         pendingRoute = null
-        car.route(Place(la.toDouble(), ln.toDouble(), name), emptyList())
+        val stops = pendingStops.also { pendingStops = emptyList() }
+        val sent = car.route(Place(la.toDouble(), ln.toDouble(), name), stops)
+        Log.i(TAG, "경로 요청 ${name} · 경유 ${stops.size}곳${stops.joinToString("") { " ${it.name}" }} · ${if (sent) "보냄" else "못 보냄"}") // 시연·E2E(디버그 인자)
     }
 
     override fun onStart() { super.onStart(); appVisible = true; main.removeCallbacks(tick); main.post(tick) }
@@ -822,7 +830,8 @@ class MainActivity : ComponentActivity() {
         if (code == null || !carStatus.restricted || !s.agreed || offer?.stage == Offer.Stage.FINDING || arrivalLoading) { if (!carStatus.restricted) near = null; return }
         car.nextPlaceEta { name, sec, final ->
             if (s.trip?.code != code || !carStatus.restricted) return@nextPlaceEta
-            val a = approach(code, name, sec, final)
+            val a = approach(code, name, sec, final, approachLimit)
+            if (debug && "$name|$sec" != etaSeen) { etaSeen = "$name|$sec"; Log.i(TAG, "다음 장소 $name 남은 ${sec}초 · 카드 ${if (a != null) "보임" else "없음"}") } // 시연·E2E 확인용
             near = a
             // 폰(P19)도 보도록 '곧 도착'을 장소 기록에 남긴다(T149 PlaceLog: 같은 장소·같은 분에 한 번, 끊기면 두었다 나중에, 모두 동의한 동안만)
             val t = s.trip?.takeIf { it.code == code } ?: return@nextPlaceEta
