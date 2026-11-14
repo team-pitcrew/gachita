@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { groupCode, memberHeading, readiness, swapSeats } from "./groups.js";
+import { groupCode, memberHeading, readiness, seatTo, swapSeats } from "./groups.js";
 
 const O = "https://gachita.mangowhois.ai";
 
@@ -33,4 +33,11 @@ test("우리 가족(P13) 아래 줄과 가족 추가(P09·P39·P40)의 제목", 
   assert.deepEqual(memberHeading(g([{ profileId: "mom", name: "엄마", role: "adult" }]), me), ["엄마가 함께해요", "엄마 계정 연결 완료 / 이제 아이를 추가해 주세요."]);
   assert.equal(memberHeading(g([{ profileId: "x", name: "지환", role: "adult" }]), me)[0], "지환이 함께해요");
   assert.deepEqual(memberHeading(g([{ profileId: "mom", name: "엄마", role: "adult" }, { profileId: "son", name: "서준", role: "child" }]), me), ["서준까지 준비됐어요", "민준, 엄마, 서준 준비 완료 / 다음 아이를 추가해 주세요."]);
+});
+
+test("자리 없는 사람을 빈자리에 앉히고, 남의 자리에 앉히면 그 사람은 옮긴 사람의 원래 자리로 간다", () => {
+  const m = [{ profileId: "dad", seat: "ROW_1_LEFT" }, { profileId: "kid", seat: null }, { profileId: "mom", seat: "ROW_1_RIGHT" }];
+  assert.deepEqual(seatTo(m, "kid", "ROW_2_LEFT").map((x) => x.seat), ["ROW_1_LEFT", "ROW_2_LEFT", "ROW_1_RIGHT"]);
+  assert.deepEqual(seatTo(m, "kid", "ROW_1_RIGHT").map((x) => x.seat), ["ROW_1_LEFT", "ROW_1_RIGHT", null]);
+  assert.deepEqual(seatTo(m, "dad", "ROW_2_RIGHT").map((x) => x.seat), ["ROW_2_RIGHT", null, "ROW_1_RIGHT"]);
 });

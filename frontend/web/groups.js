@@ -22,6 +22,11 @@ export function groupCode(url, origin) {
 }
 
 // 자리 둘을 맞바꾼 결과(P14). 바꾸지 않은 사람은 그대로.
+// 빈자리(또는 남의 자리)에 앉힌다: 그 자리에 있던 사람은 옮긴 사람의 원래 자리(없으면 자리 없음)로.
+export function seatTo(members, who, seat) {
+  const from = members.find((m) => m.profileId === who)?.seat ?? null;
+  return members.map((m) => (m.profileId === who ? { ...m, seat } : m.seat === seat ? { ...m, seat: from } : m));
+}
 export function swapSeats(members, a, b) {
   const seatA = members.find((m) => m.profileId === a)?.seat ?? null;
   const seatB = members.find((m) => m.profileId === b)?.seat ?? null;
@@ -224,20 +229,15 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
 
   function childView() {
     const d = s.draft;
-    const name = h("input", { className: "group-input", value: d.name, placeholder: "아이 이름", maxLength: 20, "aria-label": "아이 이름", oninput: (e) => { d.name = e.target.value; } });
+    const ready = () => !s.busy && Boolean(d.name.trim()) && d.consent; // 서버도 보호자 동의 없이는 아이를 만들지 않는다
+    const name = h("input", { className: "group-input", value: d.name, placeholder: "아이 이름", maxLength: 20, "aria-label": "아이 이름", oninput: (e) => { d.name = e.target.value; submit.disabled = !ready(); } });
     const label = CHARACTER_OPTIONS.find(([k]) => k === d.character)?.[1].split(" · ")[0] ?? "";
     const pick = () => {
       const i = CHARACTER_OPTIONS.findIndex(([k]) => k === d.character);
       d.character = CHARACTER_OPTIONS[(i + 1) % CHARACTER_OPTIONS.length][0];
       paint();
     };
-    return page("아이 프로필 만들기", "보호자가 이름과 캐릭터, 목소리를 관리해요.", [
-      h("small", {}, "아이 이름"),
-      name,
-      h("button", { type: "button", className: "group-card row group-character", onclick: pick, "aria-label": "캐릭터 바꾸기" }, face(d), h("strong", {}, `${label} ${d.name || ""}`.trim())),
-      h("div", { className: "group-card" }, h("strong", {}, "아이 목소리 15초 등록"), h("small", {}, "아이에게 짧은 문장을 읽어 달라고 해주세요.")),
-      h("label", { className: "group-check" }, h("input", { type: "checkbox", checked: d.consent, onchange: (e) => { d.consent = e.target.checked; } }), "보호자로서 아이의 녹음과 콘텐츠 처리에 동의해요."),
-    ], [button("동의하고 목소리 등록", () => act(async () => {
+    const submit = button("동의하고 목소리 등록", () => act(async () => {
       const g = await ensureFamily();
       const made = await call("POST", `/groups/${g.id}/children`, { name: d.name.trim(), character: d.character, guardianConsent: d.consent });
       s.groups = s.groups.map((x) => (x.id === made.id ? made : x));
@@ -246,7 +246,14 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
       s.voice = 0;
       go("childVoice");
       record();
-    }), "primary", s.busy || !d.name.trim())]);
+    }), "primary", !ready());
+    return page("아이 프로필 만들기", "보호자가 이름과 캐릭터, 목소리를 관리해요.", [
+      h("small", {}, "아이 이름"),
+      name,
+      h("button", { type: "button", className: "group-card row group-character", onclick: pick, "aria-label": "캐릭터 바꾸기" }, face(d), h("strong", {}, `${label} ${d.name || ""}`.trim())),
+      h("div", { className: "group-card" }, h("strong", {}, "아이 목소리 15초 등록"), h("small", {}, "아이에게 짧은 문장을 읽어 달라고 해주세요.")),
+      h("label", { className: "group-check" }, h("input", { type: "checkbox", checked: d.consent, onchange: (e) => { d.consent = e.target.checked; submit.disabled = !ready(); } }), "보호자로서 아이의 녹음과 콘텐츠 처리에 동의해요."),
+    ], [submit]);
   }
 
   // mock: 아이 목소리 15초 등록(P12·P42). 화면과 15초 진행만 실제이고, 값 올리기
@@ -289,7 +296,7 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
     if (!g) return memberView();
     const free = g.members.filter((m) => !m.seat);
     return page(g.kind === "guest" ? g.name : "우리 가족", s.saved ? "새 좌석을 저장했어요." : `${g.members.length}명 / ${g.kind === "guest" ? "동승 그룹" : "기본 그룹"} / 좌석을 눌러 변경`, [
-      seatGrid(g.members, (m) => { s.seats = g.members; s.swapped = null; s.picked = m?.profileId ?? null; s.saved = false; go("seat"); }),
+      seatGrid(g.members, (m) => { s.seats = g.members; s.swapped = null; s.moved = null; s.picked = m?.profileId ?? null; s.saved = false; go("seat"); }),
       free.length > 0 && h("p", { className: "meta" }, `자리 없음: ${free.map((m) => m.name).join(", ")}`),
       h("p", { className: "group-ready" }, readiness(g.members)),
     ], [
@@ -304,22 +311,36 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
   }
   function seatView() {
     const g = current();
-    const pick = (m) => {
-      if (!m) return;
+    // 사람 → 사람은 맞바꾸고, 사람 → 빈자리는 그 자리에 앉힌다(자리 없는 아이·초대로 들어온 사람·동승자도 자리를 받게).
+    const pick = (m, seat) => {
+      if (!m) {
+        if (!s.picked || !seat) return;
+        s.moved = s.seats.find((x) => x.profileId === s.picked)?.name;
+        s.seats = seatTo(s.seats, s.picked, seat);
+        s.swapped = null;
+        s.picked = null;
+        return paint();
+      }
       if (!s.picked || s.picked === m.profileId) { s.picked = m.profileId; return paint(); }
       s.seats = swapSeats(s.seats, s.picked, m.profileId);
       s.swapped = [s.seats.find((x) => x.profileId === s.picked)?.name, m.name];
+      s.moved = null;
       s.picked = null;
       paint();
     };
-    const sub = s.swapped ? `${and(s.swapped[0])} ${s.swapped[1]}의 자리 위치를 바꿨어요.` : s.picked ? "바꿀 다른 사람을 눌러 주세요." : "바꿀 두 사람을 차례로 눌러 주세요.";
-    return page("가족 좌석 바꾸기", sub, [seatGrid(s.seats, pick, s.picked)], [button("이 배치로 저장", () => act(async () => {
+    const changed = s.seats.some((m) => (m.seat ?? null) !== (g.members.find((x) => x.profileId === m.profileId)?.seat ?? null));
+    const free = s.seats.filter((m) => !m.seat);
+    const sub = s.swapped ? `${and(s.swapped[0])} ${s.swapped[1]}의 자리 위치를 바꿨어요.` : s.moved ? `${s.moved}의 자리를 정했어요.` : s.picked ? "빈자리나 바꿀 사람을 눌러 주세요." : "사람을 누른 뒤 빈자리나 다른 사람을 눌러 주세요.";
+    return page("가족 좌석 바꾸기", sub, [seatGrid(s.seats, pick, s.picked),
+      free.length > 0 && h("p", { className: "meta" }, "자리 없음: 눌러서 고른 뒤 빈자리를 눌러요"),
+      free.length > 0 && h("div", { className: "group-pair" }, free.map((m) => button(m.name, () => pick(m), `group-ghost${m.profileId === s.picked ? " picked" : ""}`))),
+    ], [button("이 배치로 저장", () => act(async () => {
       const seats = Object.fromEntries(s.seats.filter((m) => m.seat !== g.members.find((x) => x.profileId === m.profileId)?.seat).map((m) => [m.profileId, m.seat]));
       const saved = await call("PUT", `/groups/${g.id}/seats`, { seats });
       s.groups = s.groups.map((x) => (x.id === saved.id ? saved : x));
       s.saved = true;
       go("group");
-    }), "primary", s.busy || !s.swapped)], true);
+    }), "primary", s.busy || !changed)], true);
   }
 
   function guestView() {

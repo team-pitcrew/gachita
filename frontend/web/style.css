@@ -1065,7 +1065,7 @@ button.ob-other { justify-self: start; min-height: 40px; font-size: 13px; font-w
 .group-wave i { flex: 1; border-radius: 3px; background: var(--accent-fill); }
 .group-ready { font-size: 13px; color: var(--accent); }
 .group-seats .seat { border: 0; font: inherit; color: inherit; }
-.group-seats .seat.picked { outline: 3px solid var(--accent); }
+.group-seats .seat.picked, .group-ghost.picked { outline: 3px solid var(--accent); }
 .group-actions { position: fixed; left: 0; right: 0; bottom: 0; padding: 12px var(--pad) calc(12px + env(safe-area-inset-bottom)); background: linear-gradient(to top, var(--bg) 78%, transparent); }
 .group-actions > * { max-width: calc(480px - var(--pad) * 2); margin: 8px auto 0; }
 .group-actions:empty { display: none; }
