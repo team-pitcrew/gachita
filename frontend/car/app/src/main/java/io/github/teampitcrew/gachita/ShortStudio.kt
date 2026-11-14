@@ -62,7 +62,7 @@ private data class FeedShort(val key: String, val title: String, val durationMs:
 @Composable
 internal fun ShortStudio(base: String, code: String, generation: Int, token: String?, tripTitle: String,
     canRead: () -> Boolean, canPlay: () -> Boolean, onClose: () -> Unit,
-    onActiveChange: (Boolean) -> Unit, modifier: Modifier = Modifier, participantId: String? = null) {
+    onActiveChange: (Boolean) -> Unit, modifier: Modifier = Modifier, participantId: String? = null, startCreate: Boolean = false) {
     val context = LocalContext.current
     val remoteAccess by rememberUpdatedState(canRead)
     val playbackAccess by rememberUpdatedState(canPlay)
@@ -192,6 +192,7 @@ internal fun ShortStudio(base: String, code: String, generation: Int, token: Str
                 refreshJobs(); catalog = templates.await()
             }
         } catch (e: CancellationException) { throw e } catch (e: Exception) { note = e.message ?: "연결을 확인해 주세요" } finally { loading = false }
+        if (startCreate) openCreate() // 대화 기록의 '추천 장면 고르기'(C44). K2에서 장면 고르기 흐름으로 바뀐다
         while (isActive) {
             delay(5000)
             if (!playbackAccess()) { onClose(); break }
