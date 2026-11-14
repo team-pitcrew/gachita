@@ -25,6 +25,7 @@ import { restStops, SOURCE as REST_STOPS_SOURCE } from "./rest-stops.js";
 import { shortGenerations, shortTemplateCatalog } from "./short-generations.js";
 import { shortAssets, revokeShortAssets } from "./short-assets.js";
 import { arrivalBriefing, deriveTodos, TODO_METHOD } from "./todos.js";
+import { addPlace, myTrips } from "./places.js";
 
 const WEB = fileURLToPath(new URL("../../frontend/web/", import.meta.url));
 const TRIPS_SQL = fileURLToPath(new URL("trips.sql", import.meta.url));
@@ -88,6 +89,7 @@ export function classify(e) {
 const ROUTE_WORDS = new Set(["api", "config", "trips", "participants", "requests", "moments", "utterances", "transcript", "transcriptions", "captions", "voice-match", "voice-prints", "recordings", "scene-suggestions", "shortform", "short-templates", "short-plans", "short-generations", "file", "profiles", "me", "links", "google", "feed", "tokens", "photo", "voice", "groups", "members", "invites", "j"]);
 for (const word of ["todos", "arrival-briefing"]) ROUTE_WORDS.add(word);
 for (const word of ["short-assets", "source"]) ROUTE_WORDS.add(word);
+ROUTE_WORDS.add("places");
 ROUTE_WORDS.add("rest-stops");
 ROUTE_WORDS.add("boarding-invites");
 const routeOf = (pathname) =>
@@ -189,7 +191,8 @@ async function issueToken(profileId, device = "", token = randomBytes(32).toStri
 // prefs는 좌석·공조 선호를 걷어내기(T68) 전에 만든 여행 문서에만 있다(응답에서는 제외함).
 const asParticipant = ({ tokenHash, olderTokenHashes, prefs, ...p }) => p;
 // arrival(도착한 장소 이름, T119)은 토큰 없이 읽는 여행 문서에 싣지 않는다. 동의한 참가자가 GET /todos로만 읽는다.
-const tripView = ({ arrival, ...trip }) => ({ ...trip, participants: trip.participants.map(asParticipant) });
+// places(장소 기록, T131)는 그 전에 만든 여행 문서에 없다 — 빈 목록으로 채워 늘 같은 모양을 준다.
+const tripView = ({ arrival, ...trip }) => ({ ...trip, places: trip.places ?? [], participants: trip.participants.map(asParticipant) });
 
 // 참가자 토큰(ADR-0007·docs/api/voice.md). 여행·참가에 묶이고 문서에는 해시만 남는다.
 // 프로필 토큰과 별개다 — 발화 올리기·기록본·동의 켜기의 인증에 쓴다.
@@ -329,6 +332,11 @@ async function profiles(req, seg, b) {
       ...moments.rows.map((r) => ({ kind: "moment", id: r.id, tripCode: r.trip_code, at: Number(r.at), label: r.label, ...(r.lat !== null ? { lat: r.lat, lng: r.lng } : {}) })),
     ].sort((a, b) => b.at - a.at);
     return [200, { items: items.slice(0, 100) }];
+  }
+  if (seg[1] === "trips" && !seg[2]) {
+    // 내 여행과 콘텐츠 목록(T131, places.js): 콘텐츠 기록 화면(갤러리·타임라인·지도)이 읽는다.
+    if (m !== "GET") fail(405, "GET만 됨");
+    return myTrips((await profileOf(req)) ?? fail(401, "프로필 토큰이 필요함"));
   }
   if (seg[1] === "moments" && !seg[2]) {
     // 한 여행의 내 앨범 장면(T81 공유 후보). 피드와 달리 발화와 섞지도 100개로 자르지도 않는다 — 여행당 장면은 500개가 상한이다.
@@ -983,6 +991,7 @@ async function trips(req, [code, sub, id, leaf, ...rest], b, query, signal) {
       participants: [],
       requests: [],
       moments: [],
+      places: [], // 차가 내비에서 읽은 장소(T131)
       version: 1,
       createdAt: Date.now(),
     };
@@ -1071,7 +1080,12 @@ async function handle(trip, { req, m, sub, id, leaf, b, query, profile }, client
     if (m === "GET") return query.get("v") === String(trip.version) ? [304] : [200, tripView(trip)];
     if (m !== "PATCH") fail(405, "GET, PATCH만 됨");
     if (b.status !== undefined) {
+      const was = trip.status;
       trip.status = oneOf(b.status, TRIP_STATUS, "status");
+      // 출발·끝 시각(T131, 내 여행 목록): 처음 주행을 시작한 때, 마지막으로 끝낸 때. 끝낸 여행을 다시 출발하면 끝 시각을 지운다.
+      if (trip.status === "driving") trip.startedAt ??= Date.now();
+      if (trip.status !== "ended") delete trip.endedAt;
+      else if (was !== "ended") trip.endedAt = Date.now();
       if (!["parked", "ended"].includes(trip.status)) delete trip.arrival; // 다시 출발하면 지난 도착은 끝난다(T119)
       // 동의가 모이면 주행과 함께 기록을 시작하고, 주차·종료에서 그 구간을 마감한다.
       trip.recording = trip.status === "driving" && everyoneConsents(trip);
@@ -1157,6 +1171,13 @@ async function handle(trip, { req, m, sub, id, leaf, b, query, profile }, client
       return changed(200, r);
     }
     fail(405, "POST /requests, PATCH /requests/:id만 됨");
+  }
+
+  if (sub === "places") {
+    // 장소 기록(T131): 차가 내비의 출발·경유·곧 도착·도착·목적지를 남긴다. 그 여행의 참가자 토큰으로.
+    if (id) fail(404, "없는 경로");
+    if (m !== "POST") fail(405, "POST만 됨");
+    return changed(201, addPlace(trip, participantOf(req, trip), b, { text, num, int, oneOf }));
   }
 
   if (sub === "moments" && m === "POST" && !id) {
