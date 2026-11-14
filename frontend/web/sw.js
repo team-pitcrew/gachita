@@ -6,7 +6,7 @@ const CACHE = "gachita";
 const TRIP = /^\/api\/trips\/[A-Z0-9]+$/;
 
 // 설치할 때 화면 파일을 받아 둔다. 첫 방문 뒤 바로 끊겨도(이 파일들은 워커가 켜지기 전에 읽혔다) 다시 열 수 있게.
-const SHELL = ["/", "/app.js", "/shared.js", "/media-controls.js", "/captions.js", "/shares.js", "/share-card.js", "/qrcode.js", "/records.js", "/conversations.js", "/todos.js", "/ride.js", "/short-film.js", "/short-studio.js", "/short-generation.js", "/short-library.js", "/short-scenes.js", "/boarding.js", "/vehicle-boarding.js", "/onboarding.js", "/voice-embed.js", "/style.css", "/manifest.webmanifest", "/icon.svg", "/icons/gachita-32.png", "/icons/gachita-180.png", "/icons/gachita-192.png", "/icons/gachita-512.png", "/brief.js", "/contents.js", "/after-trip.js"];
+const SHELL = ["/", "/app.js", "/shared.js", "/media-controls.js", "/captions.js", "/shares.js", "/share-card.js", "/qrcode.js", "/records.js", "/conversations.js", "/todos.js", "/ride.js", "/short-film.js", "/short-studio.js", "/short-generation.js", "/short-library.js", "/short-scenes.js", "/boarding.js", "/vehicle-boarding.js", "/onboarding.js", "/voice-embed.js", "/groups.js", "/style.css", "/manifest.webmanifest", "/icon.svg", "/icons/gachita-32.png", "/icons/gachita-180.png", "/icons/gachita-192.png", "/icons/gachita-512.png", "/brief.js", "/contents.js", "/after-trip.js"];
 
 addEventListener("install", (e) => e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => skipWaiting())));
 addEventListener("activate", (e) => e.waitUntil(clients.claim()));
