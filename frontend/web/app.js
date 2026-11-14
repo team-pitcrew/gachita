@@ -18,7 +18,8 @@ import { createBoarding } from "/boarding.js";
 import { accountReady, createOnboarding } from "/onboarding.js";
 import { createGroups } from "/groups.js";
 import { createAfterTrip } from "/after-trip.js";
-import { appBar, askState, CONTINUE_ASK, createPlaces, driveState, END_ASK, journeyTabs, recordingLine, rideHeading, seatMap, statusMoves } from "/ride.js";
+import { appBar, askState, CONTINUE_ASK, createPlaces, driveState, END_ASK, journeyTabs, recordingLine, rideHeading, seatMap, setAppBarEnd, statusMoves } from "/ride.js";
+import { createProfileMenu, forgetIdentity } from "/profile-menu.js";
 import { arrivalBrief, arrivalMove, nearBrief } from "/brief.js";
 
 // 여행 상태 이름. 상태별 제목·부제·운전석 단추는 ride.js가 고른다.
@@ -234,6 +235,34 @@ const contents = createContents({
   onStudio: launchShort,
 });
 const openContents = () => contents.open();
+
+// 오른쪽 위 내 얼굴과 프로필 드롭다운(시안 C17m을 폰 톤으로, docs/design.md §5). 다른 창 위에서도 열리므로 고른 곳으로 가기 전에 열린 창을 닫는다.
+const closeOverlays = () => [conversations, contents, afterTrip, groups, studio, scenes].forEach((x) => x.close());
+const profileMenu = createProfileMenu({
+  getProfile: () => profile,
+  face: () => avatar(profile, photo),
+  loadGroups: async () => (await mine("GET", "/groups")).items,
+  onProfile: () => { closeOverlays(); location.hash = "me"; },
+  onGroups: () => { closeOverlays(); groups.openAt("groups"); },
+  onSeats: () => { closeOverlays(); groups.openAt("assign"); },
+  onGallery: () => { closeOverlays(); openContents(); },
+  onLogout: logout,
+});
+setAppBarEnd(profileMenu.button);
+
+// 로그아웃(로그아웃 확인 2220:5864): 이 폰이 기억하는 신원을 모두 잊고 시작 화면(P01)으로. 서버 토큰은 남는다(profile-menu.js).
+function logout() {
+  closeOverlays();
+  boarding.close();
+  forgetIdentity(identityStorage, identityPrefix);
+  profile = null;
+  trip = null;
+  URL.revokeObjectURL(photo);
+  photo = "";
+  if (location.hash) location.hash = "";
+  else refresh(true);
+  toast("로그아웃했어요.");
+}
 const openConversations = () => {
   if (trip?.code === code()) return conversations.open();
   const last = store("trip");
@@ -363,7 +392,8 @@ async function refresh(force) {
 
 const button = (label, onclick, className = "") => h("button", { type: "button", className, onclick }, label);
 const bar = (...kids) => h("div", { className: "bar" }, h("div", {}, kids));
-const header = (...kids) => h("div", { className: "top" }, kids);
+// 머리 줄: 왼쪽 첫 칸, 오른쪽에 나머지와 내 얼굴 단추(docs/design.md §5).
+const header = (first, ...rest) => h("div", { className: "top" }, first, h("span", { className: "app-bar-end" }, rest, profileMenu.button()));
 const form = (onsubmit, ...kids) => h("form", { className: "stack", onsubmit: (e) => (e.preventDefault(), onsubmit()) }, kids);
 
 // 하나를 고르는 칩. 라디오 단추라 키보드와 화면 낭독기가 그대로 쓴다.
@@ -518,8 +548,22 @@ function profileConnection() {
   );
 }
 
+// 내 프로필(#me). 프로필이 있으면 시안 톤의 프로필 화면(얼굴·이름·계정 → 목록 행 → 이름과 얼굴 고치기 → 로그아웃),
+// 없으면 처음 만들기. 오른쪽 위 드롭다운의 '내 프로필'이 여기로 온다(docs/design.md §5).
 function profileView() {
   if (!profile && store("profile")) return [header(button("이전", () => (location.hash = ""), "plain")), profileConnection()];
+  const back = button("‹", () => (location.hash = ""), "plain profile-back");
+  back.setAttribute("aria-label", "이전 화면으로");
+  if (!profile) return [
+    header(back, h("span", { className: "meta" }, "프로필 만들기")),
+    h("h1", {}, "나를 소개해 주세요"),
+    h("p", { className: "sub" }, "같이 타는 사람들에게 보이는 이름과 얼굴이에요."),
+    googleId && h("section", { className: "card" },
+      h("p", { className: "what" }, "구글 계정이 있나요?"),
+      h("p", { className: "meta" }, "구글로 계속하면 다른 폰에서도 같은 프로필로 들어와요. 전에 만든 프로필이 있으면 그대로 이어져요."),
+      button("구글로 계속", () => google().catch((e) => toast(e.status === 0 ? "연결이 끊겨서 열지 못했어요." : e.message)))),
+    form(saveProfile, ...profileFields(true), bar(h("button", { id: "profile-save", className: "primary", disabled: savingProfile }, savingProfile ? "저장 중" : "저장"))),
+  ];
   const remove = () =>
     confirm("프로필과 남긴 장면 앨범이 지워져요. 지울까요?") &&
     act(async () => {
@@ -528,44 +572,27 @@ function profileView() {
       await loadProfile();
       location.hash = "";
     });
+  const row = (label, detail, onclick) => h("button", { type: "button", className: "menu-row profile-row", onclick },
+    h("span", { className: "menu-label" }, h("strong", {}, label), h("small", {}, detail)), h("span", { className: "menu-arrow", "aria-hidden": "true" }, "›"));
+  const linked = profile.links?.includes("google");
   return [
-    header(button("이전", () => (location.hash = ""), "plain"), h("span", { className: "meta" }, profile ? "내 프로필" : "프로필 만들기")),
-    h("h1", {}, profile ? "내 프로필" : "나를 소개해 주세요"),
-    h("p", { className: "sub" }, "같이 타는 사람들에게 보이는 이름과 얼굴이에요."),
-    googleId &&
-      !profile?.links?.includes("google") &&
-      h(
-        "section",
-        { className: "card" },
-        h("p", { className: "what" }, profile ? "다른 기기에서도 쓰기" : "구글 계정이 있나요?"),
-        h("p", { className: "meta" }, profile ? "구글 계정을 연결하면 다른 폰에서 구글로 계속해 이 프로필로 들어와요." : "구글로 계속하면 다른 폰에서도 같은 프로필로 들어와요. 전에 만든 프로필이 있으면 그대로 이어져요."),
-        button(profile ? "구글 계정 연결" : "구글로 계속", () => google().catch((e) => toast(e.status === 0 ? "연결이 끊겨서 열지 못했어요." : e.message))),
-      ),
-    profile?.links?.includes("google") &&
-      h(
-        "section",
-        { className: "card" },
-        h("p", { className: "what" }, "구글 계정을 연결했어요"),
-        h("p", { className: "meta" }, "다른 폰에서 구글로 계속하면 이 프로필로 들어와요."),
-        button("구글 연결 끊기", () => act(async () => (await mine("DELETE", "/profiles/me/links/google"), await loadProfile(), toast("구글 연결을 끊었어요."))), "plain"),
-      ),
-    profile && h("section", { className: "card" },
-      h("p", { className: "what" }, profile.email ? (profile.hasVoice ? "목소리 다시 등록" : "15초 목소리 등록") : "이메일 계정과 목소리 등록"),
-      h("p", { className: "meta" }, profile.email ? `${profile.email} 계정 · 차에서 말한 사람을 알아보는 데 써요.` : "같은 계정으로 차에서도 로그인하고, 15초 목소리로 말한 사람을 알아봐요."),
-      button(profile.email ? "목소리 등록하기" : "계정 만들기", () => { onboarding.open(); location.hash = "start"; })),
-    form(saveProfile, ...profileFields(true), bar(h("button", { id: "profile-save", className: "primary", disabled: savingProfile }, savingProfile ? "저장 중" : "저장"))),
-    profile &&
-      h(
-        "section",
-        { className: "card" },
-        h("p", { className: "what" }, "지우기"),
-        h(
-          "div",
-          { className: "row" },
-          profile.hasPhoto && button("사진 지우기", () => act(async () => (await mine("DELETE", "/profiles/me/photo"), await loadProfile()))),
-          button("프로필 지우기", remove, "plain"),
-        ),
-      ),
+    header(back, h("span", { className: "meta" }, "내 프로필")),
+    h("section", { className: "profile-hero" },
+      avatar(profile, photo),
+      h("div", {}, h("h1", {}, profile.name), h("p", { className: "meta" }, profile.email || "이 폰에서 만든 프로필"))),
+    h("div", { className: "profile-rows" },
+      row(profile.hasVoice ? "목소리 다시 등록" : "15초 목소리 등록", profile.hasVoice ? "등록했어요 · 차에서 말한 사람을 알아봐요" : "차에서 말한 사람을 알아보는 데 써요", () => { onboarding.open(); location.hash = "start"; }),
+      !profile.email && row("이메일 계정 만들기", "같은 계정으로 차에서도 로그인해요", () => { onboarding.open(); location.hash = "start"; }),
+      row("동승 그룹", "가족과 동승 그룹, 좌석과 초대 코드", () => groups.open()),
+      googleId && !linked && row("구글 계정 연결", "다른 폰에서 구글로 계속해 이 프로필로 들어와요", () => google().catch((e) => toast(e.status === 0 ? "연결이 끊겨서 열지 못했어요." : e.message))),
+      linked && row("구글 연결 끊기", "다른 폰에서 구글로 계속하면 이 프로필로 들어와요", () => act(async () => (await mine("DELETE", "/profiles/me/links/google"), await loadProfile(), toast("구글 연결을 끊었어요."))))),
+    h("section", { className: "card profile-edit" },
+      h("h2", {}, "이름과 얼굴"),
+      form(saveProfile, ...profileFields(true), h("button", { id: "profile-save", className: "primary", disabled: savingProfile }, savingProfile ? "저장 중" : "저장"))),
+    h("button", { type: "button", className: "menu-logout profile-logout", onclick: profileMenu.confirmLogout }, "로그아웃"),
+    h("div", { className: "row profile-danger" },
+      profile.hasPhoto && button("사진 지우기", () => act(async () => (await mine("DELETE", "/profiles/me/photo"), await loadProfile())), "plain"),
+      button("프로필 지우기", remove, "plain")),
   ];
 }
 
