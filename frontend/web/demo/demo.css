@@ -1340,3 +1340,21 @@ select {
 
 .scroll-hint {display: none;}
 @media (max-width: 1099px) {.scroll-hint {display: block; color: #fff; margin: 8px 14px; font-size: 13px; position: sticky; left: 14px;}}
+
+/* 참석 QR은 차량 화면이 표시하고 폰의 카메라가 읽습니다. */
+.vehicle-boarding-dialog { position:fixed; inset:0; width:100vw; height:100dvh; max-width:none; max-height:none; margin:0; padding:0; border:0; border-radius:0; color:#19221c; background:#fbfcfa; overflow:auto; }
+.vehicle-boarding-dialog::backdrop { background:#fbfcfa; }
+.vehicle-boarding-dialog>header { display:flex; justify-content:space-between; align-items:center; max-width:1180px; margin:auto; padding:24px 36px; font-size:22px; }
+.vehicle-boarding-dialog button { padding:14px 24px; border:1px solid #d9dfda; border-radius:14px; background:white; color:#19221c; min-height:52px; font-size:17px; cursor:pointer; }
+.vehicle-boarding-dialog button:disabled { opacity:.45; cursor:not-allowed; }
+.vehicle-boarding-content { text-align:center; max-width:720px; margin:0 auto; padding:0 24px 36px; }
+.vehicle-boarding-trip { font-size:16px; color:#66726a; margin:4px 0 12px; }
+.vehicle-boarding-content h1 { font-size:36px; line-height:1.35; letter-spacing:-1px; margin:8px 0 20px; }
+.vehicle-boarding-code { display:grid; place-items:center; min-height:320px; }
+.vehicle-boarding-qr { display:block; width:min(380px,58vh,82vw); height:auto; background:white; }
+.vehicle-boarding-content p { font-size:18px; line-height:1.6; margin:10px 0; }
+.vehicle-boarding-content .vehicle-boarding-countdown { font-variant-numeric:tabular-nums; font-weight:600; }
+.vehicle-boarding-content .vehicle-boarding-note { font-size:15px; color:#66726a; }
+.vehicle-boarding-content .vehicle-boarding-people { margin:18px 0; color:#246649; }
+.vehicle-boarding-error { text-align:center; margin:0 auto 24px; max-width:680px; color:#a13330; font-size:16px; }
+@media(max-width:600px){.vehicle-boarding-dialog>header{padding:16px 20px;font-size:18px}.vehicle-boarding-content h1{font-size:28px}.vehicle-boarding-content p{font-size:15px}.vehicle-boarding-code{min-height:260px}}

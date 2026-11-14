@@ -56,7 +56,11 @@ const NEXT = {
   done: [],
   cancelled: [],
 };
-const MIME = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".json": "application/json", ".webmanifest": "application/manifest+json" };
+const MIME = {
+  ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
+  ".svg": "image/svg+xml; charset=utf-8", ".json": "application/json; charset=utf-8", ".webmanifest": "application/manifest+json; charset=utf-8",
+  ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".ico": "image/vnd.microsoft.icon",
+};
 
 const RETIRED_GROUP = "그룹 초대는 종료됐어요. 탑승자 폰에서 동승 연결 QR을 열고, 주차 중인 차에서 읽어 주세요.";
 
@@ -1251,7 +1255,7 @@ async function serveFile(path, req, res) {
   // If-None-Match는 약한 비교(RFC 9110 13.1.2): Cloudflare가 압축하면서 W/를 붙이고, 목록이나 *로도 온다.
   const inm = req.headers["if-none-match"];
   if (inm === "*" || inm?.split(",").some((t) => t.trim().replace(/^W\//, "") === headers.etag)) return void (res.writeHead(304, headers), res.end());
-  res.writeHead(200, { "content-type": `${MIME[page ? ".html" : extname(file)] ?? "application/octet-stream"}; charset=utf-8`, ...headers });
+  res.writeHead(200, { "content-type": MIME[page ? ".html" : extname(file).toLowerCase()] ?? "application/octet-stream", ...headers });
   res.end(data);
 }
 
