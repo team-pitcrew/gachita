@@ -48,7 +48,7 @@ class ArrivalBriefTest {
         assertEquals(listOf(BriefRow(RESTROOM, "화장실 먼저 다녀오기", "하은이 요청", "")), rows.first)
         assertEquals(listOf(BriefRow(MEAT, "삼겹살", "엄마 요청", "600g"), BriefRow(FRUIT, "귤", "엄마 요청", "1봉지"),
             BriefRow(SNACK, "젤리", "서준이 요청", "1봉지"), BriefRow(DRINK, "탄산수", "아빠 요청", "2병")), rows.buy)
-        assertEquals("장보고 여행 계속", arrivalButton(false))
+        assertEquals("계속", arrivalButton(false)) // C20·D19 단추
         assertEquals("먼저 할 일과 살 것을 모았어요", arrivalSub(false))
     }
 

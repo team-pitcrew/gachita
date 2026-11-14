@@ -598,7 +598,7 @@ TAPS = {"Onboarding.kt": ["가치타 시작하기", "가입하고 계속", "로�
                       "전체 그룹 보기", "우리 가족 보기", "오늘 함께 탈 가족과 좌석을 확인해 주세요.", "좌석 배정", "좌석을 누르고 앉을 사람을 선택해 주세요.", "빈자리",
                       "누가 앉나요?", "좌석 배정으로", "그룹으로", "이 그룹과 출발", "좌석을 눌러 변경", "우리 가족 추가", "코드 복사"],
         "Drive.kt": ["아래 버튼으로 언제든 멈출 수 있어요", "같은 버튼을 누르면 다시 기록해요", "중지한 지점부터 이어서 기록해요", "기록 중지", "기록 재개", "도착까지 약"],
-        "Arrival.kt": ["먼저 할 일과 살 것을 모았어요", "장보고 여행 계속", "여행 마치고 기록 보기", "내리기 전, 할 일과 챙길 것"],
+        "Arrival.kt": ["먼저 할 일과 살 것을 모았어요", "잊지 말고 살 것", "계속", "여행 마치고 기록 보기", "내리기 전, 할 일과 챙길 것"],
         "AfterTrip.kt": ["오늘의 주행을 기록했어요", "남기고 싶은 순간을 골라요", "장면을 선택해 주세요", "콘텐츠를 만들어요", "순간이 완성됐어요", "콘텐츠 기록 보기"],
         "Contents.kt": ["우리 가족 / 차량과 폰에서 이어보기", "날짜를 따라 다시 보는 우리 가족", "지도에서 보기", "어디에서 나눈 이야기였을까요?", "장면 확대하기",
                         "이 장면 보기", "영상 내보내기", "공유할 준비가 됐어요", "콘텐츠 기록으로"]}
@@ -766,8 +766,8 @@ def drive_steps_seed(code):
     seed_lines(code, "B"); seed_place(code, "approaching", "하나로마트", eta=180)
     f4("near"); step(20, ["하나로마트 도착까지"], note_="차 목업 near + 서버 approaching", seeded=True)
     park(); seed_arrive(code, "하나로마트")
-    f4("mart"); step(21, ["먼저 할 일과 살 것을 모았어요", "장보고 여행 계속"], note_="차 목업 mart + 서버 도착 브리핑", seeded=True)
-    tap("장보고 여행 계속", timeout=4)
+    f4("mart"); step(21, ["먼저 할 일과 살 것을 모았어요", "잊지 말고 살 것"], note_="차 목업 mart + 서버 도착 브리핑", seeded=True)
+    tap("계속", timeout=4)
     drive(); seed_status(code, "driving"); seed_lines(code, "C")
     f4("driveContinue"); step(22, ["내일도 같이 타면 안 돼", "아래 버튼으로 언제든 멈출 수 있어요"], note_="차 목업 driveContinue + 서버 기록본 5줄", seeded=True)
     seed_place(code, "approaching", "강릉 숙소", eta=60)
@@ -796,9 +796,9 @@ def drive_steps(code):
     launch("--es", "route", f"{lodge[0]},{lodge[1]},강릉 숙소", "--es", "stops", f"{mart[0]},{mart[1]},하나로마트", "--ei", "approachSeconds", APPROACH_S)
     split(); tap("함께 타는 중", timeout=3)
     step(20, ["하나로마트 도착까지"], 25, f"시연 경로: 경유 하나로마트 {mart}, 목적지 강릉 숙소 {lodge}(내비 위치 {here}에서 약 {NEAR_M:.0f} m)")
-    park(); step(21, ["먼저 할 일과 살 것을 모았어요", "장보고 여행 계속"], 25)
+    park(); step(21, ["먼저 할 일과 살 것을 모았어요", "잊지 말고 살 것"], 25)
     if results[21]["result"] == "없음" and seen("도착했어요"): results[21] = {**results[21], "result": "다른 화면", "note": "develop의 T123 도착 카드(v1) — " + flow_state("F4")}
-    tap("장보고 여행 계속", "닫기", timeout=4)
+    tap("계속", "닫기", timeout=4)
     launch("--es", "route", f"{FAR_LODGE[0]},{FAR_LODGE[1]},강릉 숙소"); split(); tap("함께 타는 중", timeout=3)
     drive(); say("lodge")
     step(22, ["내일도 같이 타면 안 돼", "아래 버튼으로 언제든 멈출 수 있어요"], 20, "대사 5줄(하은·엄마·아빠)")
