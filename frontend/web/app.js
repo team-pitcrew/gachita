@@ -14,6 +14,7 @@ import { CHARACTER_OPTIONS, characterKey, characterImage, createShortFilm, expor
 import { createShortStudio } from "/short-studio.js";
 import { createScenePicker } from "/short-scenes.js";
 import { createBoarding } from "/boarding.js";
+import { createOnboarding } from "/onboarding.js";
 import { appBar, arrivalCards, askState, driveState, journeyTabs, nearCard, recordingLine, rideHeading, seatMap, statusMoves } from "/ride.js";
 
 // 여행 상태 이름. 상태별 제목·부제·운전석 단추는 ride.js가 고른다.
@@ -47,7 +48,8 @@ const QUICK = [
 
 const app = document.getElementById("app");
 const sheet = document.getElementById("sheet");
-const code = () => (location.hash === "#me" ? "" : location.hash.slice(1).toUpperCase());
+// /#start는 계정·온보딩(T142). 여행 코드가 아니다.
+const code = () => (location.hash === "#me" || location.hash === "#start" ? "" : location.hash.slice(1).toUpperCase());
 // 이 폰이 기억하는 것. store(키)는 읽기, store(키, 값)은 쓰기, store(키, null)은 지우기.
 const vehicleView = new URLSearchParams(location.search).get("vehicle-view") === "1";
 const identityStorage = vehicleView ? sessionStorage : localStorage;
@@ -139,6 +141,22 @@ const boarding = createBoarding({ getProfile: () => profile, getToken: () => sto
   onLinked: ({ code, participant, token }) => { store(code, participant.id); store(`${code}:token`, token); store(`${code}:asked`, null); store("trip", code); },
   onDecision: ({ code }) => { store(`${code}:asked`, "1"); reading = false; },
   onLeave: ({ code: joinedCode }) => { store(`${joinedCode}:asked`, "1"); reading = false; if (code() === joinedCode) refresh(true); else location.hash = joinedCode; } });
+// 계정·온보딩(T142, P01–P08). 프로필 토큰이 없는 첫 화면과 /#start에서 보인다. 동의 문구는 여행 기록 동의와 같은 CONSENT를 넘긴다(T138과 한 배열).
+const onboarding = createOnboarding({
+  getProfile: () => profile,
+  getToken: () => store("profile"),
+  setToken: (token) => store("profile", token),
+  loadProfile,
+  getPhoto: () => photo,
+  consentText: CONSENT,
+  render: () => render(),
+  onBegin: () => { if (location.hash !== "#start") location.hash = "start"; },
+  onDone: () => { location.hash = ""; },
+  // mock: F2(가족 그룹, T133 #372)가 병합되면 그 입구로 잇는다. 그 전에는 처음 화면으로 간다.
+  onFamily: () => { location.hash = ""; },
+  onOther: () => { location.hash = "me"; },
+  isOnline: () => !offline && navigator.onLine !== false,
+});
 const startRide = () => boarding.open();
 const launchShort = () => studio.open();
 const openConversations = () => {
@@ -451,6 +469,10 @@ function profileView() {
         h("p", { className: "meta" }, "다른 폰에서 구글로 계속하면 이 프로필로 들어와요."),
         button("구글 연결 끊기", () => act(async () => (await mine("DELETE", "/profiles/me/links/google"), await loadProfile(), toast("구글 연결을 끊었어요."))), "plain"),
       ),
+    profile && h("section", { className: "card" },
+      h("p", { className: "what" }, profile.email ? (profile.hasVoice ? "목소리 다시 등록" : "15초 목소리 등록") : "이메일 계정과 목소리 등록"),
+      h("p", { className: "meta" }, profile.email ? `${profile.email} 계정 · 차에서 말한 사람을 알아보는 데 써요.` : "같은 계정으로 차에서도 로그인하고, 15초 목소리로 말한 사람을 알아봐요."),
+      button(profile.email ? "목소리 등록하기" : "계정 만들기", () => { onboarding.open(); location.hash = "start"; })),
     form(saveProfile, ...profileFields(true), bar(h("button", { id: "profile-save", className: "primary", disabled: savingProfile }, savingProfile ? "저장 중" : "저장"))),
     profile &&
       h(
@@ -480,6 +502,7 @@ function home() {
       profile ? h("div", { className: "home-profile" }, editPortrait(), h("div", {}, h("p", { className: "meta" }, "오늘도 함께해요"), h("h1", {}, `${profile.name} 님`))) : h("h1", {}, "같이 탄 오늘,", h("br"), "함께 남겨요."),
       h("p", { className: "sub" }, profile ? "차 안에서 나눈 이야기가 우리만의 기록이 돼요." : "이름과 얼굴을 정하고, 차 화면의 QR을 스캔해 주세요."),
     ),
+    profile?.email && !profile.hasVoice && entry("record", "15초 목소리 등록", "차에서 말한 사람을 알아보는 데 써요", () => { onboarding.open(); location.hash = "start"; }),
     profile ? entry("qr", "차량 QR로 참여", "차 화면의 QR을 휴대폰으로 스캔해요", startRide, "ride-entry") : store("profile") ? profileConnection() : entry("pencil", "내 프로필 만들기", "사진 또는 캐릭터로 나를 소개해요", () => { location.hash = "me"; }, "ride-entry"),
     h("section", { className: "home-section" }, h("div", { className: "between" }, h("h2", {}, "다시 만나는 우리 이야기"), button("보관함", () => studio.open({ view: "library" }), "plain")), entry("play", "우리 쇼츠", "원래 목소리로 남긴 짧은 여행", launchShort)),
     last && h("section", { className: "home-section" },
@@ -957,9 +980,11 @@ function render() {
   const gone = short && (failed || trip?.code !== short.code ? "여행을 더 볼 수 없어 숏폼을 닫았어요." : !me?.consent || trip.generation !== short.generation ? "기록 동의가 바뀌어 숏폼을 닫았어요." : "");
   if (gone) return closeShort(gone);
   const ownProfile = profile && me?.profileId === profile.id;
-  const page = short ? "short" : location.hash === "#me" ? "profile" : !code() ? "home" : failed ? "missing" : !trip ? "loading" : !me ? "notHere" : (asking(me) || reading) && !ownProfile ? "consent" : "trip";
-  const view = { short: shortView, profile: profileView, home, missing, loading, notHere, consent: () => consentView(me), trip: () => tripView(me) }[page]();
+  const firstVisit = !location.hash && !store("profile") && !vehicleView && !boarding.pending();
+  const page = short ? "short" : location.hash === "#me" ? "profile" : location.hash === "#start" || firstVisit ? "onboarding" : !code() ? "home" : failed ? "missing" : !trip ? "loading" : !me ? "notHere" : (asking(me) || reading) && !ownProfile ? "consent" : "trip";
+  const view = { short: shortView, profile: profileView, onboarding: () => onboarding.view(), home, missing, loading, notHere, consent: () => consentView(me), trip: () => tripView(me) }[page]();
   app.classList.toggle("home-view", page === "home");
+  app.classList.toggle("onboarding-view", page === "onboarding");
   app.classList.toggle("ride-view", page === "trip");
   app.replaceChildren(...view.flat().filter(Boolean));
   if (!short && me && ownProfile && myToken() && (asking(me) || reading)) boarding.openConsent(trip, me, myToken());
@@ -998,7 +1023,7 @@ function render() {
   };
 }
 
-addEventListener("hashchange", () => (boarding.close(), openingShort?.abort(), (reading = false), short && closeShort(), location.hash === "#me" && fillDraft(), (trip = null), (failed = ""), refresh(true)));
+addEventListener("hashchange", () => (boarding.close(), location.hash !== "#start" && onboarding.close(), openingShort?.abort(), (reading = false), short && closeShort(), location.hash === "#me" && fillDraft(), (trip = null), (failed = ""), refresh(true)));
 app.addEventListener("focusout", () => setTimeout(() => stale && !typing() && render())); // 입력이 끝나면 밀린 변경을 그린다
 setInterval(refresh, 2000); // ponytail: 2초마다 묻는다(바뀐 게 없으면 304). 지연이 문제가 되면 SSE로 바꾼다.
 render();
