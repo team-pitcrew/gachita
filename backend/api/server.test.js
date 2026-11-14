@@ -1681,3 +1681,20 @@ test('작업자는 중복 결제·제출 불명확 재시도·합성 중 삭제�
   await call('DELETE',`${f.path}/short-generations/${uncertain.id}`,null,f.a.token);await tickShort(u.worker,uncertain.id);
  }finally{delete process.env.SHORTS_ENABLED;delete process.env.HF_CREDENTIALS;delete process.env.SHORTS_DAILY_SECONDS;}
 });
+test('생성을 꺼 둔 동안에도 동의 철회는 원음 사본과 결과를 정리하고 유료 요청은 보내지 않습니다(T85)',async()=>{
+ Object.assign(process.env,{SHORTS_ENABLED:'true',HF_CREDENTIALS:'test:secret',SHORTS_DAILY_SECONDS:'120'});
+ try{
+  const f=await shortFixture();const [,job]=await call('POST',`${f.path}/short-generations`,shortBody(f,'off-withdraw-test'),f.a.token);
+  const on=shortWorker();let calls=0,paid=0;const count=async()=>{calls++;return {status:'completed'};};
+  const off=shortWorker({ready:()=>false,provider:{submit:async()=>{paid++;return count();},status:count,cancel:count,remove:count},media:{put:async()=>{},sign:async k=>k,remove:async k=>{on.objects.delete(k);}}});
+  // Off and not finished: only re-checked, then pushed back. No submit, no status poll.
+  let row=await tickShort(off.worker,job.id);assert.equal(row.state,'queued');assert.equal(calls,0);assert.ok(new Date(row.next_attempt_at)>new Date());
+  row=await tickShort(on.worker,job.id);assert.equal(row.state,'generating');
+  row=await tickShort(off.worker,job.id);assert.equal(row.state,'generating');assert.equal(calls,0);
+  for(let i=0;i<4;i++)row=await tickShort(on.worker,job.id);assert.equal(row.state,'completed');assert.ok(on.objects.size>0);
+  await call('PATCH',`${f.path}/participants/${f.b.id}`,{consent:false});
+  row=await tickShort(off.worker,job.id);assert.equal(row.state,'canceled');assert.equal(row.cleanup_pending,true);assert.equal(calls,0);
+  // Cleanup may delete provider results, but never sends a new paid request.
+  row=await tickShort(off.worker,job.id);assert.equal(row.cleanup_pending,false);assert.equal(row.result_key,null);assert.equal(on.objects.size,0);assert.equal(paid,0);
+ }finally{delete process.env.SHORTS_ENABLED;delete process.env.HF_CREDENTIALS;delete process.env.SHORTS_DAILY_SECONDS;}
+});
