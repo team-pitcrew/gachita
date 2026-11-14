@@ -953,7 +953,7 @@ input[type="file"]::file-selector-button {
 
 /* 함께 타는 중(최종 시안 P17–P21). 색은 위의 밝은·어두운 토큰, 반경은 --r-phone-*를 쓴다. 글꼴은 앱의 Pretendard(시안은 Noto Sans KR). */
 .ride-view { gap: 12px; }
-.app-bar { min-height: 32px; } /* 시안 app bar 350×32. 처음으로 단추는 44px 누름 영역을 위아래 6px씩 넘겨 둔다 */
+.app-bar { min-height: 32px; } /* 시안 app bar 350×32. 처음으로·내 얼굴 단추는 44px 누름 영역을 위아래 6px씩 넘겨 둔다(전역 button 최소 48을 44로 눌러야 머리 줄이 36이 되지 않는다) */
 button.brand-home { min-height: 44px; margin-block: -6px; padding: 0 4px 0 0; gap: 10px; background: none; color: var(--ink); font-size: 19px; font-weight: 700; letter-spacing: -0.01em; }
 .app-bar .brand::before { width: 24px; height: 24px; border-radius: 0; background: center / contain no-repeat var(--mascot-mark); }
 .link-state { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink-2); }
@@ -1298,7 +1298,7 @@ button.after-pick { justify-self: center; min-height: 44px; color: var(--ink-2);
 
 /* 오른쪽 위 내 얼굴과 프로필 드롭다운(시안 C17m 2206:5852·로그아웃 확인 2220:5864를 폰 톤으로, docs/design.md §5) */
 .app-bar-end { display: inline-flex; align-items: center; gap: 12px; margin-left: auto; }
-.me-button { flex: none; display: inline-grid; place-items: center; width: 44px; height: 44px; margin: -6px -6px -6px 0; padding: 0; border-radius: 50%; background: none; }
+.me-button { flex: none; display: inline-grid; place-items: center; width: 44px; height: 44px; min-height: 44px; margin: -6px -6px -6px 0; padding: 0; border-radius: 50%; background: none; }
 .me-button .avatar { width: 32px; height: 32px; background-color: var(--surface-2); }
 .me-button .avatar, .menu-head .avatar, .profile-hero .avatar { border-radius: 50%; overflow: hidden; } /* 시안 '프로필 사진' 원(캐릭터도 원 안에) */
 .menu-dialog { position: fixed; inset: 0; width: 100vw; max-width: none; height: 100dvh; max-height: none; margin: 0; padding: max(56px, calc(env(safe-area-inset-top) + 48px)) 16px 16px; border: 0; border-radius: 0; background: rgb(0 0 0 / 0.56); color: var(--ink); }
