@@ -121,6 +121,7 @@ export async function migrate() {
   await tripsDb().query(await readFile(new URL("trips-8-short-generations.sql", import.meta.url), "utf8"));
   await tripsDb().query(await readFile(new URL("trips-9-retention.sql", import.meta.url), "utf8"));
   await tripsDb().query(await readFile(new URL("trips-11-boarding-invites.sql", import.meta.url), "utf8"));
+  await tripsDb().query(await readFile(new URL("trips-13-utterance-segments.sql", import.meta.url), "utf8"));
   await profilesDb().query(await readFile(PROFILES_SQL, "utf8"));
   await profilesDb().query(await readFile(LINKS_SQL, "utf8"));
   await profilesDb().query(await readFile(ALBUM_SQL, "utf8"));
@@ -199,6 +200,8 @@ const asUtterance = (r) => ({
   device: r.device,
   seq: Number(r.seq),
   at: Number(r.at),
+  ...(r.end_at != null ? { endAt: Number(r.end_at) } : {}),
+  ...(r.speaker_label && r.speaker_scope ? { speakerLabel: r.speaker_label, speakerScope: r.speaker_scope } : {}),
   text: r.text,
   displayText: r.edited_text ?? r.asr_text ?? r.text,
   editedText: r.edited_text ?? null,
@@ -284,7 +287,7 @@ async function profiles(req, seg, b) {
     if (m !== "GET") fail(405, "GET만 됨");
     const me = (await profileOf(req)) ?? fail(401, "프로필 토큰이 필요함");
     const utterances = await tripsDb().query(
-      `SELECT u.trip_code, u.at, u.text, u.seat_area FROM utterances u
+      `SELECT u.trip_code, u.at, u.text, u.seat_area, u.end_at, u.speaker_label, u.speaker_scope FROM utterances u
        JOIN trips t ON t.code = u.trip_code
        WHERE u.profile_id = $1 AND u.text <> ''
        ORDER BY u.at DESC LIMIT 100`,
@@ -295,7 +298,8 @@ async function profiles(req, seg, b) {
       [me.id]
     );
     const items = [
-      ...utterances.rows.map((r) => ({ kind: "utterance", tripCode: r.trip_code, at: Number(r.at), text: r.text, seatArea: r.seat_area })),
+      ...utterances.rows.map((r) => ({ kind: "utterance", tripCode: r.trip_code, at: Number(r.at), text: r.text, seatArea: r.seat_area,
+        ...(r.end_at != null ? { endAt: Number(r.end_at) } : {}), ...(r.speaker_label && r.speaker_scope ? { speakerLabel: r.speaker_label, speakerScope: r.speaker_scope } : {}) })),
       ...moments.rows.map((r) => ({ kind: "moment", id: r.id, tripCode: r.trip_code, at: Number(r.at), label: r.label, ...(r.lat !== null ? { lat: r.lat, lng: r.lng } : {}) })),
     ].sort((a, b) => b.at - a.at);
     return [200, { items: items.slice(0, 100) }];
@@ -533,9 +537,12 @@ async function transcriptions(code, req, query, signal) {
   const seconds = samples.length / 16000;
   if (channels !== 1 || seconds < 0.5 || seconds > 10) fail(400, "발화 음성은 16 kHz 모노 PCM16 WAV 0.5~10초");
   if (!samples.some((sample) => sample !== 0)) fail(422, "받아 적을 음성이 없어요");
-  const result = await transcribe(wav, check, signal); // 대기 뒤, 공급자로 보내기 직전에 다시 확인한다.
+  const result = await transcribe(wav, check, signal, seconds); // 대기 뒤, 공급자로 보내기 직전에 다시 확인한다.
   await check(); // 철회·재동의·참가자 삭제 뒤에 도착한 결과는 돌려주지 않는다.
-  if (result.text) return [200, { text: result.text, seconds, generation }];
+  if (result.text) return [200, {
+    text: result.text, seconds, generation, providerText: result.providerText, segments: result.segments,
+    diarization: { method: "provider-window", scope: "request", requestId: randomUUID(), ...result.diarization },
+  }];
   if (result.reason === "empty") fail(422, "받아 적을 음성이 없어요");
   if (result.reason === "rate_limited") fail(429, "음성 전사 요청이 많아요. 잠시 뒤 다시 해 주세요");
   if (result.reason === "timeout") fail(504, "음성 전사 응답 시간이 지났어요");
@@ -1121,7 +1128,7 @@ async function handle(trip, { req, m, sub, id, leaf, b, query, profile }, client
     if (ack[0] && ack[0].participant_id !== caller.id) fail(403, "그 기기로 올린 참가자만 고침");
     const { rows } = await client.query(
       `UPDATE utterances SET participant_id = $4, profile_id = $5, speaker_by_hand = true WHERE trip_code = $1 AND device = $2 AND seq = $3 AND text <> ''
-       RETURNING device, seq, at, text, asr_text, seat_area, participant_id, profile_id, confidence, lat, lng`,
+       RETURNING device, seq, at, text, asr_text, seat_area, participant_id, profile_id, confidence, lat, lng, end_at, speaker_label, speaker_scope`,
       [trip.code, device, seq, who?.id ?? null, who?.profileId ?? null]
     );
     return rows[0] ? [200, asUtterance(rows[0])] : fail(404, "없는 발화");
@@ -1151,20 +1158,26 @@ async function handle(trip, { req, m, sub, id, leaf, b, query, profile }, client
         const seq = int(u.seq, 1, 1_000_000_000, `items[${i}].seq`);
         const generation = int(u.generation ?? b.generation, 1, current, `items[${i}].generation`);
         // 옛 세대는 저장하지 않으니 순번과 세대만 본다. 차량은 동의가 꺼질 때 내용을 버리고 {seq, generation}만 보내 확인받는다(ADR-0007).
-        if (generation < current) return [trip.code, device, seq, null, null, null, null, null, null, generation];
+        if (generation < current) return [trip.code, device, seq, null, null, null, null, null, null, generation, null, null, null];
         const hasLat = u.lat !== undefined;
         if (hasLat !== (u.lng !== undefined)) fail(400, `items[${i}].lat, lng: 둘 다 있거나 둘 다 없음`);
+        const at = int(u.at, 0, Date.now() + 600_000, `items[${i}].at`);
+        const endAt = u.endAt == null ? null : int(u.endAt, at + 1, at + 10_000, `items[${i}].endAt`);
+        const speakerLabel = u.speakerLabel == null ? null : typeof u.speakerLabel === "string" && /^spk:[0-9]{1,4}$/.test(u.speakerLabel) ? u.speakerLabel : fail(400, `items[${i}].speakerLabel: 익명 spk:번호`);
+        const speakerScope = u.speakerScope == null ? null : typeof u.speakerScope === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(u.speakerScope) ? u.speakerScope.toLowerCase() : fail(400, `items[${i}].speakerScope: 전사 요청 UUID`);
+        if ((speakerLabel === null) !== (speakerScope === null)) fail(400, `items[${i}].speakerLabel, speakerScope: 둘 다 있거나 둘 다 없음`);
         return [
           trip.code,
           device,
           seq,
-          int(u.at, 0, Date.now() + 600_000, `items[${i}].at`),
+          at,
           text(u.text, 500, `items[${i}].text`),
           u.seatArea == null ? null : oneOf(u.seatArea, SEATS, `items[${i}].seatArea`), // 모르는 구역은 비워 둔다(T37)
           u.confidence === undefined ? null : num(u.confidence, 0, 1, `items[${i}].confidence`),
           hasLat ? num(u.lat, -90, 90, `items[${i}].lat`) : null,
           hasLat ? num(u.lng, -180, 180, `items[${i}].lng`) : null,
           generation,
+          endAt, speakerLabel, speakerScope,
         ];
       });
       const fresh = rows.filter((r) => r[9] === current);
@@ -1173,9 +1186,9 @@ async function handle(trip, { req, m, sub, id, leaf, b, query, profile }, client
       // 같은 (기기, 순번)은 다시 보내도 한 번만 남는다(멱등). 순서는 섞여도 좋다.
       for (let i = 0; i < fresh.length; i += 100) {
         const chunk = fresh.slice(i, i + 100);
-        const values = chunk.map((_, j) => `(${Array.from({ length: 10 }, (_, k) => `$${j * 10 + k + 1}`).join(", ")})`).join(", ");
+        const values = chunk.map((_, j) => `(${Array.from({ length: 13 }, (_, k) => `$${j * 13 + k + 1}`).join(", ")})`).join(", ");
         await client.query(
-          `INSERT INTO utterances (trip_code, device, seq, at, text, seat_area, confidence, lat, lng, generation)
+          `INSERT INTO utterances (trip_code, device, seq, at, text, seat_area, confidence, lat, lng, generation, end_at, speaker_label, speaker_scope)
            VALUES ${values} ON CONFLICT (trip_code, device, seq) DO NOTHING`,
           chunk.flat()
         );
@@ -1202,7 +1215,7 @@ async function handle(trip, { req, m, sub, id, leaf, b, query, profile }, client
         params.push(device, int(Number(query.get("after") ?? 0), 0, 1_000_000_000, "after"));
         where += " AND device = $2 AND seq > $3";
       }
-      const { rows } = await client.query(`SELECT device, seq, at, text, asr_text, edited_text, edit_version, edited_by, edited_at, seat_area, participant_id, profile_id, confidence, lat, lng FROM utterances WHERE ${where} ORDER BY at`, params);
+      const { rows } = await client.query(`SELECT device, seq, at, text, asr_text, edited_text, edit_version, edited_by, edited_at, seat_area, participant_id, profile_id, confidence, lat, lng, end_at, speaker_label, speaker_scope FROM utterances WHERE ${where} ORDER BY at`, params);
       return [200, { generation: trip.generation ?? 1, recording: trip.recording, items: rows.map(asUtterance) }];
     }
     if (m === "DELETE") {
@@ -1211,7 +1224,7 @@ async function handle(trip, { req, m, sub, id, leaf, b, query, profile }, client
       // 줄은 지우지 않고 내용만 비운다: 순번에 빈자리가 있던 기기가 같은 순번을 다시 보내도(멱등 키에 걸려) 되살아나지 않게.
       if (!caller.profileId) fail(403, "프로필로 참가한 사람의 글만 지울 수 있음");
       const { rowCount } = await client.query(
-        "UPDATE utterances SET text = '', asr_text = NULL, edited_text = NULL, edit_version = 0, edited_by = NULL, edited_at = NULL, seat_area = NULL, confidence = NULL, lat = NULL, lng = NULL WHERE trip_code = $1 AND profile_id = $2 AND text <> ''",
+        "UPDATE utterances SET text = '', asr_text = NULL, edited_text = NULL, edit_version = 0, edited_by = NULL, edited_at = NULL, seat_area = NULL, confidence = NULL, lat = NULL, lng = NULL, end_at = NULL, speaker_label = NULL, speaker_scope = NULL WHERE trip_code = $1 AND profile_id = $2 AND text <> ''",
         [trip.code, caller.profileId]
       );
       return [200, { deleted: rowCount }];
@@ -1222,7 +1235,7 @@ async function handle(trip, { req, m, sub, id, leaf, b, query, profile }, client
   const lines = async () => {
     if (m !== "GET") fail(405, "GET만 됨");
     if (!participantOf(req, trip).consent) fail(403, "녹음에 동의한 참가자만 볼 수 있음");
-    const { rows } = await client.query("SELECT device, seq, at, text, asr_text, edited_text, edit_version, edited_by, edited_at, seat_area, participant_id, profile_id, confidence, lat, lng FROM utterances WHERE trip_code = $1 AND text <> '' ORDER BY at", [trip.code]);
+    const { rows } = await client.query("SELECT device, seq, at, text, asr_text, edited_text, edit_version, edited_by, edited_at, seat_area, participant_id, profile_id, confidence, lat, lng, end_at, speaker_label, speaker_scope FROM utterances WHERE trip_code = $1 AND text <> '' ORDER BY at", [trip.code]);
     return rows.map(asUtterance);
   };
 
