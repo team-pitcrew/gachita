@@ -1150,6 +1150,52 @@ paths:
       responses:
         "204": { description: 지움 }
         "401": { $ref: "#/components/responses/Error" }
+  /api/trips/{code}/transcriptions:
+    parameters: [{ $ref: "#/components/parameters/code" }]
+    post:
+      tags: [기록본]
+      summary: 웹 입력 음성의 첫 전사
+      description: |
+        Pleos 초안이 없는 웹 입력 음성을 설정된 ASR 서버의 nemo_transcribe30 모델에 보내고 실제 받아 적은 글만 반환합니다(T96).
+        참가자 토큰과 전원 녹음 동의가 필요합니다. 본문을 읽기 전, 공급자로 보내기 직전, 응답 직후에 토큰·전원 동의·세대를 다시 확인합니다.
+        16 kHz 모노 PCM16 WAV 0.5~10초, 최대 400,000바이트를 받습니다. 잘린 파일과 다중 채널은 400입니다.
+        음성과 결과를 저장하지 않습니다. 클라이언트가 반환한 text와 generation으로 기존 /utterances에 발화를 저장하고 /voice-match로 화자를 대조합니다.
+        초안·가짜 대화·화자를 만들지 않습니다. 무음 또는 공급자의 빈 전사는 422 invalid입니다. 공급자가 실패하거나 잘못된 답을 주면 503입니다.
+        대기는 기존 재전사와 간격을 공유하며, 프로세스당 동시 대기·처리를 8건으로 제한합니다. 초과 또는 공급자 429는 429입니다.
+        대기와 외부 요청을 합해 기본 10초(ASR_TIMEOUT_MS, 최대 20초) 뒤 504로 끝냅니다. 클라이언트 연결이 끊기면 공급자 요청을 취소합니다.
+        자동 재시도하지 않습니다. 클라이언트도 실패한 원음을 유지하고 상태를 표시해야 하며, 조용히 버리거나 성공한 자막으로 바꾸지 않습니다.
+        ASR_URL과 ASR_TOKEN이 없으면 503입니다. 외부 요청 동안 여행의 DB 연결·행 잠금을 점유하지 않습니다.
+      security: [{ participantToken: [] }]
+      parameters:
+        - { name: generation, in: query, required: true, schema: { type: integer, minimum: 1, maximum: 2147483647 }, description: 녹음을 시작할 때 읽은 동의 세대 }
+      requestBody:
+        required: true
+        content:
+          audio/wav: { schema: { type: string, format: binary, maxLength: 400000 } }
+      responses:
+        "200":
+          description: 전사 결과. 발화 저장과 화자 대조는 기존 API로 이어집니다.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [text, seconds, generation]
+                additionalProperties: false
+                properties:
+                  text: { type: string, minLength: 1, maxLength: 500, description: 공급자의 전사에서 특수 태그만 뺀 글 }
+                  seconds: { type: number, minimum: 0.5, maximum: 10, description: 받은 WAV의 표본 수로 잰 길이 }
+                  generation: { type: integer, minimum: 1, description: 요청과 결과 반환 때 확인한 동의 세대 }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "405": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+        "504": { $ref: "#/components/responses/Error" }
   /api/trips/{code}/voice-match:
     parameters: [{ $ref: "#/components/parameters/code" }]
     post:

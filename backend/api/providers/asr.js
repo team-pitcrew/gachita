@@ -3,6 +3,8 @@
 // 보내는 것: 발화 하나의 소리(16 kHz 모노 WAV), 그 발화의 Pleos 초안, 여행이 아는 낱말. 11/14 실측(2구간 56쌍)과 같은 지시다.
 // 토큰은 머리말로만 보내고 로그·응답에 남기지 않는다.
 
+import { setTimeout as pause } from "node:timers/promises";
+
 const MODEL = "nemo_transcribe30";
 // 상대 서버는 IP당 초당 2건이다. API 파드 둘이 한 노드(한 IP)로 나가므로 파드마다 1.1초 간격(합쳐 초당 2건 아래).
 const gapMs = () => Number(process.env.ASR_GAP_MS ?? 1100);
@@ -60,13 +62,66 @@ const suspicious = (text, draft) => {
   return distance(t, d) > d.length / 2 || (repeats(t) && !repeats(d));
 };
 
-let slot = 0; // 다음 요청을 보내도 되는 시각. 이 프로세스의 모든 재전사가 함께 지킨다
-const sleep = (ms) => new Promise((ok) => setTimeout(ok, ms));
-const wait = async () => {
+let slot = 0; // 다음 요청을 보내도 되는 시각. 첫 전사와 재전사가 함께 지킨다
+const wait = async (signal) => {
   const now = Date.now();
   slot = Math.max(slot, now) + gapMs();
-  await sleep(slot - gapMs() - now);
+  await pause(Math.max(0, slot - gapMs() - now), undefined, { signal });
 };
+
+let transcribing = 0;
+// 웹의 첫 전사(T96): Pleos 초안이나 추정 문장을 넣지 않는다. 대기까지 제한하고 공급자는 한 번만 부른다.
+// stillOk는 DB 읽기를 마친 뒤 돌아온다. 공급자 응답을 기다리는 동안 DB 연결·잠금을 점유하지 않는다.
+export async function transcribe(wav, stillOk, callerSignal) {
+  if (!asrReady()) return { reason: "unconfigured" };
+  if (transcribing >= 8) return { reason: "rate_limited" };
+  const configured = timeoutMs();
+  const deadline = AbortSignal.timeout(Number.isFinite(configured) && configured > 0 ? Math.min(20_000, Math.ceil(configured)) : 10_000);
+  const signal = callerSignal ? AbortSignal.any([deadline, callerSignal]) : deadline;
+  transcribing++;
+  try {
+    await wait(signal);
+    await stillOk();
+    signal.throwIfAborted();
+    const res = await fetch(`${process.env.ASR_URL.replace(/\/$/, "")}/chat/completions`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${process.env.ASR_TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        model: MODEL,
+        temperature: 0,
+        max_tokens: 512,
+        chat_template_kwargs: { enable_thinking: false },
+        skip_special_tokens: false,
+        messages: [{ role: "user", content: [
+          { type: "text", text: "Transcribe the following audio in Korean exactly as spoken. Do not translate. Return only the spoken words. Return an empty string for silence. Do not invent dialogue or speaker names." },
+          { type: "audio_url", audio_url: { url: `data:audio/wav;base64,${wav.toString("base64")}` } },
+        ] }],
+      }),
+      signal,
+    });
+    if (!res.ok) {
+      await res.body?.cancel();
+      if (res.status === 429) {
+        slot = Math.max(slot, Date.now() + BACKOFF[0]); // 재전사도 함께 물러서되 이 음성은 재전송하지 않는다.
+        return { reason: "rate_limited" };
+      }
+      return { reason: "upstream" };
+    }
+    const choice = (await res.json())?.choices?.[0];
+    const content = choice?.message?.content;
+    signal.throwIfAborted();
+    if (typeof content !== "string" || choice.finish_reason === "length") return { reason: "bad_response" };
+    const clean = content.replace(/<[^>]*>/g, "").trim();
+    if (!clean) return { reason: "empty" };
+    if (clean.length > 500 || clean.includes("\0") || !clean.isWellFormed()) return { reason: "bad_response" };
+    return { text: clean };
+  } catch (e) {
+    if (e?.status) throw e; // 호출 직전의 인증·동의·세대 검사를 공급자 장애로 바꾸지 않는다.
+    return { reason: callerSignal?.aborted ? "cancelled" : deadline.aborted ? "timeout" : "unreachable" };
+  } finally {
+    transcribing--;
+  }
+}
 
 // 다시 받아 적은 글 { text } 또는 원문으로 남는 이유 { reason }. 보내기 직전마다 stillOk()로 다시 본다 —
 // 그 사이 클립이 지워졌거나 동의가 철회됐거나 글이 지워졌으면 보내지 않는다(기다리는 동안과 429 뒤에도).

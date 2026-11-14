@@ -87,12 +87,13 @@ before(async () => {
     for await (const c of req) chunks.push(c);
     const body = JSON.parse(Buffer.concat(chunks).toString());
     const prompt = body.messages[0].content[0].text;
-    const draft = /draft from another recognizer \(may contain errors\): "(.*)"\. Context:/.exec(prompt)[1];
+    const draft = /draft from another recognizer \(may contain errors\): "(.*)"\. Context:/.exec(prompt)?.[1];
     asr.calls.push({ path: req.url, auth: req.headers.authorization, body, prompt, draft });
     const hook = asr.onCall;
     asr.onCall = null;
-    await hook?.();
-    const reply = (status, content) => (res.writeHead(status, { "content-type": "application/json" }), res.end(JSON.stringify(status === 200 ? { choices: [{ message: { content } }] } : { error: {} })));
+    await hook?.(req, res);
+    const reply = (status, content, finishReason) => (res.writeHead(status, { "content-type": "application/json" }), res.end(JSON.stringify(status === 200 ? { choices: [{ message: { content }, finish_reason: finishReason }] } : { error: {} })));
+    if (draft === undefined) return reply(asr.rawReply?.status ?? 200, asr.rawReply?.content ?? "<spk:0> 지금 보이는 길이 예쁘다.", asr.rawReply?.finish_reason);
     if (draft.includes("고장")) return reply(500);
     if (draft.includes("붐빔") && asr.calls.filter((c) => c.draft === draft).length === 1) return reply(429);
     if (draft.includes("되풀이")) return reply(200, "되풀이 되풀이 되풀이 되풀이 되풀이 되풀이 되풀이 되풀이 ");
@@ -677,7 +678,7 @@ const wav = (freq, seconds) => {
 };
 const postRaw = (path, buf, token) => fetch(base + path, { method: "POST", headers: token ? { authorization: `Bearer ${token}` } : {}, body: buf });
 // 천천히 올리는 본문: 앞 조각만 보내 두고, 서버가 첫 확인을 마칠 때까지 기다린 뒤 release()로 나머지를 보낸다(업로드 중의 경합 재현).
-const slowPost = async (path, buf, token) => {
+const slowPost = async (path, buf, token, headers = {}) => {
   let release;
   const gate = new Promise((ok) => (release = ok));
   const body = new ReadableStream({
@@ -688,7 +689,7 @@ const slowPost = async (path, buf, token) => {
       c.close();
     },
   });
-  const done = fetch(base + path, { method: "POST", headers: { authorization: `Bearer ${token}` }, body, duplex: "half" });
+  const done = fetch(base + path, { method: "POST", headers: { authorization: `Bearer ${token}`, ...headers }, body, duplex: "half" });
   await new Promise((ok) => setTimeout(ok, 200));
   return { release, done };
 };
@@ -1759,4 +1760,170 @@ test('90일 전 여행의 새 영상과 이전 48시간 기한을 가진 영상�
   await w.worker.tick();
   assert.equal((await tripsDb().query('SELECT count(*)::int AS n FROM short_generations WHERE id=$1',[job.id])).rows[0].n,1);
  } finally {delete process.env.SHORTS_ENABLED;delete process.env.HF_CREDENTIALS;delete process.env.SHORTS_DAILY_SECONDS;}
+});
+
+test("웹 첫 전사는 실제 공급자 계약·전원 동의·세대·취소를 지키며 원음을 저장하지 않습니다(T96)", async (t) => {
+  const keys = ["ASR_URL", "ASR_TOKEN", "ASR_GAP_MS", "ASR_TIMEOUT_MS"];
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  t.after(() => {
+    for (const key of keys) previous[key] === undefined ? delete process.env[key] : process.env[key] = previous[key];
+    asr.rawReply = undefined;
+    asr.onCall = null;
+  });
+  const configure = () => Object.assign(process.env, { ASR_URL: `http://127.0.0.1:${fakeAsr.address().port}/asr/v1/`, ASR_TOKEN: "test-asr-token", ASR_GAP_MS: "20", ASR_TIMEOUT_MS: "3000" });
+  const setup = async () => {
+    const [, trip] = await call("POST", "/api/trips", {});
+    const [, caller] = await join(trip.code, "운전자", "ROW_1_LEFT");
+    const [, passenger] = await join(trip.code, "동승자", "ROW_1_RIGHT");
+    return { trip, caller, passenger, path: `/api/trips/${trip.code}`, url: `/api/trips/${trip.code}/transcriptions?generation=1` };
+  };
+  const upload = (f, overrides = {}) => fetch(base + (overrides.url ?? f.url), {
+    method: "POST", body: overrides.body ?? wav(210, 1), signal: overrides.signal,
+    headers: { "content-type": "audio/wav", authorization: `Bearer ${f.caller.token}`, ...overrides.headers },
+  });
+  const pending = () => {
+    let resolve;
+    const promise = new Promise((ok) => { resolve = ok; });
+    return { promise, resolve };
+  };
+  configure();
+
+  await t.test("원본 WAV를 한 번 보내고 글·길이·세대만 반환하며 발화와 클립을 저장하지 않습니다", async () => {
+    const f = await setup();
+    const raw = wav(210, 1.25);
+    const before = asr.calls.length;
+    const res = await upload(f, { body: raw });
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), { text: "지금 보이는 길이 예쁘다.", seconds: 1.25, generation: 1 });
+    assert.equal(res.headers.get("cache-control"), "no-store");
+    assert.equal(asr.calls.length, before + 1);
+    const sent = asr.calls.at(-1);
+    assert.equal(sent.path, "/asr/v1/chat/completions");
+    assert.equal(sent.auth, "Bearer test-asr-token");
+    assert.equal(sent.body.model, "nemo_transcribe30");
+    assert.equal(sent.draft, undefined, "초안·가짜 대화를 공급자에게 넣지 않습니다");
+    assert.deepEqual(Buffer.from(sent.body.messages[0].content[1].audio_url.url.split(",")[1], "base64"), raw);
+    const [, transcript] = await call("GET", `${f.path}/transcript`, null, f.caller.token);
+    assert.deepEqual(transcript.utterances, []);
+    assert.equal((await tripsDb().query("SELECT count(*)::int AS n FROM recordings WHERE trip_code=$1", [f.trip.code])).rows[0].n, 0);
+  });
+
+  await t.test("미설정·무권한·미동의·옛 세대·잘못된 WAV는 공급자를 부르지 않습니다", async () => {
+    const f = await setup();
+    const outsider = await setup();
+    const before = asr.calls.length;
+    delete process.env.ASR_TOKEN;
+    assert.equal((await upload(f)).status, 503);
+    configure();
+    assert.equal((await upload(f, { headers: { authorization: "" } })).status, 401);
+    assert.equal((await upload(f, { headers: { authorization: `Bearer ${outsider.caller.token}` } })).status, 401);
+    assert.equal((await upload(f, { url: `${f.path}/transcriptions?generation=2` })).status, 409);
+    assert.equal((await upload(f, { url: `${f.path}/transcriptions` })).status, 400);
+    assert.equal((await upload(f, { headers: { "content-type": "application/json" } })).status, 400);
+    const stereo = wav(210, 1); stereo.writeUInt16LE(2, 22);
+    const rate = wav(210, 1); rate.writeUInt32LE(48000, 24);
+    const truncated = wav(210, 1).subarray(0, 20000);
+    for (const body of [Buffer.from("not audio"), wav(210, 0.49), wav(210, 10.01), stereo, rate, truncated])
+      assert.equal((await upload(f, { body })).status, 400);
+    assert.equal((await upload(f, { body: Buffer.alloc(400_001) })).status, 413);
+    const silence = wav(210, 1); silence.fill(0, 44);
+    const empty = await upload(f, { body: silence });
+    assert.equal(empty.status, 422);
+    assert.equal((await empty.json()).type, "invalid");
+    await call("PATCH", `${f.path}/participants/${f.passenger.id}`, { consent: false });
+    assert.equal((await upload(f)).status, 403, "호출자가 동의해도 동승자 철회 시 보내지 않습니다");
+    assert.equal(asr.calls.length, before);
+  });
+
+  await t.test("빈 답·잘못된 답·공급자 오류는 자막을 지어내거나 재시도하지 않습니다", async () => {
+    const f = await setup();
+    for (const [reply, expected] of [
+      [{ content: "<spk:0>  " }, 422], [{ content: {} }, 503], [{ content: "말".repeat(501) }, 503],
+      [{ content: "잘려서 끝나지 않은 문장", finish_reason: "length" }, 503],
+      [{ status: 500 }, 503], [{ status: 429 }, 429],
+    ]) {
+      asr.rawReply = reply;
+      const before = asr.calls.length;
+      const res = await upload(f);
+      assert.equal(res.status, expected);
+      assert.equal("text" in await res.json(), false);
+      assert.equal(asr.calls.length, before + 1, "429도 자동으로 다시 보내지 않습니다");
+    }
+    asr.rawReply = undefined;
+  });
+
+  await t.test("느린 업로드 도중 철회·재동의하면 세대가 달라진 원음을 보내지 않습니다", async () => {
+    const f = await setup();
+    const before = asr.calls.length;
+    const slow = await slowPost(f.url, wav(210, 1), f.caller.token, { "content-type": "audio/wav" });
+    await call("PATCH", `${f.path}/participants/${f.passenger.id}`, { consent: false });
+    await call("PATCH", `${f.path}/participants/${f.passenger.id}`, { consent: true }, f.passenger.token);
+    slow.release();
+    assert.equal((await slow.done).status, 409);
+    assert.equal(asr.calls.length, before);
+  });
+
+  await t.test("공급자 대기열에서도 동의를 다시 확인합니다", async () => {
+    const first = await setup();
+    const queued = await setup();
+    const entered = pending();
+    const release = pending();
+    process.env.ASR_GAP_MS = "350";
+    asr.onCall = async () => { entered.resolve(); await release.promise; };
+    const a = upload(first);
+    await entered.promise;
+    const before = asr.calls.length;
+    const b = upload(queued);
+    await new Promise((ok) => setTimeout(ok, 50));
+    await call("PATCH", `${queued.path}/participants/${queued.passenger.id}`, { consent: false });
+    release.resolve();
+    assert.equal((await a).status, 200);
+    assert.equal((await b).status, 403);
+    assert.equal(asr.calls.length, before, "대기 도중 철회한 음성은 보내지 않습니다");
+    configure();
+  });
+
+  await t.test("외부 호출 중 동의 변경을 막지 않고 철회·재동의 뒤 늦은 결과를 버립니다", async () => {
+    const f = await setup();
+    asr.onCall = async () => {
+      const started = performance.now();
+      assert.equal((await call("PATCH", `${f.path}/participants/${f.passenger.id}`, { consent: false }))[0], 200);
+      assert.ok(performance.now() - started < 1000, "공급자 응답 전에 동의 철회가 완료되어야 합니다");
+      await call("PATCH", `${f.path}/participants/${f.passenger.id}`, { consent: true }, f.passenger.token);
+    };
+    const res = await upload(f);
+    assert.equal(res.status, 409);
+    assert.equal("text" in await res.json(), false);
+    const [, profile] = await call("POST", "/api/profiles", { name: "검증 참가자" });
+    const [, caller] = await call("POST", `${f.path}/participants`, { seat: "ROW_2_LEFT", consent: true }, profile.token);
+    asr.onCall = async () => { assert.equal((await call("DELETE", "/api/profiles/me", null, profile.token))[0], 204); };
+    assert.equal((await upload({ ...f, caller }, { url: `${f.path}/transcriptions?generation=2` })).status, 401);
+  });
+
+  await t.test("제한 시간과 클라이언트 취소는 공급자 연결을 끊고 재시도하지 않습니다", async () => {
+    const f = await setup();
+    // 앞 대기열 예약을 비운 뒤 짧은 공급자 제한 시간을 시험합니다.
+    await new Promise((ok) => setTimeout(ok, 400));
+    process.env.ASR_TIMEOUT_MS = "150";
+    const timedOut = pending();
+    asr.onCall = async (_req, res) => { await new Promise((ok) => res.once("close", ok)); timedOut.resolve(); };
+    let before = asr.calls.length;
+    const res = await upload(f);
+    assert.equal(res.status, 504);
+    await timedOut.promise;
+    assert.equal(asr.calls.length, before + 1);
+    configure();
+    const entered = pending();
+    const disconnected = pending();
+    asr.onCall = async (_req, res) => { entered.resolve(); await new Promise((ok) => res.once("close", ok)); disconnected.resolve(); };
+    const controller = new AbortController();
+    before = asr.calls.length;
+    const response = upload(f, { signal: controller.signal });
+    const rejected = assert.rejects(response, { name: "AbortError" });
+    await entered.promise;
+    controller.abort();
+    await rejected;
+    await disconnected.promise;
+    assert.equal(asr.calls.length, before + 1);
+  });
 });
