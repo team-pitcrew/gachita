@@ -27,7 +27,7 @@ import { restStops, SOURCE as REST_STOPS_SOURCE } from "./rest-stops.js";
 import { shortGenerations, shortTemplateCatalog } from "./short-generations.js";
 import { shortAssets, revokeShortAssets } from "./short-assets.js";
 import { arrivalBriefing, deriveTodos, TODO_METHOD } from "./todos.js";
-import { addPlace, myTrips } from "./places.js";
+import { addPlace, myTrips, tripContents } from "./places.js";
 
 const WEB = fileURLToPath(new URL("../../frontend/web/", import.meta.url));
 const TRIPS_SQL = fileURLToPath(new URL("trips.sql", import.meta.url));
@@ -96,6 +96,7 @@ const ROUTE_WORDS = new Set(["api", "config", "trips", "participants", "requests
 for (const word of ["todos", "arrival-briefing"]) ROUTE_WORDS.add(word);
 for (const word of ["short-assets", "source"]) ROUTE_WORDS.add(word);
 ROUTE_WORDS.add("places");
+ROUTE_WORDS.add("contents");
 ROUTE_WORDS.add("rest-stops");
 ROUTE_WORDS.add("boarding-invites");
 for (const word of ["accounts", "sessions"]) ROUTE_WORDS.add(word);
@@ -1243,6 +1244,13 @@ async function handle(trip, { req, m, sub, id, leaf, b, query, profile }, client
     }
     if (m !== "POST") fail(405, "GET, POST만 됨");
     return changed(201, addPlace(trip, participantOf(req, trip), b, { text, num, int, oneOf }));
+  }
+
+  if (sub === "contents") {
+    // 콘텐츠 기록(F6): 프로필 토큰이 없는 기기(차)가 이 여행 하나를 /profiles/me/trips 항목과 같은 모양으로 읽는다(places.js).
+    if (id) fail(404, "없는 경로");
+    if (m !== "GET") fail(405, "GET만 됨");
+    return tripContents(trip, participantOf(req, trip));
   }
 
   if (sub === "moments" && m === "POST" && !id) {
