@@ -131,6 +131,12 @@ step("부탁을 남기고 상태를 끝까지 바꾸기", async () => {
   status(await call("POST", `${t}/requests`, { body: { by: "nobody", text: "x" } }), 400);
 });
 
+// 경로 위 휴게소(T97). 이미지에 휴게소 자료(rest-stops.json)가 함께 들어갔는지도 이것으로 본다
+step("경로 위 휴게소 고르기", async () => {
+  const r = status(await call("POST", "/api/rest-stops", { body: { from: { lat: 37.33, lng: 127.83 }, to: { lat: 37.7645, lng: 128.8996 } } }), 200);
+  same("첫 휴게소", r.items[0]?.name, "문막휴게소 강릉방향");
+});
+
 step("주차하면 기록 마감", async () => {
   const parked = status(await call("PATCH", t, { body: { status: "parked" } }), 200);
   same("주차 뒤 상태와 기록", [parked.status, parked.recording], ["parked", false]);

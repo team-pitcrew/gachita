@@ -9,6 +9,8 @@
 !backend/api/ride-links.js
 !backend/api/profile-lifecycle.js
 !backend/api/result-shares.js
+!backend/api/rest-stops.js
+!backend/api/rest-stops.json
 !backend/api/short-generations.js
 !backend/api/short-templates.js
 !backend/api/short-render.js
