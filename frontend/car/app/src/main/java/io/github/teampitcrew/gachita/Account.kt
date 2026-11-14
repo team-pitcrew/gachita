@@ -32,13 +32,6 @@ fun firstOnboardStep(p: AccountProfile?, hasToken: Boolean): OnboardStep = when 
     else -> OnboardStep.PROFILE
 }
 
-/** 가입·로그인 뒤: 동의가 없으면 동의, 로그인했고 목소리까지 있으면 끝(null), 아니면 프로필. */
-fun nextAfterAccount(p: AccountProfile, login: Boolean): OnboardStep? = when {
-    !p.consent -> OnboardStep.CONSENT
-    login && p.hasVoice -> null
-    else -> OnboardStep.PROFILE
-}
-
 /** 읽을 문장의 이름 부르기: 받침이 있으면 '이야', 없으면 '야'(시안 '나는 민준이야'). */
 fun callName(name: String): String {
     val n = name.trim()

@@ -24,10 +24,10 @@ class GroupScreensTest {
         assertNull(seatLabel("ROW_3_LEFT"))
     }
 
-    @Test fun `그룹 둘째 줄은 인원과 종류, 혼자인 동승 그룹에 초대가 있으면 초대 대기`() {
+    @Test fun `그룹 둘째 줄은 인원과 종류, 혼자인 동승 그룹은 그룹 저장 직후에도 초대 대기(시안 C16L)`() {
         assertEquals("4명  |  기본 그룹", groupLine(family))
         assertEquals("1명  |  초대 대기", groupLine(solo))
-        assertEquals("1명  |  동승 그룹", groupLine(solo.copy(invite = null)))
+        assertEquals("1명  |  초대 대기", groupLine(solo.copy(invite = null)))
         assertEquals("2명  |  동승 그룹", groupLine(solo.copy(members = solo.members + m("f", "지우", null))))
     }
 
@@ -41,8 +41,8 @@ class GroupScreensTest {
         assertEquals(listOf("g1", "g2"), groupsInOrder(listOf(solo, family)).map { it.id })
     }
 
-    @Test fun `구성원과 좌석은 자리 순서로, 자리 없는 사람은 마지막 한 줄`() {
-        assertEquals(listOf("운전석" to "아빠", "조수석" to "엄마", "뒤 왼쪽" to "서준", "자리 없음" to "하은"), seatLines(family.members))
+    @Test fun `구성원과 좌석은 자리 순서로, 자리 없는 사람은 시안처럼 줄을 두지 않음`() {
+        assertEquals(listOf("운전석" to "아빠", "조수석" to "엄마", "뒤 왼쪽" to "서준"), seatLines(family.members))
         assertEquals(listOf("운전석" to "아빠", "뒤 오른쪽" to "하은"), seatLines(listOf(m("girl", "하은", "ROW_2_RIGHT"), m("dad", "아빠", "ROW_1_LEFT"))))
     }
 
