@@ -20,6 +20,7 @@ import { googleIdentity, googlePublicConfig } from "./providers/google.js";
 import { cues, momentSpan, suggest } from "./scenes.js";
 import { embed, matchThreshold, similarity, wavMono } from "./providers/voice.js";
 import { rideLinks, redeemRideLink } from "./ride-links.js";
+import { restStops, SOURCE as REST_STOPS_SOURCE } from "./rest-stops.js";
 import { shortGenerations, shortTemplateCatalog } from "./short-generations.js";
 
 const WEB = fileURLToPath(new URL("../../frontend/web/", import.meta.url));
@@ -77,7 +78,7 @@ export function classify(e) {
 }
 
 // 로그의 경로 틀: 정한 낱말이 아닌 마디(여행 코드, id, 초대 코드)는 :p로 가린다. 웹 파일은 /(web) 하나로.
-const ROUTE_WORDS = new Set(["api", "config", "trips", "participants", "requests", "moments", "utterances", "transcript", "captions", "voice-match", "recordings", "scene-suggestions", "shortform", "short-templates", "short-plans", "short-generations", "file", "profiles", "me", "links", "google", "feed", "tokens", "photo", "voice", "groups", "members", "invites", "j"]);
+const ROUTE_WORDS = new Set(["api", "config", "trips", "participants", "requests", "moments", "utterances", "transcript", "captions", "voice-match", "recordings", "scene-suggestions", "shortform", "short-templates", "short-plans", "short-generations", "file", "profiles", "me", "links", "google", "feed", "tokens", "photo", "voice", "groups", "members", "invites", "j", "rest-stops"]);
 const routeOf = (pathname) =>
   pathname === "/healthz" ? pathname : pathname.startsWith("/api/") ? `/${pathname.split("/").filter(Boolean).map((s) => (ROUTE_WORDS.has(s) ? s : ":p")).join("/")}` : "/(web)";
 // ALB가 붙이는 추적 id(X-Amzn-Trace-Id)를 그대로 쓴다. 없거나 모양이 이상하면 새로.
@@ -96,6 +97,18 @@ const int = (v, min, max, name) => (Number.isInteger(v) ? num(v, min, max, name)
 const oneOf = (v, list, name) => (list.includes(v) ? v : fail(400, `${name}: ${list.join(", ")} 중 하나`));
 const bool = (v, name) => (typeof v === "boolean" ? v : fail(400, `${name}: true 또는 false`));
 const obj = (v, name) => (v && typeof v === "object" && !Array.isArray(v) ? v : fail(400, `${name}: 객체`));
+
+// 경로 위 휴게소(T97, rest-stops.js). 위치는 로그에 남지 않게 주소가 아니라 본문으로 받고 저장하지 않는다.
+// 범위는 우리나라 안(제주·독도 포함). 차가 위치를 모르면(0, 0) 400이고 차는 고정 목록으로 돌아간다.
+const point = (v, name) => (obj(v, name), { lat: num(v.lat, 33, 39, `${name}.lat`), lng: num(v.lng, 124, 132, `${name}.lng`) });
+function restStopsOf(b) {
+  const from = point(b.from, "from");
+  const heading = b.from.heading == null ? null : num(b.from.heading, 0, 360, "from.heading");
+  const to = b.to == null ? null : point(b.to, "to");
+  const remain = b.remainMeters == null ? null : int(b.remainMeters, 0, 2_000_000, "remainMeters");
+  const limit = b.limit == null ? 3 : int(b.limit, 1, 10, "limit");
+  return { items: restStops({ from, heading, to, remain, limit }), source: REST_STOPS_SOURCE };
+}
 
 const everyoneConsents = (trip) => trip.participants.length > 0 && trip.participants.every((p) => p.consent);
 const newCode = () => Array.from({ length: 6 }, () => CODE_CHARS[randomInt(CODE_CHARS.length)]).join("");
@@ -1306,6 +1319,10 @@ export const server = createServer(async (req, res) => {
       // 목소리 등록(…/voice)·발화 대조는 이진 본문(WAV)이다 — JSON으로 먼저 읽지 않는다.
       const binary = req.method === "POST" && (seg.at(-1) === "voice" || (seg[1] === "trips" && (seg[3] === "voice-match" || seg[3] === "recordings")));
       const body = !binary && (req.method === "POST" || req.method === "PATCH") ? await readBody(req, big ? 1_000_000 : MAX_BODY) : {};
+      if (seg[1] === "rest-stops" && !seg[2]) {
+        if (req.method !== "POST") fail(405, "POST만 됨");
+        return send(200, restStopsOf(body));
+      }
       if (seg[1] === "ride-links") return send(...(await rideLinks(req, seg.slice(2), { profileOf })));
       if (seg[1] === "trips" && seg[2] && seg[3] === "ride-links" && !seg[4])
         return send(...(await redeemRideLink(req, seg[2], body, { profileById, seats: SEATS })));

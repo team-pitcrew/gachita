@@ -270,6 +270,19 @@ test("잘못된 요청은 서버를 죽이지 않고 거절한다", async () => 
   assert.match(await page.text(), /가치타/);
 });
 
+test("경로 위 휴게소: 내비가 주는 위치·목적지로 고르고, 잘못된 좌표는 거절한다(T97)", async () => {
+  const gangneung = { lat: 37.7645236, lng: 128.8996276 };
+  const [ok, r] = await call("POST", "/api/rest-stops", { from: { lat: 37.33, lng: 127.83, heading: 70 }, to: gangneung, remainMeters: 110_000 });
+  assert.equal(ok, 200);
+  assert.equal(r.items[0].name, "문막휴게소 강릉방향");
+  assert.deepEqual(Object.keys(r.items[0]).sort(), ["lat", "lng", "meters", "name", "route"]);
+  assert.match(r.source, /한국도로공사/);
+  assert.deepEqual((await call("POST", "/api/rest-stops", { from: { lat: 37.33, lng: 127.83 } }))[1].items, [], "목적지도 방향도 없으면 빈 목록");
+  for (const bad of [{}, { from: { lat: 0, lng: 0 } }, { from: { lat: 37.3, lng: 127.8 }, to: { lat: 37.7 } }, { from: { lat: 37.3, lng: 127.8, heading: 400 } }, { from: { lat: 37.3, lng: 127.8 }, limit: 0 }])
+    assert.equal((await call("POST", "/api/rest-stops", bad))[0], 400, JSON.stringify(bad));
+  assert.equal((await call("GET", "/api/rest-stops"))[0], 405);
+});
+
 test("여행 저장소와 프로필 저장소가 서로 다른 DB에 있다(T23)", async () => {
   assert.equal((await tripsDb().query("SELECT to_regclass('profiles')")).rows[0].to_regclass, null, "여행 DB에 프로필 표가 없다");
   assert.equal((await profilesDb().query("SELECT to_regclass('trips')")).rows[0].to_regclass, null, "프로필 DB에 여행 표가 없다");
