@@ -605,13 +605,31 @@ async function printsOf(trip, which = () => true) {
 
 // 대조 값 조회(ADR-0023): 차가 이 여행의 등록값을 받아 가 차 안에서 대조한다. 녹음에 동의한 참가자가, 동의한 참가자의 값만.
 // 다른 임베더로 만든 값(길이가 다름)은 주지 않는다. 기준값을 함께 줘 차가 서버와 같은 기준을 쓴다.
+// 값을 모으는 동안(여행 DB와 프로필 DB는 서로 달라 한 트랜잭션으로 묶이지 않는다) 누군가 동의를 철회하면, 철회 전의 참가자 목록으로
+// 그 사람의 프로필 등록값을 읽어 내줄 수 있다. 그래서 값을 다 읽은 뒤 여행을 다시 읽어, 동의 세대가 그대로일 때만 돌려준다 —
+// 철회는 세대를 올리므로 세대가 같으면 그 사이 꺼진 동의가 없다. 달라졌으면 읽은 값을 버리고 새 여행으로 다시 한다.
+// 동의·세대·값이 한 시점의 것이 되고, 응답의 generation도 그 시점의 값이다. 여행 줄은 잠그지 않는다(voiceMatch와 같은 까닭).
 async function voicePrints(code, req) {
   if (req.method !== "GET") fail(405, "GET만 됨");
-  const trip = await withTrip(code, false, (t) => t);
-  if (!participantOf(req, trip).consent) fail(403, "녹음에 동의한 참가자만 받을 수 있음");
-  const items = (await printsOf(trip)).filter(([, v]) => v.vector.length === DIMS)
-    .map(([p, v]) => ({ participantId: p.id, vector: v.vector, seconds: v.seconds, source: v.source }));
-  return [200, { generation: trip.generation ?? 1, embedder: EMBEDDER, dims: DIMS, threshold: matchThreshold(), items }, "private, no-store"];
+  const read = async () => {
+    const trip = await withTrip(code, false, (t) => t);
+    if (!participantOf(req, trip).consent) fail(403, "녹음에 동의한 참가자만 받을 수 있음");
+    return trip;
+  };
+  let trip = await read();
+  for (let tries = 0; tries < 3; tries++) {
+    const prints = await printsOf(trip);
+    const after = await read();
+    if ((after.generation ?? 1) === (trip.generation ?? 1)) {
+      // 세대를 올리지 않고 빠진 사람(참가자 삭제)도 뺀다
+      const here = new Set(after.participants.filter((p) => p.consent).map((p) => p.id));
+      const items = prints.filter(([p, v]) => here.has(p.id) && v.vector.length === DIMS)
+        .map(([p, v]) => ({ participantId: p.id, vector: v.vector, seconds: v.seconds, source: v.source }));
+      return [200, { generation: after.generation ?? 1, embedder: EMBEDDER, dims: DIMS, threshold: matchThreshold(), items }, "private, no-store"];
+    }
+    trip = after;
+  }
+  fail(409, "동의가 바뀌는 중. 다시 받아 주세요");
 }
 
 // 발화 대조(ADR-0008·0019): 발화 음성과 좌석 구역(앞줄·뒷줄)을 받아 그 줄 참가자의 등록 목소리와 비교해
@@ -1259,8 +1277,12 @@ async function handle(trip, { req, m, sub, id, leaf, b, query, profile }, client
       // 한 묶음에 같은 순번이 두 번이면 앞의 것만(아래 ON CONFLICT DO UPDATE는 한 문장에서 같은 줄을 두 번 건드리지 못한다).
       const seen = new Set();
       const fresh = rows.filter((r) => r[9] === current && !seen.has(r[2]) && seen.add(r[2]));
-      const { rows: count } = await client.query("SELECT count(*)::int AS n FROM utterances WHERE trip_code = $1", [trip.code]);
-      if (count[0].n + fresh.length > MAX_TRIP_UTTERANCES) fail(409, `이 여행의 발화가 한도(${MAX_TRIP_UTTERANCES}줄)에 닿음`);
+      // 한도는 새로 생길 줄만 센다. 이미 받은 순번(다시 보냄, 화자만 채우기)은 줄을 늘리지 않는다 — 한도에 닿은 여행에서도 화자는 채워진다.
+      const { rows: count } = await client.query(
+        "SELECT count(*)::int AS n, (count(*) FILTER (WHERE device = $2 AND seq = ANY($3::bigint[])))::int AS had FROM utterances WHERE trip_code = $1",
+        [trip.code, device, fresh.map((r) => r[2])]
+      );
+      if (count[0].n + fresh.length - count[0].had > MAX_TRIP_UTTERANCES) fail(409, `이 여행의 발화가 한도(${MAX_TRIP_UTTERANCES}줄)에 닿음`);
       // 같은 (기기, 순번)은 다시 보내도 한 번만 남는다(멱등). 순서는 섞여도 좋다.
       for (let i = 0; i < fresh.length; i += 100) {
         const chunk = fresh.slice(i, i + 100);

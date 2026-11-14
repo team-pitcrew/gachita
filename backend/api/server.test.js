@@ -1328,10 +1328,38 @@ test("차가 대조 값을 받아 가 차 안에서 붙인 화자를 발화와 �
   assert.equal((await (await postRaw(`${t}/voice-match?row=2&device=car&seq=6`, wav(300, 1.5), a.token)).json()).applied, true);
   assert.deepEqual((await lines()).find((l) => l[0] === 6).slice(0, 3), [6, b.id, "server-voice"]);
 
+  // 한도(2만 줄)에 닿은 여행에서도 이미 받은 줄의 화자는 채운다. 새 줄만 거절한다
+  await up([{ seq: 7, at: at + 10, text: "창문 열어도 돼?" }]);
+  await tripsDb().query("INSERT INTO utterances (trip_code, device, seq, at, text, generation) SELECT $1, 'filler', g, $2, 'x', 1 FROM generate_series(1, 20000 - 7) g", [trip.code, at]);
+  assert.deepEqual((await up([{ seq: 7, at: at + 10, text: "창문 열어도 돼?", participantId: b.id, ...said }])), [200, { lastSeq: 7, generation: 1 }]);
+  assert.deepEqual((await lines()).find((l) => l[0] === 7 && l[1]).slice(0, 3), [7, b.id, "device-voice"]);
+  assert.equal((await up([{ seq: 7, at: at + 10, text: "창문 열어도 돼?", participantId: b.id, ...said }, { seq: 8, at: at + 11, text: "새 줄" }]))[0], 409, "새 줄은 한도에 걸림");
+  await tripsDb().query("DELETE FROM utterances WHERE trip_code = $1 AND device = 'filler'", [trip.code]);
+
+  // 값을 모으는 사이 누군가 동의를 철회하면, 철회 전 목록으로 읽은 그 사람의 프로필 값을 내주지 않는다(세대도 철회 뒤의 값)
+  const [, mom] = await call("POST", "/api/profiles", { name: "엄마" });
+  assert.equal((await json("/api/profiles/me/voice", value(1), mom.token)).status, 200, "프로필에도 값만 등록");
+  const [, pm] = await call("POST", `${t}/participants`, { seat: "ROW_1_RIGHT", consent: true }, mom.token);
+  assert.deepEqual((await call("GET", `${t}/voice-prints`, null, a.token))[1].items.find((p) => p.participantId === pm.id)?.source, "profile");
+  const pool = profilesDb();
+  const query = pool.query;
+  let raced = 0;
+  pool.query = async function (sql, ...rest) { // 프로필 값을 읽는 바로 그때 철회가 끼어든다
+    if (typeof sql === "string" && sql.includes("FROM voice_prints WHERE profile_id = ANY") && !raced++) await call("PATCH", `${t}/participants/${pm.id}`, { consent: false });
+    return query.call(this, sql, ...rest);
+  };
+  try {
+    const [status, body] = await call("GET", `${t}/voice-prints`, null, a.token);
+    assert.deepEqual([status, raced > 0, body.generation, body.items.some((p) => p.participantId === pm.id)], [200, true, 2, false]);
+  } finally {
+    pool.query = query;
+  }
+  await call("PATCH", `${t}/participants/${pm.id}`, { consent: true }, pm.token);
+
   // 동의가 꺼진 참가자의 값은 내주지 않고(서버에서도 지워짐), 그 사람은 화자로 붙지 않는다
   await call("PATCH", `${t}/participants/${b.id}`, { consent: false });
   const after = (await call("GET", `${t}/voice-prints`, null, a.token))[1];
-  assert.deepEqual([after.generation, after.items.map((p) => p.participantId)], [2, [a.id]]);
+  assert.deepEqual([after.generation, after.items.map((p) => p.participantId).sort()], [3, [a.id, pm.id].sort()]);
 });
 
 test("손님 참가자도 여행에 목소리를 등록하면 화자가 붙는다(T38·T37)", async () => {
