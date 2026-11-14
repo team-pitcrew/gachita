@@ -25,7 +25,7 @@ export function contentGroups(trips) {
     .filter((t) => Array.isArray(t.contents) && t.contents.length)
     .map((t) => {
       const items = [...t.contents].sort((a, b) => a.at - b.at);
-      return { trip: t, title: `${monthDay(items[0].at ?? t.createdAt)}  ${t.title || "함께 탄 여행"}`, items };
+      return { trip: t, title: `${monthDay(items[0].at ?? t.createdAt)}  ${t.title || "함께 탄 여행"}`, items: items.map((c) => ({ ...c, place: wayLabel(c, t.places) })) };
     });
 }
 
@@ -45,8 +45,29 @@ export function tripLine(places) {
 // 지도 아래 '동해고속도로 → 하나로마트 → 강릉 숙소': 출발·곧 도착을 뺀 장소 이름을 처음 나온 순서로.
 export const placeChain = (places) => [...new Set((Array.isArray(places) ? places : []).filter(named).filter((p) => !["start", "approaching"].includes(p.kind)).sort((a, b) => a.at - b.at).map((p) => p.name.trim()))].join(" → ");
 
-// 핀 글: 긴 제목은 줄인다.
-export const pinLabel = (title) => { const t = String(title ?? "").trim(); return t.length > 10 ? `${t.slice(0, 9)}…` : t; };
+// 장면의 자리 글. 서버는 그 시각 전의 마지막 장소 이름을 준다. 들른 곳(A)에 도착한 뒤이거나 다음 곳(B)에 곧 도착하는 중이면
+// 'B 가는 길'(시안 P34 '강릉 숙소 가는 길', player2 '하나로마트 가는 길'). 출발 뒤 첫 구간처럼 그 밖의 경우는 서버 글을 그대로 쓴다.
+export function wayLabel(content, places) {
+  const list = (Array.isArray(places) ? places : []).filter(named).filter((p) => Number.isFinite(p.at)).sort((a, b) => a.at - b.at);
+  const at = content?.at;
+  const last = list.findLast((p) => p.at <= at && ["start", "approaching", "arrived"].includes(p.kind));
+  if (last?.kind === "approaching") return `${last.name.trim()} 가는 길`;
+  if (last?.kind !== "arrived") return content?.place ?? null;
+  const from = last.name.trim();
+  const reached = (name) => list.some((p) => p.kind === "arrived" && p.at <= at && p.name.trim() === name);
+  const next = list.find((p) => p.at > at && p.kind === "arrived" && p.name.trim() !== from)
+    ?? list.findLast((p) => p.kind === "destination" && p.name.trim() !== from && !reached(p.name.trim()));
+  return next ? `${next.name.trim()} 가는 길` : content?.place ?? null;
+}
+
+// 핀 글(시안 '아빠보다 빠른 정답'): 길면 말한 사람 이름의 '○○의 '를 빼고, 그래도 길면 낱말 경계에서 줄인다.
+export const pinLabel = (title, names = []) => {
+  let t = String(title ?? "").trim();
+  for (const name of names) if (name && t.length > 10) t = t.replace(`${name}의 `, "");
+  if (t.length <= 10) return t;
+  const cut = t.slice(0, 10).lastIndexOf(" ");
+  return `${t.slice(0, cut > 0 ? cut : 9)}…`;
+};
 
 // mock: 서버에 장면 머리글(시안 '바다를 찾는 아빠와 이미 찾은 서준')의 원천이 없다. 말한 사람 이름으로 만든 글을 둔다(#392 플랜 표 '목업').
 export function headline(content) {
@@ -152,7 +173,7 @@ export function createContents({ getProfileToken, getTrip, getParticipant, getPa
       const pin = button("", () => { s.pin = item.id; paint(s); }, `content-pin tone-${i % 2}${s.pin === item.id ? " selected" : ""}`);
       pin.style.left = `${(x / W) * 100}%`; pin.style.top = `${(y / H) * 100}%`;
       pin.setAttribute("aria-label", `${item.title} 장면`);
-      pin.append(face(castOf(item, trip)[1] ?? castOf(item, trip)[0]), h("span", {}, pinLabel(item.title)));
+      pin.append(face(castOf(item, trip)[1] ?? castOf(item, trip)[0]), h("span", {}, pinLabel(item.title, (item.cast ?? []).map((p) => p.name))));
       box.append(pin);
     });
     if (!project) box.append(h("p", { className: "content-map-empty" }, "기록한 위치가 없어 길을 그리지 못했어요."));
