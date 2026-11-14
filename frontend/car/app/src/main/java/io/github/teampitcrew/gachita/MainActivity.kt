@@ -157,6 +157,7 @@ class MainActivity : ComponentActivity() {
                 if (v.consented) Live.rawGen = box.generation // 원음은 모두 동의한 세대로만 남긴다(T63)
                 if ("${t.code}:${box.generation}" != rawSeen) { rawSeen = "${t.code}:${box.generation}"; dropRaw(filesDir, t.code, below = box.generation) } // 옛 세대의 원음은 지운다
             }
+            if (v.autoStart) main.post(::autoRecord) // 모두 동의한 채 주행으로 바뀌면 버튼 없이 녹음(C03·C13)
         }
     private enum class Destination(val label: String) { RIDE("함께 타는 중"), CONVERSATION("대화 기록"), SHORTS("콘텐츠 기록") } // 콘텐츠 기록은 K3 전까지 쇼츠 화면
     private var destination by mutableStateOf(Destination.RIDE)
@@ -176,6 +177,8 @@ class MainActivity : ComponentActivity() {
     private var shortsCreate = false // 대화 기록의 '추천 장면 고르기'로 콘텐츠 기록 탭을 열면 만들기 화면부터
     private var afterStart by mutableStateOf<AfterStep?>(null) // 여행 마무리·장면 고르기(C22–C32, F5). null이면 콘텐츠 기록은 쇼츠 화면
     private var justResumed by mutableStateOf(false) // 기록 재개 뒤 새 말을 받기 전(시안 2026:1969 '중지한 지점부터 이어서 기록해요')
+    private var autoFailed = "" // 자동 시작이 실패한 여행·세대·판. 서버 여행이 바뀔 때만 다시 시도해 실패가 되풀이되지 않게
+    private var departing = false // 주행 알림(PATCH driving)이 통신 줄에 있음
     private var transcriptLoading by mutableStateOf(false)
     private var transcriptNote by mutableStateOf("")
     private var transcriptRequest = 0
@@ -298,7 +301,7 @@ class MainActivity : ComponentActivity() {
         override fun run() {
             val every = ++n % RESYNC_EVERY == 0
             if (every && retentionMs != null) expire()
-            refresh(resync = every || !s.online, prune = every); locate(); approaching()
+            refresh(resync = every || !s.online, prune = every); locate(); approaching(); depart()
             if (destination == Destination.CONVERSATION) loadTranscript()
             if (appVisible || s.recording) main.postDelayed(this, if (boarding.page == BoardingPage.QR) 2_000L else POLL_MS)
         }
@@ -384,6 +387,7 @@ class MainActivity : ComponentActivity() {
             if (it.restricted || it.gear != "P") closeBoarding() // 주행 제한·기어 변경은 QR을 즉시 가리고 초대를 폐기한다
             if (it.restricted && shortOf != null) stopShort() // 주행 중에는 숏폼을 틀지 않는다(T11)
             s = s.withGear(it.gear)
+            if (previousCar.gear != it.gear) depart()
             val (parking, arrived) = arrivalParking.observe(it.gear, it.restricted)
             arrivalParking = parking
             if (arrived) arrive()
@@ -533,7 +537,7 @@ class MainActivity : ComponentActivity() {
                 if (s.trip?.code != t.code) return@onSuccess // 그사이 삭제된 여행이나 새 여행: 늦게 온 응답으로 되살리지 않는다
                 val wasWithdrawing = s.offPending
                 s = (if (got == null) s.copy(online = true) else s.withTrip(keep(got))).polled()
-                if (wasWithdrawing && !s.offPending) s = s.copy(note = "동의를 철회했어요. 다시 녹음하려면 각자의 동의와 녹음 시작이 필요해요")
+                if (wasWithdrawing && !s.offPending) s = s.copy(note = "동의를 철회했어요. 다시 녹음하려면 각자의 동의가 필요해요")
                 consentSeenAt = System.currentTimeMillis()
                 upload(t, resync, prune) // 받은 여행의 동의 세대를 보관함에 반영한(철회면 글을 지운) 뒤에만 올린다
                 speakers(t) // 올릴 새 발화가 없어도 밀린 대조와 고침을 잇는다
@@ -818,10 +822,46 @@ class MainActivity : ComponentActivity() {
         car.here { la, ln, _ -> if (la != null && ln != null) Live.fix = Fix(la, ln, System.currentTimeMillis()) }
     }
 
-    /** 터치와 음성 모두 같은 최신 동의·주차 검사로 시작하며, 늦은 응답은 수음을 켜지 않는다. */
-    private fun startRecording(done: (Boolean, String) -> Unit = { _, _ -> }) {
+    /**
+     * 차가 기어 D로 나가면 여행을 주행으로 바꾼다(아직 대기·주차 상태일 때만, 조회마다 다시 시도). 서버는 모두 동의했을 때만 기록 표시를 켜고,
+     * 차는 그 값을 받아 autoRecord로 녹음을 시작한다. 동의가 없으면 서버가 켜지 않으므로 녹음도 시작하지 않는다.
+     */
+    private fun depart() {
+        val t = s.trip ?: return
+        // 이미 주행인데 서버 기록이 꺼져 있고 차가 아는 동의가 모두 켜졌으면(주행 전환 뒤에 동의가 모임) 한 번 더 알려 서버가 기록 표시를 다시 계산하게 한다
+        val again = t.status == "driving" && !t.recording && s.agreed && !s.started
+        if (carStatus.gear != "D" || (t.status !in setOf("boarding", "parked") && !again) || departing) return
+        val token = tokens.minByOrNull { it.key }?.value ?: return
+        departing = true
+        val url = server
+        bg({ Server(url).departed(t.code, token) }) { r ->
+            departing = false
+            r.onSuccess { got -> if (s.trip?.code == t.code && server == url) s = s.withTrip(keep(got)) }
+                .onFailure { Log.i(TAG, "주행 알림 미룸 ${if (it is ApiError) it.status else "연결"}") }
+        }
+    }
+
+    /**
+     * 자동 시작(C03·C13): 서버가 주행·모두 동의로 기록을 켰으면 시작 단추 없이 녹음한다. 시작할 때마다 서버에서 동의를 다시 읽는다.
+     * 실패한 여행 판에서는 다시 시도하지 않는다(서버 여행이 바뀌면 다시). 동의 확인이 끊겨 멈춘 뒤(T139)에도 다시 닿아 확인되면 이어서 녹음한다.
+     */
+    private fun autoRecord() {
+        val t = s.trip ?: return
+        if (isDestroyed || !s.autoStart || cancelRecordingStart != null) return
+        val key = "${t.code}:${t.generation}:${t.version}"
+        if (key == autoFailed) return
+        Log.i(TAG, "자동 녹음 시작 요청")
+        startRecording(auto = true) { ok, _ -> autoFailed = if (ok) "" else key }
+    }
+
+    /**
+     * 터치·음성·자동 모두 같은 최신 동의 검사로 시작하며, 늦은 응답은 수음을 켜지 않는다. 터치와 음성은 주차 중에만,
+     * 자동(auto)은 서버가 주행·모두 동의로 기록을 켰을 때만(Session.blockAutoStart) 시작한다.
+     */
+    private fun startRecording(auto: Boolean = false, done: (Boolean, String) -> Unit = { _, _ -> }) {
         val trip = s.trip
-        if (trip == null || carStatus.restricted || s.blockStart() != null) {
+        fun blocked(x: Session) = if (auto) x.blockAutoStart() else x.blockStart()
+        if (trip == null || !auto && carStatus.restricted || blocked(s) != null) {
             done(false, "Recording requires parking, a connection and every passenger's consent.")
             return
         }
@@ -832,17 +872,17 @@ class MainActivity : ComponentActivity() {
             if (!attempt.finish()) return
             main.removeCallbacks(timeout)
             cancelRecordingStart = null
-            s = s.copy(busy = false, note = if (ok) "" else "녹음을 시작하지 못했어요. 주차·동의·연결 상태를 확인해 주세요")
+            s = s.copy(busy = false, note = if (ok || auto) "" else "녹음을 시작하지 못했어요. 주차·동의·연결 상태를 확인해 주세요")
             done(ok, message)
         }
         cancelRecordingStart = { finish(false, "Recording did not start. The request timed out or was cancelled.") }
-        s = s.copy(busy = true, note = "동의를 확인하고 있어요")
+        s = s.copy(busy = true, note = if (auto) s.note else "동의를 확인하고 있어요")
         main.postDelayed(timeout, RECORDING_START_TIMEOUT_MS)
         fun current(): Boolean = !isDestroyed && server == url && attempt.accepts(s.trip, android.os.SystemClock.elapsedRealtime())
         car.readGear { gear ->
             if (!current()) { finish(false, "The trip changed before recording started."); return@readGear }
             s = s.withGear(gear)
-            if (carStatus.restricted || s.copy(busy = false).blockStart() != null) {
+            if (!auto && carStatus.restricted || blocked(s.copy(busy = false)) != null) {
                 finish(false, "Recording requires parking and every passenger's consent.")
                 return@readGear
             }
@@ -852,11 +892,11 @@ class MainActivity : ComponentActivity() {
                     if (!current()) { finish(false, "The trip changed or the request timed out."); return@post }
                     result.onSuccess { got ->
                         val ready = s.copy(busy = false).withTrip(got.trip)
-                        if (!attempt.accepts(got.trip, android.os.SystemClock.elapsedRealtime()) || carStatus.restricted || ready.blockStart() != null) {
+                        if (!attempt.accepts(got.trip, android.os.SystemClock.elapsedRealtime()) || !auto && carStatus.restricted || blocked(ready) != null) {
                             finish(false, "Consent or parking changed. Recording did not start.")
                         } else {
                             if (Live.mic == Mic.FAILED) { Live.set(Mic.OFF); askedMic = false }
-                            s = ready.withTrip(keep(got)).startRecording()
+                            s = ready.withTrip(keep(got)).startRecording(auto)
                             finish(s.recording, "Recording is enabled. Audio capture begins when the microphone is available after this voice command.")
                         }
                     }.onFailure { finish(false, "The server could not confirm passenger consent. Recording did not start.") }
@@ -877,7 +917,7 @@ class MainActivity : ComponentActivity() {
             s = s.copy(busy = true, note = "동의를 저장하고 있어요")
             bg({ Server(url).agree(trip.code, id, token) }) { result -> // 켜기는 한 번만, 뒤의 조회만 다시 묻는다(T122)
                 if (s.trip?.code != trip.code || server != url) return@bg
-                result.onSuccess { s = s.copy(busy = false, note = "본인의 동의를 저장했어요. 녹음은 홈에서 시작해 주세요").withTrip(keep(it)) }
+                result.onSuccess { s = s.copy(busy = false, note = "본인의 동의를 저장했어요. 모두 동의하면 출발할 때 자동으로 기록해요").withTrip(keep(it)) }
                     .onFailure { s = s.agreeFailed(it) }
             }
         }
@@ -1847,7 +1887,7 @@ class MainActivity : ComponentActivity() {
                     if (parked) CardAction("동승자 설정", onClick = ::openBoarding)
                 }
             },
-            button = if (mock != null) driveButton(true, mockPaused, true, true, true) else driveButton(s.recording, muted, s.agreed, carStatus.restricted, s.blockStart() == null, ended = ended),
+            button = if (mock != null) driveButton(true, mockPaused, true, true) else driveButton(s.recording, muted, s.agreed, carStatus.restricted, ended = ended),
             // 새 여행은 지금처럼 동의를 끈 뒤에만(#239). 그 전이면 여행 관리의 '새 여행 만들기'와 그 안내를 연다
             onButton = { if (!ended) recordingAction() else if (!s.agreed && !s.switchOn && !s.busy) newTrip() else managing = true }, modifier = modifier,
         )
