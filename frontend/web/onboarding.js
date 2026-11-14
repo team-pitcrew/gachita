@@ -5,11 +5,9 @@
 import { api, h, toast } from "./shared.js";
 import { appBar } from "./ride.js";
 import { CHARACTER_TYPES, characterImage, characterKey } from "./short-film.js";
-import { MIN_SECONDS, startVoice, voiceBars, VOICE_SECONDS } from "./voice-meter.js";
+import { MIN_SECONDS, startVoice, voiceBars, VOICE_SECONDS, WAVE_BARS as BARS } from "./voice-meter.js";
 
 export { MIN_SECONDS, VOICE_SECONDS };
-// 시안 P06 파형 막대 36개의 높이(px, 314×72 틀).
-const BARS = [23, 40, 57, 21, 38, 55, 19, 36, 53, 17, 34, 51, 15, 32, 49, 13, 30, 47, 11, 28, 45, 62, 26, 43, 60, 24, 41, 58, 22, 39, 56, 20, 37, 54, 18, 35];
 // 시안 P04의 앞 네 캐릭터(안경·힐링·캡모자·기본) 순서로 두고 나머지를 잇는다.
 const LABEL = Object.fromEntries(CHARACTER_TYPES);
 const ORDER = ["glasses", "healing", "cap", "basic", ...CHARACTER_TYPES.map(([key]) => key).filter((key) => !["glasses", "healing", "cap", "basic"].includes(key))];
