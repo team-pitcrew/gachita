@@ -189,11 +189,22 @@ class VoicePrints(dir: File, val trip: String, private val seal: Seal, now: Long
         savedAt = o.optLong("fetchedAt"); fetchedAt = savedAt
     }
 
-    /** 서버 응답으로 바꾼다. 임시 파일에 쓴 뒤 이름을 바꾼다. */
-    @Synchronized fun put(o: JSONObject, now: Long = System.currentTimeMillis()) {
+    private var dropped = false
+
+    /**
+     * 사본을 버리고 이 인스턴스를 닫는다: 이 차에서 동의를 철회했을 때(서버에 아직 전하지 못했어도 바로), 여행을 떠나거나 여행이 지워졌을 때.
+     * 값과 파일을 지우고, 그 뒤에 도착하는 조회 응답(앞서 시작한 요청)은 저장하지 않는다 — 지운 민감정보가 늦은 응답으로 되살아나지 않게.
+     * 버린 뒤에는 되돌리지 않는다. 다시 쓰려면 새 인스턴스를 만든다(다시 동의한 뒤 새로 받음).
+     */
+    @Synchronized fun drop() { dropped = true; clear() }
+
+    /** 서버 응답으로 바꾼다. 임시 파일에 쓴 뒤 이름을 바꾼다. 버린 인스턴스면 아무것도 저장하지 않는다(false) — 확인과 저장이 한 잠금 안. */
+    @Synchronized fun put(o: JSONObject, now: Long = System.currentTimeMillis()): Boolean {
+        if (dropped) return false
         read(o.put("fetchedAt", now))
         val tmp = File(file.path + ".tmp")
         tmp.writeText(seal.line(o.toString())); tmp.renameTo(file)
+        return true
     }
 
     /**
@@ -205,7 +216,8 @@ class VoicePrints(dir: File, val trip: String, private val seal: Seal, now: Long
         expire(now)
         if (!stale(now)) return false
         try {
-            put(fetch(), now); see(generation)
+            if (!put(fetch(), now)) return false // 받는 사이 버려짐(철회, 여행 삭제)
+            see(generation)
             return true
         } catch (e: java.io.IOException) {
             if (size == 0) throw e

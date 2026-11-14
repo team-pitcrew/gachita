@@ -155,4 +155,25 @@ class VoiceTest {
         assertEquals(listOf("match", "fixes", "send"), ran); assertTrue(failed is java.io.IOException)
         assertNull(speakerRound({}, {}, {}))
     }
+
+    @Test fun `철회하거나 여행이 지워지면 사본을 바로 버리고 늦은 응답으로 되살리지 않는다`() {
+        val low = vector(cases[0])
+        val file = File(tmp.root, "voiceprints-ABC123.json")
+
+        // 끊긴 상태에서 이 차로 철회: 서버의 세대를 받지 못해도 바로 지우고, 앞서 시작한 조회의 응답은 저장하지 않는다
+        val vp = VoicePrints(tmp.root, "ABC123", TEST_SEAL)
+        vp.put(prints(1, "dad" to low)); assertTrue(file.exists())
+        vp.drop()
+        assertFalse(file.exists()); assertNull(vp.match(low, listOf("dad")).who)
+        assertFalse(vp.put(prints(1, "dad" to low))); assertFalse(vp.refresh(System.currentTimeMillis(), 1) { prints(1, "dad" to low) })
+        assertFalse(file.exists()); assertEquals(0, vp.size)
+        assertEquals("다시 동의한 뒤에는 새로 받는다", 1, VoicePrints(tmp.root, "ABC123", TEST_SEAL).also { it.put(prints(2, "dad" to low)) }.size)
+        dropTrip(tmp.root, "ABC123")
+
+        // 조회 응답이 늦는 사이 여행이 지워짐(404 → 사본 버림 + dropTrip): 응답이 와도 파일을 만들지 않는다
+        val late = VoicePrints(tmp.root, "ABC123", TEST_SEAL)
+        assertFalse(late.refresh(System.currentTimeMillis(), 1) { late.drop(); dropTrip(tmp.root, "ABC123"); prints(1, "dad" to low) })
+        assertFalse(file.exists()); assertEquals(0, late.size)
+        assertTrue(tmp.root.listFiles().orEmpty().none { it.name.startsWith("voiceprints-") })
+    }
 }

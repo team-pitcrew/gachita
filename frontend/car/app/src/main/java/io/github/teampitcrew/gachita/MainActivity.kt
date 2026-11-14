@@ -640,6 +640,12 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * 대조 값 사본을 바로 버린다(ADR-0023): 이 차에서 동의를 철회할 때(끊겨서 서버에 전하지 못해도), 여행을 떠나거나 여행이 지워질 때.
+     * 진행 중인 조회의 늦은 응답도 저장되지 않는다. 철회 대기 중에는 대조가 돌지 않으니(clipsAllowed) 다시 받지도 않는다.
+     */
+    private fun dropPrints() { prints?.drop(); prints = null }
+
     private fun printsOf(code: String): VoicePrints = prints?.takeIf { it.trip == code } ?: VoicePrints(filesDir, code, Live.seal(this)).also { prints = it }
     private fun speakersOf(code: String): Speakers = speakers?.takeIf { it.trip == code } ?: Speakers(filesDir, code, Live.seal(this)).also { speakers = it; heardTick++ }
 
@@ -764,6 +770,7 @@ class MainActivity : ComponentActivity() {
 
     /** 철회는 네트워크·주행 상태와 무관하게 즉시 수음을 멈춘다. 전송 대기와 대상은 재시작 후에도 보존한다. */
     private fun turnOff(id: String? = null) {
+        dropPrints() // 철회는 서버 응답을 기다리지 않고 이 차의 목소리 대조 값부터 지운다
         s = s.turnOff(id).copy(note = "동의를 철회했어요. 원음과 대화를 지우고 있어요")
         s.trip?.let { dropRawAll(it.code) }
         refresh()
@@ -787,7 +794,7 @@ class MainActivity : ComponentActivity() {
         sweep(filesDir, Live.seal(this), System.currentTimeMillis(), retentionMs).forEach(Live::forget)
         tokens = emptyMap()
         s = Session(gear = s.gear)
-        offer = null; todoState = todoState.bind(null); arrivalRequest++; arrivalLoading = false; arrivalNote = ""; brief = null; speakers = null; prints = null; voiced = emptySet()
+        offer = null; todoState = todoState.bind(null); arrivalRequest++; arrivalLoading = false; arrivalNote = ""; brief = null; speakers = null; dropPrints(); voiced = emptySet()
     }
 
     // ---- 부탁을 경유지로(T9). 서버의 부탁 상태: held → proposed → accepted → reflected, 못 넣으면 held(openapi.yaml) ----
