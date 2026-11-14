@@ -23,7 +23,8 @@
   --r-ctl: 10px;
   --r-phone-card: 24px; /* 최종 시안(민준 개선안) 폰 카드·컨트롤 반경. 새로 바꾼 여행 화면부터 쓴다 */
   --r-phone-ctl: 16px;
-  --r-phone-char: 48px; /* 시안 Character 조각(사진·캐릭터 틀) 반경 */
+  --r-phone-char: 48px;
+  --r-phone-panel: 20px; /* 시안 브리핑 카드(P20)·대화 기록 날짜·부탁 칸(P44) 반경 */ /* 시안 Character 조각(사진·캐릭터 틀) 반경 */
   --pad: 20px;
   --mascot: url("/icons/gachita-192.png");
   --mascot-mark: url("/brand/mascot.svg"); /* 시안 Mascot(7:544) 24px 선 그림, 머리 줄(app bar)에 쓴다 */
@@ -691,11 +692,11 @@ input[type="file"]::file-selector-button {
 /* 대화 기록(최종 시안 P44). 머리·탭·바닥은 고정하고 본문만 스크롤한다. 대화 입력창은 두지 않는다. */
 .conversations-dialog { width: min(100%, 520px); height: 100dvh; max-height: 100dvh; max-width: 520px; margin: 0 auto; padding: 0; border-radius: 0; background: var(--bg); overflow: hidden; }
 .conversations-dialog[open] { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; gap: 12px; animation: none; }
-.conversations-dialog .app-bar { padding: max(8px, env(safe-area-inset-top)) var(--pad) 0; }
+.conversations-dialog .app-bar { padding: max(20px, env(safe-area-inset-top)) var(--pad) 0; } /* 시안 P44: 머리 줄 y 20, 탭 64, 제목 124 */
 .conversations-dialog .journey-tabs { margin: 0 var(--pad); }
 .conversation-body { overflow-y: auto; overscroll-behavior: contain; min-height: 0; scroll-behavior: auto; padding: 0 var(--pad) 20px; display: grid; align-content: start; gap: 12px; }
 .conversation-title { display: grid; gap: 12px; }
-.conversation-range { padding: 12px; border-radius: 20px; background: var(--accent-soft); font-size: 15px; font-weight: 500; line-height: 22px; }
+.conversation-range { padding: 12px; border-radius: var(--r-phone-panel); background: var(--accent-soft); font-size: 15px; font-weight: 500; line-height: 22px; }
 .conversation-thread { display: grid; gap: 12px; }
 .conversation-group { display: grid; gap: 12px; }
 .conversation-time { font-size: 13px; font-weight: 400; line-height: 18px; color: var(--ink-2); }
@@ -707,7 +708,7 @@ input[type="file"]::file-selector-button {
 .message-text { font-size: 17px; line-height: 26px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .conversation-message.grouped { margin-top: -6px; }
 .conversation-message.grouped .message-bubble { border-radius: 18px; }
-.conversation-ask { display: grid; gap: 6px; padding: 12px; border-radius: 20px; background: var(--accent-soft); }
+.conversation-ask { display: grid; gap: 6px; padding: 12px; border-radius: var(--r-phone-panel); background: var(--accent-soft); }
 .conversation-ask .meta { font-size: 13px; line-height: 18px; }
 .ask-quote { font-size: 17px; line-height: 26px; overflow-wrap: anywhere; }
 .conversation-empty { min-height: 240px; display: grid; align-content: center; justify-items: center; gap: 18px; padding: 32px; text-align: center; }
@@ -1091,7 +1092,7 @@ button.ob-other { justify-self: start; min-height: 40px; font-size: 13px; font-w
 .group-share-row > *, .group-share > .group-ghost { min-height: 48px; padding: 0; border-radius: var(--r-phone-ctl); background: var(--surface-2); color: var(--ink); font: inherit; font-size: 19px; line-height: 28px; font-weight: 700; letter-spacing: -0.01em; border: 0; display: grid; place-items: center; text-decoration: none; }
 /* v2 도착 브리핑(P19·P20·finalBrief, T141): 분류별 행동 항목. 'Briefing / action item / Phone'(2056:2246) */
 .near-line { font-size: 17px; line-height: 26px; }
-.brief-card { gap: 12px; padding: 16px 16px 18px; }
+.brief-card { gap: 12px; padding: 16px; border-radius: var(--r-phone-panel); } /* 시안 P20 먼저 할 일·살 것 카드: 반경 20·여백 16 */
 .brief-first { background: var(--accent-soft); }
 .brief-label { font-size: 15px; line-height: 22px; font-weight: 500; color: var(--ink-2); }
 .brief-first .brief-label { color: var(--accent); }
@@ -1100,13 +1101,13 @@ button.ob-other { justify-self: start; min-height: 40px; font-size: 13px; font-w
 .brief-count { font-size: 15px; line-height: 22px; font-weight: 700; }
 .brief-rows { display: grid; gap: 14px; }
 .brief-rows li { padding: 0; border: 0; }
-.brief-row { display: grid; grid-template-columns: 34px 1fr auto; align-items: center; gap: 10px; }
-.brief-emoji { font-size: 28px; line-height: 34px; text-align: center; }
+.brief-row { display: grid; grid-template-columns: 30px 1fr auto; align-items: center; gap: 12px; min-height: 48px; } /* 시안 행동 항목 318×48, 이모지 30 */
+.brief-emoji { font-size: 26px; line-height: 30px; text-align: center; }
 .brief-emoji.small { font-size: 24px; line-height: 28px; }
-.brief-copy { display: grid; min-width: 0; }
-.brief-copy strong { font-size: 19px; line-height: 26px; overflow-wrap: anywhere; }
+.brief-copy { display: grid; gap: 2px; min-width: 0; }
+.brief-copy strong { font-size: 19px; line-height: 28px; letter-spacing: -0.01em; overflow-wrap: anywhere; }
 .brief-copy small { font-size: 13px; line-height: 18px; color: var(--ink-2); }
-.brief-qty { font-size: 19px; line-height: 26px; font-weight: 700; white-space: nowrap; }
+.brief-qty { font-size: 19px; line-height: 28px; font-weight: 700; white-space: nowrap; }
 /* ---- 콘텐츠 기록(F6, 최종 시안 P33–P38·D補 emptyContent·player2·3·export2·3) ---- */
 :root { --tile-0: #fdf0dc; --tile-1: #fbe5ee; --map-bg: #efebe5; --map-road: #b8b0a3; --map-water: #b7d3d8; }
 @media (prefers-color-scheme: dark) { :root { --tile-0: #3a3122; --tile-1: #3a2733; --map-bg: #26231f; --map-road: #c9c0b2; --map-water: #5c7a80; } }
