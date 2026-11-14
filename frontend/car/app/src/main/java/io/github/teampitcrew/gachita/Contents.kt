@@ -244,30 +244,29 @@ private fun coverOf(item: ContentItem, trip: ContentTrip): CoverData {
  * 숏폼 표지(시안 'Archive / galleryCar' 400×550이 기준. listCar 104×143·listPhone 62×85·pin 80×110·playerCar 360×640은 같은 그림의 축소).
  * 폭 [width]/400 배로 여백·모서리·글자를 모두 줄이고, [height]가 다르면 가운데 여백만 늘거나 준다(playerCar).
  * 표지 안 글(18.75·40·16.25)은 영상 표지 그림의 글자라 차 화면 글자 단계(CarText)가 아니고, 그림처럼 함께 줄도록 dp로 잰다.
- * 바탕은 tint(CarTints, 차 화면 값), 글은 ink·ink-2. 시안 표지는 같은 변수의 밝은 값(tint-2 #FCF0D9 등)으로 그려져 있다 — 보고 참고.
+ * 바탕·글은 시안 그대로 밝은 종이 값(CarPaper: tint-1–5·ink·ink-2의 밝은 값). 표지는 어두운 화면 위에 놓는 그림이다.
  */
 @Composable
 private fun ContentCover(cover: CoverData, tint: Int, width: Dp, height: Dp = width * 550f / 400f) {
-    val c = MaterialTheme.colorScheme
     val k = width.value / 400f
     val d = LocalDensity.current
     fun s(v: Float) = with(d) { (v * k).dp.toSp() }
     val small = TextStyle(fontFamily = Pretendard, fontWeight = FontWeight.Medium, fontSize = s(18.75f), lineHeight = s(27.5f))
-    Column(Modifier.size(width, height).clip(RoundedCornerShape(25.dp * k)).background(CarTints[tint]).padding(30.dp * k),
+    Column(Modifier.size(width, height).clip(RoundedCornerShape(25.dp * k)).background(CarPaper.Tints[tint % CarPaper.Tints.size]).padding(30.dp * k),
         verticalArrangement = Arrangement.spacedBy(20.dp * k)) {
-        Text("${cover.date}  ${cover.trip}", style = small, color = c.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text("${cover.date}  ${cover.trip}", style = small, color = CarPaper.Ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
         Text(contentTwoLines(cover.quote), style = CarText.Title.copy(fontSize = s(40f), lineHeight = s(55f)),
-            color = c.onSurface, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            color = CarPaper.Ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
         Spacer(Modifier.weight(1f))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(15.dp * k, Alignment.CenterHorizontally)) {
             cover.faces.forEach { ContentFace(it, 140.dp * k) }
         }
         Text(cover.caption, Modifier.fillMaxWidth(), style = small.copy(fontWeight = FontWeight.Normal, fontSize = s(16.25f), lineHeight = s(22.5f)),
-            color = c.onSurfaceVariant, textAlign = TextAlign.Center, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            color = CarPaper.Ink2, textAlign = TextAlign.Center, maxLines = 1, overflow = TextOverflow.Ellipsis)
         Row(Modifier.fillMaxWidth()) {
-            Text("가치타", style = small, color = c.onSurfaceVariant, maxLines = 1)
+            Text("가치타", style = small, color = CarPaper.Ink2, maxLines = 1)
             Spacer(Modifier.weight(1f))
-            Text("▶ ${contentShortClock(cover.seconds)}", style = small, color = c.onSurface, maxLines = 1)
+            Text("▶ ${contentShortClock(cover.seconds)}", style = small, color = CarPaper.Ink, maxLines = 1)
         }
     }
 }
