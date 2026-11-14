@@ -86,15 +86,15 @@ class DriveTest {
     @Test fun briefFoldsAsksIntoShortActions() {
         val trash = SharedTodo("n4", "마트", "쓰레기 정리하기", "pending", 0, emptyList(), "remember", listOf(TodoItem("쓰레기", null)), listOf("dad"), "쓰레기 정리하기")
         // A D20 '화장실 가기 / 장보기 / 쓰레기 정리하기'
-        assertEquals(listOf(BriefLine(BriefIcon.TOILET, "화장실 가기"), BriefLine(BriefIcon.CART, "장보기"), BriefLine(BriefIcon.TRASH, "쓰레기 정리하기")),
-            briefLines(F4Mock.martNear.take(2) + trash))
+        assertEquals(listOf(NearRow(NearMark.TOILET, "화장실 가기"), NearRow(NearMark.CART, "장보기"), NearRow(NearMark.TRASH, "쓰레기 정리하기")),
+            nearRows(F4Mock.martNear.take(2) + trash))
         // every thing to buy is one '장보기' row; at most three rows; anything else keeps its title with a mark by its words
-        assertEquals(listOf(BriefLine(BriefIcon.CART, "장보기")), briefLines(F4Mock.mart.drop(1)))
-        assertEquals(listOf(BriefLine(BriefIcon.TOILET, "화장실 가기"), BriefLine(BriefIcon.COLD, "고기는 바로 냉장 보관"), BriefLine(BriefIcon.BAG, "체크인하고 가방 내리기")),
-            briefLines(F4Mock.lodge))
+        assertEquals(listOf(NearRow(NearMark.CART, "장보기")), nearRows(F4Mock.mart.drop(1)))
+        assertEquals(listOf(NearRow(NearMark.TOILET, "화장실 가기"), NearRow(NearMark.COLD, "고기는 바로 냉장 보관"), NearRow(NearMark.BAG, "체크인하고 가방 내리기")),
+            nearRows(F4Mock.lodge))
         val old = SharedTodo("o", "마트", "우유 꼭 사기", "pending", 0, emptyList()) // 이전 서버: 분류·제목 없음
-        assertEquals(listOf(BriefLine(BriefIcon.DOT, "우유 꼭 사기")), briefLines(listOf(old)))
-        assertTrue(briefLines(F4Mock.mart + F4Mock.lodge).size <= 3)
+        assertEquals(listOf(NearRow(NearMark.DOT, "우유 꼭 사기")), nearRows(listOf(old)))
+        assertTrue(nearRows(F4Mock.mart + F4Mock.lodge).size <= 3)
     }
 
     @Test fun gridHidesOnlyAnEmptyMiddleSeat() {

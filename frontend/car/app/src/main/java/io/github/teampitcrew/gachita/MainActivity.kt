@@ -1946,7 +1946,7 @@ class MainActivity : ComponentActivity() {
                 occupied = carStatus.occupied,
                 speaking = if (mock != null) F4Mock.talking(mock) else talking?.let { u -> sp?.get(u.seq)?.who }, consentNote = consentNote,
                 last = if (mock != null) mockLast() else last, unsent = if (parked) Live.pending else 0,
-                near = nearAsks?.let { (a, asks) -> a to briefLines(asks) },
+                near = nearAsks?.let { (a, asks) -> a to nearRows(asks) },
                 control = driveButton(true, paused, true, !parked), onControl = { if (mock == null) recordingAction() },
                 onGleo = { handoff.give(wake = false) }.takeIf { mock == null && s.recording && !muted && handoff.state == Handoff.State.OFF },
                 // 주행 중에도 철회는 바로(T11). 한 번 누르면 수음을 멈추고 이 여행의 원음과 대화를 지운다
@@ -1966,7 +1966,7 @@ class MainActivity : ComponentActivity() {
                 when {
                     o != null -> OfferCard(o, m)
                     enrolling != null && parked -> EnrollCard(t, m)
-                    nearAsks != null -> Surface(m, CarShape.Card, color = c.surface) { NearCard(nearAsks.first, briefLines(nearAsks.second), Modifier.padding(24.dp)) }
+                    nearAsks != null -> Surface(m, CarShape.Card, color = c.surface) { NearCard(nearAsks.first, nearRows(nearAsks.second), Modifier.padding(24.dp)) }
                     else -> HeardCard(
                         if (s.recording && muted || ended) "멈추기 전 마지막 대화" else "방금 받아 적은 말 ${Live.count}건",
                         // 시안은 제목만 둔다(부탁·할 일 수는 도착 전 브리핑·장소별 할 일에서). 주차 중 미전송 수는 원음을 잃지 않게 남긴다

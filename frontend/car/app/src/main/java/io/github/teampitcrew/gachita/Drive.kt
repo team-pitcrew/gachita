@@ -190,26 +190,26 @@ internal const val WAVE_BARS = 60
 internal val DESIGN_WAVE = listOf(8, 47, 23, 23, 12, 24, 71, 11, 105, 44, 60, 25, 20, 75, 15, 123, 47, 77, 41, 11, 35, 14, 70, 27, 48, 29, 15, 10, 10, 31,
     16, 36, 28, 22, 17, 10, 45, 24, 79, 63, 54, 51, 9, 48, 26, 108, 81, 77, 77, 17, 16, 16, 72, 53, 55, 54, 17, 17, 9, 28).map { it / 140f }
 
-internal enum class BriefIcon { TOILET, CART, TRASH, COLD, BAG, DOT }
+internal enum class NearMark { TOILET, CART, TRASH, COLD, BAG, DOT }
 
-internal data class BriefLine(val icon: BriefIcon, val text: String)
+internal data class NearRow(val icon: NearMark, val text: String)
 
 /**
  * D20 rows ('화장실 가기 / 장보기 / 쓰레기 정리하기'): one short action per ask with a monochrome mark (no emoji in the car), every thing to buy
  * folded into '장보기', at most three. Anything else keeps the ask's title (finalNear '고기는 바로 냉장 보관').
  * ponytail: keyword rule on the ask words. A short label from the server replaces it once the rules give one.
  */
-internal fun briefLines(asks: List<SharedTodo>): List<BriefLine> = asks.map { a ->
+internal fun nearRows(asks: List<SharedTodo>): List<NearRow> = asks.map { a ->
     val words = listOfNotNull(a.title, a.text) + a.items.map { it.name }
     fun has(re: String) = words.any { Regex(re).containsMatchIn(it) }
     val title = a.title ?: a.text
     when {
-        has("화장실") -> BriefLine(BriefIcon.TOILET, "화장실 가기")
-        a.category == "buy" -> BriefLine(BriefIcon.CART, "장보기")
-        has("쓰레기") -> BriefLine(BriefIcon.TRASH, "쓰레기 정리하기")
-        has("냉장|냉동|얼음") -> BriefLine(BriefIcon.COLD, title)
-        has("가방|짐|캐리어|트렁크") -> BriefLine(BriefIcon.BAG, title)
-        else -> BriefLine(BriefIcon.DOT, title)
+        has("화장실") -> NearRow(NearMark.TOILET, "화장실 가기")
+        a.category == "buy" -> NearRow(NearMark.CART, "장보기")
+        has("쓰레기") -> NearRow(NearMark.TRASH, "쓰레기 정리하기")
+        has("냉장|냉동|얼음") -> NearRow(NearMark.COLD, title)
+        has("가방|짐|캐리어|트렁크") -> NearRow(NearMark.BAG, title)
+        else -> NearRow(NearMark.DOT, title)
     }
 }.distinct().take(3)
 
@@ -282,7 +282,7 @@ internal data class LastLine(val who: String, val text: String)
 internal fun RecordView(
     status: DriveStatus, paused: Boolean, note: String, time: String, wave: List<Float>,
     people: List<Person>, seats: List<List<Seat>>, occupied: Set<String>, speaking: String?, consentNote: (Person) -> Pair<String, Color>?,
-    last: LastLine?, unsent: Int, near: Pair<Approach, List<BriefLine>>?, control: DriveButton, onControl: () -> Unit,
+    last: LastLine?, unsent: Int, near: Pair<Approach, List<NearRow>>?, control: DriveButton, onControl: () -> Unit,
     onGleo: (() -> Unit)?, onWithdraw: (() -> Unit)?, modifier: Modifier = Modifier,
 ) {
     val c = MaterialTheme.colorScheme
@@ -351,7 +351,7 @@ internal fun Wave(levels: List<Float>, live: Boolean, modifier: Modifier) {
  * block; before recording the C17 cards put it in the middle slot. Details are shown after parking (C20, finalBrief, flow F4).
  */
 @Composable
-internal fun NearCard(a: Approach, lines: List<BriefLine>, modifier: Modifier) {
+internal fun NearCard(a: Approach, lines: List<NearRow>, modifier: Modifier) {
     val c = MaterialTheme.colorScheme
     val semi = FontWeight.SemiBold
     Column(modifier, verticalArrangement = Arrangement.spacedBy(20.dp)) {
@@ -361,7 +361,7 @@ internal fun NearCard(a: Approach, lines: List<BriefLine>, modifier: Modifier) {
         }
         lines.forEach { l ->
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-                Box(Modifier.size(50.dp), contentAlignment = Alignment.Center) { BriefMark(l.icon, c.onSurface, 44.dp) } // 시안 56 칸, 줄 높이(Title 50)에 맞춤
+                Box(Modifier.size(50.dp), contentAlignment = Alignment.Center) { NearMarkIcon(l.icon, c.onSurface, 44.dp) } // 시안 56 칸, 줄 높이(Title 50)에 맞춤
                 Text(l.text, style = CarText.Title.copy(fontWeight = semi), maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
@@ -443,43 +443,43 @@ internal fun RecordControl(b: DriveButton, onClick: () -> Unit) {
 
 /** Small monochrome marks for the brief rows (no emoji in the car UI), drawn on a 24-unit grid. */
 @Composable
-private fun BriefMark(icon: BriefIcon, color: Color, size: Dp) {
+private fun NearMarkIcon(icon: NearMark, color: Color, size: Dp) {
     Canvas(Modifier.size(size)) {
         val k = this.size.width / 24
         val line = Stroke(2f * k, cap = StrokeCap.Round)
         fun p(vararg xy: Float) = Path().apply { moveTo(xy[0] * k, xy[1] * k); for (i in 2 until xy.size step 2) lineTo(xy[i] * k, xy[i + 1] * k) }
         fun o(x: Float, y: Float) = Offset(x * k, y * k)
         when (icon) {
-            BriefIcon.TOILET -> { // two figures and a divider, like the design's 🚻
+            NearMark.TOILET -> { // two figures and a divider, like the design's 🚻
                 drawCircle(color, 2f * k, o(6.5f, 4.5f)); drawRect(color, o(4.5f, 8f), Size(4f * k, 7f * k))
                 drawRect(color, o(4.8f, 15f), Size(1.4f * k, 6f * k)); drawRect(color, o(6.8f, 15f), Size(1.4f * k, 6f * k))
                 drawLine(color, o(12f, 3f), o(12f, 21f), 1.2f * k)
                 drawCircle(color, 2f * k, o(17.5f, 4.5f)); drawPath(p(17.5f, 8f, 21f, 16f, 14f, 16f).apply { close() }, color)
                 drawRect(color, o(15.8f, 16f), Size(1.4f * k, 5f * k)); drawRect(color, o(17.8f, 16f), Size(1.4f * k, 5f * k))
             }
-            BriefIcon.CART -> {
+            NearMark.CART -> {
                 drawPath(p(2f, 4f, 5f, 4f, 7.5f, 15f, 18f, 15f, 20.5f, 7f, 6.2f, 7f), color, style = line)
                 drawCircle(color, 1.8f * k, o(9f, 19.5f)); drawCircle(color, 1.8f * k, o(17f, 19.5f))
             }
-            BriefIcon.TRASH -> {
+            NearMark.TRASH -> {
                 drawLine(color, o(3.5f, 6f), o(20.5f, 6f), 2f * k)
                 drawPath(p(9f, 6f, 9f, 3f, 15f, 3f, 15f, 6f), color, style = line)
                 drawPath(p(6f, 6f, 7f, 21f, 17f, 21f, 18f, 6f), color, style = line)
                 drawLine(color, o(10f, 10f), o(10f, 17f), 1.6f * k); drawLine(color, o(14f, 10f), o(14f, 17f), 1.6f * k)
             }
-            BriefIcon.COLD -> { // snowflake: three crossing strokes with small tips
+            NearMark.COLD -> { // snowflake: three crossing strokes with small tips
                 listOf(0f, 60f, 120f).forEach { deg ->
                     val r = Math.toRadians(deg.toDouble()); val dx = (9 * Math.cos(r)).toFloat(); val dy = (9 * Math.sin(r)).toFloat()
                     drawLine(color, o(12f - dx, 12f - dy), o(12f + dx, 12f + dy), 2f * k, StrokeCap.Round)
                 }
                 drawCircle(color, 2f * k, o(12f, 12f))
             }
-            BriefIcon.BAG -> { // suitcase with a handle
+            NearMark.BAG -> { // suitcase with a handle
                 drawRoundRect(color, o(3f, 8f), Size(18f * k, 13f * k), CornerRadius(2.5f * k), style = line)
                 drawPath(p(9f, 8f, 9f, 4.5f, 15f, 4.5f, 15f, 8f), color, style = line)
                 drawLine(color, o(3f, 13f), o(21f, 13f), 1.6f * k)
             }
-            BriefIcon.DOT -> drawCircle(color, 3f * k)
+            NearMark.DOT -> drawCircle(color, 3f * k)
         }
     }
 }
