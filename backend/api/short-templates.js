@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
-export const MODEL = "bytedance/seedance-2.5/reference-to-video";
+// 만드는 쪽은 생성 일꾼(ADR-0025): Codex(gpt-6-astra, 추론 xhigh)가 스킬로 장면 그림을 그리고, 일꾼이 원음·자막과 합친다.
+export const MODEL = "gpt-6-astra";
 export const templates = [
   {
     id: "car-sitcom-v1",
@@ -11,7 +12,7 @@ export const templates = [
     minSeconds: 15,
     maxSeconds: 45,
     direction:
-      "Warm hand-drawn 2D animated sitcom inside a modern car. Confident thick charcoal outlines, simple white rounded characters, soft cel shading, warm mint upholstery, sunset through the windows. Dashboard-facing two-shot; clear eye-lines and readable expressions. Keep both complete character silhouettes and both arms visible. No static sticker collage. No photorealism.",
+      "Warm hand-drawn 2D sitcom frames inside a modern car. Confident thick charcoal outlines, the supplied white rounded characters exactly as drawn, soft cel shading, warm mint upholstery, sunset through the windows. Dashboard-facing two-shot; clear eye-lines and readable expressions. No photorealism, no human faces.",
   },
   {
     id: "travel-postcard-v1",
@@ -22,7 +23,7 @@ export const templates = [
     minSeconds: 15,
     maxSeconds: 45,
     direction:
-      "A beautifully illustrated moving travel postcard. Two rounded white characters in a car, warm watercolor landscape visible through the windows, restrained parallax, paper grain, sunlit sage and cream palette. Characters remain large and expressive. Keep complete silhouettes and both arms visible; no map labels, real landmarks, addresses, or location text.",
+      "Beautifully illustrated travel postcard frames. The supplied rounded white characters in a car, warm watercolor landscape through the windows, paper grain, sunlit sage and cream palette. Characters remain large and expressive; no map labels, real landmarks, addresses, or location text. No photorealism, no human faces.",
   },
 ];
 export const characters = new Set(
@@ -50,11 +51,9 @@ export function planShort(source, options = {}) {
   const template =
     templates.find((t) => t.id === (options.templateId ?? templates[0].id)) ??
     invalid("없는 쇼츠 템플릿");
-  if (
-    options.audioReference !== undefined &&
-    typeof options.audioReference !== "boolean"
-  )
-    invalid("audioReference: true 또는 false");
+  // 원음은 생성 일꾼까지만 가고 OpenAI로는 보내지 않는다(ADR-0025). 옛 앱이 false를 보내는 것은 받는다.
+  if (options.audioReference !== undefined && options.audioReference !== false)
+    invalid("audioReference: 원음은 외부 생성에 보내지 않아요");
   const eligible = source.scenes.filter(
     (s) => s.seconds >= 15 && s.seconds <= 45 && s.cues.length,
   );
@@ -103,7 +102,7 @@ export function planShort(source, options = {}) {
       cast.find((x) => x.participantId && x.participantId === c.participantId)
         ?.slot ?? null,
   }));
-  // 5~8초 촬영 단위. 마지막 조각도 모델의 4초 하한보다 짧아지지 않습니다.
+  // 5~8초 장면 그림 단위(스토리보드 한 칸 = 그림 한 장 = 켄 번스 한 조각).
   const count = Math.ceil(scene.seconds / 8);
   const shots = Array.from({ length: count }, (_, i) => {
     const start = round((scene.seconds * i) / count),
@@ -145,11 +144,11 @@ export function planShort(source, options = {}) {
     cast,
     cues,
     shots,
-    audioReference: options.audioReference === true,
-    externalData:
-      options.audioReference === true
-        ? ["선택 캐릭터 이미지", "발화 시각과 반응 지시", "장면별 원음"]
-        : ["선택 캐릭터 이미지", "발화 시각과 반응 지시"],
+    audioReference: false,
+    externalData: [
+      "OpenAI(미국)로: 장면의 받아 적은 글(이름 대신 캐릭터 번호)",
+      "OpenAI(미국)로: 출연 캐릭터 그림",
+    ],
     estimatedGenerationSeconds: shots.reduce(
       (n, s) => n + s.generationSeconds,
       0,
@@ -161,7 +160,7 @@ export function planShort(source, options = {}) {
             "일부 화자는 두 캐릭터와 연결되지 않았습니다. 이름을 추측하지 않습니다.",
           ]
         : []),
-      "발화 끝 시각은 기존 전사에서 추정한 값입니다. 정밀 립싱크는 실제 생성 결과에서 확인해야 합니다.",
+      "인물은 프로필 캐릭터 그림으로만 그리고 실제 얼굴·사진을 쓰지 않습니다. 소리는 원래 목소리입니다.",
     ],
   };
   return {
@@ -173,13 +172,3 @@ export function planShort(source, options = {}) {
   };
 }
 
-export function shotPrompt(plan, shot) {
-  const t = templates.find((t) => t.id === plan.templateId);
-  const timing = shot.turns
-    .map(
-      (x) =>
-        `${x.at.toFixed(2)}–${x.until.toFixed(2)} seconds: ${x.speakerSlot === null ? "unidentified off-screen voice; neither character impersonates it" : `character ${x.speakerSlot + 1} speaks; character ${2 - x.speakerSlot} listens`}; ${x.reaction}.`,
-    )
-    .join("\n");
-  return `${t.direction}\nCreate a single continuous ${shot.generationSeconds}-second animated shot, part ${shot.index + 1}/${plan.shots.length}. Reference image 1 is character 1 on the left. Reference image 2 is character 2 on the right. Preserve their exact shape, face, colors and accessories. Each character has exactly TWO arms; no additional limbs, duplicate bodies or morphing. Large characters occupy the central 65% of the frame. Leave top 15% and bottom 22% calm for titles and captions added later.\n${shot.beat === "hook" ? "Begin directly in a lively exchange; establish both characters in the first second." : shot.beat === "payoff" ? "Let the listener register the last remark with a clear blink and small delayed reaction. Hold the final reaction for half a second." : "Use tiny head turns, blinks and purposeful hand gestures. The listener reacts after the speaker, not continuously."}\nCamera stays inside the same car; gentle push-in only. No rapid cuts, camera orbit, outfit changes or characters appearing. No written words, subtitles, logos, watermark, fake UI or invented locations.\nTiming plan:\n${timing}\n${plan.audioReference ? "Use the attached original audio as the timing and articulation reference. Do not invent dialogue." : "No spoken dialogue or music. Animate the supplied turn timing; preserve pauses."}`;
-}

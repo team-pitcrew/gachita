@@ -13,7 +13,6 @@ import pg from "pg";
 import { classify, migrate, server, sweep, verifyGoogleLink, shortServiceContext } from "./server.js";
 import { shortGenerations } from "./short-generations.js";
 import { shortAssets } from "./short-assets.js";
-import { HiggsfieldError } from "./providers/higgsfield.js";
 import { captureLog } from "./log.js";
 import { cues, suggest } from "./scenes.js";
 import { endStores, profilesDb, tripsDb } from "./db.js";
@@ -1818,19 +1817,32 @@ async function shortFixture() {
   return {trip,path,a,b,plan,clip};
 }
 const shortBody=(f,key)=>({momentId:f.plan.momentId,templateId:f.plan.templateId,planHash:f.plan.planHash,generation:1,idempotencyKey:key,externalGenerationConsent:true});
+// 생성 일꾼(ADR-0025)의 자리에 서서 계약을 부른다. S3와 파일 검사만 이중으로 주입한다.
+const WORKER_TOKEN='w'.repeat(40);
+const workerReq=(method,body,token=WORKER_TOKEN)=>Object.assign(Readable.from(body?[body]:[]),{method,headers:{authorization:`Bearer ${token}`,'content-type':'video/mp4'}});
 const shortWorker=(extra={})=>{
- const objects=new Map();let submissions=0,removals=0;
- const provider={submit:async()=>({id:`request-${++submissions}`,statusUrl:'https://api.higgsfield.ai/requests/test/status',cancelUrl:'https://api.higgsfield.ai/requests/test/cancel'}),status:async()=>({status:'completed',videoUrl:'https://cdn.higgsfield.ai/test.mp4'}),remove:async()=>{removals++;},cancel:async()=>{}};
- const worker=shortGenerations(shortServiceContext,{ready:()=>true,provider,media:{put:async(k,b)=>{objects.set(k,b);},get:async k=>objects.get(k),sign:async k=>`https://media.example/${k}`,remove:async k=>{objects.delete(k);}},download:async()=>Buffer.from('video'),audio:async()=>Buffer.from('original audio'),render:async()=>Buffer.from('final MP4'),...extra});
- return {worker,objects,submissions:()=>submissions,removals:()=>removals};
+ const objects=new Map();
+ const service=shortGenerations(shortServiceContext,{ready:()=>true,media:{put:async(k,b)=>{objects.set(k,b);},get:async k=>objects.get(k),remove:async k=>{objects.delete(k);}},audio:async()=>Buffer.from('original audio'),probe:async(d,m,seconds)=>({seconds}),...extra});
+ const job=(id,leaf,method,body)=>service.worker(workerReq(method,body),['jobs',id,leaf],{});
+ return {service,objects,
+  claim:()=>service.worker(workerReq('POST'),['claim'],{}),
+  audio:id=>job(id,'audio','GET'),
+  result:(id,video=Buffer.from('final MP4'))=>job(id,'result','PUT',video),
+  fail:(id,errorCode)=>service.worker(workerReq('POST'),['jobs',id,'fail'],{errorCode})};
 };
-async function tickShort(worker,id){await tripsDb().query("UPDATE short_generations SET next_attempt_at=CASE WHEN id=$1 THEN now()-interval '1 hour' ELSE now()+interval '1 hour' END",[id]);await worker.tick();return (await tripsDb().query('SELECT * FROM short_generations WHERE id=$1',[id])).rows[0];}
+// 다른 시험이 남긴 대기 작업을 치워 이 작업만 받아 가게 한다.
+const only=(id)=>tripsDb().query("UPDATE short_generations SET state='failed' WHERE state='queued' AND id<>$1",[id]);
+async function tickShort(service,id){await tripsDb().query("UPDATE short_generations SET next_attempt_at=CASE WHEN id=$1 THEN now()-interval '1 hour' ELSE now()+interval '1 hour' END",[id]);await service.tick();return (await tripsDb().query('SELECT * FROM short_generations WHERE id=$1',[id])).rows[0];}
+const shortEnv=(extra={})=>Object.assign(process.env,{SHORTS_ENABLED:'true',SHORTS_WORKER_TOKEN:WORKER_TOKEN,SHORTS_DAILY_SECONDS:'1000',...extra});
+const shortEnvOff=()=>{for(const k of ['SHORTS_ENABLED','SHORTS_WORKER_TOKEN','SHORTS_DAILY_SECONDS','SHORTS_TRIP_JOBS'])delete process.env[k];};
 
-test('생성 API: 계획 확인·멱등·한도·자막 변경·철회와 다운로드 권한(T85)',async()=>{
- Object.assign(process.env,{SHORTS_ENABLED:'true',HF_CREDENTIALS:'test:secret',SHORTS_DAILY_SECONDS:'120'});
+test('생성 API: 계획 확인·멱등·한도·자막 변경·철회와 다운로드 권한(T85·T157)',async()=>{
+ shortEnv({SHORTS_DAILY_SECONDS:'120'});
  try{
   const f=await shortFixture();const body=shortBody(f,'same-request-key');
-  assert.equal((await call('GET','/api/short-templates'))[1].templates.length,2);
+  const catalog=(await call('GET','/api/short-templates'))[1];
+  assert.deepEqual([catalog.enabled,catalog.provider,catalog.templates.length],[true,'openai-codex',2]);
+  assert.ok(f.plan.externalData.every(x=>x.startsWith('OpenAI')));assert.equal(f.plan.audioReference,false);
   assert.equal((await call('GET',`${f.path}/short-generations/${'-'.repeat(36)}`,null,f.a.token))[0],404);
   assert.equal((await call('POST',`${f.path}/short-generations`,body))[0],401);
   assert.equal((await call('POST',`${f.path}/short-generations`,{...body,externalGenerationConsent:false},f.a.token))[0],400);
@@ -1840,69 +1852,68 @@ test('생성 API: 계획 확인·멱등·한도·자막 변경·철회와 다운
   const pair=await Promise.all([call('POST',`${f.path}/short-generations`,body,f.a.token),call('POST',`${f.path}/short-generations`,body,f.a.token)]);
   assert.deepEqual(pair.map(x=>x[0]).sort(),[200,202]);assert.equal(pair[0][1].id,pair[1][1].id);
   const id=pair[0][1].id;const job=`${f.path}/short-generations/${id}`;
-  assert.equal((await call('POST',`${f.path}/short-generations`,{...body,audioReference:true},f.a.token))[0],409);
+  assert.equal((await call('POST',`${f.path}/short-generations`,{...body,audioReference:true,idempotencyKey:'audio-reference'},f.a.token))[0],400,'원음은 외부 생성에 보내지 않는다');
   const other=await shortFixture();assert.equal((await call('GET',job,null,other.a.token))[0],401);
   assert.equal((await call('DELETE',job,null,f.b.token))[0],403);
-  process.env.SHORTS_DAILY_SECONDS='1';assert.equal((await call('POST',`${f.path}/short-generations`,{...body,idempotencyKey:'next-request-key'},f.a.token))[0],429);process.env.SHORTS_DAILY_SECONDS='120';
-  const w=shortWorker();let row;
-  for(let i=0;i<5;i++)row=await tickShort(w.worker,id);
-  assert.equal(row.state,'completed');assert.equal(w.submissions(),2);assert.equal(row.bytes,9);
+  process.env.SHORTS_DAILY_SECONDS='1';assert.equal((await call('POST',`${f.path}/short-generations`,{...body,idempotencyKey:'next-request-key'},f.a.token))[0],429);process.env.SHORTS_DAILY_SECONDS='1000';
+  // 일꾼 경로는 일꾼 토큰만 받는다(참가자 토큰·틀린 토큰은 401).
+  for(const token of [undefined,f.a.token,'x'.repeat(40)])assert.equal((await call('POST','/api/short-worker/claim',{},token))[0],401);
+  const w=shortWorker();await only(id);
+  const [claimed,leased]=await w.claim();
+  assert.equal(claimed,200);assert.equal(leased.id,id);assert.match(leased.template.direction,/no human faces/);
+  assert.deepEqual(leased.plan.cues.map(c=>c.text),['함께 떠나니 좋다']);assert.equal(leased.audio,`/api/short-worker/jobs/${id}/audio`);
+  assert.deepEqual(await w.claim(),[204],'임대한 작업은 다시 주지 않는다');
+  assert.equal((await call('GET',job,null,f.a.token))[1].state,'generating');
+  assert.equal((await w.audio(id))[1].toString(),'original audio');
+  const bad=shortWorker({probe:async()=>{throw {status:400,error:'9:16 세로 영상이 필요해요'};}});
+  await assert.rejects(bad.result(id),e=>e.status===400);assert.equal(bad.objects.size,0);
+  const [done,view]=await w.result(id);assert.equal(done,200);assert.equal(view.state,'completed');assert.equal(view.progress.completedShots,view.progress.totalShots);
   assert.equal((await call('GET',job,null,f.a.token))[1].result.url,`${job}/file`);
   const req={method:'GET',headers:{authorization:`Bearer ${f.a.token}`}};
-  const downloaded=await w.worker.request(req,f.trip.code,'short-generations',id,'file',{});assert.equal(downloaded[1].toString(),'final MP4');
+  assert.equal((await w.service.request(req,f.trip.code,'short-generations',id,'file',{}))[1].toString(),'final MP4');
+  await assert.rejects(w.result(id),e=>e.status===410,'끝난 작업에 다시 올릴 수 없다');
   await call('PATCH',`${f.path}/captions/short-test/1`,{generation:1,expectedVersion:0,text:'고친 자막'},f.a.token);
   assert.equal((await call('GET',job,null,f.a.token))[0],409);
-  await tickShort(w.worker,id);row=await tickShort(w.worker,id);assert.equal(row.state,'canceled');assert.equal(row.cleanup_pending,false);assert.equal(w.objects.size,0);assert.equal(w.removals(),2);
-  // Two jobs and their rounded generation seconds remain budgeted after deletion.
-  assert.equal(row.plan.estimatedGenerationSeconds,16);
+  let row=await tickShort(w.service,id);assert.equal(row.state,'canceled');row=await tickShort(w.service,id);
+  assert.equal(row.cleanup_pending,false);assert.equal(w.objects.size,0);assert.equal(row.plan.estimatedGenerationSeconds,16);
   const [,plan2]=await call('POST',`${f.path}/short-plans`,{},f.a.token);
   const [,next]=await call('POST',`${f.path}/short-generations`,{...body,planHash:plan2.planHash,idempotencyKey:'after-edit-key'},f.a.token);
+  process.env.SHORTS_TRIP_JOBS='2';assert.equal((await call('POST',`${f.path}/short-generations`,{...body,planHash:plan2.planHash,idempotencyKey:'trip-cap-key'},f.a.token))[0],429,'여행당 상한');
   await call('PATCH',`${f.path}/participants/${f.b.id}`,{consent:false});
   assert.equal((await call('GET',`${f.path}/short-generations/${next.id}`,null,f.a.token))[0],403);
-  assert.equal((await tickShort(w.worker,next.id)).state,'canceled');await tickShort(w.worker,next.id);
- }finally{delete process.env.SHORTS_ENABLED;delete process.env.HF_CREDENTIALS;delete process.env.SHORTS_DAILY_SECONDS;}
+  await only(next.id);assert.deepEqual(await w.claim(),[204],'철회된 작업은 일꾼에게 주지 않고 취소한다');
+  assert.equal((await tripsDb().query('SELECT state FROM short_generations WHERE id=$1',[next.id])).rows[0].state,'canceled');
+ }finally{shortEnvOff();}
 });
 
-test('작업자는 중복 결제·제출 불명확 재시도·합성 중 삭제를 막습니다(T85)',async()=>{
- Object.assign(process.env,{SHORTS_ENABLED:'true',HF_CREDENTIALS:'test:secret',SHORTS_DAILY_SECONDS:'120'});
+test('일꾼 임대: 끝난 임대·실패 알림·만드는 중 삭제와 철회는 결과를 받지 않고 정리합니다(T157)',async()=>{
+ shortEnv({SHORTS_TRIP_JOBS:'10'});
  try{
-  const f=await shortFixture();const [,job]=await call('POST',`${f.path}/short-generations`,shortBody(f,'worker-cancel-test'),f.a.token);
-  const w=shortWorker({render:async()=>{await call('DELETE',`${f.path}/short-generations/${job.id}`,null,f.a.token);return Buffer.from('late result');}});
-  // Both replicas compete for the same database advisory lock.
-  await tripsDb().query("UPDATE short_generations SET next_attempt_at=now()+interval '1 hour'");await tripsDb().query('UPDATE short_generations SET next_attempt_at=now() WHERE id=$1',[job.id]);
-  await Promise.all([w.worker.tick(),w.worker.tick()]);assert.equal(w.submissions(),1);
-  for(let i=0;i<4;i++)await tickShort(w.worker,job.id);
-  let row=await tickShort(w.worker,job.id);assert.equal(row.state,'canceled');assert.equal(row.result_key,null);assert.equal(w.objects.size,0);
-  const [,uncertain]=await call('POST',`${f.path}/short-generations`,shortBody(f,'worker-unknown-test'),f.a.token);
-  let count=0;const u=shortWorker({provider:{submit:async()=>{count++;throw new HiggsfieldError('provider_connection',true);}}});
-  row=await tickShort(u.worker,uncertain.id);assert.equal(row.state,'submission_unknown');
-  for(let i=0;i<3;i++)await tickShort(u.worker,uncertain.id);assert.equal(count,1);
-  // A restarted worker with a saved 'submitting' state also stops without another charge.
-  await tripsDb().query("UPDATE short_generations SET state='submitting' WHERE id=$1",[uncertain.id]);row=await tickShort(u.worker,uncertain.id);assert.equal(row.state,'submission_unknown');assert.equal(count,1);
-  await call('DELETE',`${f.path}/short-generations/${uncertain.id}`,null,f.a.token);await tickShort(u.worker,uncertain.id);
- }finally{delete process.env.SHORTS_ENABLED;delete process.env.HF_CREDENTIALS;delete process.env.SHORTS_DAILY_SECONDS;}
+  const f=await shortFixture();const w=shortWorker();const make=async key=>(await call('POST',`${f.path}/short-generations`,shortBody(f,key),f.a.token))[1].id;
+  const off=shortWorker({ready:()=>false});const a=await make('lease-expired');await only(a);
+  assert.deepEqual(await off.claim(),[204],'꺼 두면 작업을 내주지 않는다');
+  assert.equal((await w.claim())[1].id,a);
+  let row=await tickShort(w.service,a);assert.deepEqual([row.state,row.error_code],['failed','worker_timeout']);
+  await assert.rejects(w.result(a),e=>e.status===410);await assert.rejects(w.audio(a),e=>e.status===410);
+  const b=await make('worker-fail');await only(b);await w.claim();
+  assert.deepEqual((await w.fail(b,'ffmpeg_error'))[1],{id:b,state:'failed'});
+  assert.equal((await tripsDb().query('SELECT error_code FROM short_generations WHERE id=$1',[b])).rows[0].error_code,'worker_ffmpeg_error');
+  await assert.rejects(w.fail(b,'again'),e=>e.status===410);
+  const c=await make('deleted-while-making');await only(c);await w.claim();
+  assert.equal((await call('DELETE',`${f.path}/short-generations/${c}`,null,f.a.token))[0],200);
+  await assert.rejects(w.result(c),e=>e.status===410);await tickShort(w.service,c);assert.equal(w.objects.size,0);
+  // 올리는 사이 철회: 받은 파일은 정리 대상에 남고 작업은 취소된다.
+  const d=await make('revoked-while-uploading');await only(d);await w.claim();
+  const racing=shortWorker({media:{put:async(k,v)=>{w.objects.set(k,v);await call('PATCH',`${f.path}/participants/${f.b.id}`,{consent:false});},get:async k=>w.objects.get(k),remove:async k=>{w.objects.delete(k);}}});
+  await assert.rejects(racing.result(d),e=>[403,410].includes(e.status));
+  row=(await tripsDb().query('SELECT * FROM short_generations WHERE id=$1',[d])).rows[0];
+  assert.deepEqual([row.state,row.cleanup_pending,row.object_keys],['canceled',true,[`shorts/${d}/final.mp4`]]);
+  row=await tickShort(w.service,d);assert.equal(row.cleanup_pending,false);assert.equal(w.objects.size,0);
+ }finally{shortEnvOff();}
 });
-test('생성을 꺼 둔 동안에도 동의 철회는 원음 사본과 결과를 정리하고 유료 요청은 보내지 않습니다(T85)',async()=>{
- Object.assign(process.env,{SHORTS_ENABLED:'true',HF_CREDENTIALS:'test:secret',SHORTS_DAILY_SECONDS:'120'});
- try{
-  const f=await shortFixture();const [,job]=await call('POST',`${f.path}/short-generations`,shortBody(f,'off-withdraw-test'),f.a.token);
-  const on=shortWorker();let calls=0,paid=0;const count=async()=>{calls++;return {status:'completed'};};
-  const off=shortWorker({ready:()=>false,provider:{submit:async()=>{paid++;return count();},status:count,cancel:count,remove:count},media:{put:async()=>{},sign:async k=>k,remove:async k=>{on.objects.delete(k);}}});
-  // Off and not finished: only re-checked, then pushed back. No submit, no status poll.
-  let row=await tickShort(off.worker,job.id);assert.equal(row.state,'queued');assert.equal(calls,0);assert.ok(new Date(row.next_attempt_at)>new Date());
-  row=await tickShort(on.worker,job.id);assert.equal(row.state,'generating');
-  row=await tickShort(off.worker,job.id);assert.equal(row.state,'generating');assert.equal(calls,0);
-  for(let i=0;i<4;i++)row=await tickShort(on.worker,job.id);assert.equal(row.state,'completed');assert.ok(on.objects.size>0);
-  await call('PATCH',`${f.path}/participants/${f.b.id}`,{consent:false});
-  row=await tickShort(off.worker,job.id);assert.equal(row.state,'canceled');assert.equal(row.cleanup_pending,true);assert.equal(calls,0);
-  // Cleanup may delete provider results, but never sends a new paid request.
-  row=await tickShort(off.worker,job.id);assert.equal(row.cleanup_pending,false);assert.equal(row.result_key,null);assert.equal(on.objects.size,0);assert.equal(paid,0);
- }finally{delete process.env.SHORTS_ENABLED;delete process.env.HF_CREDENTIALS;delete process.env.SHORTS_DAILY_SECONDS;}
-});
-
 
 test('90일 전 여행의 새 영상과 이전 48시간 기한을 가진 영상은 보존하고 철회하면 삭제합니다(T90)', async()=> {
- Object.assign(process.env,{SHORTS_ENABLED:'true',HF_CREDENTIALS:'test:secret',SHORTS_DAILY_SECONDS:'120'});
+ shortEnv();
  try {
   const f=await shortFixture();
   await tripsDb().query("UPDATE trips SET created_at=now()-interval '90 days', doc=jsonb_set(doc,'{createdAt}',to_jsonb((extract(epoch FROM now()-interval '90 days')*1000)::bigint)) WHERE code=$1",[f.trip.code]);
@@ -1912,19 +1923,17 @@ test('90일 전 여행의 새 영상과 이전 48시간 기한을 가진 영상�
   await migrate(); await migrate();
   const stored=(await tripsDb().query('SELECT expires_at,state FROM short_generations WHERE id=$1',[job.id])).rows[0];
   assert.equal(stored.expires_at,null); assert.equal(stored.state,'queued');
-  const w=shortWorker(); let row;
-  for(let i=0;i<5;i++)row=await tickShort(w.worker,job.id);
-  assert.equal(row.state,'completed'); assert.equal(w.submissions(),2);
+  const w=shortWorker(); await only(job.id); await w.claim(); await w.result(job.id);
   await sweep();
   const req={method:'GET',headers:{authorization:`Bearer ${f.a.token}`}};
-  assert.equal((await w.worker.request(req,f.trip.code,'short-generations',job.id,'file',{}))[1].toString(),'final MP4');
+  assert.equal((await w.service.request(req,f.trip.code,'short-generations',job.id,'file',{}))[1].toString(),'final MP4');
   await call('PATCH',`${f.path}/participants/${f.b.id}`,{consent:false});
-  row=await tickShort(w.worker,job.id); assert.equal(row.state,'canceled');
-  await tickShort(w.worker,job.id); assert.equal(w.objects.size,0);
+  let row=await tickShort(w.service,job.id); assert.equal(row.state,'canceled');
+  await tickShort(w.service,job.id); assert.equal(w.objects.size,0);
   await tripsDb().query("UPDATE short_generations SET updated_at=now()-interval '90 days' WHERE id=$1",[job.id]);
-  await w.worker.tick();
+  await w.service.tick();
   assert.equal((await tripsDb().query('SELECT count(*)::int AS n FROM short_generations WHERE id=$1',[job.id])).rows[0].n,1);
- } finally {delete process.env.SHORTS_ENABLED;delete process.env.HF_CREDENTIALS;delete process.env.SHORTS_DAILY_SECONDS;}
+ } finally {shortEnvOff();}
 });
 
 // 저장·경합 시험은 S3와 미디어 검사만 이중으로 주입합니다. 실제 ffprobe/파일 검증은 별도 이미지 실행으로 확인합니다.

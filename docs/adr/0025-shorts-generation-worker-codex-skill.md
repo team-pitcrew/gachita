@@ -1,0 +1,83 @@
+# ADR-0025: 쇼츠 서버 생성은 운영자 맥의 Codex 일꾼이 youtube-shorts-factory 스킬로 만든다
+
+* **상태:** 채택됨, 2026-11-15 — 힉스필드를 쓰지 않고 스킬 방식·OpenAI 구독 에이전트로(지환님 지시, 11/15)
+* **대체:** [ADR-0022](0022-shortform-video-on-device-and-server-generation-off.md)의 '서버의 힉스필드 생성'(1절 셋째 줄, 2절, 4절)과 [ADR-0021](0021-shortform-as-composition-data.md)의 '외부 영상 업체를 쓰지 않는다'. ADR-0022의 구성 재생·기기에서 만드는 영상, 결과 파일이 나가는 길(3절)은 그대로다.
+* **관련:** T157(#487), T85(#252·#257), T86(#255), [생성 API](../api/short-generation.md), [동의 문구](../api/voice.md)
+
+## 배경
+
+지환님 지시(11/15): 쇼츠 생성은 힉스필드를 쓰지 않고 팀이 쇼츠를 만들 때 쓰던 [youtube-shorts-factory](https://github.com/ninestonelee/youtube-shorts-factory) 스킬(MIT)을 서버에 두고 쓴다. 레퍼런스는 [이 쇼츠](https://www.youtube.com/shorts/KnC14OCrYro)이고, 인물은 참가자의 프로필 캐릭터 그림을 투사한다. 에이전트는 OpenAI(이 맥의 구독 계정 로그인, gpt-6-astra, 추론 xhigh)로 돌린다.
+
+이 맥에서 확인한 것(11/15):
+
+- Codex CLI(`codex-cli 0.157.0`)가 ChatGPT 구독으로 로그인돼 있다(`codex login status`).
+- `@openai/codex-sdk`(0.169.0)는 같은 로그인으로 스레드를 돌린다. `@openai/agents`는 API 키 방식이라 구독 로그인을 쓰지 못한다.
+- SDK로 돈 스레드가 내장 `image_gen`으로 9:16 그림을 만든다. `basic` 캐릭터를 붙여 차 뒷자리 장면을 그렸고 38초가 걸렸다(추론 low, 시험). API 키가 필요 없다.
+- 스킬은 이미지·영상·나레이션에 별도 파이프라인(`rfn_generator`)과 Google(Veo·TTS)을 쓴다. 그 파이프라인은 저장소에 없고, 이 맥에도 없다. 감정마다 영상 엔진을 고르는데 `ken_burns`($0)도 그중 하나다.
+
+## 검토한 선택
+
+| 선택 | 좋은 점 | 걸리는 점 |
+|---|---|---|
+| 구독 인증(`~/.codex/auth.json`)을 클러스터 Secret으로 옮겨 API 파드에서 Codex를 돌림 | 서버 안에서 끝남 | 개인 구독 자격이 맥 밖으로 나감. 토큰 갱신이 파드와 맥에서 엇갈림. API 이미지에 Codex·ffmpeg 무거운 작업 |
+| OpenAI API 키 + Agents SDK | 서버 표준 | 지시는 구독 계정. 호출마다 요금 |
+| **맥의 일꾼이 밖으로만 연결해 작업을 임대받음** | 구독 자격이 맥에 남음. API는 큐만 둠. 맥에 들어오는 연결이 없음 | 맥이 꺼져 있으면 작업이 대기하다 실패. 처리량은 맥 한 대 |
+| 스킬대로 Veo·TTS까지 | 움직이는 영상, 나레이션 | 장면당 요금·키·결제. 나레이션은 원래 목소리라는 제품의 핵심과 맞지 않음 |
+
+## 결정
+
+### 1. 어디서 도나
+
+- **API(AWS 서울 EKS)**는 작업을 받아 `short_generations`에 `queued`로 둔다. 앱 계약(`short-plans`, `short-generations`, `…/file`, 콘텐츠 기록)은 T85 그대로다.
+- **생성 일꾼**(`backend/api/shorts-worker/`, API 이미지에 들어가지 않음)은 운영자 맥에서 돈다. API에 HTTPS로 나가는 연결만 연다.
+  1. `POST /api/short-worker/claim`으로 가장 오래된 작업을 60분 임대한다. API는 내주기 전에 동의·원본을 다시 본다.
+  2. `GET …/jobs/{id}/audio`로 장면 원음을 받는다.
+  3. 결과를 `PUT …/jobs/{id}/result`(video/mp4)로 올리거나, `POST …/jobs/{id}/fail`로 알린다.
+- 일꾼은 사람 토큰이 아니라 **일꾼 토큰** 하나(`SHORTS_WORKER_TOKEN`, 32자 이상)로만 들어온다. 클러스터에는 SSM → ExternalSecret으로, 맥에는 `~/.config/gachita/shorts-worker.env`에 둔다. 저장소에는 없다.
+- **구독 인증은 맥 밖으로 나가지 않는다.** Codex는 맥의 `~/.codex` 로그인을 그대로 쓴다.
+- 임대가 끝날 때까지 결과도 실패도 오지 않으면 API가 `failed`(`worker_timeout`)로 바꾸고 다시 내주지 않는다. 같은 장면을 다시 만들려면 사람이 새로 요청한다.
+
+### 2. 스킬을 어떻게 쓰나
+
+스킬(`skill/`, 커밋 `4476e9a`에 고정, LICENSE 포함)을 작업 폴더에 두고 Codex 스레드(gpt-6-astra, 추론 xhigh, 작업 폴더 쓰기만)에 지침으로 준다.
+
+| 스킬 단계 | 가치타에서 |
+|---|---|
+| 1–2. 레퍼런스 자막 추출·포렌식 분석 | 위 레퍼런스 하나. 분석은 맥의 `~/.gachita-shorts/reference-analysis.md`에 한 번 만들어 두고 다음 작업이 다시 쓴다. 자막 원문은 남기지 않는다 |
+| 3. 30%+ 각색 | 레퍼런스의 감정 공식(Hook → 긴장 → Payoff)을 고른 장면에 옮긴다. **대사는 바꾸지 않는다**. 자막은 원래 말 그대로다 |
+| 4. Story JSON(schema 2.0) | 장면의 5–8초 칸마다 한 장. `video_engine`은 모두 `ken_burns` |
+| 5. 이미지 | 스킬의 'Korean actor, hyperrealistic' 고정값 대신 **참가자 프로필 캐릭터 그림**(`frontend/web/chars/{character}.png`)을 참조로 투사한다. 사람·실제 얼굴·사진은 그리지 않는다. 그림 안에 글자를 넣지 않는다. Codex 내장 `image_gen`(구독) |
+| 6. HTML 스토리보드 | 하지 않는다(사람 확인 단계 없음. 사람은 장면을 고르고 외부 생성에 동의했다) |
+| 7. 영상·자막 | Veo·TTS·BGM을 쓰지 않는다. 일꾼이 칸마다 켄 번스(ffmpeg)로 움직임을 주고, **원래 목소리**와 자막(`short-render.js`, ASS)을 합쳐 720×1280 MP4로 만든다 |
+
+API는 올라온 파일을 기본 영상과 같은 검사(9:16, 영상·소리 트랙 하나씩, 장면 길이와 1초 안)로 보고, 동의·원본을 다시 확인한 뒤 S3에 둔다.
+
+### 3. 밖으로 나가는 것과 동의
+
+| 받는 곳 | 가는 것 | 가지 않는 것 |
+|---|---|---|
+| OpenAI(미국, 운영자 ChatGPT 구독) | 고른 장면의 받아 적은 글(참가자 이름은 캐릭터 번호로 바꿈), 장면 제목, 출연 캐릭터 그림(앱에 든 그림, 사진 아님), 칸 길이 | 소리, 참가자 이름·id·자리, 여행 코드, 위치 |
+| YouTube | 레퍼런스 자막 요청(처음 한 번) | 가족 자료 일체 |
+| 운영자 맥(생성 일꾼) | 장면 원음, 자막, 출연자 이름(자막에 씀) | 작업이 끝나면 작업 폴더를 지움 |
+
+- 조건은 T85 그대로다: 부르는 참가자와 동승자 전원의 녹음 동의, 주차 중, 요청에 `externalGenerationConsent: true`. `audioReference: true`는 400이다(원음을 외부 생성에 보내지 않음).
+- 아이는 보호자 동의 범위다. 아이는 보호자가 동의해 참가시키고, 전원 동의 조건에 아이도 들어간다.
+- 동의 문구(웹 `CONSENT`, [voice.md](../api/voice.md))에 OpenAI로 보내는 것과 보내지 않는 것을 더한다.
+- OpenAI 쪽 보관·학습 여부는 운영자 ChatGPT 계정 설정을 따른다. 코드와 문서는 그 설정을 바꾸거나 확인하지 않는다(남은 위험).
+
+### 4. 상한과 끄기
+
+- `SHORTS_ENABLED=true`이고 일꾼 토큰과 저장소가 있을 때만 새 작업을 받는다. 운영 배포의 기본은 `false`다.
+- 하루 상한 `SHORTS_DAILY_SECONDS`(기본 120초, 장면 칸 길이 합), 여행 상한 `SHORTS_TRIP_JOBS`(기본 3편, 동의 세대마다), 여행마다 동시에 둘.
+- 일꾼이 꺼져 있으면 작업은 `queued`로 남는다. 켜면 오래된 것부터 만든다.
+- 유료 API 호출은 없다. Codex는 운영자 구독의 사용량 안에서 돈다. Veo를 다시 넣으려면 이 ADR을 고친다(키·장면당 요금·Google 국외 이전 동의).
+
+## 결과
+
+- **비용:** 서버는 큐와 S3만 쓴다. 생성은 운영자 구독 사용량과 맥 CPU. 한 편에 Codex xhigh 몇 분 + ffmpeg 몇 초.
+- **힉스필드 코드를 걷었다:** 공급자 클라이언트, 서버 안의 제출·조회 루프, CDN 받기, 서명 URL, 그 키(ExternalSecret `higgsfield`)와 나가는 길.
+- **잃는 것:** 캐릭터가 실제로 움직이는 영상은 없다. 그림 칸에 켄 번스만 준다. 맥이 꺼져 있으면 만들지 못한다.
+- **확인하지 못한 것:**
+  - OpenAI 계정의 학습·보관 설정
+  - 운영(dev 클러스터)에서의 끝까지 흐름(일꾼 토큰 Secret·배포 전)
+  - 아이 목소리가 든 실제 가족 장면의 결과
