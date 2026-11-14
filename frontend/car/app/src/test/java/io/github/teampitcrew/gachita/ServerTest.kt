@@ -1,5 +1,6 @@
 package io.github.teampitcrew.gachita
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -39,5 +40,30 @@ class ServerTest {
 
     @Test fun `서버가 거절하면 ApiError`() = serve(404, """{"error":"여행이 없습니다"}""") { url ->
         assertTrue(runCatching { Server(url).trip("AB23CD") }.exceptionOrNull() is ApiError)
+    }
+
+    @Test fun `앞단 502는 거절이 아니라 잠깐 못 받은 것으로 보이고 본문을 붙이지 않는다(T122)`() = serve(502, "error code: 502") { url ->
+        val e = runCatching { Server(url).trip("AB23CD") }.exceptionOrNull()
+        assertTrue(e is ApiError && e.transient)
+        assertEquals("서버가 잠깐 응답하지 않아요", failureText(e!!))
+        assertEquals("서버가 거절했어요(409 이미 다른 사람이 앉은 자리)", failureText(ApiError(409, "이미 다른 사람이 앉은 자리")))
+        assertEquals("서버에 닿지 않아요", failureText(java.io.IOException()))
+    }
+
+    @Test fun `잠깐 못 받은 응답만 두 번 더 묻고, 거절과 통신 실패는 바로 던진다(T122)`() {
+        val slept = mutableListOf<Long>()
+        var n = 0
+        assertEquals("ok", retryTransient(sleep = { slept += it }) { if (++n < 3) throw ApiError(503, "x") else "ok" })
+        assertEquals(3, n); assertEquals(listOf(500L, 1000L), slept)
+
+        n = 0
+        assertTrue(runCatching { retryTransient<Unit>(sleep = {}) { n++; throw ApiError(504, "x") } }.exceptionOrNull() is ApiError)
+        assertEquals(3, n) // 처음 + 두 번
+
+        for (e in listOf(ApiError(409, "x"), Gone("AB23CD"), java.io.IOException())) {
+            n = 0
+            assertTrue(runCatching { retryTransient<Unit>(sleep = {}) { n++; throw e } }.exceptionOrNull() === e)
+            assertEquals(1, n)
+        }
     }
 }

@@ -417,7 +417,7 @@ class MainActivity : ComponentActivity() {
 
     private fun keep(got: Server.Got): Trip { prefs.edit().putString("trip", Live.seal(this).line(got.json)).apply(); return got.trip }
 
-    private fun reason(e: Throwable) = if (e is ApiError) "서버가 거절했어요(${e.message})" else "서버에 닿지 않아요"
+    private fun reason(e: Throwable) = failureText(e)
 
     private fun createTrip() {
         val members = FAMILY.filter { it.name in picked }
@@ -460,14 +460,14 @@ class MainActivity : ComponentActivity() {
             r.onSuccess { got ->
                 if (s.trip?.code != t.code) return@onSuccess // 그사이 삭제된 여행이나 새 여행: 늦게 온 응답으로 되살리지 않는다
                 val wasWithdrawing = s.offPending
-                s = if (got == null) s.copy(online = true) else s.withTrip(keep(got))
+                s = (if (got == null) s.copy(online = true) else s.withTrip(keep(got))).polled()
                 if (wasWithdrawing && !s.offPending) s = s.copy(note = "동의를 철회했어요. 다시 녹음하려면 각자의 동의와 녹음 시작이 필요해요")
                 upload(t, resync, prune) // 받은 여행의 동의 세대를 보관함에 반영한(철회면 글을 지운) 뒤에만 올린다
                 speakers(t) // 올릴 새 발화가 없어도 밀린 대조와 고침을 잇는다
                 s.trip?.let(::clips)
                 loadTodos()
             }
-                .onFailure { if (it is Gone) forget(t.code) else s = s.copy(online = it is ApiError, note = if (it is ApiError) reason(it) else s.note) } // 조회를 못 하면 이번에는 올리지 않는다
+                .onFailure { if (it is Gone) forget(t.code) else s = s.pollFailed(it) } // 조회를 못 하면 이번에는 올리지 않는다
         }
     }
 
@@ -689,7 +689,7 @@ class MainActivity : ComponentActivity() {
                 return@readGear
             }
             recordingIo.execute {
-                val result = runCatching { Server(url).trip(trip.code) ?: error("Trip is no longer available") }
+                val result = runCatching { retryTransient { Server(url).trip(trip.code) } ?: error("Trip is no longer available") } // 조회라 다시 물어도 같다(T122)
                 main.post {
                     if (!current()) { finish(false, "The trip changed or the request timed out."); return@post }
                     result.onSuccess { got ->
@@ -717,10 +717,11 @@ class MainActivity : ComponentActivity() {
             s = s.withGear(gear)
             if (s.trip?.code != trip.code || carStatus.restricted || s.blockOn() != null) return@readGear
             s = s.copy(busy = true, note = "동의를 저장하고 있어요")
-            bg({ Server(url).let { api -> api.consent(trip.code, id, true, token); api.trip(trip.code)!! } }) { result ->
+            // 이미 켜진 동의를 다시 켜면 서버는 세대·목소리 값을 건드리지 않아 다시 보내도 같다(T122)
+            bg({ retryTransient { Server(url).let { api -> api.consent(trip.code, id, true, token); api.trip(trip.code)!! } } }) { result ->
                 if (s.trip?.code != trip.code || server != url) return@bg
                 result.onSuccess { s = s.copy(busy = false, note = "본인의 동의를 저장했어요. 녹음은 홈에서 시작해 주세요").withTrip(keep(it)) }
-                    .onFailure { s = s.copy(busy = false, online = it is ApiError, note = "동의를 저장하지 못했어요 · ${reason(it)}") }
+                    .onFailure { s = s.copy(busy = false, online = it is ApiError && !it.transient, note = "동의를 저장하지 못했어요 · ${reason(it)}") }
             }
         }
     }

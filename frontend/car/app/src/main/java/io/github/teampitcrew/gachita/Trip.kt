@@ -85,6 +85,7 @@ data class Session(
     val note: String = "",
     val ours: Set<String> = emptySet(),
     val withdrawn: Set<String> = emptySet(), // 철회 전송 대기. 비어 있는 offPending은 이전 판의 전원 철회와 호환한다.
+    val pollNote: String = "", // 여행 조회 실패로 note에 적은 문구. 다음 조회가 성공하면 이것만 지운다(T122)
 ) {
     val consented: Boolean get() = trip != null && trip.people.isNotEmpty() && trip.people.all { it.consent }
 
@@ -127,6 +128,19 @@ data class Session(
         gear != "P" -> "주차(P)한 뒤에 켤 수 있어요"
         else -> null
     }
+
+    /**
+     * 여행 조회가 실패했다(T122). 서버가 거절했으면 그 이유를 적는다. 잠깐 못 받은 응답(502·503·504)은 '서버 연결됨'으로 세지 않고,
+     * 다음 조회에서 다시 묻는다고 적는다. 닿지 않았으면 연결 끊김으로만 보이고 문구는 그대로 둔다.
+     */
+    fun pollFailed(e: Throwable): Session {
+        if (e !is ApiError) return copy(online = false)
+        val why = failureText(e) + if (e.transient) ". 다시 시도할게요" else ""
+        return copy(online = !e.transient, note = why, pollNote = why)
+    }
+
+    /** 여행 조회가 성공했다. 지난 조회 실패 문구만 지우고, 그사이 사용자가 한 일의 결과 문구(동의 저장 등)는 둔다. */
+    fun polled() = if (pollNote.isEmpty()) this else copy(note = if (note == pollNote) "" else note, pollNote = "")
 
     /** 서버에서 받은 최신 여행을 반영한다. 서버도 모두 꺼짐이면 끄기 대기를 푼다. */
     fun withTrip(t: Trip): Session {

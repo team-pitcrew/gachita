@@ -188,7 +188,29 @@ class Server(base: String, private val open: (URL) -> HttpURLConnection = { it.o
 }
 
 /** 서버가 거절함(4xx·5xx). 통신 자체가 안 된 것(IOException)과 구분해 '연결 끊김'으로 보지 않는다. */
-open class ApiError(val status: Int, message: String) : Exception("$status $message")
+open class ApiError(val status: Int, message: String) : Exception("$status $message") {
+    /** 502·503·504: 배포 중이거나 앞단(ALB·Cloudflare)이 잠깐 못 받았다. 거절이 아니고, 본문도 앞단의 것이다(T122). */
+    val transient: Boolean get() = status in 502..504
+}
+
+/** 화면에 보일 실패 이유. 잠깐 못 받은 응답은 거절과 나누고 앞단 본문('error code: 502')을 붙이지 않는다(T122). */
+fun failureText(e: Throwable): String = when {
+    e is ApiError && e.transient -> "서버가 잠깐 응답하지 않아요"
+    e is ApiError -> "서버가 거절했어요(${e.message})"
+    else -> "서버에 닿지 않아요"
+}
+
+/**
+ * 502·503·504면 waits만큼 쉬고 다시 보낸다(T122). 다시 보내도 결과가 같은 요청(조회, 같은 값 저장)에만 쓴다.
+ * 쉬는 동안 그 실행기를 붙잡으니 메인 스레드에서 부르지 않는다. 거절(4xx 등)과 통신 실패는 바로 던진다.
+ */
+fun <T> retryTransient(waits: List<Long> = listOf(500, 1000), sleep: (Long) -> Unit = Thread::sleep, work: () -> T): T {
+    for (w in waits) {
+        try { return work() } catch (e: ApiError) { if (!e.transient) throw e }
+        sleep(w)
+    }
+    return work()
+}
 
 /** 서버(withTrip)가 여행을 모를 때의 404 문구. 이것만 여행이 없어진 것으로 본다. */
 private val TRIP_GONE = setOf("없는 여행 코드", "보관 기간이 지난 여행")
