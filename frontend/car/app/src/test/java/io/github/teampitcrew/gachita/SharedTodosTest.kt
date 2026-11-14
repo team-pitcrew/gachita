@@ -86,6 +86,25 @@ class SharedTodosTest {
         assertFalse(canReadArrival(result.copy(items = listOf(sharedTodo(item("done")))), observation, scope, scope, true, 11000))
     }
 
+    @Test fun initialParkAndLateUxReleaseDoNotPretendArrival() {
+        var gate = ArrivalParkingGate()
+        fun signal(gear: String?, restricted: Boolean): Boolean {
+            val (next, arrived) = gate.observe(gear, restricted); gate = next; return arrived
+        }
+        assertFalse(signal("P", true))
+        assertFalse(signal("P", false))
+        assertFalse(signal("P", false))
+        assertFalse(signal("D", true))
+        assertFalse(signal("P", true))
+        assertTrue(signal("P", false))
+        assertFalse(signal("P", false))
+        assertFalse(signal("D", false))
+        assertTrue(signal("P", false))
+        assertFalse(signal("D", true))
+        assertFalse(signal(null, true))
+        assertFalse(signal("P", false))
+    }
+
     private class Connection(url: URL, val response: String, val status: Int = 200) : HttpURLConnection(url) {
         val sent = ByteArrayOutputStream()
         override fun connect() {}

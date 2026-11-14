@@ -172,6 +172,7 @@ class MainActivity : ComponentActivity() {
     private var offers = 0L // 제안 번호. 늦게 온 콜백이 다른 제안을 건드리지 않게
     private var todoState by mutableStateOf(SharedTodoState())
     private var todosRequestedAt = 0L
+    private var arrivalParking = ArrivalParkingGate()
     @Volatile private var arrivalRequest = 0
     private var arrivalLoading by mutableStateOf(false)
     private var arrivalNote by mutableStateOf("")
@@ -336,9 +337,10 @@ class MainActivity : ComponentActivity() {
             if (it.restricted) { managing = false; conversationOpen = false; destination = Destination.RIDE; clearTranscript() }
             if (it.restricted || it.gear != "P") closeBoarding() // 주행 제한·기어 변경은 QR을 즉시 가리고 초대를 폐기한다
             if (it.restricted && shortOf != null) stopShort() // 주행 중에는 숏폼을 틀지 않는다(T11)
-            val was = s.gear
             s = s.withGear(it.gear)
-            if (was != null && it.gear == "P" && !it.restricted && (was != "P" || previousCar.restricted)) arrive() // 최초 P는 도착으로 간주하지 않습니다.
+            val (parking, arrived) = arrivalParking.observe(it.gear, it.restricted)
+            arrivalParking = parking
+            if (arrived) arrive()
             routeIfReady()
         }
         car.start()
@@ -1815,7 +1817,7 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun Focus(t: Trip, modifier: Modifier) {
         val o = offer?.takeIf { it.stage != Offer.Stage.FINDING }
-        val b = brief?.takeIf { !carStatus.restricted } // 주행 중에는 목록을 띄우지 않는다(T40)
+        val b = brief?.takeIf { vehicleParked() } // 실제 P이고 주행 제한이 풀린 동안만 목록을 표시합니다.
         when {
             o != null -> OfferCard(o, modifier)
             b != null -> BriefCard(b, modifier)

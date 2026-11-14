@@ -115,6 +115,16 @@ data class SharedTodoState(
         copy(data = if (clear) null else data, syncedAt = if (clear) null else syncedAt, loading = false, note = message)
 }
 
+/** 처음 받은 P와 뒤늦은 UX 제한 해제는 도착이 아닙니다. 실제 P 외 기어를 본 다음에만 자동 확인합니다. */
+data class ArrivalParkingGate(val armed: Boolean = false) {
+    fun observe(gear: String?, restricted: Boolean): Pair<ArrivalParkingGate, Boolean> = when {
+        gear == null -> ArrivalParkingGate() to false
+        gear != "P" -> ArrivalParkingGate(armed = true) to false
+        armed && !restricted -> ArrivalParkingGate() to true
+        else -> this to false
+    }
+}
+
 fun vehiclePoint(lat: Double?, lng: Double?): Boolean = lat != null && lng != null && lat.isFinite() && lng.isFinite() &&
     lat in -90.0..90.0 && lng in -180.0..180.0 && !(lat == 0.0 && lng == 0.0)
 fun arrivalPlace(name: String?, lat: Double?, lng: Double?): Place? =
