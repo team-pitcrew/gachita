@@ -13,22 +13,19 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.*
 import java.io.File
 import java.text.SimpleDateFormat
@@ -49,9 +46,9 @@ import java.util.UUID
 
 /** 글 있는 한 줄. zone은 후보 규칙이 말한 사람으로 세는 값(차: 좌석 줄 "0"·"1" = 서버 seatArea, 서버 기록본: 참가자 id), person은 이름을 붙일 참가자 id. */
 internal data class AfterLine(val key: Long, val at: Long, val text: String, val zone: String?, val person: String?, val lat: Double? = null, val lng: Double? = null)
-/** line은 완성 표지(C32)의 큰 글(대사 줄 그대로), voices는 장면에서 말한 확인된 참가자 id(처음 말한 순서). */
+/** line은 완성 표지(C32)의 큰 글(대사 줄 그대로). */
 internal data class AfterPick(val number: Int, val from: Long, val to: Long, val at: Long, val title: String, val quote: String, val speakerId: String?, val lat: Double?, val lng: Double?,
-    val line: String = "", val voices: List<String> = emptyList())
+    val line: String = "")
 
 private fun two(n: Long) = n.toString().padStart(2, '0')
 /** 여행 시작에서 잰 'HH:MM:SS'(시작 전은 0). */
@@ -111,7 +108,7 @@ internal fun afterPicks(cands: List<SceneCandidate>, byKey: Map<Long, AfterLine>
         val lines = c.lines.mapNotNull { byKey[it.seq] }
         val (title, quote, who) = pickTitle(lines, names)
         val line = titleLines(lines, names)?.let { (l, o) -> clipText((o ?: l).text, 30) }.orEmpty() // 표지 큰 글: 대사 줄(없으면 제목 줄)
-        AfterPick(i + 1, c.from, c.to, c.at, title, quote, who, c.lat, c.lng, line, lines.mapNotNull { it.person }.filter { it in names }.distinct())
+        AfterPick(i + 1, c.from, c.to, c.at, title, quote, who, c.lat, c.lng, line)
     }
 
 /** 시간축 막대: 칸마다 받아 적은 말의 수(최대 칸 대비 제곱근). 말이 없던 칸은 0(높이를 지어내지 않음). */
@@ -137,10 +134,11 @@ internal class AfterItem(val pick: AfterPick) {
     var render by mutableStateOf(0f)
     var momentId: String? = null
     var seconds by mutableStateOf(0.0)
+    var cast by mutableStateOf<List<Int>>(emptyList()) // 만든 영상의 캐릭터 그림(shortSceneCast와 같은 둘) — 완성 표지 '목소리의 주인공'
     var error by mutableStateOf("")
 }
 
-internal class AfterRun(val code: String, val generation: Int, val items: List<AfterItem>) {
+internal class AfterRun(val code: String, val generation: Int, val items: List<AfterItem>, val people: List<Person> = emptyList()) {
     var job: Job? = null
     val active get() = job?.isActive == true
     val finished get() = items.all { it.phase == Phase.DONE || it.phase == Phase.FAILED }
@@ -235,6 +233,7 @@ internal object AfterRuns {
             }
             if (source.generation != run.generation) throw AfterStopped("기록 동의가 바뀌어 멈췄어요")
             item.seconds = source.seconds; item.phase = Phase.RENDER; item.render = 0f
+            item.cast = shortSceneCast(source.short, source.short.scenes.singleOrNull(), null, run.people).mapNotNull { it.character?.drawable }
             val dir = File(context.cacheDir, "after-${UUID.randomUUID()}")
             val control = ShortExportControl()
             try {
@@ -280,6 +279,7 @@ internal enum class AfterStep { UPLOAD, SELECT, MAKE, DONE }
 /**
  * C22–C32(원본 Figma 2005:3443–4441, 11/15 실시간 읽기). 여행 화면 틀(머리·위 탭)은 MainActivity가 그리고, 여기는 탭 아래 본문:
  * 제목 묶음 · 칸(높이 나머지) · 아래 큰 단추, 간격 24. C22·C31은 988 폭 한 칸을 가운데에, C23–C30은 전체 폭, C32는 완성 표지(400)를 가운데에 둔다.
+ * 시연판 D21–D26은 C와 같은 틀이고 단추 글(D21 '대화 기록 확인', D25 '생성 결과 확인')·제목(D26 'N개의 순간이 완성됐어요')만 달라 C 글을 따른다.
  * lines는 글 있는 줄(시각 순), people은 여행 참가자. token은 동의한 이 차 참가자의 토큰. allowed·ready는 AfterRuns.start 참고.
  * onContents: 콘텐츠 기록(쇼츠 보관함)으로. 시작 화면은 step(대화 기록의 '추천 장면 고르기'는 SELECT).
  */
@@ -296,6 +296,7 @@ internal fun AfterTrip(trip: Trip, lines: List<AfterLine>, base: String, token: 
     val end = maxOf(lines.lastOrNull()?.at ?: origin, picks.maxOfOrNull { it.to } ?: origin)
     val wave = remember(lines) { afterBars(lines.map { it.at }, origin, end, 64) } // C22·C31 파형 막대 64개
     val fine = remember(lines) { afterBars(lines.map { it.at }, origin, end, 120) } // C23–C30 파형 막대 120개
+    val place by produceState<String?>(null, trip.code) { value = withContext(Dispatchers.IO) { parkedPlace(context, trip.code) } }
     val running = AfterRuns.run?.takeIf { it.code == trip.code && it.generation == trip.generation }
     var step by remember(trip.code, trip.generation) { mutableStateOf(if (running != null) AfterStep.MAKE else start) }
     if (step == AfterStep.MAKE && running?.finished == true && !running.active) step = AfterStep.DONE
@@ -306,17 +307,17 @@ internal fun AfterTrip(trip: Trip, lines: List<AfterLine>, base: String, token: 
     val upload = if (!mine) 0f else if (audio == AudioState.READY || audio == AudioState.EXPIRED) 1f else FullAudio.progress
     // 받아 적은 말이 없으면(이 차가 받아 적지 못함) 올린 전체 음성의 길이로 주행 시간과 눈금을 보인다
     val seconds = ((end - origin) / 1000).takeIf { it > 0 } ?: (if (mine) FullAudio.seconds.toLong() else 0L)
-    val done = running?.items?.count { it.phase == Phase.DONE } ?: 0
+    val failed = running != null && running.items.none { it.phase == Phase.DONE }
     fun toggle(k: Long) { if (k in chosen) chosen.remove(k) else chosen.add(k) }
     fun open() { AfterRuns.run = null; onContents() }
 
     Column(modifier, verticalArrangement = Arrangement.spacedBy(24.dp)) {
         val (title, sub) = when (step) {
-            AfterStep.UPLOAD -> "오늘의 주행을 기록했어요" to (if (trip.status == "ended") "여행을 마쳤어요" else "주차 후 여행 마무리")
-            AfterStep.SELECT -> "남기고 싶은 순간을 골라요" to (if (picks.isEmpty()) "아직 추천할 장면을 찾지 못했어요" else "${if (audio == AudioState.READY) "전체 음성" else "받아 적은 대화"}에서 찾은 추천 장면 ${picks.size}개")
+            AfterStep.UPLOAD -> "오늘의 주행을 기록했어요" to (place?.let { "$it 도착 / " }.orEmpty() + "주차 후 여행 마무리")
+            AfterStep.SELECT -> "남기고 싶은 순간을 골라요" to "전체 음성에서 찾은 추천 장면 ${picks.size}개"
             AfterStep.MAKE -> "우리 가족의 콘텐츠를 만들어요" to "선택한 장면에 캐릭터와 자막을 입히는 중"
-            // 시연판 D26: 완성한 수를 제목에. 하나도 못 만들었으면 완성됐다고 하지 않는다(카드마다 까닭을 보임)
-            AfterStep.DONE -> if (done > 0) "${done}개의 순간이 완성됐어요" to "선택한 장면을 콘텐츠 기록에 저장했어요." else "콘텐츠를 만들지 못했어요" to "만들지 못한 까닭을 확인해 주세요."
+            // 하나도 못 만들었으면 완성됐다고 하지 않는다(시안 밖 실패 상태 — 표지마다 까닭을 보임)
+            AfterStep.DONE -> if (failed) "콘텐츠를 만들지 못했어요" to "만들지 못한 까닭을 확인해 주세요." else "우리 가족의 순간이 완성됐어요" to "선택한 장면을 콘텐츠 기록에 저장했어요."
         }
         TitleBlock(title, sub, Modifier.fillMaxWidth())
         Box(Modifier.weight(1f).fillMaxWidth()) {
@@ -337,48 +338,35 @@ internal fun AfterTrip(trip: Trip, lines: List<AfterLine>, base: String, token: 
                         }
                     }
                     picks.forEach { p -> SceneRow(p, p.from in chosen, origin) { toggle(p.from) } }
-                    if (picks.isEmpty()) Text("대화가 더 쌓이면 다시 찾아요.", style = CarText.Label, color = c.onSurfaceVariant)
                 }
                 AfterStep.MAKE -> Centered {
                     val r = running
-                    if (r == null) Text("만들 장면이 없어요.", style = CarText.Label, color = c.onSurfaceVariant)
-                    else {
-                        val prepared = r.items.count { it.phase >= Phase.RENDER && it.phase != Phase.FAILED }
-                        val now = r.items.firstOrNull { it.phase in Phase.MOMENT..Phase.SAVE }
-                        val overall = r.items.sumOf { phaseProgress(it.phase, it.render).toDouble() }.toFloat() / r.items.size
-                        InfoCard(if (prepared == r.items.size) "음성 구간 준비 완료" else "음성 구간 준비 중 · $prepared/${r.items.size}",
-                            when (now?.phase) {
-                                Phase.RENDER -> "캐릭터 배치와 자막 생성 중 · ${r.items.indexOf(now) + 1}/${r.items.size}"
-                                Phase.SAVE -> "콘텐츠 기록에 저장 중"
-                                Phase.VOICE -> "이 차가 장면 소리를 잘라 올리는 중"
-                                Phase.MOMENT -> "고른 장면을 남기는 중"
-                                else -> if (r.active) "준비 중" else "멈췄어요"
-                            }, soft = true)
-                        WaveCard("콘텐츠 생성 중  ${(overall * 100).toInt()}%", wave, seconds)
-                        // 시안은 '이 화면을 나가도 완성되면 알려드려요.' — 완성 알림이 없어 지금 하는 일만 적는다(다른 탭에서도 계속, 주행하면 멈춤)
-                        Text("이 화면을 나가도 이 차에서 계속 만들어요. 주행을 시작하면 멈춰요.", style = CarText.Label, color = c.onSurfaceVariant)
+                    if (r != null) {
+                        val prepared = r.items.all { it.phase >= Phase.RENDER && it.phase != Phase.FAILED }
+                        // 시안 C31의 상태 글. 음성 구간을 아직 준비하는 동안은 '준비 중', 멈추면(사람이 멈춤) '멈췄어요'
+                        InfoCard(if (prepared) "음성 구간 준비 완료" else "음성 구간 준비 중", if (!r.active && !r.finished) "멈췄어요" else "캐릭터 배치와 자막 생성 중", soft = true)
                     }
+                    WaveCard("콘텐츠 생성 중", wave, seconds)
+                    Text("이 화면을 나가도 완성되면 알려드려요.", style = CarText.Label, color = c.onSurfaceVariant) // mock: 완성 알림은 아직 없다(다른 탭에서도 계속 만들고, 돌아오면 완성 화면)
                 }
                 AfterStep.DONE -> Box(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), contentAlignment = Alignment.TopCenter) {
-                    val r = running
-                    if (r == null) Text("만들 장면이 없어요.", style = CarText.Label, color = c.onSurfaceVariant)
-                    else Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(24.dp)) { // 좁은 창이면 옆으로 넘김
-                        r.items.forEachIndexed { i, item -> DoneScene(item, i, trip, origin, ::open) }
+                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(24.dp)) { // 좁은 창이면 옆으로 넘김
+                        running?.items?.forEachIndexed { i, item -> DoneScene(item, i, trip, ::open) }
                     }
                 }
             }
         }
         val n = chosen.size
         when (step) {
-            AfterStep.UPLOAD -> AfterButton("추천 장면 보기") { step = AfterStep.SELECT }
-            AfterStep.SELECT -> AfterButton(if (n == 0) "장면을 선택해 주세요" else "선택한 ${n}개 생성", enabled = n > 0 && token != null) {
+            AfterStep.UPLOAD -> CarButton("추천 장면 보기") { step = AfterStep.SELECT }
+            AfterStep.SELECT -> CarButton(if (n == 0) "장면을 선택해 주세요" else "선택한 ${n}개 생성", enabled = n > 0 && token != null) {
                 if (token != null && n > 0) {
-                    val run = AfterRun(trip.code, trip.generation, picks.filter { it.from in chosen }.map(::AfterItem))
+                    val run = AfterRun(trip.code, trip.generation, picks.filter { it.from in chosen }.map(::AfterItem), trip.people)
                     AfterRuns.start(context, base, token, run, allowed, ready); step = AfterStep.MAKE
                 }
             }
-            AfterStep.MAKE -> AfterButton("콘텐츠 기록으로", onClick = onContents)
-            AfterStep.DONE -> AfterButton("콘텐츠 기록 보기", onClick = ::open)
+            AfterStep.MAKE -> CarButton("콘텐츠 기록으로", onClick = onContents)
+            AfterStep.DONE -> CarButton("콘텐츠 기록 보기", onClick = ::open)
         }
     }
 }
@@ -389,20 +377,22 @@ private fun dayRange(from: Long, to: Long): String {
     else "${day.format(Date(from))} ${hm.format(Date(from))} – ${day.format(Date(to))} ${hm.format(Date(to))}"
 }
 
+/**
+ * C22 부제의 장소('강릉 숙소 도착'): 이 차의 장소 기록(Places.kt PlaceLog, places-<여행>.json)에 남은 마지막 도착·경유, 없으면 내비 목적지 이름. 읽기만 한다.
+ * ponytail: PlaceLog에 읽기 함수가 생기면 그것으로(지금은 파일 모양을 여기서도 앎).
+ */
+private fun parkedPlace(context: Context, code: String): String? = runCatching {
+    val o = org.json.JSONObject(Live.seal(context).unline(File(context.filesDir, "places-$code.json").readText()))
+    o.optString("here").ifBlank { o.optString("dest") }.ifBlank { null }
+}.getOrNull()
+
 /** C22·C31의 '주요 내용': 988 폭 한 칸을 가운데에(간격 24). 좁은 창에서는 폭을 줄인다. */
 @Composable
 private fun Centered(content: @Composable ColumnScope.() -> Unit) = Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
     Column(Modifier.widthIn(max = 988.dp).fillMaxWidth().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(24.dp), content = content)
 }
 
-/**
- * 아래 큰 단추(시안 Button/car/primary 1602×96). 누를 수 없을 때 시안 C23은 같은 민트 단추의 불투명도 45%라 CarButton의 꺼진 색(surface-2) 대신 그렇게 그린다.
- * ponytail: CarButton의 꺼진 모양이 시안과 같아지면 enabled만 넘긴다.
- */
-@Composable
-private fun AfterButton(label: String, enabled: Boolean = true, onClick: () -> Unit) = CarButton(label, enabled = enabled, onClick = onClick)
-
-/** 파형 막대(시안 '파형'·'음성 파형'): 첫 막대는 왼쪽 끝, 마지막 막대는 오른쪽 끝에 붙고 사이는 고르게. 말이 없던 칸은 가장 낮은 막대. */
+/** 파형 막대(시안 '파형'·'음성 파형'): 첫 막대는 왼쪽 끝, 마지막 막대는 오른쪽 끝에 붙고 사이는 고르게. 높이는 받아 적은 말의 양, 말이 없던 칸은 가장 낮은 막대. */
 private fun DrawScope.waveBars(bars: List<Float>, width: Float, radius: Float, centerY: Float, low: Float, high: Float, color: Color) {
     if (bars.isEmpty()) return
     val pitch = if (bars.size > 1) (size.width - width) / (bars.size - 1) else 0f
@@ -464,73 +454,56 @@ private fun SceneWave(bars: List<Float>, picks: List<AfterPick>, origin: Long, e
     }
 }
 
-/** C23–C30 장면 행(전체 폭, 여백 16, 간격 6, 모서리 32 — 고르면 accent-soft, 아니면 surface): '☐/☑ N. 제목'(Headline 32) · '시작–끝 / “대사”'(Label 24, ink-2). */
+/**
+ * C23–C30 장면 행(전체 폭, 여백 16, 간격 6, 모서리 32 — 고르면 accent-soft, 아니면 surface): '☐/☑ N. 제목'(Headline 32, ink) · '시작–끝 / “대사”'(Label 24, ink-2).
+ * 체크는 시안처럼 글자 기호(Pretendard에 없어 시스템 기호 글꼴로 그려짐).
+ */
 @Composable
 private fun SceneRow(p: AfterPick, on: Boolean, origin: Long, onClick: () -> Unit) {
     val c = MaterialTheme.colorScheme
     Surface(onClick = onClick, shape = CarShape.Card, color = if (on) c.primaryContainer else c.surface,
         modifier = Modifier.fillMaxWidth().semantics { contentDescription = "${p.number}번 장면 ${if (on) "선택됨" else "선택 안 됨"}" }) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Tick(on)
-                Text("${p.number}. ${p.title}", style = CarText.Headline, maxLines = 1, overflow = TextOverflow.Ellipsis) // 시연 실행기가 '1. '·'3. '으로 찾는다
-            }
+            Text("${if (on) "☑" else "☐"} ${p.number}. ${p.title}", style = CarText.Headline, color = c.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(afterSpan(p.from, p.to, origin) + if (p.quote.isNotEmpty()) " / ${p.quote}" else "", style = CarText.Label, color = c.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }
 
-/**
- * 시안 행 첫머리의 '☐'·'☑' 글자 기호를 같은 크기의 그림으로(차 글꼴에 이 기호가 없을 수 있어 대신 그림). 글이 아니어서 행의 읽는 글은 'N. 제목'으로 시작한다.
- * ☐: ink 2 선의 네모 23. ☑: 32 둥근 네모(모서리 6, outline)에 ink 체크.
- */
-@Composable
-private fun Tick(on: Boolean) {
-    val c = MaterialTheme.colorScheme
-    Canvas(Modifier.size(32.dp)) {
-        if (on) {
-            drawRoundRect(c.outline, cornerRadius = CornerRadius(6.dp.toPx(), 6.dp.toPx()))
-            val mark = Path().apply { moveTo(size.width * .25f, size.height * .52f); lineTo(size.width * .43f, size.height * .70f); lineTo(size.width * .77f, size.height * .31f) }
-            drawPath(mark, c.onSurface, style = Stroke(3.5.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
-        } else {
-            val s = 23.dp.toPx()
-            drawRect(c.onSurface, Offset((size.width - s) / 2, (size.height - s) / 2), Size(s, s), style = Stroke(2.dp.toPx()))
-        }
-    }
-}
+/** 시안 'Archive / galleryCar' 표지 글(시안 값 그대로): 머리·발 Medium 18.75/27.5, 대사 Bold 40/55(자간 -2%), 설명 Regular 16.25/22.5. */
+private val PosterSmall = CarText.Label.copy(fontSize = 18.75.sp, lineHeight = 27.5.sp)
+private val PosterLine = CarText.Title.copy(lineHeight = 55.sp)
+private val PosterCaption = CarText.Label.copy(fontWeight = FontWeight.Normal, fontSize = 16.25.sp, lineHeight = 22.5.sp)
 
 /**
- * 시안 'Archive / galleryCar'(C32 완성 장면·C33 갤러리의 표지)는 어두운 화면 위에서도 밝은 종이 색으로 고정돼 있다. design.md 3절 표의 밝은 열 값(tint-1–5·ink·ink-2)이고
- * Material 역할(어두운 색표)에 없는 값이라 여기 둔다. ponytail: F6 갤러리(C33)도 같은 표지를 쓰니 CarDesign.kt로 올린다.
- */
-
-/**
- * C32 '완성 장면'(폭 400, 간격 16): 표지 400×550(여백 30, 간격 20, 모서리 24 — 시안 25, 종이 tint-2부터 차례로) — '날짜  여행 제목' · 대사 줄(Title 40) · 여백 ·
- * '목소리의 주인공' 캐릭터 140 둘(간격 15) · 장면 구간 · '가치타'와 '▶ 길이' — 그 아래 장면 제목(Headline 32). 만들지 못한 장면은 어두운 표지에 까닭을 적는다.
- * 시안의 표지 작은 글(18.75·16.25)은 차의 가장 작은 글자 Label 24로, 대사 아래 설명 줄('서준의 한마디에 모두 웃음')은 데이터가 없어 장면 구간으로 둔다.
+ * C32 '완성 장면'(폭 400, 간격 16): 표지 'Archive / galleryCar' 400×550(여백 30, 간격 20, 모서리 25, 종이 tint-2부터 차례로) — '날짜  여행 제목' · 대사 줄 ·
+ * 여백 · '목소리의 주인공'(만든 영상의 캐릭터 140 둘, 간격 15) · 설명 · '가치타'와 '▶ 길이' — 그 아래 장면 제목(Headline 32). 누르면 콘텐츠 기록으로.
+ * 설명 줄(시안 '서준의 한마디에 모두 웃음')은 장면마다 지은 글이 없어 폰 완성 표지(after-trip.js)와 같이 영상 종류 '캐릭터 자막형'.
+ * 만들지 못한 장면(시안 밖 실패 상태)은 어두운 표지에 까닭을 적는다.
  */
 @Composable
-private fun DoneScene(item: AfterItem, index: Int, trip: Trip, origin: Long, onOpen: () -> Unit) {
+private fun DoneScene(item: AfterItem, index: Int, trip: Trip, onOpen: () -> Unit) {
     val c = MaterialTheme.colorScheme
     val ok = item.phase == Phase.DONE
     val p = item.pick
     val ink = if (ok) CarPaper.Ink else c.onSurface
     val ink2 = if (ok) CarPaper.Ink2 else c.onSurfaceVariant
     Column(Modifier.width(400.dp).then(if (ok) Modifier.clickable(onClick = onOpen) else Modifier), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        Surface(Modifier.fillMaxWidth().height(550.dp), CarShape.Ctl, color = if (ok) CarPaper.Tints[(index + 1) % CarPaper.Tints.size] else c.surface) {
+        Surface(Modifier.fillMaxWidth().height(550.dp), RoundedCornerShape(25.dp), color = if (ok) CarPaper.Tints[(index + 1) % CarPaper.Tints.size] else c.surface) {
             Column(Modifier.padding(30.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
-                Text("${SimpleDateFormat("M.d", Locale.KOREA).format(Date(p.at))}  ${trip.title.ifBlank { "함께 탄 여행" }}", style = CarText.Label, color = ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(p.line.ifEmpty { p.title }, style = CarText.Title, color = ink, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                Text("${SimpleDateFormat("M.d", Locale.KOREA).format(Date(p.at))}  ${trip.title.ifBlank { "함께 탄 여행" }}", style = PosterSmall, color = ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(p.line.ifEmpty { p.title }, style = PosterLine, color = ink, maxLines = 4, overflow = TextOverflow.Ellipsis)
                 Spacer(Modifier.weight(1f))
                 if (ok) {
-                    val faces = p.voices.mapNotNull { id -> trip.people.firstOrNull { it.id == id }?.let(::seatCharacter) }.take(2).ifEmpty { listOf(0) }
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(15.dp, Alignment.CenterHorizontally)) { faces.forEach { Avatar(it, 140.dp) } }
-                    Text(afterSpan(p.from, p.to, origin), Modifier.fillMaxWidth(), style = CarText.Label, color = ink2, textAlign = TextAlign.Center, maxLines = 1)
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(15.dp, Alignment.CenterHorizontally)) {
+                        item.cast.take(2).forEach { CharAvatar(it, 140.dp) }
+                    }
+                    Text("캐릭터 자막형", Modifier.fillMaxWidth(), style = PosterCaption, color = ink2, textAlign = TextAlign.Center, maxLines = 1)
                     Row(Modifier.fillMaxWidth()) {
-                        Text("가치타", style = CarText.Label, color = ink2)
+                        Text("가치타", style = PosterSmall, color = ink2)
                         Spacer(Modifier.weight(1f))
                         val s = item.seconds.toLong()
-                        Text("▶ ${s / 60}:${two(s % 60)}", style = CarText.Label, color = ink)
+                        Text("▶ ${s / 60}:${two(s % 60)}", style = PosterSmall, color = ink)
                     }
                 } else {
                     Text("만들지 못했어요", style = CarText.Headline, color = ink)
@@ -538,7 +511,7 @@ private fun DoneScene(item: AfterItem, index: Int, trip: Trip, origin: Long, onO
                 }
             }
         }
-        Text(p.title, style = CarText.Headline, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Text(p.title, style = CarText.Headline, color = c.onSurface, maxLines = 2, overflow = TextOverflow.Ellipsis)
     }
 }
 
