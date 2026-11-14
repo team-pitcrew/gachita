@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { createConnection } from "node:net";
 import { basename, join as joinPath } from "node:path";
@@ -1255,6 +1255,115 @@ test("짧은 말도 초안과 글자가 절반 넘게 다르면 원문으로 남
     delete process.env.ASR_GAP_MS;
   }
   assert.deepEqual(events.find((e) => e.msg === "clip_retranscribed").reasons, { suspicious: 1 }, "'가자' → '싫어'는 받지 않음");
+});
+
+test("차가 대조 값을 받아 가 차 안에서 붙인 화자를 발화와 함께 올린다(ADR-0023)", async () => {
+  const { cases } = JSON.parse(await readFile(new URL("voice-vectors.json", import.meta.url), "utf8"));
+  const [, trip] = await call("POST", "/api/trips", {});
+  const t = `/api/trips/${trip.code}`;
+  const [, a] = await join(trip.code, "아빠", "ROW_1_LEFT", true);
+  const [, b] = await join(trip.code, "누나", "ROW_2_LEFT", true);
+  const [, c] = await join(trip.code, "동생", "ROW_2_RIGHT", false);
+  const json = (path, body, token) => fetch(base + path, { method: "POST", headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(body) });
+  const value = (i, more = {}) => ({ embedder: "logmel-pitch-1", vector: cases[i].vector, seconds: 7, ...more });
+
+  // 등록: 기기가 계산한 값만 올린다(소리 없이). 권한은 음성 등록과 같다
+  const reg = await json(`${t}/participants/${a.id}/voice`, value(0), a.token);
+  assert.deepEqual([reg.status, await reg.json()], [200, { seconds: 7, dims: 112 }]);
+  assert.equal((await json(`${t}/participants/${a.id}/voice`, value(0))).status, 401);
+  assert.equal((await json(`${t}/participants/${a.id}/voice`, value(0), b.token)).status, 403, "남의 값을 등록하지 못함");
+  assert.equal((await json(`${t}/participants/${c.id}/voice`, value(2), c.token)).status, 409, "녹음에 동의한 뒤 등록");
+  assert.equal((await json(`${t}/participants/${a.id}/voice`, value(0, { embedder: "other-1" }), a.token)).status, 400, "다른 임베더의 값은 섞지 않음");
+  assert.equal((await json(`${t}/participants/${a.id}/voice`, value(0, { vector: cases[0].vector.slice(1) }), a.token)).status, 400, "차원");
+  assert.equal((await json(`${t}/participants/${a.id}/voice`, value(0, { vector: cases[0].vector.map((x) => x * 2) }), a.token)).status, 400, "정규화");
+  assert.equal((await json(`${t}/participants/${a.id}/voice`, value(0, { seconds: 0.5 }), a.token)).status, 400, "등록은 1초부터");
+  assert.equal((await fetch(`${base}${t}/participants/${a.id}/voice`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${a.token}` }, body: "{" })).status, 400);
+  assert.equal((await postRaw(`${t}/participants/${b.id}/voice`, wav(300, 3), b.token)).status, 200, "음성 등록도 그대로 됨");
+  // 말소리가 없는 등록은 음성으로든 값으로든 같은 기준, 같은 문구로 거절한다
+  const silence = wav(300, 3); silence.fill(0, 44);
+  const noVoice = [await postRaw(`${t}/participants/${b.id}/voice`, silence, b.token), await json(`${t}/participants/${b.id}/voice`, value(0, { vector: new Array(112).fill(0) }), b.token)];
+  assert.deepEqual(await Promise.all(noVoice.map(async (r) => [r.status, (await r.json()).error])), [[400, "말소리가 없어 등록할 수 없음"], [400, "말소리가 없어 등록할 수 없음"]]);
+
+  // 조회: 녹음에 동의한 참가자가, 동의한 참가자의 값만. 저장하지 않게
+  const got = await fetch(`${base}${t}/voice-prints`, { headers: { authorization: `Bearer ${a.token}` } });
+  const prints = await got.json();
+  assert.deepEqual([got.status, got.headers.get("cache-control")], [200, "private, no-store"]);
+  assert.deepEqual([prints.generation, prints.embedder, prints.dims, prints.threshold], [1, "logmel-pitch-1", 112, 0.9]);
+  assert.deepEqual(prints.items.map((p) => [p.participantId, p.source, p.vector.length]).sort(), [[a.id, "trip", 112], [b.id, "trip", 112]].sort());
+  assert.deepEqual(prints.items.find((p) => p.participantId === a.id).vector, cases[0].vector, "올린 값 그대로");
+  assert.equal((await call("GET", `${t}/voice-prints`))[0], 401);
+  assert.equal((await call("GET", `${t}/voice-prints`, null, c.token))[0], 403, "동의하지 않은 참가자는 받지 못함");
+  assert.equal((await call("POST", `${t}/voice-prints`, {}, a.token))[0], 405);
+  assert.equal((await call("GET", `${t}/voice-prints/x`, null, a.token))[0], 404);
+
+  // 발화와 함께 올린 화자. 모두 동의해야 올릴 수 있다
+  await call("PATCH", `${t}/participants/${c.id}`, { consent: true }, c.token);
+  const up = (items, token = a.token, device = "car") => call("POST", `${t}/utterances`, { device, generation: 1, items }, token);
+  const at = trip.createdAt + 1000;
+  const said = { speakerMethod: "device-voice", speakerConfidence: 0.97 };
+  assert.deepEqual((await up([
+    { seq: 1, at, text: "언제 도착해?", participantId: b.id, ...said },
+    { seq: 2, at: at + 1, text: "곧", participantId: "nobody", ...said }, // 모르는 참가자: 묶음을 거절하지 않고 화자 없이
+    { seq: 3, at: at + 2, text: "배고파" }, // 기존 클라이언트 모양
+    { seq: 4, at: at + 3, text: "휴게소 가자", participantId: null },
+  ]))[1], { lastSeq: 4, generation: 1 });
+  const lines = async () => (await call("GET", `${t}/transcript`, null, a.token))[1].utterances.map((u) => [u.seq, u.participantId, u.speakerMethod, u.speakerConfidence]);
+  assert.deepEqual(await lines(), [[1, b.id, "device-voice", 0.97], [2, undefined, undefined, undefined], [3, undefined, undefined, undefined], [4, undefined, undefined, undefined]]);
+  assert.equal((await up([{ seq: 5, at, text: "x", participantId: 7, ...said }]))[0], 400);
+  assert.equal((await up([{ seq: 5, at, text: "x", participantId: b.id }]))[0], 400, "화자에는 판정 방법이 따라옴");
+  assert.equal((await up([{ seq: 5, at, text: "x", participantId: b.id, speakerMethod: "by-hand" }]))[0], 400);
+  assert.equal((await up([{ seq: 5, at, text: "x", participantId: b.id, speakerMethod: "device-voice", speakerConfidence: 2 }]))[0], 400);
+  assert.equal((await up([{ seq: 1, at, text: "x", participantId: a.id, ...said }], b.token))[0], 403, "남의 기기 발화에는 붙이지 못함");
+
+  // 늦게 붙이기: 화자가 빈 줄을 같은 순번으로 다시 보내면 화자만 채운다. 이미 붙은 줄과 글은 바꾸지 않는다
+  await up([{ seq: 3, at: at + 2, text: "다른 글", participantId: a.id, speakerMethod: "device-voice" }, { seq: 1, at, text: "언제 도착해?", participantId: a.id, ...said }]);
+  assert.deepEqual((await lines()).filter((l) => l[0] === 1 || l[0] === 3), [[1, b.id, "device-voice", 0.97], [3, a.id, "device-voice", undefined]]);
+  assert.equal((await call("GET", `${t}/transcript`, null, a.token))[1].utterances[2].text, "배고파");
+  // 사람이 고친 줄('모름' 포함)은 덮지 않고, 고치면 판정 방법 표시가 빠진다
+  await call("PATCH", `${t}/utterances/car/4`, { participantId: null }, a.token);
+  await call("PATCH", `${t}/utterances/car/1`, { participantId: a.id }, a.token);
+  await up([{ seq: 4, at: at + 3, text: "휴게소 가자", participantId: b.id, ...said }, { seq: 1, at, text: "언제 도착해?", participantId: b.id, ...said }]);
+  assert.deepEqual((await lines()).filter((l) => l[0] === 1 || l[0] === 4), [[1, a.id, undefined, undefined], [4, undefined, undefined, undefined]]);
+  // 한 묶음에 같은 순번이 두 번 와도 받는다(앞의 것)
+  assert.equal((await up([{ seq: 5, at, text: "하나", participantId: a.id, ...said }, { seq: 5, at, text: "둘", participantId: b.id, ...said }]))[0], 200);
+  assert.deepEqual((await lines()).find((l) => l[0] === 5).slice(0, 2), [5, a.id]);
+  // 서버 대조가 붙인 줄은 server-voice로 남는다
+  await up([{ seq: 6, at: at + 9, text: "노래 틀어 줘" }]);
+  assert.equal((await (await postRaw(`${t}/voice-match?row=2&device=car&seq=6`, wav(300, 1.5), a.token)).json()).applied, true);
+  assert.deepEqual((await lines()).find((l) => l[0] === 6).slice(0, 3), [6, b.id, "server-voice"]);
+
+  // 한도(2만 줄)에 닿은 여행에서도 이미 받은 줄의 화자는 채운다. 새 줄만 거절한다
+  await up([{ seq: 7, at: at + 10, text: "창문 열어도 돼?" }]);
+  await tripsDb().query("INSERT INTO utterances (trip_code, device, seq, at, text, generation) SELECT $1, 'filler', g, $2, 'x', 1 FROM generate_series(1, 20000 - 7) g", [trip.code, at]);
+  assert.deepEqual((await up([{ seq: 7, at: at + 10, text: "창문 열어도 돼?", participantId: b.id, ...said }])), [200, { lastSeq: 7, generation: 1 }]);
+  assert.deepEqual((await lines()).find((l) => l[0] === 7 && l[1]).slice(0, 3), [7, b.id, "device-voice"]);
+  assert.equal((await up([{ seq: 7, at: at + 10, text: "창문 열어도 돼?", participantId: b.id, ...said }, { seq: 8, at: at + 11, text: "새 줄" }]))[0], 409, "새 줄은 한도에 걸림");
+  await tripsDb().query("DELETE FROM utterances WHERE trip_code = $1 AND device = 'filler'", [trip.code]);
+
+  // 값을 모으는 사이 누군가 동의를 철회하면, 철회 전 목록으로 읽은 그 사람의 프로필 값을 내주지 않는다(세대도 철회 뒤의 값)
+  const [, mom] = await call("POST", "/api/profiles", { name: "엄마" });
+  assert.equal((await json("/api/profiles/me/voice", value(1), mom.token)).status, 200, "프로필에도 값만 등록");
+  const [, pm] = await call("POST", `${t}/participants`, { seat: "ROW_1_RIGHT", consent: true }, mom.token);
+  assert.deepEqual((await call("GET", `${t}/voice-prints`, null, a.token))[1].items.find((p) => p.participantId === pm.id)?.source, "profile");
+  const pool = profilesDb();
+  const query = pool.query;
+  let raced = 0;
+  pool.query = async function (sql, ...rest) { // 프로필 값을 읽는 바로 그때 철회가 끼어든다
+    if (typeof sql === "string" && sql.includes("FROM voice_prints WHERE profile_id = ANY") && !raced++) await call("PATCH", `${t}/participants/${pm.id}`, { consent: false });
+    return query.call(this, sql, ...rest);
+  };
+  try {
+    const [status, body] = await call("GET", `${t}/voice-prints`, null, a.token);
+    assert.deepEqual([status, raced > 0, body.generation, body.items.some((p) => p.participantId === pm.id)], [200, true, 2, false]);
+  } finally {
+    pool.query = query;
+  }
+  await call("PATCH", `${t}/participants/${pm.id}`, { consent: true }, pm.token);
+
+  // 동의가 꺼진 참가자의 값은 내주지 않고(서버에서도 지워짐), 그 사람은 화자로 붙지 않는다
+  await call("PATCH", `${t}/participants/${b.id}`, { consent: false });
+  const after = (await call("GET", `${t}/voice-prints`, null, a.token))[1];
+  assert.deepEqual([after.generation, after.items.map((p) => p.participantId).sort()], [3, [a.id, pm.id].sort()]);
 });
 
 test("손님 참가자도 여행에 목소리를 등록하면 화자가 붙는다(T38·T37)", async () => {
