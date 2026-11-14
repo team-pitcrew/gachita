@@ -1,14 +1,17 @@
 package io.github.teampitcrew.gachita
 
+import androidx.annotation.DrawableRes
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -19,35 +22,52 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 
 /*
- * Arrival brief of the final design v2 (flow F4, T141; Figma GISs0yf3c1KCjXwuFmF4ij): C20 waypoint arrival 2005:3369
- * ('{place} 도착', '먼저 할 일' + '잊지 말고 살 것 N개' with emoji, name, '{who} 요청', amount) and the final destination
- * finalBrief 2043:1890 ('먼저 할 일 / 잊지 말기 / 챙길 것'). Rows are the server's action items (place-rules-v2): category, items,
- * requestedBy, title. Nothing is made up here; names come only from confirmed speakers. Grouping is covered by ArrivalBriefTest.
+ * Arrival brief (flow F4, T141 → T156 port; Figma Y7zFqGUEAFDWTumG30MsOs page 2004:57). The owner's revised narrow brief
+ * 'D19 / arrived / 아빠의 가족 여행_수정본' 2131:6137 is the pattern for every arrival screen: each action row is name over '{who} 요청'
+ * with the 'Briefing / emoji' picture at the right end, '잊지 말고 살 것 N개' lists goods as name and amount only, and a fixed
+ * '쓰레기 정리하기' card closes the list. The wide parked screen keeps C20 2005:3369's two goods columns, and the final destination keeps
+ * finalBrief 2043:1890's '먼저 할 일 / 잊지 말기 / 챙길 것' cards (20 top and bottom padding). Rows are the server's action items
+ * (place-rules-v2): category, items, requestedBy, title. Names come only from confirmed speakers. Grouping is covered by ArrivalBriefTest.
  * The T113 flow stays: only server todos, server-approved arrival items, refresh and arrival check as small links.
  */
 
-/** Emoji by words in the name (the design's 'Briefing / emoji' set), else by category. */
-private val EMOJI = listOf(
-    Regex("화장실") to "🚻",
-    Regex("냉장|얼음|냉동") to "🧊", // '고기는 바로 냉장 보관' is about the fridge (finalBrief)
-    Regex("고기|삼겹살|소고기|돼지|목살|한우|갈비|닭") to "🥩",
-    Regex("귤|과일|사과|딸기|포도|바나나|수박|복숭아") to "🍊",
-    Regex("젤리|간식|과자|사탕|초콜릿|아이스크림") to "🍬",
-    Regex("음료|탄산수|^물$|생수|커피|주스|우유|맥주|콜라|사이다") to "🥤",
-    Regex("가방|짐|캐리어|트렁크") to "🧳",
-    Regex("장보기|장 보") to "🛒",
-)
-private val BY_KIND = mapOf("buy" to "🛒", "first" to "🚻", "remember" to "🧊", "bring" to "🧳")
+/**
+ * The design's 'Briefing / emoji' pictures (Twemoji 14.0.2, CC-BY 4.0, exported from the Figma components into res/drawable/ic_brief_*),
+ * drawn as images instead of emoji characters.
+ */
+internal enum class BriefIcon(@DrawableRes val res: Int) {
+    RESTROOM(R.drawable.ic_brief_restroom), // 1f6bb 2057:2408
+    COLD(R.drawable.ic_brief_ice), // 1f9ca 2057:2420
+    MEAT(R.drawable.ic_brief_meat), // 1f969 2057:2370
+    FRUIT(R.drawable.ic_brief_tangerine), // 1f34a 2057:2379
+    SNACK(R.drawable.ic_brief_candy), // 1f36c 2057:2384
+    DRINK(R.drawable.ic_brief_drink), // 1f964 2057:2392
+    LUGGAGE(R.drawable.ic_brief_luggage), // 1f9f3 2057:2430
+    CART(R.drawable.ic_brief_cart), // 1f6d2 2057:2412
+    TRASH(R.drawable.ic_brief_trash), // '쓰레기 정리' 2063:2666
+}
 
-internal fun emojiOf(name: String, category: String?): String =
-    EMOJI.firstOrNull { (re, _) -> re.containsMatchIn(name) }?.second ?: BY_KIND[category] ?: "🛒"
+/** Picture by words in the name, else by category. */
+private val ICON_BY_NAME = listOf(
+    Regex("화장실") to BriefIcon.RESTROOM,
+    Regex("냉장|얼음|냉동") to BriefIcon.COLD, // '고기는 바로 냉장 보관' is about the fridge (finalBrief)
+    Regex("고기|삼겹살|소고기|돼지|목살|한우|갈비|닭") to BriefIcon.MEAT,
+    Regex("귤|과일|사과|딸기|포도|바나나|수박|복숭아") to BriefIcon.FRUIT,
+    Regex("젤리|간식|과자|사탕|초콜릿|아이스크림") to BriefIcon.SNACK,
+    Regex("음료|탄산수|^물$|생수|커피|주스|우유|맥주|콜라|사이다") to BriefIcon.DRINK,
+    Regex("가방|짐|캐리어|트렁크") to BriefIcon.LUGGAGE,
+    Regex("쓰레기|분리배출|분리수거") to BriefIcon.TRASH,
+    Regex("장보기|장 보") to BriefIcon.CART,
+)
+private val ICON_BY_KIND = mapOf("buy" to BriefIcon.CART, "first" to BriefIcon.RESTROOM, "remember" to BriefIcon.COLD, "bring" to BriefIcon.LUGGAGE)
+
+internal fun iconOf(name: String, category: String?): BriefIcon =
+    ICON_BY_NAME.firstOrNull { (re, _) -> re.containsMatchIn(name) }?.second ?: ICON_BY_KIND[category] ?: BriefIcon.CART
 
 /** '하은이 요청', '엄마 요청' (adds 이 after a final consonant). Several: '엄마·서준이 요청'. No confirmed speaker: empty. */
 internal fun whoAsked(item: SharedTodo, people: List<Person>): String {
@@ -57,8 +77,8 @@ internal fun whoAsked(item: SharedTodo, people: List<Person>): String {
     return (names.dropLast(1) + (if (hasBatchim(last)) "${last}이" else last)).joinToString("·") + " 요청"
 }
 
-/** One row of the brief: emoji, name, '{who} 요청', amount (empty when none). */
-internal data class BriefRow(val emoji: String, val name: String, val who: String, val qty: String, val id: String = "")
+/** One row of the brief: picture, name, '{who} 요청', amount (empty when none). */
+internal data class BriefRow(val icon: BriefIcon, val name: String, val who: String, val qty: String, val id: String = "")
 
 internal data class BriefRows(val first: List<BriefRow>, val buy: List<BriefRow>, val remember: List<BriefRow>, val bring: List<BriefRow>) {
     val isEmpty get() = first.isEmpty() && buy.isEmpty() && remember.isEmpty() && bring.isEmpty()
@@ -73,8 +93,8 @@ internal fun briefRows(items: List<SharedTodo>, people: List<Person>): BriefRows
         val kind = kindOf(item)
         val who = whoAsked(item, people)
         val title = item.title ?: shortAsk(item)
-        if (kind == "buy" && item.items.isNotEmpty()) item.items.forEach { g.getValue("buy") += BriefRow(emojiOf(it.name, "buy"), it.name, who, it.qty.orEmpty(), item.id) }
-        else g.getValue(kind) += BriefRow(emojiOf("$title ${item.items.firstOrNull()?.name.orEmpty()}", kind), title, who, "", item.id)
+        if (kind == "buy" && item.items.isNotEmpty()) item.items.forEach { g.getValue("buy") += BriefRow(iconOf(it.name, "buy"), it.name, who, it.qty.orEmpty(), item.id) }
+        else g.getValue(kind) += BriefRow(iconOf("$title ${item.items.firstOrNull()?.name.orEmpty()}", kind), title, who, "", item.id)
     }
     return BriefRows(g.getValue("first"), g.getValue("buy"), g.getValue("remember"), g.getValue("bring"))
 }
@@ -96,8 +116,8 @@ internal fun BriefRows.withDetails(details: Map<String, String>): BriefRows {
 internal fun arrivalButton(final: Boolean) = if (final) "여행 마치고 기록 보기" else "장보고 여행 계속"
 
 /**
- * C20 / finalBrief. [onMain] runs the main button ('장보고 여행 계속' closes the brief, '여행 마치고 기록 보기' ends the trip and opens the
- * conversation record). [note] is the T113 sync or arrival line, shown small under the cards with refresh and arrival check.
+ * C20 / D19 수정본 / finalBrief. [onMain] runs the main button ('장보고 여행 계속' closes the brief, '여행 마치고 기록 보기' ends the trip and
+ * opens the conversation record). [note] is the T113 sync or arrival line, shown small under the cards with refresh and arrival check.
  */
 @Composable
 internal fun ArrivalBrief(
@@ -107,84 +127,104 @@ internal fun ArrivalBrief(
 ) {
     val c = MaterialTheme.colorScheme
     val rows = briefRows(items, people).withDetails(details)
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("$place 도착", fontSize = 40.sp, lineHeight = 50.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(if (final) "내리기 전, 이 세 가지만 기억하세요" else "먼저 할 일과 살 것을 모았어요", color = c.onSurfaceVariant, fontSize = 24.sp, lineHeight = 32.sp)
-        }
+    // 시안 카드 여백: 경유지(C20·D19 수정본) 24, 카드가 넷인 최종 목적지(finalBrief) 위아래 20
+    val pad = if (final) PaddingValues(horizontal = 24.dp, vertical = 20.dp) else PaddingValues(24.dp)
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(24.dp)) {
+        TitleBlock("$place 도착", arrivalSub(final))
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
             val wide = maxWidth >= 1000.dp
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                if (rows.isEmpty) Text("여기서 챙길 부탁은 없어요", color = c.onSurfaceVariant, fontSize = 28.sp)
-                if (rows.first.isNotEmpty()) BriefCard("먼저 할 일", rows.first, accent = true)
+                if (rows.isEmpty) Text("여기서 챙길 부탁은 없어요", style = CarText.Body, color = c.onSurfaceVariant)
+                if (rows.first.isNotEmpty()) BriefCard("먼저 할 일", rows.first, pad, accent = true)
                 if (final) {
-                    if (rows.remember.isNotEmpty()) BriefCard("잊지 말기", rows.remember)
-                    if (rows.bring.isNotEmpty()) BriefCard("챙길 것", rows.bring)
-                    if (rows.buy.isNotEmpty()) BuyCard(rows.buy, wide)
+                    if (rows.remember.isNotEmpty()) BriefCard("잊지 말기", rows.remember, pad)
+                    if (rows.bring.isNotEmpty()) BriefCard("챙길 것", rows.bring, pad)
+                    if (rows.buy.isNotEmpty()) BuyCard(rows.buy, wide, pad)
                 } else {
-                    if (rows.buy.isNotEmpty()) BuyCard(rows.buy, wide)
-                    if (rows.remember.isNotEmpty()) BriefCard("잊지 말기", rows.remember)
-                    if (rows.bring.isNotEmpty()) BriefCard("챙길 것", rows.bring)
+                    if (rows.buy.isNotEmpty()) BuyCard(rows.buy, wide, pad)
+                    if (rows.remember.isNotEmpty()) BriefCard("잊지 말기", rows.remember, pad)
+                    if (rows.bring.isNotEmpty()) BriefCard("챙길 것", rows.bring, pad)
                 }
+                BriefCard(null, listOf(TIDY_UP), PaddingValues(horizontal = 24.dp, vertical = 20.dp))
                 // 시안에는 없는 줄: 동기화·도착 확인이 어긋났을 때만 이유와 다시 해 보기 단추를 보인다
                 if (note.isNotEmpty()) Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(note, Modifier.weight(1f), color = c.onSurfaceVariant, fontSize = 20.sp, lineHeight = 28.sp)
-                    TextButton(onRefresh, Modifier.heightIn(min = 56.dp)) { Text("새로고침", fontSize = 20.sp) }
-                    if (onArrive != null) TextButton(onArrive, Modifier.heightIn(min = 56.dp)) { Text("도착 확인", fontSize = 20.sp) }
+                    Text(note, Modifier.weight(1f), style = CarText.Label, color = c.onSurfaceVariant)
+                    TextButton(onRefresh, Modifier.heightIn(min = 56.dp)) { Text("새로고침", style = CarText.Label) }
+                    if (onArrive != null) TextButton(onArrive, Modifier.heightIn(min = 56.dp)) { Text("도착 확인", style = CarText.Label) }
                 }
             }
         }
-        BigButton(DriveButton(arrivalButton(final), Press.GO, true), onMain, Modifier.fillMaxWidth().height(96.dp))
+        CarButton(arrivalButton(final), onClick = onMain)
     }
 }
 
-/** 'Briefing / action item / Car' (2056:2240): emoji, name over '{who} 요청', amount on the right. */
+/** The subtitle: waypoint (C20·D19 수정본) and final destination (finalBrief 2043:1890). */
+internal fun arrivalSub(final: Boolean) = if (final) "내리기 전, 할 일과 챙길 것" else "먼저 할 일과 살 것을 모았어요"
+
+/** The fixed last card of every arrival (시안 '쓰레기 정리 / 내리기 전' 2063:3119·2131:6166): not a family ask, so no requester. */
+private val TIDY_UP = BriefRow(BriefIcon.TRASH, "쓰레기 정리하기", "빈 병과 과자 봉지 챙겨 분리배출", "")
+
+/** Brief cards are 28 rounded in the design, a little less than the other car cards (CarShape.Card 32). */
+private val BriefShape = RoundedCornerShape(28.dp)
+
+/** One action row (D19 수정본 2131:6150): name (Headline) over '{who} 요청' (Label, gap 4), the picture 44 at the right end (gap 20). */
 @Composable
-private fun BriefLine(r: BriefRow, modifier: Modifier = Modifier) {
+private fun BriefLine(r: BriefRow) {
     val c = MaterialTheme.colorScheme
-    Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.dp)) { // 시안 행동 줄: 이모지 44, 간격 20
-        Text(r.emoji, Modifier.width(44.dp), fontSize = 34.sp, lineHeight = 44.sp, textAlign = TextAlign.Center)
-        Column(Modifier.weight(1f)) {
-            Text(r.name, color = c.onSurface, fontSize = 32.sp, lineHeight = 42.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            if (r.who.isNotEmpty()) Text(r.who, color = c.onSurfaceVariant, fontSize = 24.sp, lineHeight = 32.sp, maxLines = 1)
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(r.name, style = CarText.Headline, color = c.onSurface, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            if (r.who.isNotEmpty()) Text(r.who, style = CarText.Label, color = c.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-        if (r.qty.isNotEmpty()) Text(r.qty, color = c.onSurface, fontSize = 32.sp, lineHeight = 42.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+        if (r.qty.isNotEmpty()) Text(r.qty, style = CarText.Headline, color = c.onSurface, maxLines = 1)
+        Image(painterResource(r.icon.res), null, Modifier.size(44.dp))
     }
 }
 
-/** Brief cards are 28 rounded in the design (C20 2005:3369, finalBrief 2043:1890), a little less than the other car cards (32). */
-private val BRIEF_RADIUS = 28.dp
-
-/** '먼저 할 일'(accent) / '잊지 말기' / '챙길 것' card: label, then one line per ask. */
+/** '먼저 할 일'(accent-soft, label accent) / '잊지 말기' / '챙길 것' card: label (Label 24), gap 18, one line per ask. No label: the tidy-up card. */
 @Composable
-private fun BriefCard(label: String, rows: List<BriefRow>, accent: Boolean = false) {
+private fun BriefCard(label: String?, rows: List<BriefRow>, pad: PaddingValues, accent: Boolean = false) {
     val c = MaterialTheme.colorScheme
-    Surface(Modifier.fillMaxWidth(), RoundedCornerShape(BRIEF_RADIUS), color = if (accent) c.primaryContainer else c.surface) {
-        Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-            Text(label, color = if (accent) c.primary else c.onSurfaceVariant, fontSize = 24.sp, lineHeight = 32.sp)
+    Surface(Modifier.fillMaxWidth(), BriefShape, color = if (accent) c.primaryContainer else c.surface) {
+        Column(Modifier.padding(pad), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+            if (label != null) Text(label, style = CarText.Label, color = if (accent) c.primary else c.onSurfaceVariant)
             rows.forEach { BriefLine(it) }
         }
     }
 }
 
-/** '🛒 잊지 말고 살 것 N개' card. Two columns on the wide parked screen (C20 1682), one in the narrow window. */
+/** A good to buy (D19 수정본 'Briefing / action item / Car' without picture and requester): name, amount at the right end. */
 @Composable
-private fun BuyCard(rows: List<BriefRow>, wide: Boolean) {
+private fun BuyLine(r: BriefRow) {
     val c = MaterialTheme.colorScheme
-    Surface(Modifier.fillMaxWidth(), RoundedCornerShape(BRIEF_RADIUS), color = c.surface) {
-        Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+        Text(r.name, Modifier.weight(1f), style = CarText.Headline, color = c.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        if (r.qty.isNotEmpty()) Text(r.qty, style = CarText.Headline, color = c.onSurface, maxLines = 1)
+    }
+}
+
+/**
+ * '잊지 말고 살 것 N개' card (D19 수정본 2131:6156): title Headline · count Label ink-2 · cart 36 at the right end, gap 18, goods 14 apart.
+ * Two columns 40 apart on the wide parked screen (C20 2005:3369 '장보기 두 열'), one in the narrow window.
+ */
+@Composable
+private fun BuyCard(rows: List<BriefRow>, wide: Boolean, pad: PaddingValues) {
+    val c = MaterialTheme.colorScheme
+    Surface(Modifier.fillMaxWidth(), BriefShape, color = c.surface) {
+        Column(Modifier.padding(pad), verticalArrangement = Arrangement.spacedBy(18.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                Text("🛒", Modifier.width(36.dp), fontSize = 28.sp, lineHeight = 36.sp, textAlign = TextAlign.Center)
-                Text("잊지 말고 살 것", Modifier.weight(1f), fontSize = 32.sp, lineHeight = 42.sp, fontWeight = FontWeight.Bold)
-                Text("${rows.size}개", color = c.onSurfaceVariant, fontSize = 24.sp)
+                Text("잊지 말고 살 것", style = CarText.Headline, color = c.onSurface)
+                Text("${rows.size}개", style = CarText.Label, color = c.onSurfaceVariant)
+                Spacer(Modifier.weight(1f))
+                Image(painterResource(BriefIcon.CART.res), null, Modifier.padding(end = 12.dp).size(36.dp))
             }
             // 넓은 창은 시안처럼 왼쪽 열을 먼저 채운다(삼겹살·귤 | 젤리·탄산수)
             if (wide) Row(horizontalArrangement = Arrangement.spacedBy(40.dp)) {
                 rows.chunked((rows.size + 1) / 2).forEach { col ->
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(24.dp)) { col.forEach { BriefLine(it) } }
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(14.dp)) { col.forEach { BuyLine(it) } }
                 }
                 if (rows.size == 1) Column(Modifier.weight(1f)) {}
-            } else rows.forEach { BriefLine(it) }
+            } else Column(verticalArrangement = Arrangement.spacedBy(14.dp)) { rows.forEach { BuyLine(it) } }
         }
     }
 }
