@@ -2,8 +2,14 @@ package io.github.teampitcrew.gachita
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 
 class AsksTest {
     private fun u(text: String, zone: Int?) = Utterance(1, "T", 0, 0, text, 0, 0, 1, seatZone = zone)
@@ -104,5 +110,26 @@ class AsksTest {
         assertEquals("15 km · 30분", distanceLabel(14766, 1780))
         assertEquals("800 m · 1분", distanceLabel(800, 20))
         assertEquals("", distanceLabel(null, null))
+    }
+
+    @Test fun `추천 통신이 막혀도 2초에 고정 목록으로 넘어가고 늦은 답은 버린다(Astra 3차)`() {
+        val exec = Executors.newSingleThreadExecutor()
+        val dns = CountDownLatch(1) // DNS처럼 끊을 수 없는 대기
+        val got = LinkedBlockingQueue<Pair<Result<List<Place>>, Long>>()
+        val t0 = System.nanoTime()
+        within(exec, 2_000, { dns.await(); listOf(Place(37.5, 127.2, "늦게 온 추천")) }) { got += it to (System.nanoTime() - t0) / 1_000_000 }
+
+        val (r, ms) = got.poll(3, TimeUnit.SECONDS)!!
+        assertTrue(r.exceptionOrNull() is TimeoutException)
+        assertTrue("$ms ms", ms in 1_900..2_500)
+        assertEquals(listOfNotNull(nextStop(37.39, 127.11)), stopsFrom(r, 37.39, 127.11)) // 고정 목록
+        dns.countDown()
+        assertNull(got.poll(500, TimeUnit.MILLISECONDS)) // 늦게 온 답으로 다시 확정하지 않는다
+
+        // 제때 온 답은 그대로, 한 번만(마감이 뒤에 다시 부르지 않음)
+        within(exec, 300, { listOf(Place(1.0, 2.0, "추천")) }) { got += it to 0L }
+        assertEquals("추천", got.poll(1, TimeUnit.SECONDS)!!.first.getOrThrow().single().name)
+        assertNull(got.poll(600, TimeUnit.MILLISECONDS))
+        exec.shutdown()
     }
 }

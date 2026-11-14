@@ -100,6 +100,7 @@ private const val OFFER_MS = 30_000L // 제안에 답이 없으면 보관으로 
 
 class MainActivity : ComponentActivity() {
     private val io = Executors.newSingleThreadExecutor()
+    private val stopsIo = Executors.newSingleThreadExecutor() // 휴게소 추천 전용: 늦은 DNS가 공용 io를 막지 않게(Astra #317 3차)
     private val recordingIo = Executors.newSingleThreadExecutor()
     private var cancelRecordingStart: (() -> Unit)? = null
     private val clipIo = Executors.newSingleThreadExecutor() // 장면 클립 올리기(T63). 동의 끄기 요청이 클립 묶음 뒤에 서지 않게 따로
@@ -407,7 +408,7 @@ class MainActivity : ComponentActivity() {
         main.removeCallbacksAndMessages(null) // 조회, 제안 시간 초과, 결과 카드 닫기
         if (Live.onHeard == ::heard) Live.onHeard = null
         if (!isChangingConfigurations) { handoff.stop(); CaptureService.stop(this) } // 동의를 확인할 화면이 없어지면 수음도 멈춘다
-        car.stop(); io.shutdown(); clipIo.shutdownNow(); shortPreviewIo.shutdownNow(); shortPreviewCloseIo.shutdown(); shortExportIo.shutdownNow(); shortExportCheckIo.shutdownNow(); super.onDestroy()
+        car.stop(); io.shutdown(); stopsIo.shutdownNow(); clipIo.shutdownNow(); shortPreviewIo.shutdownNow(); shortPreviewCloseIo.shutdown(); shortExportIo.shutdownNow(); shortExportCheckIo.shutdownNow(); super.onDestroy()
     }
 
     /** 통신은 한 줄로 차례대로 돌리고 결과만 메인 스레드로 돌려받는다. */
@@ -815,13 +816,15 @@ class MainActivity : ComponentActivity() {
             car.destination { to, remain ->
                 val url = server
                 val known = lat != null && lng != null && !(lat == 0.0 && lng == 0.0)
-                bg({ if (known) Server(url).restStops(lat!!, lng!!, heading, to, remain) else throw IllegalStateException("위치 모름") }) { r ->
+                // 2초 안에 답이 없으면 통신이 끝나지 않았어도 고정 목록으로 간다. 늦게 온 답은 within이 버린다.
+                within(stopsIo, 2_000, { if (known) Server(url).restStops(lat!!, lng!!, heading, to, remain) else throw IllegalStateException("위치 모름") }) { r -> main.post post@{
+                    if (isDestroyed) return@post
                     r.exceptionOrNull()?.let { Log.w(TAG, "휴게소 추천을 받지 못함 · 고정 목록으로", it) }
                     val stops = stopsFrom(r, lat, lng)
                     Log.i(TAG, "휴게소 후보 ${stops.size}곳 · ${if (r.isSuccess) "추천 서버" else "고정 목록"} · 목적지 ${to != null} · 남은 길 ${remain != null}")
-                    if (stops.isEmpty()) { Log.i(TAG, "남은 휴게소 없음 · 부탁은 보관"); if (offer?.id == o.id) offer = null; return@bg }
+                    if (stops.isEmpty()) { Log.i(TAG, "남은 휴게소 없음 · 부탁은 보관"); if (offer?.id == o.id) offer = null; return@post }
                     ask(o, u, stops, lat, lng, remain)
-                }
+                } }
             }
         }
     }
