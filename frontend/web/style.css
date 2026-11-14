@@ -1114,6 +1114,7 @@ button.ob-other { justify-self: start; min-height: 40px; font-size: 13px; font-w
 .group-member .group-face { width: 42px; height: 42px; }
 .group-member.picked { outline: 3px solid var(--accent); }
 .group-assign { border: 0; gap: 12px; } /* 시안 P16B 차량 좌석 배치 */
+.group-assign .seat-front { text-align: center; }
 .group-assign .seat { min-height: 158px; align-content: center; gap: 6px; padding: 16px; }
 .group-assign .seat.me { background: var(--surface-2); }
 .group-assign .seat > :first-child { order: -2; }
