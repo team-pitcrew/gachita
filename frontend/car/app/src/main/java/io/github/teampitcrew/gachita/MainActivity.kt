@@ -222,7 +222,6 @@ class MainActivity : ComponentActivity() {
     private data class Brief(val place: String?, val arrivalItems: List<SharedTodo>? = null, val final: Boolean = false)
     private var brief by mutableStateOf<Brief?>(null)
     private var near by mutableStateOf<Approach?>(null) // 도착 전 브리핑(C19·finalNear). 주행 중 조회마다 내비 남은 시간으로 바꾸고 주차하면 지운다
-    private var nearPosted = "" // 마지막으로 서버에 남긴 '곧 도착'(여행|장소|분). 같은 분 안에는 다시 보내지 않는다
     private var f4Mock by mutableStateOf<String?>(null) // mock: 디버그 빌드의 --es f4 …(F4 화면 확인용 시연 데이터, Arrival.kt F4Mock)
     private var appVisible by mutableStateOf(false) // onStart ~ onStop
     private var resumed = false // 우리 화면이 앞: 마이크 서비스는 이때만 시작할 수 있다(T10)
@@ -523,16 +522,17 @@ class MainActivity : ComponentActivity() {
     private fun placesOf(code: String) = placeLog?.takeIf { it.trip == code } ?: PlaceLog(filesDir, code, Live.seal(this)).also { placeLog = it }
 
     /**
-     * 장소 기록(T131): 여행 조회가 성공한 뒤(끊겼으면 마지막 동의 확인 5분 안에서만), 모두 동의한 동안에만 내비의 출발·목적지·곧 도착을 남기고 밀린 것을 보낸다(도착·경유는 arrive()).
+     * 장소 기록(T149): 여행 조회가 성공한 뒤(끊겼으면 마지막 동의 확인 5분 안에서만), 모두 동의한 동안에만 내비의 출발·목적지를 남기고 밀린 것을 보낸다
+     * (곧 도착은 approaching(), 도착·경유는 arrive()).
      * 콘텐츠 기록 타임라인·지도의 장소 이름과 폰의 '…로 이동 중'이 이것을 읽는다. 위치는 기록 중에 물어 둔 마지막 위치(1분 안)만 붙인다.
      */
     private fun places(t: Trip) {
         if (!s.consented || s.offPending) return
-        car.destinationNamed { dest, remain ->
+        car.destinationNamed { dest ->
             if (s.trip?.code != t.code || !s.consented || s.offPending) return@destinationNamed
             val now = System.currentTimeMillis()
             val gear = carStatus.gear
-            placesOf(t.code).see(gear != null && gear != "P", dest, remain, Live.fix?.takeIf { now - it.at in 0..60_000 }, t.generation, now)
+            placesOf(t.code).see(gear != null && gear != "P", dest, Live.fix?.takeIf { now - it.at in 0..60_000 }, t.generation, now)
             sendPlaces(t)
         }
     }
@@ -772,13 +772,9 @@ class MainActivity : ComponentActivity() {
             if (s.trip?.code != code || !carStatus.restricted) return@nextPlaceEta
             val a = approach(code, name, sec, final)
             near = a
-            val scope = todoScope() ?: return@nextPlaceEta
-            val key = a?.let { "$code|${it.place}|${it.minutes}" } ?: return@nextPlaceEta
-            if (key == nearPosted) return@nextPlaceEta
-            nearPosted = key
-            bg({ Server(scope.server).place(scope.trip, scope.token, a.place, "approaching", etaSeconds = a.seconds) }) { r ->
-                r.onFailure { if (nearPosted == key) nearPosted = "" } // 다음 조회에서 다시 보낸다
-            }
+            // 폰(P19)도 보도록 '곧 도착'을 장소 기록에 남긴다(T149 PlaceLog: 같은 장소·같은 분에 한 번, 끊기면 두었다 나중에, 모두 동의한 동안만)
+            val t = s.trip?.takeIf { it.code == code } ?: return@nextPlaceEta
+            if (a != null && s.consented && !s.offPending && placesOf(code).approach(a.place, a.minutes, a.seconds, t.generation, System.currentTimeMillis())) sendPlaces(t)
         }
     }
 
@@ -1128,8 +1124,8 @@ class MainActivity : ComponentActivity() {
                         if (!current()) return@checked
                         arrivalLoading = false
                         val answer = checked.getOrElse { failed("도착 확인을 마치지 못했어요 · ${reason(it)}"); return@checked }
-                        // 장소 기록(T131): 서버가 이 장소에 닿았다고 본 도착은 목적지면 도착, 아니면 경유로 남긴다(모두 동의한 동안만)
-                        if (answer.eligible && s.consented) s.trip?.takeIf { it.code == scope.trip }?.let { t -> if (placesOf(t.code).arrived(place, t.generation, observed.observedAt)) sendPlaces(t) }
+                        // 장소 기록(T149): 서버가 이 장소에 닿았다고 본 도착은 최종 목적지면 도착, 아니면 경유로 남긴다(폰 P20·기록이 같은 곳을 봄, 모두 동의한 동안만)
+                        if (answer.eligible && s.consented) s.trip?.takeIf { it.code == scope.trip }?.let { t -> if (placesOf(t.code).arrived(place, final, t.generation, observed.observedAt)) sendPlaces(t) }
                         if (!canReadArrival(answer, observed, scope, todoScope(), vehicleParked(), System.currentTimeMillis())) {
                             failed(when (answer.reason) {
                                 "outside_place" -> "아직 이 장소에 도착하지 않았어요"
@@ -1139,8 +1135,6 @@ class MainActivity : ComponentActivity() {
                             }); return@checked
                         }
                         arrivalNote = if (answer.items.isEmpty()) "이 장소의 미완료 할 일이 없어요" else "서버에서 도착과 미완료 항목을 확인했어요"
-                        // 폰(P20)과 기록이 같은 곳을 보도록 도착을 남긴다(POST /places, 실패해도 브리핑은 그대로)
-                        bg({ Server(scope.server).place(scope.trip, scope.token, place.name, "arrived", place.lat, place.lng) }) { }
                         if (answer.items.isNotEmpty()) {
                             brief = Brief(place.name, answer.items, final)
                             car.speak(sharedBriefingLine(place.name, answer.items))
