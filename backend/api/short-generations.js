@@ -116,7 +116,7 @@ export function shortGenerations(ctx, overrides = {}) {
         return [200, (await plan(trip, client, body)).plan];
       });
     }
-    if (id && !/^[0-9a-f-]{36}$/.test(id)) fail(404, "없는 생성 작업");
+    if (id && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id)) fail(404, "없는 생성 작업");
     if (leaf && leaf !== "file") fail(404, "없는 생성 경로");
     let response = await ctx.withTrip(
       code,

@@ -1630,6 +1630,7 @@ test('생성 API: 계획 확인·멱등·한도·자막 변경·철회와 다운
  try{
   const f=await shortFixture();const body=shortBody(f,'same-request-key');
   assert.equal((await call('GET','/api/short-templates'))[1].templates.length,2);
+  assert.equal((await call('GET',`${f.path}/short-generations/${'-'.repeat(36)}`,null,f.a.token))[0],404);
   assert.equal((await call('POST',`${f.path}/short-generations`,body))[0],401);
   assert.equal((await call('POST',`${f.path}/short-generations`,{...body,externalGenerationConsent:false},f.a.token))[0],400);
   await call('PATCH',f.path,{status:'driving'});
