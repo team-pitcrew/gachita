@@ -1,6 +1,7 @@
 // '함께 타는 중' 탭(최종 시안 P17–P21)과 세 탭 틀. 무엇을 보일지는 서버가 준 값으로만 고르고 지어내지 않는다.
 // - 여행 상태·기록 여부: GET /trips/{code}의 status·recording
-// - 장소: 같은 문서의 places(차가 내비에서 읽어 기록, 묶음 A3). 없으면 '곧 도착'과 이동 중인 곳을 보이지 않는다.
+// - 장소: GET /trips/{code}/places와 전사 응답의 places(차가 내비에서 읽어 기록, #370). 녹음에 동의한 참가자만 읽는다.
+//   여행 문서(trip.places)는 읽지 않는다. 못 읽으면 '곧 도착'과 장소 이름을 보이지 않는다.
 // - 도착과 부탁: 기록에 동의한 참가자가 읽는 GET /todos의 arrival·items(T119·T120)
 import { h, SEATS } from "./shared.js";
 import { placeMatches } from "./todos.js";
@@ -20,7 +21,7 @@ export function ro(word) {
 // 서버의 장소 기록을 시각(at) 순으로. 늦게 도착한 옛 기록이 배열 뒤에 붙을 수 있어 배열 순서를 믿지 않는다(#370 계약:
 // 지금 상태는 at이 가장 큰 기록). 같은 시각이면 배열 순서를 지키고, 시각이 없는 기록은 가장 오래된 것으로 둔다. 이름 없는 것은 뺀다.
 const atOf = (p) => (Number.isFinite(p.at) ? p.at : -Infinity);
-export const placesOf = (trip) => (Array.isArray(trip?.places) ? trip.places : []).filter((p) => p && typeof p.name === "string" && p.name.trim()).sort((a, b) => atOf(a) - atOf(b));
+export const placesOf = (items) => (Array.isArray(items) ? items : []).filter((p) => p && typeof p.name === "string" && p.name.trim()).sort((a, b) => atOf(a) - atOf(b));
 
 // 다음에 갈 곳: 아직 도착하지 않은 첫 경유지, 없으면 마지막 목적지(도착했으면 없음).
 export function nextTarget(places) {
@@ -29,10 +30,56 @@ export function nextTarget(places) {
   return places.find((p) => p.kind === "stop" && open(p))?.name ?? [...places].reverse().find((p) => p.kind === "destination" && open(p))?.name ?? "";
 }
 
-// 지금 보일 상태. arrival은 GET /todos의 도착(동의한 참가자만), seenArrival은 이 폰이 이번 세대에서 본 도착 장소,
-// nearSeen은 '확인'을 누른 곧 도착 장소. kind: boarding | drive | paused | near | arrived | continue | parked | ended
-export function driveState(trip, { arrival = null, seenArrival = "", nearSeen = "" } = {}) {
-  const places = placesOf(trip);
+// 장소 기록 읽기(GET /trips/{code}/places, #370). 녹음에 동의하고 이 폰에서 연결한 참가자만 읽는다(아니면 서버가 403).
+// 할 일(todos.js)과 같은 주기: 여행 판이 바뀔 때와 화면이 보이는 동안 6초마다. 동의가 꺼지거나 참가자·세대가 바뀌면 바로 비운다.
+// 403·401·404(그 경로가 아직 없는 서버 포함)는 빈 목록 — 장소 이름 없이 그린다. 잠깐 끊기면 마지막 목록을 둔다.
+export function createPlaces({ getTrip, getParticipant, getToken, request, onChange, every = 6000 }) {
+  let state = null; // { key, items, json, seen(여행 판) }
+  let loading = false, again = false;
+  const keyOf = () => {
+    const trip = getTrip(), me = getParticipant();
+    return trip && me?.consent && getToken() ? `${trip.code}:${trip.generation ?? 1}:${me.id}` : "";
+  };
+  const set = (s, items) => {
+    const json = JSON.stringify(items);
+    if (json !== s.json) { Object.assign(s, { items, json }); onChange(); }
+  };
+  async function load() {
+    const s = state;
+    if (!s) return;
+    if (loading) { again = true; return; }
+    loading = true;
+    try {
+      const data = await request("GET", "/places");
+      if (state === s) set(s, Array.isArray(data?.items) ? data.items : []);
+    } catch (e) {
+      if (state === s && [401, 403, 404].includes(e.status)) set(s, []);
+    } finally {
+      loading = false;
+      if (again) { again = false; load(); }
+    }
+  }
+  function sync() {
+    const k = keyOf(), trip = getTrip();
+    if (state?.key !== k) state = k ? { key: k, items: [], json: "[]", seen: "" } : null;
+    if (!state) return;
+    const version = `${trip.code}:${trip.version}`;
+    if (version !== state.seen) { state.seen = version; load(); }
+  }
+  const timer = setInterval(() => { if (state && !globalThis.document?.hidden) load(); }, every);
+  timer.unref?.();
+  return { sync, items: () => (keyOf() && state?.key === keyOf() ? state.items : []), stop: () => clearInterval(timer) };
+}
+
+// 곧 도착 기록 하나를 가리키는 값. 같은 곳에 두 번째로 다가가면(다른 기록) '확인'한 것과 다르다.
+export const placeId = (p) => (p ? `${p.id ?? ""}|${Number.isFinite(p.at) ? p.at : ""}|${key(p.name)}` : "");
+
+// 지금 보일 상태. places는 GET /places의 목록(못 읽으면 null·[]), arrival은 GET /todos의 도착(동의한 참가자만),
+// seenArrival은 이 폰이 이번 세대에서 본 도착 { place, at }(장소 기록의 도착처럼 다룬다), nearSeen은 '확인'을 누른 곧 도착 기록(placeId).
+// kind: boarding | drive | paused | near | arrived | continue | parked | ended
+export function driveState(trip, { places: items = [], arrival = null, seenArrival = null, nearSeen = "" } = {}) {
+  const seen = seenArrival?.place ? [{ kind: "arrived", name: seenArrival.place, at: seenArrival.at }] : [];
+  const places = placesOf([...(Array.isArray(items) ? items : []), ...seen]);
   const last = places.at(-1);
   const target = nextTarget(places);
   const status = trip?.status;
@@ -41,10 +88,12 @@ export function driveState(trip, { arrival = null, seenArrival = "", nearSeen = 
     const place = arrival?.place || (last?.kind === "arrived" ? last.name : "");
     return place ? { kind: "arrived", place, target } : { kind: "parked", target };
   }
-  if (last?.kind === "approaching" && key(last.name) !== key(nearSeen)) return { kind: "near", place: last.name, eta: Number.isFinite(last.etaSeconds) ? last.etaSeconds : null, target: last.name };
+  if (last?.kind === "approaching" && placeId(last) !== nearSeen) return { kind: "near", place: last.name, eta: Number.isFinite(last.etaSeconds) ? last.etaSeconds : null, target: last.name, id: placeId(last) };
   if (!trip?.recording) return { kind: "paused", target };
-  const arrived = [...places].reverse().find((p) => p.kind === "arrived")?.name || seenArrival;
-  return arrived ? { kind: "continue", place: arrived, target } : { kind: "drive", target };
+  // 다시 출발(P21)은 마지막 도착 뒤에 새 곧 도착이 없을 때만. 다음 곳에 다가가기 시작했으면('확인' 뒤 포함) 운전 화면.
+  const lastArrived = places.findLastIndex((p) => p.kind === "arrived");
+  const approachedSince = places.findLastIndex((p) => p.kind === "approaching") > lastArrived;
+  return lastArrived >= 0 && !approachedSince ? { kind: "continue", place: places[lastArrived].name, target } : { kind: "drive", target };
 }
 
 // 부탁 목록을 어디까지 믿을지(todos.snapshot()의 값). 마지막 읽기가 실패했으면 받은 목록을 보이되 'stale'이라
@@ -122,11 +171,14 @@ export function recordingLine(trip, waiting = []) {
   return [{ boarding: "출발 전이라 기록하지 않아요", parked: "주차해서 기록을 마감했어요", ended: "여행을 마쳐 기록하지 않아요" }[trip?.status] ?? "차량 기록 멈춤", false];
 }
 
-// 운전석에서 바꿀 수 있는 여행 상태: [글자, 다음 상태]. 첫째가 주 단추 자리다.
-export function statusMoves(trip, state) {
+// 운전석에서 바꿀 수 있는 여행 상태: [글자, 다음 상태, 누르기 전에 물을 말(없으면 바로)]. 첫째가 주 단추 자리다.
+// 주차 중에는 도착을 읽었는지와 관계없이 같은 순서다(도착이 몇 초 늦게 와도 단추가 자리를 바꾸지 않게).
+export const CONTINUE_ASK = "다시 출발할까요? 함께 탄 모두의 화면에서 지금 도착 안내가 사라지고, 모두 기록에 동의해 있으면 차가 아직 주차 중이어도 대화 기록이 다시 켜져요.";
+export const END_ASK = "여행을 끝낼까요? 휴대폰에서는 다시 열 수 없어요.";
+export function statusMoves(trip) {
   if (trip?.status === "boarding") return [["출발", "driving"]];
   if (trip?.status === "driving") return [["주차", "parked"]];
-  if (trip?.status === "parked") return state.kind === "arrived" ? [["볼일 보고 여행 계속", "driving"], ["여행 끝내기", "ended"]] : [["여행 끝내기", "ended"], ["다시 출발", "driving"]];
+  if (trip?.status === "parked") return [["여행 계속", "driving", CONTINUE_ASK], ["여행 끝내기", "ended", END_ASK]];
   return [];
 }
 
@@ -148,7 +200,7 @@ export function placeAt(places, at) {
 // 받아 적은 글을 'HH:MM / 장소' 머리로 묶는다. 같은 장소에서 gap 안에 이어진 말은 한 묶음이고,
 // 할 일의 원발화(asks: 'device:seq')는 따로 '부탁' 카드가 된다. lines는 transcriptLines()의 시간순 결과.
 export function transcriptSections(lines, { places = [], asks = new Set(), gap = 5 * 60_000 } = {}) {
-  const log = placesOf({ places }).filter((p) => Number.isFinite(p.at));
+  const log = placesOf(places).filter((p) => Number.isFinite(p.at));
   const out = [];
   for (const line of lines) {
     const place = placeAt(log, line.at);

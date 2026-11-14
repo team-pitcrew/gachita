@@ -1,7 +1,8 @@
 // 현재 참가 권한이 있는 여행의 녹취(최종 시안 P44 '대화 기록'). 개인 피드나 앨범을 여행 전문으로 쓰지 않는다.
 // 시간·장소 머리로 묶고, 장소별 할 일의 원발화는 '○○의 부탁' 카드로 보인다. 묶는 규칙은 ride.js(transcriptSections).
+// 장소는 전사 응답의 places(동의한 참가자만 받음, #370)에서 읽는다. 여행 문서는 읽지 않고, 없으면 시각만 보인다.
 import { h, SEAT } from "./shared.js";
-import { appBar, askKeys, dateRange, hhmm, journeyTabs, placesOf, transcriptSections } from "./ride.js";
+import { appBar, askKeys, dateRange, hhmm, journeyTabs, transcriptSections } from "./ride.js";
 
 const button = (text, onclick, className = "") => h("button", { type: "button", className, onclick }, text);
 
@@ -43,15 +44,15 @@ export function createConversations({ getTrip, getParticipant, getToken, request
     if (!s) return;
     s.lines = [];
     s.asks = new Set();
+    s.places = [];
     s.unavailable = message;
     paint(s);
   };
-  // 화면을 다시 그릴 때마다 부른다: 권한이 바뀌면 닫고, 연결 상태·장소 기록이 바뀌면 다시 그린다.
+  // 화면을 다시 그릴 때마다 부른다: 권한이 바뀌면 닫고, 연결 상태가 바뀌면 머리를 다시 그린다.
   const sync = () => {
     if (!state) return;
     if (!state.unavailable) { const reason = invalid(state); if (reason) return unavailable(reason); }
-    const look = JSON.stringify([isOnline(), getTrip()?.places ?? null]);
-    if (look !== state.look) paint(state);
+    if (isOnline() !== state.online) paint(state);
   };
 
   const who = (line) => getTrip()?.participants.find((person) => person.id === line.participantId);
@@ -77,7 +78,7 @@ export function createConversations({ getTrip, getParticipant, getToken, request
 
   function paint(s) {
     if (state !== s) return;
-    s.look = JSON.stringify([isOnline(), getTrip()?.places ?? null]);
+    s.online = isOnline();
     const previous = dialog.querySelector(".conversation-body");
     const oldTop = previous?.scrollTop ?? 0;
     const nearEnd = previous && previous.scrollHeight - previous.clientHeight - oldTop < 80;
@@ -87,7 +88,7 @@ export function createConversations({ getTrip, getParticipant, getToken, request
     else if (!s.ready) body = bodyStatus("대화를 불러오고 있어요");
     else if (!s.lines.length) body = bodyStatus("아직 받아 적은 대화가 없어요");
     else {
-      const sections = transcriptSections(s.lines, { places: placesOf(getTrip()), asks: s.asks });
+      const sections = transcriptSections(s.lines, { places: s.places, asks: s.asks });
       body = h("div", { className: "conversation-thread" }, sections.map((part) => part.kind === "ask" ? ask(part.line)
         : h("section", { className: "conversation-group" },
           h("h2", { className: "conversation-time" }, [hhmm(part.at), part.place].filter(Boolean).join(" / ")),
@@ -132,14 +133,16 @@ export function createConversations({ getTrip, getParticipant, getToken, request
       s.error = "";
       s.lines = transcriptLines(data);
       s.asks = askKeys(data.todos);
+      s.places = Array.isArray(data.places) ? data.places : [];
       s.ready = true;
-      const snapshot = JSON.stringify([s.lines, [...s.asks]]);
+      const snapshot = JSON.stringify([s.lines, [...s.asks], s.places]);
       if (snapshot !== s.snapshot) { s.snapshot = snapshot; paint(s); }
     } catch (e) {
       if (state !== s || s.unavailable) return;
       // 연결이 끊겼을 때 원문을 계속 노출하지 않는다. 뒤늦은 철회도 폴링 재개 때 다시 검증한다.
       s.lines = [];
       s.asks = new Set();
+      s.places = [];
       s.snapshot = null;
       if (e.status === 401 || e.status === 403 || e.status === 404) return unavailable(e.status === 404 ? "지워졌거나 찾을 수 없는 대화예요." : "지금은 이 대화를 볼 수 없어요. 기록 동의와 동승 연결을 확인해 주세요.");
       s.error = "연결이 끊겨 대화를 불러오지 못했어요.";
@@ -156,7 +159,7 @@ export function createConversations({ getTrip, getParticipant, getToken, request
     const trip = getTrip();
     const participant = getParticipant();
     if (!trip || !participant) return;
-    const s = state = { code: trip.code, title: trip.title || "함께 탄 여행", generation: trip.generation, participantId: participant.id, lines: [], asks: new Set() };
+    const s = state = { code: trip.code, title: trip.title || "함께 탄 여행", generation: trip.generation, participantId: participant.id, lines: [], asks: new Set(), places: [] };
     paint(s);
     dialog.showModal();
     const reason = invalid(s);
