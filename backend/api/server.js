@@ -23,6 +23,7 @@ import { rideLinks, redeemRideLink } from "./ride-links.js";
 import { boardingInvites, tripBoardingInvites } from "./boarding-invites.js";
 import { restStops, SOURCE as REST_STOPS_SOURCE } from "./rest-stops.js";
 import { shortGenerations, shortTemplateCatalog } from "./short-generations.js";
+import { shortAssets, revokeShortAssets } from "./short-assets.js";
 import { arrivalBriefing, deriveTodos, TODO_METHOD } from "./todos.js";
 
 const WEB = fileURLToPath(new URL("../../frontend/web/", import.meta.url));
@@ -86,6 +87,7 @@ export function classify(e) {
 // 로그의 경로 틀: 정한 낱말이 아닌 마디(여행 코드, id, 초대 코드)는 :p로 가린다. 웹 파일은 /(web) 하나로.
 const ROUTE_WORDS = new Set(["api", "config", "trips", "participants", "requests", "moments", "utterances", "transcript", "transcriptions", "captions", "voice-match", "recordings", "scene-suggestions", "shortform", "short-templates", "short-plans", "short-generations", "file", "profiles", "me", "links", "google", "feed", "tokens", "photo", "voice", "groups", "members", "invites", "j"]);
 for (const word of ["todos", "arrival-briefing"]) ROUTE_WORDS.add(word);
+for (const word of ["short-assets", "source"]) ROUTE_WORDS.add(word);
 ROUTE_WORDS.add("rest-stops");
 ROUTE_WORDS.add("boarding-invites");
 const routeOf = (pathname) =>
@@ -138,6 +140,7 @@ export async function migrate() {
   await tripsDb().query(await readFile(new URL("trips-9-retention.sql", import.meta.url), "utf8"));
   await tripsDb().query(await readFile(new URL("trips-10-todos.sql", import.meta.url), "utf8"));
   await tripsDb().query(await readFile(new URL("trips-11-boarding-invites.sql", import.meta.url), "utf8"));
+  await tripsDb().query(await readFile(new URL("trips-12-short-assets.sql", import.meta.url), "utf8"));
   await profilesDb().query(await readFile(PROFILES_SQL, "utf8"));
   await profilesDb().query(await readFile(LINKS_SQL, "utf8"));
   await profilesDb().query(await readFile(ALBUM_SQL, "utf8"));
@@ -201,6 +204,7 @@ const participantOf = (req, trip) => {
 async function bumpGeneration(trip, client) {
   trip.generation = (trip.generation ?? 1) + 1;
   await client.query("DELETE FROM utterances WHERE trip_code = $1 AND generation < $2", [trip.code, trip.generation]);
+  await revokeShortAssets(client, trip.code, trip.generation);
   await client.query("DELETE FROM todo_states WHERE trip_code = $1 AND generation < $2", [trip.code, trip.generation]);
   // 그 여행의 클립도 모두 지운다(T76). 같은 트랜잭션에서 지울 키를 적고 버킷은 커밋 뒤에 비운다(sweepClips) —
   // 잠금을 쥔 채 S3를 기다리지 않고, 되돌려지면 적은 것도 되돌려진다. 늦게 올라오는 옛 세대 클립은 세대 확인이 막는다.
@@ -929,6 +933,7 @@ async function trips(req, [code, sub, id, leaf, ...rest], b, query, signal) {
     }
   }
   if ((sub === "short-plans" || sub === "short-generations") && !rest.length) return shortService.request(req, code, sub, id, leaf, b);
+  if (sub === "short-assets" && !rest.length) return shortAssetService.request(req, code, id, leaf, query);
   if (rest.length || (leaf !== undefined && !(sub === "participants" && leaf === "voice") && sub !== "utterances" && sub !== "captions")) fail(404, "없는 경로");
   if (sub === "boarding-invites") return tripBoardingInvites(req, code, id, { withTrip, participantOf });
   if (sub === "captions") {
@@ -974,6 +979,7 @@ async function trips(req, [code, sub, id, leaf, ...rest], b, query, signal) {
 // 직접 삭제·동의 철회로 적어 둔 원음만 정리합니다. 여행의 나이로 데이터를 지우지 않습니다.
 export async function sweep() {
   await sweepClips();
+  await shortAssetService.sweep();
 }
 
 async function handle(trip, { req, m, sub, id, leaf, b, query, profile }, client) {
@@ -1299,7 +1305,7 @@ async function handle(trip, { req, m, sub, id, leaf, b, query, profile }, client
 
   if (sub === "shortform") {
     // 숏폼 구성(T43, ADR-0021·ADR-0022): 클립이 올라온 장면마다 소리 주소와 자막 큐와 말한 사람을 준다.
-    // 웹 9:16 화면과 주차 중 차가 이 데이터로 그 자리에서 재생하고, 기기에서 영상 파일로도 만든다(서버로 올리지 않음).
+    // 웹 9:16 화면과 주차 중 차가 이 데이터로 재생하고 기기에서 영상 파일로도 만듭니다. 공용 보관은 short-assets(T107)입니다.
     // 서버의 힉스필드 생성(T85, 꺼서 배포)은 short-generations.js. 말한 사람은 화자 대조(T38)로 붙은 프로필만 — 자리만으로 이름을 붙이지 않는다.
     const all = await lines();
     return [200, await composition(trip, client, all)];
@@ -1343,6 +1349,7 @@ async function composition(trip, client, all) {
 
 export const shortServiceContext = { withTrip, participantOf, composition };
 const shortService = shortGenerations(shortServiceContext);
+const shortAssetService = shortAssets(shortServiceContext);
 
 // 확장자 없는 주소는 화면이다: 그 폴더의 index.html(/demo), 없으면 웹앱 첫 화면 — Google 로그인 콜백처럼 웹앱이 주소를 읽는다.
 // 웹 파일은 쓸 때마다 다시 확인하게 한다(no-cache + ETag). 지시가 없으면 Cloudflare가 4시간 캐시해
@@ -1416,7 +1423,7 @@ export const server = createServer(async (req, res) => {
       // 발화 묶음은 본문이 커서 그 경로만 따로 한도를 둔다(docs/api/voice.md).
       const big = seg[1] === "trips" && seg[3] === "utterances";
       // 목소리 등록(…/voice)·발화 대조는 이진 본문(WAV)이다 — JSON으로 먼저 읽지 않는다.
-      const binary = req.method === "POST" && (seg.at(-1) === "voice" || (seg[1] === "trips" && ["voice-match", "recordings", "transcriptions"].includes(seg[3])));
+      const binary = req.method === "POST" && (seg.at(-1) === "voice" || (seg[1] === "trips" && (["voice-match", "recordings", "transcriptions"].includes(seg[3]) || (seg[3] === "short-assets" && !seg[4]))));
       const body = !binary && (req.method === "POST" || req.method === "PATCH") ? await readBody(req, big ? 1_000_000 : MAX_BODY) : {};
       if (seg[1] === "rest-stops" && !seg[2]) {
         if (req.method !== "POST") fail(405, "POST만 됨");
@@ -1465,5 +1472,6 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   process.on("unhandledRejection", crash("unhandled_rejection"));
   server.listen(port, () => log("info", "listening", { port }));
   shortService.start();
+  shortAssetService.start();
   setInterval(sweep, 10 * 60_000).unref(); // 여행을 아무도 만들지 않아도 묵은 여행과 클립을 치운다
 }
