@@ -12,10 +12,14 @@ import { createConversations } from "/conversations.js";
 import { createTodos } from "/todos.js";
 import { CHARACTER_OPTIONS, characterKey, characterImage, createShortFilm, exportShortFilm, recordingFormat } from "/short-film.js";
 import { createShortStudio } from "/short-studio.js";
+import { createContents } from "/contents.js";
 import { createScenePicker } from "/short-scenes.js";
 import { createBoarding } from "/boarding.js";
 import { createOnboarding } from "/onboarding.js";
-import { appBar, arrivalCards, askState, createPlaces, driveState, journeyTabs, nearCard, recordingLine, rideHeading, seatMap, statusMoves } from "/ride.js";
+import { createGroups } from "/groups.js";
+import { createAfterTrip } from "/after-trip.js";
+import { appBar, askState, CONTINUE_ASK, createPlaces, driveState, END_ASK, journeyTabs, recordingLine, rideHeading, seatMap, statusMoves } from "/ride.js";
+import { arrivalBrief, arrivalMove, nearBrief } from "/brief.js";
 
 // 여행 상태 이름. 상태별 제목·부제·운전석 단추는 ride.js가 고른다.
 const TRIP = { boarding: "탑승 중", driving: "주행 중", parked: "주차 완료", ended: "여행 종료" };
@@ -120,8 +124,8 @@ const conversations = createConversations({
   isOnline: () => !offline,
   onHome: () => { location.hash = ""; },
   onCaptions: () => captions.open(),
-  onShorts: () => launchShort(),
-  onScenes: () => scenes.open(),
+  onShorts: () => openContents(),
+  onScenes: () => afterTrip.open({ step: "select" }), // P44 '추천 장면 고르기' → 추천 장면 3개(P23). 옛 장면 고르기는 그 화면의 '직접 고르기'
 });
 const todos = createTodos({
   getTrip: () => trip,
@@ -147,6 +151,27 @@ const studio = createShortStudio({ getTrip: () => trip, getParticipant: () => tr
   onPick: (momentId) => scenes.open({ momentId }), onConnect: () => { if (trip && code()) { render(); } else if (profile) startRide(); else location.hash = "me"; } });
 const scenes = createScenePicker({ getTrip: () => trip, getParticipant: () => trip?.participants.find((p) => p.id === myId()), getToken: myToken,
   onChoose: (momentId) => studio.open({ momentId }), onLocal: launchLocalShort, onCandidates: () => records.openScenes(), onCaptions: (options) => captions.open(options), onShare: (momentId) => shares.openCompose({ momentId }) });
+// 여행 마무리·추천 장면 고르기·생성(P22–P32). 만든 영상은 콘텐츠 기록 탭(F6, contents.js)에서 본다. '직접 고르기'는 옛 장면 고르기(→ 힉스필드 템플릿).
+const afterTrip = createAfterTrip({ getTrip: () => trip, getParticipant: () => trip?.participants.find((p) => p.id === myId()), getToken: myToken,
+  request: (method, path, body, signal) => asMe(trip.participants.find((p) => p.id === myId()), (c, token) => api(method, `/trips/${c}${path}`, body, token, signal)),
+  remember: store, avatar: (person) => personAvatar(person), getPlaces: () => places.items(), isOnline: () => !offline, onHome: () => { location.hash = ""; },
+  onTalk: () => conversations.open(), onContents: () => openContents(), onPick: () => scenes.open() });
+// 여행을 끝낸 직후(종료)에 이 폰에서 한 번, 그리고 멈춘 만들기가 남아 있으면 이 페이지에서 한 번 마무리 화면을 연다.
+// 주차(경유지·목적지 도착)에는 열지 않는다: 도착 브리핑(F4)을 덮지 않게, 장소를 읽기 전 첫 화면이 '주차'로 보여도. 주차 중에는 '여행 마무리 보기' 카드로 연다.
+// 다른 창(대화 기록·쇼츠·부탁 시트 등)이 열려 있으면 열지 않는다. 동의하고 이 폰에서 연결한 사람만.
+const afterOffered = new Set();
+function offerAfterTrip(me, kind) {
+  if (trip.status !== "ended" || !me.consent || !myToken() || afterTrip.isOpen() || short || document.querySelector("dialog[open]")) return;
+  const scope = `${trip.code}:${trip.generation ?? 1}`;
+  if (afterTrip.pending()) {
+    if (afterOffered.has(scope)) return;
+    afterOffered.add(scope);
+    return afterTrip.open();
+  }
+  if (kind !== "ended" || store(`${trip.code}:after-offered`) === `${scope}:${trip.status}`) return;
+  store(`${trip.code}:after-offered`, `${scope}:${trip.status}`);
+  afterTrip.open();
+}
 const boarding = createBoarding({ getProfile: () => profile, getToken: () => store("profile"), consentText: CONSENT, consentOffMessage: OFF_WIPES,
   onProfile: () => { location.hash = "me"; },
   onLinked: ({ code, participant, token }) => { store(code, participant.id); store(`${code}:token`, token); store(`${code}:asked`, null); store("trip", code); },
@@ -163,13 +188,48 @@ const onboarding = createOnboarding({
   render: () => render(),
   onBegin: () => { if (location.hash !== "#start") location.hash = "start"; },
   onDone: () => { location.hash = ""; },
-  // mock: F2(가족 그룹, T133 #372)가 병합되면 그 입구로 잇는다. 그 전에는 처음 화면으로 간다.
-  onFamily: () => { location.hash = ""; },
+  // F2(가족 그룹, groups.js): 온보딩을 마치면 가족 추가(P09)로 잇는다.
+  onFamily: () => { location.hash = ""; groups.open(); },
   onOther: () => { location.hash = "me"; },
   isOnline: () => !offline && navigator.onLine !== false,
 });
+// 가족·동승 그룹(흐름 F2, groups.js). 초대 링크(/?group=코드)는 프로필을 읽은 뒤 연다.
+const groups = createGroups({
+  getProfile: () => profile,
+  getToken: () => store("profile"),
+  onProfile: () => { location.hash = "me"; },
+  onTrip: (tripCode, participantId, token) => {
+    if (participantId) store(tripCode, participantId);
+    if (token) store(`${tripCode}:token`, token);
+    location.hash = tripCode;
+  },
+  onChange: () => loadProfile(),
+});
+groups.remember();
 const startRide = () => boarding.open();
 const launchShort = () => studio.open();
+// 콘텐츠 기록 탭(F6, contents.js). 영상 파일은 그 여행의 참가자 토큰으로 받는다 — 이 폰에 없으면 프로필로 다시 참가해 받는다(places.md).
+const contents = createContents({
+  getProfileToken: () => store("profile"),
+  getTrip: () => trip,
+  getParticipant: () => trip?.participants.find((p) => p.id === myId()),
+  getParticipantToken: () => myToken(),
+  tokenFor: async (c) => {
+    const kept = store(`${c}:token`);
+    if (kept || !store("profile")) return kept;
+    const again = await api("POST", `/trips/${c}/participants`, {}, store("profile"));
+    store(c, again.id); store(`${c}:token`, again.token);
+    return again.token;
+  },
+  avatar: (person) => personAvatar(person),
+  isOnline: () => !offline,
+  onHome: () => { location.hash = ""; },
+  onRide: () => render(),
+  onTalk: () => openConversations(),
+  onProfile: () => { location.hash = "me"; },
+  onStudio: launchShort,
+});
+const openContents = () => contents.open();
 const openConversations = () => {
   if (trip?.code === code()) return conversations.open();
   const last = store("trip");
@@ -520,6 +580,7 @@ function home() {
     ),
     profile?.email && !profile.hasVoice && entry("record", "15초 목소리 등록", "차에서 말한 사람을 알아보는 데 써요", () => { onboarding.open(); location.hash = "start"; }),
     profile ? entry("qr", "차량 QR로 참여", "차 화면의 QR을 휴대폰으로 스캔해요", startRide, "ride-entry") : store("profile") ? profileConnection() : entry("pencil", "내 프로필 만들기", "사진 또는 캐릭터로 나를 소개해요", () => { location.hash = "me"; }, "ride-entry"),
+    profile && entry("record", "우리 가족", "가족과 동승 그룹, 좌석과 초대 코드", () => groups.open()),
     h("section", { className: "home-section" }, h("div", { className: "between" }, h("h2", {}, "다시 만나는 우리 이야기"), button("보관함", () => studio.open({ view: "library" }), "plain")), entry("play", "우리 쇼츠", "원래 목소리로 남긴 짧은 여행", launchShort)),
     last && h("section", { className: "home-section" },
       h("div", { className: "between" }, h("h2", {}, "함께한 여행"), button("여행 열기", () => { location.hash = last; }, "plain")),
@@ -633,7 +694,12 @@ function tripView(me) {
   let main = null;
   if (state.kind === "near") main = button("확인", () => { ride.near = { key: scope, id: state.id }; render(); }, "primary");
   else if (trip.status === "driving") main = recordButton("primary big");
-  else if (moves.length) main = move(moves.shift(), "primary");
+  else if (state.kind === "arrived" && driver) {
+    // v2 도착 브리핑(T141): 경유지 '장보고 여행 계속', 최종 목적지 '여행 마치고 기록 보기'(끝낸 뒤 여행 마무리 P22로, 시연 24→25). 나머지 상태는 아래 카드에 남긴다.
+    const [label, status] = arrivalMove(state);
+    main = button(label, () => confirm(status === "ended" ? END_ASK : CONTINUE_ASK) && patch("", { status })().then(() => status === "ended" && trip?.status === "ended" && !afterTrip.isOpen() && afterTrip.open()), "primary");
+    moves.splice(moves.findIndex((m) => m[1] === status), 1);
+  } else if (moves.length) main = move(moves.shift(), "primary");
   const ask = trip.status !== "ended" && button("부탁 남기기", () => (sheet.showModal(), sheet.querySelector("#sheet-text").focus()), main ? "secondary" : "primary");
 
   // 운전자가 제안하고 수락한다. 반영 확인은 차량 앱이 내비 결과를 받은 뒤 누르는 자리다.
@@ -660,16 +726,23 @@ function tripView(me) {
   const band = (withToggle) => h("section", { className: `ride-status${recordOn ? " on" : ""}`, role: "status" },
     h("div", { className: "between" }, h("strong", {}, recordText), withToggle && recordButton("plain")),
     h("p", { className: "meta" }, "실제 녹음 상태는 차 화면에서 확인해 주세요."));
-  const now = state.kind === "near" ? [nearCard(state, asks), band(true)]
-    : state.kind === "arrived" ? arrivalCards(state, asks, trip.participants, personAvatar)
-    : [seatMap(trip, me, personAvatar), band(false)];
+  // 여행을 마쳤으면(도착 장소 없이 주차·종료) 마무리 화면(P22)으로 가는 카드를 맨 위에 둔다.
+  const finished = ["parked", "ended"].includes(state.kind);
+  const afterEntry = finished && me.consent && myToken() && h("section", { className: "ride-card after-entry" },
+    h("h2", {}, "오늘의 주행을 기록했어요"), h("p", { className: "meta" }, "전체 음성 올리기와 추천 장면을 확인하고 콘텐츠로 남겨요."),
+    button("여행 마무리 보기", () => afterTrip.open(), "primary"));
+  const now = state.kind === "near" ? [nearBrief(state, asks, trip.participants), band(true)]
+    : state.kind === "arrived" ? arrivalBrief(state, asks, trip.participants)
+    : [afterEntry, seatMap(trip, me, personAvatar), band(false)];
+  queueMicrotask(() => { if (trip && code() === trip.code) offerAfterTrip(me, state.kind); });
 
   return [
     appBar({ online: !offline, onHome: () => { location.hash = ""; } }),
-    journeyTabs("ride", { talk: () => conversations.open(), contents: launchShort }),
+    journeyTabs("ride", { talk: () => conversations.open(), contents: openContents }),
     h("div", { className: "ride-title" }, h("h1", {}, heading.title), heading.sub && h("p", { className: "sub" }, heading.sub)),
     ...now,
-    todos.card(),
+    // 곧 도착·도착에서는 위의 행동 항목이 같은 할 일을 보이므로 할 일 카드를 겹쳐 두지 않는다(v2 시안 P19·P20, T141)
+    !["near", "arrived"].includes(state.kind) && todos.card(),
     h(
       "section",
       { className: "card" },
@@ -988,6 +1061,7 @@ function render() {
   captions.sync();
   records.sync();
   conversations.sync();
+  afterTrip.sync();
   todos.sync();
   places.sync();
   stale = false;
@@ -1009,6 +1083,8 @@ function render() {
   if (conversationPending && me && !asking(me) && !reading) { conversationPending = false; conversations.open(); }
   if (failed || (trip && !me)) conversationPending = false;
   if (location.hash !== "#me" && !savingProfile && boarding.pending()) boarding.resume();
+  // 온보딩 중에는 초대 참여를 띄우지 않고 마친 뒤(처음 화면) 연다.
+  if (location.hash !== "#me" && page !== "onboarding" && !savingProfile && profile) groups.resume();
 }
 
 // 부탁 남기기 시트는 한 번만 채운다

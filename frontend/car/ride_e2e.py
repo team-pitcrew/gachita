@@ -97,7 +97,7 @@ def main(apk):
     gear("Park")
     adb("shell", "am", "force-stop", "--user", "10", PKG); adb("shell", "pm", "clear", "--user", "10", PKG)
     for perm in ("RECORD_AUDIO", "POST_NOTIFICATIONS", "CAMERA"): adb("shell", "pm", "grant", "--user", "10", PKG, f"android.permission.{perm}")
-    adb("shell", "am", "start", "--user", "10", "-n", f"{PKG}/.MainActivity", "--es", "server", f"http://10.0.2.2:{cap.PORT}")
+    adb("shell", "am", "start", "--user", "10", "-n", f"{PKG}/.MainActivity", "--es", "server", f"http://10.0.2.2:{cap.PORT}", "--ez", "onboarding", "false")
     time.sleep(5); note("pick", ok=pick_all_but_mom()); e2e.tap_make(); time.sleep(5)
     ui = texts(); code = next((t.split()[-1] for t in ui if t.startswith("여행 코드")), None); note("trip", code=code)
     check("엄마를 빼고 여행을 만듦(좌석 지도에 빈자리)", code and "엄마" not in ui and "빈자리" in ui)
