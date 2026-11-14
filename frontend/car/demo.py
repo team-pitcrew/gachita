@@ -539,20 +539,22 @@ def after_steps(code):
     """25–35 전체 화면(F5·F3·F6)."""
     rec_part(3)
     if not unsplit(): note("unsplit.fail")
-    step(25, ["오늘의 주행을 기록했어요", "전체 음성 업로드"], 12)
+    tap("콘텐츠 기록", timeout=4)  # 주차·끝난 여행의 콘텐츠 기록 탭이 여행 마무리(C22)로 열린다(F5)
+    step(25, ["오늘의 주행을 기록했어요", "전체 음성 업로드"], 12, "업로드 진행은 목업(원음 전체는 올리지 않음, PLAN 속도 우선 ③)")
     tap("대화 기록", timeout=4)
     step(26, ["의 부탁", "아까부터 바다 보이는데"], 15, "기록본의 시각·장소 머리, '{이름}의 부탁' 카드")
     tap("추천 장면 고르기", timeout=4)
+    made = False
     if step(27, ["남기고 싶은 순간을 골라요", "장면을 선택해 주세요"]):
-        picks = [n for n in ui() if re.match(r"^[☐☑]?\s*[13]\.\s", n[0])] or [n for n in ui() if n[0] in ("선택", "선택 안 됨")]
+        picks = [n for n in ui() if re.match(r"^[13]\.\s", n[0])]
         for n in (picks[:1] + picks[-1:]) if len(picks) > 1 else picks:
             x1, y1, x2, y2 = n[4]; adb("shell", "input", "tap", str((x1 + x2) // 2), str((y1 + y2) // 2)); time.sleep(1)
         step(28, ["선택한 2개 생성", "선택한 "]); tap("선택한 2개 생성", "선택한 ", exact=False)
         step(29, ["콘텐츠를 만들어요", "콘텐츠 생성 중"])
-        step(30, ["순간이 완성됐어요", "콘텐츠 기록 보기"], 120); tap("콘텐츠 기록 보기")
+        step(30, ["순간이 완성됐어요"], 120); made = tap("콘텐츠 기록 보기")
     else:
         for n in (28, 29, 30): mark(n, "없음", "27 장면 고르기 화면이 없어 건너뜀 — " + flow_state("F5"))
-    tap("콘텐츠 기록", timeout=4)
+    if not made: tap("콘텐츠 기록", timeout=4)  # 30 뒤에는 이미 콘텐츠 기록이 열려 있다(탭을 다시 누르면 여행 마무리로 감)
     if step(31, ["우리 가족 / 차량과 폰에서 이어보기", "갤러리"], 12):
         tap("타임라인"); step(32, ["날짜를 따라 다시 보는 우리 가족", "지도에서 보기"])
         tap("지도에서 보기"); step(33, ["어디에서 나눈 이야기였을까요?", "장면 확대하기"])
