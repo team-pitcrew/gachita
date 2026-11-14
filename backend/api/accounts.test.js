@@ -1,0 +1,174 @@
+// 이메일 계정·로그인·계정 동의·사진 범위(T128). 실행: 저장소 루트에서 make check
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { after, before, test } from "node:test";
+import pg from "pg";
+import { migrate, server } from "./server.js";
+import { hashPassword, verifyPassword } from "./accounts.js";
+import { endStores, profilesDb } from "./db.js";
+import { captureLog } from "./log.js";
+
+let base, adminUrl, names;
+const logs = [];
+captureLog((line) => logs.push(line));
+before(async () => {
+  adminUrl = process.env.DATABASE_URL;
+  const admin = new pg.Client({ connectionString: adminUrl });
+  await admin.connect();
+  names = [`${admin.database}_accounts_trips_${process.pid}`, `${admin.database}_accounts_profiles_${process.pid}`];
+  for (const name of names) await admin.query(`CREATE DATABASE "${name}"`);
+  await admin.end();
+  process.env.TRIPS_DATABASE_URL = adminUrl.replace(/\/[^/?]*(\?.*)?$/, `/${names[0]}`);
+  process.env.PROFILES_DATABASE_URL = adminUrl.replace(/\/[^/?]*(\?.*)?$/, `/${names[1]}`);
+  await migrate();
+  await migrate(); // 여러 번 돌려도 같아야 한다
+  await new Promise((ok) => server.listen(0, "127.0.0.1", ok));
+  base = `http://127.0.0.1:${server.address().port}`;
+});
+after(async () => {
+  await new Promise((ok) => server.close(ok));
+  await endStores();
+  const admin = new pg.Client({ connectionString: adminUrl });
+  await admin.connect();
+  for (const name of names) await admin.query(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
+  await admin.end();
+});
+
+async function call(method, path, body, token, raw) {
+  const res = await fetch(`${base}/api${path}`, {
+    method,
+    headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...(raw ? { "content-type": "application/json" } : {}) },
+    ...(body !== undefined ? { body: raw ?? JSON.stringify(body) } : {}),
+  });
+  const type = res.headers.get("content-type") ?? "";
+  return { status: res.status, data: res.status === 204 ? null : type.startsWith("application/json") ? await res.json() : Buffer.from(await res.arrayBuffer()), headers: res.headers };
+}
+const signup = (email, more = {}) => call("POST", "/accounts", { email, password: "바다보러가자1234", name: "지우", ...more });
+const PNG = Buffer.from("89504e470d0a1a0a0000000d49484452", "hex");
+
+test("가입하면 프로필과 토큰을 주고, 이메일은 본인 응답에만 있고, 비밀번호는 scrypt 값으로만 남는다", async () => {
+  const made = await signup("  Jiwoo@Example.COM ", { character: "bunny", device: "폰" });
+  assert.equal(made.status, 201);
+  assert.match(made.data.token, /^[A-Za-z0-9_-]{43}$/);
+  assert.deepEqual(
+    [made.data.email, made.data.name, made.data.character, made.data.hasVoice, made.data.consent, made.data.consentAt, made.data.hasPhoto],
+    ["jiwoo@example.com", "지우", "bunny", false, false, null, false]
+  );
+  const me = await call("GET", "/profiles/me", undefined, made.data.token);
+  assert.equal(me.data.email, "jiwoo@example.com");
+  assert.equal(me.data.token, undefined, "토큰은 발급할 때만");
+  assert.equal(me.headers.get("cache-control"), "no-store");
+
+  const { rows } = await profilesDb().query("SELECT email, password_hash FROM profiles WHERE id = $1", [made.data.id]);
+  assert.match(rows[0].password_hash, /^scrypt:16384:8:1:[A-Za-z0-9+/=]{24}:[A-Za-z0-9+/=]{88}$/);
+  assert.ok(!rows[0].password_hash.includes("바다보러가자"));
+  assert.ok(!logs.join("\n").includes("바다보러가자"), "비밀번호가 로그에 남지 않음");
+  // 같은 비밀번호도 소금이 달라 값이 다르다
+  const other = await signup("other@example.com");
+  const { rows: two } = await profilesDb().query("SELECT password_hash FROM profiles WHERE id = ANY($1::uuid[])", [[made.data.id, other.data.id]]);
+  assert.notEqual(two[0].password_hash, two[1].password_hash);
+
+  // 이메일 중복(대소문자·공백 무시)은 409
+  assert.equal((await signup("JIWOO@example.com")).status, 409);
+  const dup = await Promise.all([signup("race@example.com"), signup("race@example.com")]);
+  assert.deepEqual(dup.map((r) => r.status).sort(), [201, 409], "동시에 같은 이메일로 가입해도 하나만");
+});
+
+test("입력 검사: 이메일 모양, 비밀번호 8~72자, 이름", async () => {
+  for (const email of ["", "jiwoo", "a@b", "a b@c.d", 3, `${"a".repeat(250)}@b.cd`]) assert.equal((await signup(email)).status, 400, String(email));
+  for (const password of ["1234567", "가".repeat(73), 12345678, "\0abcdefgh"]) assert.equal((await signup("p@example.com", { password })).status, 400, String(password));
+  assert.equal((await signup("p@example.com", { password: "가".repeat(72) })).status, 201, "72자까지 됨(바이트가 아니라 글자)");
+  assert.equal((await signup("q@example.com", { password: "12345678" })).status, 201, "8자부터 됨");
+  assert.equal((await signup("r@example.com", { name: undefined })).status, 400, "새 계정에는 이름이 필요함");
+  assert.equal((await call("GET", "/accounts")).status, 405);
+  assert.equal((await call("POST", "/sessions", { email: "x@example.com" })).status, 400);
+});
+
+test("로그인: 맞으면 새 기기 토큰, 틀린 비밀번호와 없는 이메일은 같은 401", async () => {
+  const made = await signup("login@example.com");
+  const ok = await call("POST", "/sessions", { email: " LOGIN@example.com", password: "바다보러가자1234", device: "차량" });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.data.id, made.data.id);
+  assert.notEqual(ok.data.token, made.data.token, "기기마다 다른 토큰");
+  for (const token of [ok.data.token, made.data.token]) assert.equal((await call("GET", "/profiles/me", undefined, token)).data.id, made.data.id, "앞 기기의 토큰도 그대로");
+  const { rows } = await profilesDb().query("SELECT device FROM tokens WHERE profile_id = $1 ORDER BY created_at", [made.data.id]);
+  assert.deepEqual(rows.map((r) => r.device), ["", "차량"]);
+
+  const wrong = await call("POST", "/sessions", { email: "login@example.com", password: "바다보러가자12345" });
+  const nobody = await call("POST", "/sessions", { email: "nobody@example.com", password: "바다보러가자1234" });
+  const short = await call("POST", "/sessions", { email: "login@example.com", password: "1" });
+  for (const r of [wrong, nobody, short]) {
+    assert.equal(r.status, 401);
+    assert.deepEqual(r.data, wrong.data, "어느 쪽이 틀렸는지 말하지 않음");
+    assert.equal(r.data.token, undefined);
+  }
+  // 이메일 없는 기기 프로필은 비밀번호로 들어갈 수 없다
+  await call("POST", "/profiles", { name: "기기만" });
+  assert.equal((await call("POST", "/sessions", { email: "", password: "" })).status, 401);
+});
+
+test("기기 프로필에 계정을 붙이면 같은 프로필이 되고, 이미 계정이 있거나 남의 이메일이면 409", async () => {
+  const device = (await call("POST", "/profiles", { name: "기기 프로필", character: "cat" })).data;
+  const attached = await call("POST", "/accounts", { email: "attach@example.com", password: "12345678" }, device.token);
+  assert.equal(attached.status, 200);
+  assert.deepEqual([attached.data.id, attached.data.name, attached.data.character, attached.data.email, attached.data.token], [device.id, "기기 프로필", "cat", "attach@example.com", device.token]);
+  const login = await call("POST", "/sessions", { email: "attach@example.com", password: "12345678" });
+  assert.equal(login.data.id, device.id);
+  assert.equal((await call("POST", "/accounts", { email: "attach2@example.com", password: "12345678" }, device.token)).status, 409, "비밀번호 바꾸기가 아님");
+  const second = (await call("POST", "/profiles", { name: "둘째" })).data;
+  assert.equal((await call("POST", "/accounts", { email: "attach@example.com", password: "12345678" }, second.token)).status, 409);
+  assert.equal((await call("POST", "/accounts", { email: "attach3@example.com", password: "12345678" }, "x".repeat(43))).status, 401, "틀린 토큰은 새 계정으로 넘어가지 않음");
+  const { rows } = await profilesDb().query("SELECT count(*)::int AS n FROM profiles WHERE email = 'attach3@example.com'");
+  assert.equal(rows[0].n, 0);
+});
+
+test("계정 동의는 시각과 문구 판을 남기고, 끄면 비운다. 목소리 등록 여부가 프로필에 보인다", async () => {
+  const { data: me } = await signup("consent@example.com");
+  const on = await call("PATCH", "/profiles/me", { consent: true }, me.token);
+  assert.equal(on.status, 200);
+  assert.equal(on.data.consent, true);
+  assert.ok(Math.abs(on.data.consentAt - Date.now()) < 5000);
+  assert.equal(on.data.consentVersion, "2026-11-14");
+  const v2 = await call("PATCH", "/profiles/me", { consent: true, consentVersion: "v2" }, me.token);
+  assert.equal(v2.data.consentVersion, "v2");
+  const named = await call("PATCH", "/profiles/me", { name: "지우개" }, me.token);
+  assert.deepEqual([named.data.name, named.data.consent, named.data.consentVersion], ["지우개", true, "v2"], "동의를 보내지 않으면 그대로");
+  const off = await call("PATCH", "/profiles/me", { consent: false }, me.token);
+  assert.deepEqual([off.data.consent, off.data.consentAt, off.data.consentVersion], [false, null, null]);
+  for (const bad of [{ consent: "yes" }, { consent: true, consentVersion: "" }]) assert.equal((await call("PATCH", "/profiles/me", bad, me.token)).status, 400);
+
+  const { cases } = JSON.parse(await readFile(new URL("voice-vectors.json", import.meta.url), "utf8"));
+  const value = JSON.stringify({ embedder: "logmel-pitch-1", vector: cases[0].vector, seconds: 7 });
+  assert.equal((await call("POST", "/profiles/me/voice", null, me.token, value)).status, 200);
+  assert.equal((await call("GET", "/profiles/me", undefined, me.token)).data.hasVoice, true);
+  // 다른 임베더 길이의 옛 값은 차가 쓰지 못하니 '등록함'으로 세지 않는다
+  await profilesDb().query("UPDATE voice_prints SET vector = $2 WHERE profile_id = $1", [me.id, [1, 0, 0]]);
+  assert.equal((await call("GET", "/profiles/me", undefined, me.token)).data.hasVoice, false);
+  assert.equal((await call("DELETE", "/profiles/me/voice", undefined, me.token)).status, 204);
+  assert.equal((await call("GET", "/profiles/me", undefined, me.token)).data.hasVoice, false);
+});
+
+test("다른 프로필의 사진 주소는 지금 본인만 받는다(그룹은 A2)", async () => {
+  const { data: a } = await signup("photo-a@example.com");
+  const { data: b } = await signup("photo-b@example.com");
+  const put = await fetch(`${base}/api/profiles/me/photo`, { method: "PUT", headers: { authorization: `Bearer ${a.token}` }, body: PNG });
+  assert.equal(put.status, 204);
+  const own = await call("GET", `/profiles/${a.id}/photo`, undefined, a.token);
+  assert.equal(own.status, 200);
+  assert.equal(own.headers.get("content-type"), "image/png");
+  assert.equal(own.headers.get("x-content-type-options"), "nosniff");
+  assert.deepEqual(own.data, PNG);
+  assert.equal((await call("GET", `/profiles/${a.id}/photo`, undefined, b.token)).status, 404, "남의 사진은 없는 것과 같게");
+  assert.equal((await call("GET", `/profiles/${a.id}/photo`)).status, 401);
+  assert.equal((await call("GET", `/profiles/not-a-uuid/photo`, undefined, a.token)).status, 404);
+  assert.equal((await call("PUT", `/profiles/${a.id}/photo`, undefined, a.token)).status, 405);
+  assert.equal((await call("GET", `/profiles/${a.id}`, undefined, a.token)).status, 404);
+  assert.equal((await call("GET", `/profiles/${b.id}/photo`, undefined, b.token)).status, 404, "사진이 없으면 404");
+});
+
+test("비밀번호 값: 맞는 것만 통과하고 모양이 이상한 저장값은 틀린 것으로 본다", async () => {
+  const stored = await hashPassword("abcdefgh");
+  assert.equal(await verifyPassword("abcdefgh", stored), true);
+  assert.equal(await verifyPassword("abcdefgi", stored), false);
+  for (const bad of [null, "", "bcrypt:x", "scrypt:16384:8:1::", stored.slice(0, -4)]) assert.equal(await verifyPassword("abcdefgh", bad), false);
+});
