@@ -28,6 +28,20 @@ class Server(base: String, private val open: (URL) -> HttpURLConnection = { it.o
 
     fun createTrip(title: String): Got = got(call("POST", "/api/trips", JSONObject().put("title", title))!!)
 
+    // ---- 가족·동승 그룹(흐름 F2, docs/api/groups.md). 이 차에 로그인한 프로필 토큰으로 ----
+    fun profileName(token: String): String = JSONObject(call("GET", "/api/profiles/me", null, token)!!).getString("name")
+    fun groups(token: String): List<CarGroup> = JSONObject(call("GET", "/api/groups", null, token)!!).getJSONArray("items").let { a -> (0 until a.length()).map { parseGroup(a.getJSONObject(it)) } }
+    fun createGroup(token: String, name: String, kind: String): CarGroup = parseGroup(JSONObject(call("POST", "/api/groups", JSONObject().put("name", name).put("kind", kind), token)!!))
+    fun groupInvite(token: String, groupId: String): GroupInvite = JSONObject(call("POST", "/api/groups/$groupId/invites", JSONObject(), token)!!).let { GroupInvite(it.getString("code"), it.getString("url")) }
+    fun addChild(token: String, groupId: String, name: String, character: String, guardianConsent: Boolean): CarGroup =
+        parseGroup(JSONObject(call("POST", "/api/groups/$groupId/children", JSONObject().put("name", name).put("character", character).put("guardianConsent", guardianConsent), token)!!))
+    fun saveSeats(token: String, groupId: String, seats: Map<String, String?>): CarGroup =
+        parseGroup(JSONObject(call("PUT", "/api/groups/$groupId/seats", JSONObject().put("seats", JSONObject().also { o -> seats.forEach { (k, v) -> o.put(k, v ?: JSONObject.NULL) } }), token)!!))
+    /** 그룹으로 여행 만들기: 여행 코드와 이 차가 맡을 참가자 토큰(부른 사람과 그가 보호자인 아이 몫, 이때 한 번만 옴). */
+    fun groupTrip(token: String, groupId: String, title: String): Pair<String, Map<String, String>> =
+        JSONObject(call("POST", "/api/trips", JSONObject().put("groupId", groupId).put("title", title), token)!!)
+            .let { o -> o.getString("code") to o.getJSONObject("tokens").let { t -> t.keys().asSequence().associateWith { k -> t.getString(k) } } }
+
     /** 손님으로 참가. 이름과 자리를 보내고 동의는 꺼짐으로 시작한다. 참가자 id와 참가자 토큰(이때 한 번만 옴). */
     fun join(code: String, m: Member): Pair<String, String> =
         JSONObject(call("POST", "/api/trips/$code/participants", JSONObject().put("seat", m.seat.name).put("name", m.name).put("consent", false))!!)
@@ -69,10 +83,24 @@ class Server(base: String, private val open: (URL) -> HttpURLConnection = { it.o
 
     /** 실제 차량 P 관측으로 호출하며, 서버가 확인한 주차 상태 뒤에 도착 판정을 요청합니다. */
     fun parkedForArrival(code: String, token: String): Got = got(call("PATCH", "/api/trips/$code", JSONObject().put("status", "parked"), token)!!)
+    /** 여행을 마친다(최종 목적지 브리핑의 '여행 마치고 기록 보기'). 서버의 여행 상태만 바꾸고 기록·동의는 그대로 둔다. */
+    fun endTrip(code: String, token: String): Got = got(call("PATCH", "/api/trips/$code", JSONObject().put("status", "ended"), token)!!)
+
+    /** 내비에서 읽은 장소를 여행에 남긴다(T131 `POST /places`). kind: approaching·arrived·destination. */
+    fun place(code: String, token: String, name: String, kind: String, lat: Double? = null, lng: Double? = null, etaSeconds: Int? = null) {
+        val body = JSONObject().put("name", name).put("kind", kind).apply {
+            if (lat != null && lng != null) put("lat", lat).put("lng", lng)
+            etaSeconds?.let { put("etaSeconds", it) }
+        }
+        call("POST", "/api/trips/$code/places", body, token)
+    }
+
     fun arrivalBriefing(code: String, token: String, generation: Int, observation: VehicleArrival): SharedArrival =
         sharedArrival(call("POST", "/api/trips/$code/arrival-briefing", observation.body(generation, parked = true), token)!!)
 
     fun shortform(code: String, token: String): String = call("GET", "/api/trips/$code/shortform", null, token)!!
+    /** 콘텐츠 기록(F6): 이 여행 하나의 구성원·장소·경로·콘텐츠(docs/api/places.md). 녹음에 동의한 참가자 토큰만. */
+    fun contents(code: String, token: String): String = call("GET", "/api/trips/$code/contents", null, token, timeoutMs = 10000)!!
 
     fun shortTemplates(): JSONObject = JSONObject(call("GET", "/api/short-templates", null)!!)
     fun shortPlan(code: String, token: String, template: String, audio: Boolean): JSONObject = JSONObject(call("POST", "/api/trips/$code/short-plans", JSONObject().put("templateId", template).put("audioReference", audio), token)!!)

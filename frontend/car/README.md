@@ -21,6 +21,13 @@ adb shell am start --user 10 -n io.github.teampitcrew.gachita/.MainActivity --es
 - 기어 값은 Cold boot한 에뮬레이터에서만 읽힙니다(`docs/emulator/README.md`).
 - 마이크 권한(`RECORD_AUDIO`)과 알림 권한(`POST_NOTIFICATIONS`, 화면 뒤에서 '기록 멈춤'을 알림으로 보임)은 처음 기록할 때 함께 묻습니다. `-g`로 설치하면 미리 허용됩니다.
 
+## 계정·온보딩(T142)
+
+- 이 차에 계정 토큰이 없고 여행이 없으면 주차 중 전체 창에 시안 C01–C08(`Onboarding.kt`): 이메일 가입·로그인(`POST /api/accounts`·`/api/sessions`, 기기 이름 '차' — 토큰은 이 차에 암호화해 둠) → 계정 동의 → 이름·캐릭터 → 사진(기기 사진 선택기, 없으면 '사진 대신 캐릭터') → 15초 목소리 → 등록 완료. 서버 호출은 `Account.kt`.
+- 목소리는 수음과 같은 형식(MIC, 16 kHz 2채널 → `downmix` 모노)으로 15초를 모아 `embed(pcmSamples(...))`로 값만 `POST /api/profiles/me/voice`에 올립니다(ADR-0023). 계정 동의가 켜져 있지 않으면 마이크를 열지 않습니다.
+- 주행 제한이면 지금처럼 잠금 화면이고 녹음 중이면 멈춥니다. 머리 줄 '나중에'나 C08 '가족 그룹 만들기'는 지금의 여행 만들기로 가고, 처음 화면 '계정·목소리 등록'으로 다시 엽니다. 가족 그룹(F2)이 들어오기 전이라 오른쪽 '우리 가족 4명'은 고정 그림입니다(`// mock:`).
+- 기존 e2e 스크립트는 첫 실행에 디버그 인자 `--ez onboarding false`를 붙여 처음 화면을 여행 만들기로 봅니다(이 차에 기억).
+
 ## 주행 중 화면(T11)
 
 - **선언:** `MainActivity`에 `distractionOptimized`. 선언하지 않으면 기어 D에서 Pleos 차단 화면이 앱을 덮습니다.
@@ -79,6 +86,7 @@ adb shell am start --user 10 -n io.github.teampitcrew.gachita/.MainActivity --es
 
 ## 서버 할 일과 도착 브리핑(T113)
 
+- **차 안 도출(T144):** `TodoActions.kt`의 `deriveActionTodos`는 서버 `backend/api/todos.js`(`place-rules-v2`, T141)의 `todoOf`·`actionOf`·`deriveTodos`와 같은 규칙입니다. 받아 적은 발화에서 장소별 할 일과 행동 항목(분류 `first`·`buy`·`remember`·`bring`, 제목, 물건 이름·수량, 요청한 사람)을 차 안에서 냅니다. id는 서버와 같은 `sha256(JSON [장소, 글])` 앞 32자라 서버에 남은 완료·취소 상태가 그대로 붙습니다. 두 구현은 `backend/api/todo-vectors.json` 한 파일로 맞춥니다(`TodoActionsTest.kt`, 18건). 할 일 카드는 차 보관함(`Outbox.lines()`: 지금 동의 세대의 글 있는 발화)으로 도출한 목록을 씁니다. 서버 목록에서는 같은 id의 상태·버전·확인된 화자, 그리고 차에 없는 할 일(폰 입력·교정본)만 받아 붙입니다(`withCarTodos`). 서버가 같은 발화에서 교정본으로 다른 할 일을 냈으면 차 것을 뺍니다. 서버가 아직 받지 못한 발화의 할 일은 대기로 먼저 보이고, 완료·취소는 서버가 그 발화를 받은 뒤에 됩니다(그 전에는 PATCH가 404). 동의가 없거나 보관함의 세대가 서버 목록의 세대와 다르면 차 결과를 쓰지 않습니다. 도착 브리핑의 선정은 아직 서버(`POST /arrival-briefing`)입니다.
 - **같은 목록:** 참가자 토큰으로 `GET /api/trips/{code}/todos`를 읽습니다. 웹과 차량이 같은 전사와 보정문에서 추출된 할 일·원발화·상태·버전을 봅니다. 추출은 서버의 `place-rules-v1` 낱말 규칙이며 모델 추론이 아닙니다. 이전 `todos-<여행 코드>.json` 파일은 그대로 두고 새 목록에 합치지 않습니다.
 - **변경:** 실제 P이고 주행 제한이 풀렸을 때 완료·취소·다시 열기를 보냅니다. PATCH에는 현재 동의 세대와 `expectedVersion`이 들어갑니다. 서버 성공 뒤 목록을 다시 읽어 화면에 반영합니다. 404·409는 최신 목록을 보여 주고 다시 선택하도록 안내하며 자동으로 덮어쓰지 않습니다. 연결 실패 시 마지막 서버 목록·동기화 시각·재시도를 표시합니다. 여행·서버·참가 토큰·동의 세대가 바뀌면 이전 응답과 목록을 버립니다.
 - **도착 근거:** 최초 P는 도착으로 보지 않습니다. 주차로 전환하고 주행 제한이 풀렸거나 사용자가 '도착 확인'을 누르면 내비 SDK의 다음 경유지(없으면 목적지) 이름·좌표와 별도의 현재 위치를 읽습니다. 좌표가 없거나 `(0, 0)`이면 도착 안내를 보류합니다. 현재 위치 콜백을 받은 시각을 `observedAt`, 출처를 `vehicle`로 보냅니다. SDK가 원래 측정 시각을 주지 않아 센서의 실제 측정 시각까지 검증하지는 못합니다.
@@ -212,6 +220,7 @@ Gleo와 마이크 주고받기(T41)는 `python3 frontend/car/gleo_e2e.py <APK> <
 | `Car.kt` | Pleos SDK: 기어 읽기·알림, 순정 내비 경로·경유지 추가와 알림, 지금 위치·장소까지 거리, TTS. 차박지도 앱에서 옮김. AAOS 주행 제한 값(T11) |
 | `Asks.kt` | 부탁을 경유지로(T9)에서 화면·SDK와 무관한 규칙: 부탁·답 낱말, 휴게소 목록과 다음 후보, 제안 단계(단위 테스트 `AsksTest.kt`) |
 | `Todos.kt` | T113 서버 목록·버전·원발화 모델, 오래된 응답/도착 관측 검증(`SharedTodosTest.kt`). 이전 T40 파일 호환 코드도 보존합니다 |
+| `TodoActions.kt` | 할 일 행동 항목 규칙 `place-rules-v2`, 서버 `todos.js`와 같은 값(T144, 단위 테스트 `TodoActionsTest.kt`) |
 | `Short.kt` | 숏폼(T43)에서 화면·SDK와 무관한 것: 구성 해석, 시각의 자막, 클립 주소 거르기(단위 테스트 `ShortTest.kt`) |
 | `ShortStage.kt` | 가용 공간에 맞는 9:16 생성 장면 화면, 실제 자막·캐릭터·진행률, 수직 넘김과 재생 조작 |
 | `ShortVideoExport.kt` | 원음 WAV 검증, 앞 45초의 Canvas·EGL·AVC/AAC MP4 생성과 MediaStore 명시 저장, 진행률·취소·임시 파일 정리(단위 테스트 `ShortVideoExportTest.kt`) |

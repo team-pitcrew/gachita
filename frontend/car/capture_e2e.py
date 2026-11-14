@@ -334,7 +334,7 @@ def main(apk, minutes):
     adb("shell", "am", "force-stop", "--user", "10", PKG)
     adb("shell", "pm", "clear", "--user", "10", PKG)
     for perm in ("RECORD_AUDIO", "POST_NOTIFICATIONS"): adb("shell", "pm", "grant", "--user", "10", PKG, f"android.permission.{perm}")
-    adb("shell", "am", "start", "--user", "10", "-n", f"{PKG}/.MainActivity", "--es", "server", f"http://10.0.2.2:{PORT}")
+    adb("shell", "am", "start", "--user", "10", "-n", f"{PKG}/.MainActivity", "--es", "server", f"http://10.0.2.2:{PORT}", "--ez", "onboarding", "false")
     wait_texts(lambda u: e2e.SETUP in u, 30); e2e.tap_make(); time.sleep(4)  # 설치 직후 첫 화면은 바쁜 기기에서 4초를 넘기기도 함
     ui = texts(); code = next((t.split()[-1] for t in ui if t.startswith("여행 코드")), None); note("trip", code=code)
     # 1. 폰 참가자가 들어오고, 주차 중 동의: 차는 자기가 참가시킨 사람만 켜고, 폰이 자기 토큰으로 켜면 수음 시작(T68)

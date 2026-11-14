@@ -133,7 +133,7 @@ def main(apk):
     gear("Park")
     adb("shell", "am", "force-stop", "--user", "10", PKG); adb("shell", "pm", "clear", "--user", "10", PKG)
     for perm in ("RECORD_AUDIO", "POST_NOTIFICATIONS"): adb("shell", "pm", "grant", "--user", "10", PKG, f"android.permission.{perm}")
-    adb("shell", "am", "start", "--user", "10", "-n", f"{PKG}/.MainActivity", "--es", "server", f"http://10.0.2.2:{SHORT_PORT if FAKE else cap.PORT}")
+    adb("shell", "am", "start", "--user", "10", "-n", f"{PKG}/.MainActivity", "--es", "server", f"http://10.0.2.2:{SHORT_PORT if FAKE else cap.PORT}", "--ez", "onboarding", "false")
     cap.wait_texts(lambda u: any(t.endswith("명으로 여행 만들기") for t in u), 20)  # 설치 직후 첫 실행은 4초보다 늦게 뜬 적이 있다(11/14)
     e2e.tap_make(); time.sleep(4)
     tap_switch()
