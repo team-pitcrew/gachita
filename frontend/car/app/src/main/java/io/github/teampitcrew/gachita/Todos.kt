@@ -167,3 +167,29 @@ fun canReadArrival(result: SharedArrival, request: VehicleArrival, scope: TodoSc
     scope == current && parked && result.eligible && result.generation == scope.generation && result.observedAt == request.observedAt && result.place == request.place &&
         now - request.observedAt in 0L..60_000L && result.items.all { it.pending }
 fun sharedBriefingLine(place: String, items: List<SharedTodo>) = "${place}에 도착했어요. 할 일 ${items.size}건. " + items.joinToString(". ") { it.text }
+
+/** 하버사인 거리(m). 서버 todos.js의 meters와 같은 식(지구 반지름 6,371 km). */
+fun arrivalMeters(place: Place, lat: Double, lng: Double): Double {
+    val rad = Math.PI / 180
+    val h = Math.sin((place.lat - lat) * rad / 2).let { it * it } +
+        Math.cos(lat * rad) * Math.cos(place.lat * rad) * Math.sin((place.lng - lng) * rad / 2).let { it * it }
+    return 6_371_000 * 2 * Math.asin(Math.sqrt(minOf(1.0, h)))
+}
+
+/**
+ * 도착 브리핑 선정을 차 안에서(T144). 서버 todos.js의 arrivalBriefing과 같은 규칙이고 두 구현은 backend/api/arrival-vectors.json으로 맞춘다
+ * (TodosTest.kt): 주차가 아니면 not_parked, 위치가 60초보다 오래면 stale_position, 장소에서 250 m 밖이면 outside_place, 아니면 그 장소
+ * 낱말(띄어쓰기 무시)의 대기 할 일. 서버 응답과 같은 모양(SharedArrival)이다. parked는 실제 P이고 여행이 parked·ended일 때만 true로 넘긴다
+ * (서버도 여행 상태를 함께 본다). 폰이 읽는 도착 기록은 서버 POST /arrival-briefing이 남긴다.
+ */
+fun pickArrival(arrival: VehicleArrival, parked: Boolean, items: List<SharedTodo>, generation: Int, now: Long): SharedArrival {
+    val reason = when {
+        !parked -> "not_parked"
+        now - arrival.observedAt > 60_000 -> "stale_position"
+        arrivalMeters(arrival.place, arrival.lat, arrival.lng) > 250 -> "outside_place"
+        else -> null
+    }
+    val name = arrival.place.name.filterNot(Char::isWhitespace)
+    return SharedArrival(generation, reason == null, reason, arrival.observedAt, arrival.place,
+        if (reason == null) items.filter { it.pending && it.place in name } else emptyList())
+}

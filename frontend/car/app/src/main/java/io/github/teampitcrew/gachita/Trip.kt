@@ -32,10 +32,13 @@ val FAMILY = listOf(
 /** profile은 프로필로 참가한 사람(그 프로필의 목소리 등록값이 대조 후보가 됨, #65). */
 data class Person(val id: String, val name: String, val seat: String, val consent: Boolean, val profile: Boolean = false)
 
-/** generation은 동의 세대(동의 철회로 올라감), createdAt은 만든 시각(epoch ms). */
+/**
+ * generation은 동의 세대(동의 철회로 올라감), createdAt은 만든 시각(epoch ms).
+ * recording은 서버의 기록 표시: 여행이 주행(driving)으로 바뀔 때 모두 동의했으면 켜지고, 누가 철회하거나 동의 전인 사람이 타면 꺼진다.
+ */
 data class Trip(
     val code: String, val title: String, val status: String, val people: List<Person>, val heldRequests: Int, val version: Int,
-    val generation: Int = 1, val createdAt: Long = 0, val moments: List<Moment> = emptyList(),
+    val generation: Int = 1, val createdAt: Long = 0, val moments: List<Moment> = emptyList(), val recording: Boolean = false,
 )
 
 /** GET·POST /api/trips 응답(openapi.yaml의 Trip)을 읽는다. 보관한 부탁은 status가 held인 것만 센다. */
@@ -57,6 +60,7 @@ fun parseTrip(json: String): Trip {
         moments = o.optJSONArray("moments")?.let { a ->
             List(a.length()) { i -> a.getJSONObject(i).let { Moment(it.getString("id"), it.getLong("at"), it.optLongOrNull("from"), it.optLongOrNull("to")) } }
         }.orEmpty(),
+        recording = o.optBoolean("recording", false),
     )
 }
 
@@ -116,7 +120,24 @@ data class Session(
         else -> null
     }
 
-    fun startRecording(): Session = if (blockStart() == null) copy(started = true, note = "") else this
+    /**
+     * 자동 시작(C03 '탑승 시 대화 자동 기록', C13 '다음 탑승부터 자동 기록 켜짐'): 여행이 주행으로 바뀌어 서버가 기록을 켰고(trip.recording)
+     * 차가 아는 동의도 모두 켜져 있으면 버튼 없이 시작한다. 주행 중 시작이라 주차 조건은 보지 않는다(누르는 것이 없음). 동의 조건은 같다.
+     * 사용자가 멈춘 기록은 started가 남아 있어 여기서 다시 켜지지 않는다(재개는 같은 단추로).
+     */
+    fun blockAutoStart(): String? = when {
+        busy -> "처리하고 있어요"
+        !agreed -> "탑승자 모두의 녹음 동의가 필요해요"
+        trip?.status == "ended" -> "끝난 여행이에요. 새 여행에서 녹음을 시작해 주세요"
+        !online -> "연결을 확인한 뒤 녹음을 시작해 주세요"
+        trip?.status != "driving" || !trip.recording -> "주행으로 바뀌면 자동으로 기록해요"
+        else -> null
+    }
+
+    /** 지금 자동으로 녹음을 시작할 때인지: 아직 시작하지 않았고 자동 시작 조건을 모두 만족함. */
+    val autoStart: Boolean get() = !started && blockAutoStart() == null
+
+    fun startRecording(auto: Boolean = false): Session = if ((if (auto) blockAutoStart() else blockStart()) == null) copy(started = true, note = "") else this
 
     /** 동의를 켤 수 없으면 그 이유. 켤 수 있으면 null. */
     fun blockOn(): String? = when {
