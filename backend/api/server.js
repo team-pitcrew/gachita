@@ -993,6 +993,13 @@ export async function sweep() {
 }
 
 async function handle(trip, { req, m, sub, id, leaf, b, query, profile }, client) {
+  if (sub === "me") {
+    if (id !== undefined) fail(404, "없는 경로");
+    if (m !== "GET") fail(405, "GET만 됨");
+    // 동의하기 전에도 저장된 토큰의 주체를 확인한다. 토큰·프로필·다른 참가자는 반환하지 않는다.
+    const { id: participantId, name, seat, consent } = participantOf(req, trip);
+    return [200, { id: participantId, name, seat, consent }];
+  }
   if (sub === "shares" && !id) {
     if (m !== "POST") fail(405, "POST만 됨");
     return createShare(client, trip, participantOf(req, trip), b);
