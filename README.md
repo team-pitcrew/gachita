@@ -92,4 +92,5 @@ make check     # CI와 같은 검사
 
 - 파일 SHA-256: `7bafb82e90756425597fe208ce12431fc09953152375aae728319750813c1e6b`
 - 서명 인증서 SHA-256: `6f07b9fd44ef8e0e04782c160983e05b91cf8c7f10cff22cf7d5e690e599b2f6`. 이전 제출용 APK와 같습니다.
+- [최신 UI 세로 검토 영상](frontend/car/verification/20261114/current-ui-review.mp4) · 54.96초 · Pleos 에뮬레이터와 합성 음성입니다.
 - [제출 준비와 영상 검증](docs/submission-readiness.md), [실제 휴대폰·심사 접근 확인](docs/device-acceptance.md)을 함께 봅니다. 실제 휴대폰 검사와 심사용 계정 접근은 미확인입니다.
