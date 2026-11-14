@@ -600,7 +600,7 @@ async function legacyGroup(ownerId, memberId = ownerId) {
   return { groupId, kidId, code };
 }
 
-test("옛 그룹·초대와 대리 참가를 410으로 닫되 기존 자료의 프로필 삭제는 보존한다(T46)", async () => {
+test("옛 QR 초대(/j)와 대리 참가는 410으로 닫고, 옛 그룹 자료는 새 그룹 API로 읽히며 프로필 삭제를 보존한다(T46·T133)", async () => {
   const [, owner] = await call("POST", "/api/profiles", { name: "대표" });
   const [, member] = await call("POST", "/api/profiles", { name: "기존 구성원" });
   const { groupId, kidId, code } = await legacyGroup(owner.id, member.id);
@@ -608,7 +608,8 @@ test("옛 그룹·초대와 대리 참가를 410으로 닫되 기존 자료의 �
   const count = async (table) => (await profilesDb().query(`SELECT count(*)::int AS n FROM ${table}`)).rows[0].n;
   const tables = ["profiles", "tokens", "groups", "group_members", "invites"];
   const before = await Promise.all(tables.map(count));
-  const paths = ["/api/groups", `/api/groups/${groupId}`, `/api/groups/${groupId}/members`, `/api/groups/${groupId}/members/${kidId}`, `/api/groups/${groupId}/members/${kidId}/voice`, `/api/groups/${groupId}/invites`, `/api/groups/${groupId}/invites/${code}`, "/api/j", `/api/j/${code}`, `/api/j/${code}/extra`];
+  // 그룹(/api/groups)은 새 모양으로 되살렸다(T133, groups.test.js). 옛 QR 초대 주소만 계속 닫혀 있다.
+  const paths = ["/api/j", `/api/j/${code}`, `/api/j/${code}/extra`];
   const logs = [];
   captureLog((line) => logs.push(line));
   try {
@@ -625,7 +626,7 @@ test("옛 그룹·초대와 대리 참가를 410으로 닫되 기존 자료의 �
       }
     }
     assert.equal((await call("POST", `/api/j/${code}`, { name: "새 사람" }))[0], 410, "무인증 수락도 토큰을 만들지 않음");
-    assert.equal((await call("POST", "/api/groups", {}, "wrong-token"))[0], 410, "종료 안내는 인증 판정 전에 반환");
+    assert.equal((await call("POST", "/api/j", {}, "wrong-token"))[0], 410, "종료 안내는 인증 판정 전에 반환");
     assert.ok(!logs.join("\n").includes(code), "옛 초대 코드가 로그에 남지 않음");
     assert.ok(!logs.join("\n").includes(owner.token), "프로필 토큰이 로그에 남지 않음");
   } finally {
@@ -636,7 +637,12 @@ test("옛 그룹·초대와 대리 참가를 410으로 닫되 기존 자료의 �
 
   const tripCount = () => tripsDb().query("SELECT count(*)::int AS n FROM trips").then((r) => r.rows[0].n);
   const beforeTrips = await tripCount();
-  assert.equal((await call("POST", "/api/trips", { groupId }, owner.token))[0], 410, "유효한 옛 그룹으로도 여행을 만들 수 없음");
+  // 옛 그룹은 새 그룹 API로 읽힌다: 대표, 계정 있는 구성원, 대표가 만든 아이(옛 crew·family는 guest·family)
+  const [, listed] = await call("GET", "/api/groups", null, owner.token);
+  assert.deepEqual(listed.items.map((g) => [g.id, g.kind, g.invite]), [[groupId, "family", null]], "옛 /j 초대 코드는 새 초대로 보이지 않음");
+  assert.deepEqual(listed.items[0].members.map((m) => [m.profileId, m.role, m.seat]), [[owner.id, "owner", null], [member.id, "adult", null], [kidId, "child", null]]);
+  assert.equal((await call("GET", `/api/group-invites/${code}`))[0], 404, "옛 초대 코드로는 들어가지 못함");
+  assert.equal((await call("POST", "/api/trips", { groupId }, owner.token))[0], 409, "자리가 정해진 구성원이 없는 옛 그룹으로는 여행을 만들지 않음");
   assert.equal(await tripCount(), beforeTrips);
   const [, trip] = await call("POST", "/api/trips", {});
   const path = `/api/trips/${trip.code}/participants`;
@@ -2028,7 +2034,7 @@ test("장소별 할 일은 실제 전사·교정본에서 묶고 완료·취소�
   const [, stranger] = await join(another.code, "다른 여행", "ROW_1_LEFT");
   assert.equal((await call("GET", `${t}/todos`))[0], 401);
   assert.equal((await call("GET", `${t}/todos`, null, stranger.token))[0], 401);
-  assert.deepEqual((await call("GET", `${t}/todos`, null, p.token))[1], { generation: 1, method: "place-rules-v1", items: [], arrival: null });
+  assert.deepEqual((await call("GET", `${t}/todos`, null, p.token))[1], { generation: 1, method: "place-rules-v2", items: [], arrival: null });
   const texts = ["마트에서 우유 사자", "숙소에서는 아이 가방부터 꺼내야지", "마트에서 우유 사자", "화장실 가고 싶어"];
   const items = texts.map((text, i) => ({ seq: i + 1, at: trip.createdAt + i * 1000, text }));
   assert.equal((await call("POST", `${t}/utterances`, { device: "web-source", generation: 1, items }, p.token))[0], 200);
@@ -2057,7 +2063,7 @@ test("장소별 할 일은 실제 전사·교정본에서 묶고 완료·취소�
   await call("PATCH", `${t}/participants/${p.id}`, { consent: false });
   assert.equal((await list())[0], 403);
   await call("PATCH", `${t}/participants/${p.id}`, { consent: true }, p.token);
-  assert.deepEqual((await list())[1], { generation: 2, method: "place-rules-v1", items: [], arrival: null });
+  assert.deepEqual((await list())[1], { generation: 2, method: "place-rules-v2", items: [], arrival: null });
   assert.equal((await tripsDb().query("SELECT count(*)::int AS n FROM todo_states WHERE trip_code=$1", [trip.code])).rows[0].n, 0);
   assert.equal((await call("PATCH", path, body, p.token))[0], 409);
 });
@@ -2093,6 +2099,8 @@ test("도착 브리핑은 현재 여행 주차·최신 위치·장소 범위를 
   const result = (await briefing())[1];
   assert.equal(result.eligible, true); assert.equal(result.items.length, 1);
   assert.equal(result.items[0].place, "마트"); assert.equal(result.distanceMeters, 0);
+  assert.equal(result.method, "place-rules-v2");
+  assert.deepEqual([result.items[0].category, result.items[0].items, result.items[0].requestedBy], ["buy", [{ name: "우유", qty: null }], []], "도착 브리핑 항목에도 행동 항목 칸이 있습니다(T141)");
   assert.equal(result.source, "browser");
   const arrival = async () => (await call("GET", `${t}/todos`, null, p.token))[1].arrival;
   assert.deepEqual(await arrival(), { place: "이마트 강릉점", at: input.observedAt, source: "browser" }, "도착 판정을 받은 장소 이름만 남겨 폰이 읽습니다(T119)");

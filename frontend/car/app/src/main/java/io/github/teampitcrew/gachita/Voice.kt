@@ -190,6 +190,9 @@ class VoicePrints(dir: File, val trip: String, private val seal: Seal, now: Long
     }
 
     private var dropped = false
+    // 여행 조회로 마지막에 확인한 동의 세대. 사본을 지워도 남긴다: 조회 응답을 기다리는 사이 누군가 폰에서 철회하면(세대가 오름)
+    // 철회 전 세대의 응답이 뒤늦게 와도 저장하지 않게.
+    private var seen = 0
 
     /**
      * 사본을 버리고 이 인스턴스를 닫는다: 이 차에서 동의를 철회했을 때(서버에 아직 전하지 못했어도 바로), 여행을 떠나거나 여행이 지워졌을 때.
@@ -200,7 +203,7 @@ class VoicePrints(dir: File, val trip: String, private val seal: Seal, now: Long
 
     /** 서버 응답으로 바꾼다. 임시 파일에 쓴 뒤 이름을 바꾼다. 버린 인스턴스면 아무것도 저장하지 않는다(false) — 확인과 저장이 한 잠금 안. */
     @Synchronized fun put(o: JSONObject, now: Long = System.currentTimeMillis()): Boolean {
-        if (dropped) return false
+        if (dropped || o.optInt("generation") < seen) return false // 버린 인스턴스, 또는 조회를 시작한 뒤 철회가 있었음(옛 세대의 응답)
         read(o.put("fetchedAt", now))
         val tmp = File(file.path + ".tmp")
         tmp.writeText(seal.line(o.toString())); tmp.renameTo(file)
@@ -216,7 +219,7 @@ class VoicePrints(dir: File, val trip: String, private val seal: Seal, now: Long
         expire(now)
         if (!stale(now)) return false
         try {
-            if (!put(fetch(), now)) return false // 받는 사이 버려짐(철회, 여행 삭제)
+            if (!put(fetch(), now)) return false // 받는 사이 버려짐(이 차나 폰에서 철회, 여행 삭제)
             see(generation)
             return true
         } catch (e: java.io.IOException) {
@@ -227,6 +230,7 @@ class VoicePrints(dir: File, val trip: String, private val seal: Seal, now: Long
 
     /** 지금 동의 세대. 사본의 세대와 다르면 지운다(철회 전의 값으로 대조하지 않게). */
     @Synchronized fun see(g: Int) {
+        seen = g
         if (generation == 0 || generation == g) return // 받은 것이 없거나 같은 세대
         clear()
     }
