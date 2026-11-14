@@ -161,4 +161,33 @@ class TripTest {
         assertFalse(next.started)
         assertTrue(next.startRecording().recording)
     }
+
+    @Test fun `조회가 성공하면 지난 조회 실패 문구만 지운다(T122)`() {
+        val failed = Session(note = "").pollFailed(ApiError(502, "error code: 502"))
+        assertEquals("서버가 잠깐 응답하지 않아요. 다시 시도할게요", failed.note)
+        assertTrue(failed.online) // 전처럼 연결된 것으로 센다(다른 화면이 연결 대기로 바뀌지 않게)
+        assertEquals("", failed.polled().note)
+
+        // 그사이 사용자가 한 일의 결과 문구는 남긴다
+        val acted = failed.copy(note = "본인의 동의를 저장했어요. 녹음은 홈에서 시작해 주세요")
+        assertEquals(acted.note, acted.polled().note)
+        assertEquals("", acted.polled().pollNote)
+
+        // 거절은 이유를 보이고 연결은 된 것으로, 닿지 않으면 문구를 바꾸지 않는다
+        val refused = Session().pollFailed(ApiError(403, "동의는 본인만 켤 수 있음"))
+        assertTrue(refused.online); assertEquals("서버가 거절했어요(403 동의는 본인만 켤 수 있음)", refused.note)
+        val away = Session(note = "동의를 확인하고 있어요").pollFailed(java.io.IOException())
+        assertFalse(away.online); assertEquals("동의를 확인하고 있어요", away.note); assertEquals("동의를 확인하고 있어요", away.polled().note)
+    }
+
+    @Test fun `동의 켜기가 잠깐 못 받아 실패하면 확인 못 함으로 적고 다음 조회에 지운다(T122)`() {
+        val unsure = Session(busy = true).agreeFailed(ApiError(502, "error code: 502"))
+        assertEquals("동의 저장을 확인하지 못했어요 · 서버가 잠깐 응답하지 않아요", unsure.note)
+        assertFalse(unsure.busy)
+        assertEquals("", unsure.polled().note) // 다음 조회가 실제 동의를 보인다
+
+        val refused = Session(busy = true).agreeFailed(ApiError(403, "동의는 본인만 켤 수 있음"))
+        assertEquals("동의를 저장하지 못했어요 · 서버가 거절했어요(403 동의는 본인만 켤 수 있음)", refused.note)
+        assertEquals(refused.note, refused.polled().note) // 저장하지 못한 것은 남긴다
+    }
 }
