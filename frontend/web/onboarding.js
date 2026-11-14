@@ -40,6 +40,12 @@ export function callName(name) {
 // 가입 때 서버가 이름을 꼭 받으므로 이메일 앞부분을 임시 이름으로 보낸다. 다음 단계(P04)에서 바꾼다.
 export const provisionalName = (email) => (email.split("@")[0] || "나").slice(0, 20);
 
+// 가입 때 붙인 임시 이름(이메일 앞부분)을 아직 그대로 쓰는지. P04에서 이름을 받기 전의 계정이다.
+export const provisionalOnly = (profile) => Boolean(profile?.email) && profile.name === provisionalName(profile.email);
+
+// 이메일 계정이 온보딩을 마쳤는지: 계정 동의, 직접 정한 이름, 목소리(첫 프로필은 목소리 필수). 초대 링크로 그룹에 들어가기 전에 본다.
+export const accountReady = (profile) => Boolean(profile?.consent && profile.hasVoice && !provisionalOnly(profile));
+
 // 서버 오류를 화면 문장으로. 로그인 실패는 이메일과 비밀번호 중 무엇이 틀렸는지 말하지 않는다(서버와 같음).
 export function accountError(e, mode) {
   if (e.status === 0) return "연결이 끊겨서 보내지 못했어요.";
@@ -50,7 +56,7 @@ export function accountError(e, mode) {
   return e.message;
 }
 
-export function createOnboarding({ getProfile, getToken, setToken, loadProfile, getPhoto, consentText, render, onBegin = () => {}, onDone, onFamily, onOther, isOnline = () => navigator.onLine !== false }) {
+export function createOnboarding({ getProfile, getToken, setToken, loadProfile, getPhoto, consentText, render, onBegin = () => {}, onDone, onFamily, onOther, hasInvite = () => false, isOnline = () => navigator.onLine !== false }) {
   let step = null; // null이면 view()가 firstStep으로 정한다
   let mode = "signup";
   const draft = { email: "", password: "", name: "", character: "", photo: null, preview: "" };
@@ -63,7 +69,7 @@ export function createOnboarding({ getProfile, getToken, setToken, loadProfile, 
   const go = (next) => { step = next; render(); };
   const fill = () => {
     const p = me();
-    draft.name = p?.name ?? "";
+    draft.name = provisionalOnly(p) ? "" : p?.name ?? ""; // 임시 이름(이메일 앞부분)은 채워 두지 않는다 — P04에서 직접 적게
     draft.character = characterKey(p?.character || "basic").replace(/-small$/, "");
   };
   const work = async (fn) => {
@@ -223,8 +229,11 @@ export function createOnboarding({ getProfile, getToken, setToken, loadProfile, 
     return [top(),
       title(`${p?.name ?? draft.name}님의 목소리 등록 완료`, "차량과 폰에서 같은 프로필을 사용해요."),
       card(p?.name ?? draft.name, p?.hasVoice ? "캐릭터와 음성 특징 저장 완료" : "캐릭터 저장 완료", { soft: true, face: avatar() }),
-      card("다음은 우리 가족", `아이의 프로필도 ${p?.name ?? draft.name}님이 만들어 줄 수 있어요.`),
-      bottom(primary("가족 그룹 만들기", () => { close(); onFamily(); }))];
+      // 초대 링크로 들어왔으면 새 가족을 만들지 않고 초대받은 그룹으로 간다(참여 화면에서 동의하고 참여).
+      hasInvite()
+        ? card("다음은 초대받은 그룹", "참여하면 같은 차에서 내 캐릭터와 목소리로 함께 기록해요.")
+        : card("다음은 우리 가족", `아이의 프로필도 ${p?.name ?? draft.name}님이 만들어 줄 수 있어요.`),
+      bottom(primary(hasInvite() ? "초대받은 그룹에 참여" : "가족 그룹 만들기", () => { close(); onFamily(); }))];
   };
 
   // ---- 녹음: 마이크 → (기기 표본율) → 16 kHz 모노 → embed() → 값만 올림 ----

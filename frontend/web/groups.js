@@ -430,6 +430,8 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
         toast(e.status === 410 ? "만료됐거나 바뀐 초대예요. 새 코드를 받아 주세요." : e.message);
       }
     },
+    // 이 탭에 남아 있는 초대 코드(없으면 null). 온보딩이 끝나기 전에는 참여를 미룬다(app.js).
+    pending: () => sessionStorage.getItem(PENDING),
     resume() {
       const code = sessionStorage.getItem(PENDING);
       if (code && !s && getToken() && getProfile()) this.join(code);
