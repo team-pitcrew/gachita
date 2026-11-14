@@ -22,6 +22,7 @@ import { embed, matchThreshold, similarity, wavMono } from "./providers/voice.js
 import { rideLinks, redeemRideLink } from "./ride-links.js";
 import { boardingInvites, tripBoardingInvites } from "./boarding-invites.js";
 import { shortGenerations, shortTemplateCatalog } from "./short-generations.js";
+import { arrivalBriefing, deriveTodos, TODO_METHOD } from "./todos.js";
 
 const WEB = fileURLToPath(new URL("../../frontend/web/", import.meta.url));
 const TRIPS_SQL = fileURLToPath(new URL("trips.sql", import.meta.url));
@@ -83,6 +84,7 @@ export function classify(e) {
 
 // 로그의 경로 틀: 정한 낱말이 아닌 마디(여행 코드, id, 초대 코드)는 :p로 가린다. 웹 파일은 /(web) 하나로.
 const ROUTE_WORDS = new Set(["api", "config", "trips", "participants", "requests", "moments", "utterances", "transcript", "transcriptions", "captions", "voice-match", "recordings", "scene-suggestions", "shortform", "short-templates", "short-plans", "short-generations", "file", "profiles", "me", "links", "google", "feed", "tokens", "photo", "voice", "groups", "members", "invites", "j"]);
+for (const word of ["todos", "arrival-briefing"]) ROUTE_WORDS.add(word);
 ROUTE_WORDS.add("boarding-invites");
 const routeOf = (pathname) =>
   pathname === "/healthz" ? pathname : pathname.startsWith("/api/") ? `/${pathname.split("/").filter(Boolean).map((s) => (ROUTE_WORDS.has(s) ? s : ":p")).join("/")}` : "/(web)";
@@ -120,6 +122,7 @@ export async function migrate() {
   await tripsDb().query(await readFile(new URL("trips-7-result-shares.sql", import.meta.url), "utf8"));
   await tripsDb().query(await readFile(new URL("trips-8-short-generations.sql", import.meta.url), "utf8"));
   await tripsDb().query(await readFile(new URL("trips-9-retention.sql", import.meta.url), "utf8"));
+  await tripsDb().query(await readFile(new URL("trips-10-todos.sql", import.meta.url), "utf8"));
   await tripsDb().query(await readFile(new URL("trips-11-boarding-invites.sql", import.meta.url), "utf8"));
   await tripsDb().query(await readFile(new URL("trips-13-utterance-segments.sql", import.meta.url), "utf8"));
   await profilesDb().query(await readFile(PROFILES_SQL, "utf8"));
@@ -185,6 +188,7 @@ const participantOf = (req, trip) => {
 async function bumpGeneration(trip, client) {
   trip.generation = (trip.generation ?? 1) + 1;
   await client.query("DELETE FROM utterances WHERE trip_code = $1 AND generation < $2", [trip.code, trip.generation]);
+  await client.query("DELETE FROM todo_states WHERE trip_code = $1 AND generation < $2", [trip.code, trip.generation]);
   // 그 여행의 클립도 모두 지운다(T76). 같은 트랜잭션에서 지울 키를 적고 버킷은 커밋 뒤에 비운다(sweepClips) —
   // 잠금을 쥔 채 S3를 기다리지 않고, 되돌려지면 적은 것도 되돌려진다. 늦게 올라오는 옛 세대 클립은 세대 확인이 막는다.
   // 사람이 지운 표시(deleted_at)는 남긴다 — 철회 뒤 다시 동의해도 지운 장면의 클립을 다시 받지 않게(여행이 닫힐 때 함께 지움).
@@ -1231,18 +1235,58 @@ async function handle(trip, { req, m, sub, id, leaf, b, query, profile }, client
     }
   }
 
+  const readLines = async () => {
+    if (!participantOf(req, trip).consent) fail(403, "녹음에 동의한 참가자만 볼 수 있음");
+    const { rows } = await client.query("SELECT device, seq, at, text, asr_text, edited_text, edit_version, edited_by, edited_at, seat_area, participant_id, profile_id, confidence, lat, lng, end_at, speaker_label, speaker_scope FROM utterances WHERE trip_code = $1 AND generation = $2 AND text <> '' ORDER BY at, device, seq", [trip.code, trip.generation ?? 1]);
+    return rows.map(asUtterance);
+  };
+  const todos = async (all) => {
+    const { rows } = await client.query("SELECT id, status, version FROM todo_states WHERE trip_code=$1 AND generation=$2", [trip.code, trip.generation ?? 1]);
+    return deriveTodos(all, rows);
+  };
+
+  if (sub === "todos" || sub === "arrival-briefing") {
+    if (!(sub === "todos" && ((m === "GET" && !id) || (m === "PATCH" && id))) && !(sub === "arrival-briefing" && m === "POST" && !id)) fail(405, "GET /todos, PATCH /todos/:id, POST /arrival-briefing만 됨");
+    const all = await readLines();
+    const generation = trip.generation ?? 1;
+    const items = await todos(all);
+    if (sub === "todos" && m === "GET" && !id) return [200, { generation, method: TODO_METHOD, items }];
+    if (sub === "todos" && m === "PATCH" && id) {
+      if (int(b.generation, 1, 2_147_483_647, "generation") !== generation) fail(409, "동의 세대가 바뀜 — 할 일을 다시 읽어 주세요");
+      const expected = int(b.expectedVersion, 0, 2_147_483_646, "expectedVersion");
+      const status = oneOf(b.status, ["pending", "done", "cancelled"], "status");
+      const todo = items.find((item) => item.id === id) ?? fail(404, "없는 할 일 — 원문이 바뀌거나 지워졌을 수 있음");
+      if (todo.version !== expected) fail(409, "다른 사람이 먼저 고침 — 할 일을 다시 읽어 주세요");
+      await client.query(
+        `INSERT INTO todo_states(trip_code,generation,id,status,version) VALUES($1,$2,$3,$4,$5)
+         ON CONFLICT(trip_code,generation,id) DO UPDATE SET status=EXCLUDED.status, version=EXCLUDED.version, updated_at=now()`,
+        [trip.code, generation, id, status, expected + 1]);
+      return changed(200, { generation, item: { ...todo, status, version: expected + 1 } });
+    }
+    if (sub === "arrival-briefing" && m === "POST" && !id) {
+      if (int(b.generation, 1, 2_147_483_647, "generation") !== generation) fail(409, "동의 세대가 바뀜 — 할 일을 다시 읽어 주세요");
+      const point = (value, name) => {
+        const p = obj(value, name);
+        return { lat: num(p.lat, -90, 90, `${name}.lat`), lng: num(p.lng, -180, 180, `${name}.lng`) };
+      };
+      const place = { ...point(b.place, "place"), name: text(b.place.name, 100, "place.name") };
+      const input = { place, position: point(b.position, "position"), parked: bool(b.parked, "parked"),
+        observedAt: int(b.observedAt, 0, Date.now() + 5_000, "observedAt"), source: oneOf(b.source, ["vehicle", "browser"], "source") };
+      input.parked = input.parked && ["parked", "ended"].includes(trip.status);
+      return [200, { generation, ...arrivalBriefing(input, items) }];
+    }
+    fail(405, "GET /todos, PATCH /todos/:id, POST /arrival-briefing만 됨");
+  }
+
   // 기록본에서 읽는 것(기록본, 장면 후보, 숏폼)은 모두 녹음에 동의한 참가자만 — 받아 적은 글이 들어간다.
   const lines = async () => {
     if (m !== "GET") fail(405, "GET만 됨");
-    if (!participantOf(req, trip).consent) fail(403, "녹음에 동의한 참가자만 볼 수 있음");
-    const { rows } = await client.query("SELECT device, seq, at, text, asr_text, edited_text, edit_version, edited_by, edited_at, seat_area, participant_id, profile_id, confidence, lat, lng, end_at, speaker_label, speaker_scope FROM utterances WHERE trip_code = $1 AND text <> '' ORDER BY at", [trip.code]);
-    return rows.map(asUtterance);
+    return readLines();
   };
 
   if (sub === "transcript") {
-    // 기록본: 발화를 시간순으로, 부탁과 도착 할 일과 함께(T39).
-    // 도착 할 일 뽑기(LLM)는 아직 구현 전이다. 기록본 모양을 미리 맞춰 둔다(ADR-0007).
-    return [200, { generation: trip.generation ?? 1, utterances: await lines(), requests: trip.requests, todos: [] }];
+    const all = await lines();
+    return [200, { generation: trip.generation ?? 1, utterances: all, requests: trip.requests, todos: await todos(all) }];
   }
 
   if (sub === "scene-suggestions") {

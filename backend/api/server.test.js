@@ -437,7 +437,7 @@ test("발화를 기록본으로 저장하고 프로필 피드로 읽는다(T39)"
   assert.ok(car2.items.every((u) => u.text === "가".repeat(200)), "글자가 그대로");
   await tripsDb().query("DELETE FROM utterances WHERE trip_code = $1 AND device = 'car2'", [trip.code]);
 
-  // 기록본: 발화 시간순 + 부탁 함께. 도착 할 일은 아직 비어 있다
+  // 기록본: 발화 시간순 + 부탁 함께. 이 발화에는 장소가 붙은 할 일이 없다
   const [, q] = await call("POST", `${t}/requests`, { by: pg.id, text: "화장실 가고 싶어" });
   assert.ok(q.id);
   const [, tr] = await call("GET", `${t}/transcript`, null, pa.token);
@@ -1760,6 +1760,90 @@ test('90일 전 여행의 새 영상과 이전 48시간 기한을 가진 영상�
   await w.worker.tick();
   assert.equal((await tripsDb().query('SELECT count(*)::int AS n FROM short_generations WHERE id=$1',[job.id])).rows[0].n,1);
  } finally {delete process.env.SHORTS_ENABLED;delete process.env.HF_CREDENTIALS;delete process.env.SHORTS_DAILY_SECONDS;}
+});
+
+test("장소별 할 일은 실제 전사·교정본에서 묶고 완료·취소에 인증·세대·버전을 적용합니다(T103)", async () => {
+  const [, trip] = await call("POST", "/api/trips", {}), t = `/api/trips/${trip.code}`;
+  const [, p] = await join(trip.code, "운전자", "ROW_1_LEFT");
+  const [, another] = await call("POST", "/api/trips", {});
+  const [, stranger] = await join(another.code, "다른 여행", "ROW_1_LEFT");
+  assert.equal((await call("GET", `${t}/todos`))[0], 401);
+  assert.equal((await call("GET", `${t}/todos`, null, stranger.token))[0], 401);
+  assert.deepEqual((await call("GET", `${t}/todos`, null, p.token))[1], { generation: 1, method: "place-rules-v1", items: [] });
+  const texts = ["마트에서 우유 사자", "숙소에서는 아이 가방부터 꺼내야지", "마트에서 우유 사자", "화장실 가고 싶어"];
+  const items = texts.map((text, i) => ({ seq: i + 1, at: trip.createdAt + i * 1000, text }));
+  assert.equal((await call("POST", `${t}/utterances`, { device: "web-source", generation: 1, items }, p.token))[0], 200);
+  const list = () => call("GET", `${t}/todos`, null, p.token);
+  const [, data] = await list();
+  assert.equal(data.items.length, 2); assert.equal(data.items[0].sources.length, 2);
+  assert.deepEqual(data.items[0].sources.map(s => [s.device, s.seq, s.text]), [["web-source", 1, texts[0]], ["web-source", 3, texts[2]]]);
+  const todo = data.items[0], path = `${t}/todos/${todo.id}`;
+  const body = { generation: 1, expectedVersion: 0, status: "done" };
+  assert.equal((await call("PATCH", path, body))[0], 401);
+  assert.equal((await call("PATCH", path, body, stranger.token))[0], 401);
+  assert.equal((await call("PATCH", path, { ...body, generation: 2 }, p.token))[0], 409);
+  assert.equal((await call("PATCH", path, { ...body, status: "invented" }, p.token))[0], 400);
+  const raced = await Promise.all([call("PATCH", path, body, p.token), call("PATCH", path, body, p.token)]);
+  assert.deepEqual(raced.map(x => x[0]).sort(), [200, 409]);
+  assert.equal((await list())[1].items[0].status, "done");
+  assert.equal((await call("PATCH", path, { ...body, expectedVersion: 1, status: "cancelled" }, p.token))[1].item.version, 2);
+  const transcript = (await call("GET", `${t}/transcript`, null, p.token))[1];
+  assert.deepEqual(transcript.todos, (await list())[1].items, "기록본과 할 일 API가 같은 항목을 반환합니다");
+  assert.equal((await call("GET", t))[1].todos, undefined, "공개 여행 응답에 대화 파생 정보를 붙이지 않습니다");
+  assert.equal((await call("PATCH", `${t}/captions/web-source/1`, { generation: 1, expectedVersion: 0, text: "마트에서 물 사자" }, p.token))[0], 200);
+  const corrected = (await list())[1].items.find(x => x.text === "마트에서 물 사자");
+  assert.ok(corrected); assert.equal(corrected.sources[0].text, texts[0]);
+  assert.equal(corrected.sources[0].displayText, "마트에서 물 사자");
+  assert.equal((await list())[1].items.find(x => x.id === todo.id).status, "cancelled", "남은 같은 원발화의 상태는 유지합니다");
+  await call("PATCH", `${t}/participants/${p.id}`, { consent: false });
+  assert.equal((await list())[0], 403);
+  await call("PATCH", `${t}/participants/${p.id}`, { consent: true }, p.token);
+  assert.deepEqual((await list())[1], { generation: 2, method: "place-rules-v1", items: [] });
+  assert.equal((await tripsDb().query("SELECT count(*)::int AS n FROM todo_states WHERE trip_code=$1", [trip.code])).rows[0].n, 0);
+  assert.equal((await call("PATCH", path, body, p.token))[0], 409);
+});
+
+test("자기 글을 지우면 파생 할 일·브리핑에도 원문이나 교정본이 남지 않습니다(T103)", async () => {
+  const [, profile] = await call("POST", "/api/profiles", { name: "작성자" });
+  const [, trip] = await call("POST", "/api/trips", {}), t = `/api/trips/${trip.code}`;
+  const [, p] = await call("POST", `${t}/participants`, { seat: "ROW_1_LEFT", consent: true }, profile.token);
+  await call("PATCH", `${t}/participants/${p.id}`, { consent: true }, p.token);
+  await call("POST", `${t}/utterances`, { device: "car", generation: 1, items: [{ seq: 1, at: Date.now(), text: "숙소에서 가방 꺼내자" }] }, p.token);
+  await call("PATCH", `${t}/utterances/car/1`, { participantId: p.id }, p.token);
+  const first = (await call("GET", `${t}/todos`, null, p.token))[1].items[0];
+  assert.ok(first);
+  assert.equal((await call("PATCH", `${t}/todos/${first.id}`, { generation: 1, expectedVersion: 0, status: "done" }, p.token))[0], 200);
+  assert.equal((await call("DELETE", `${t}/utterances`, null, p.token))[1].deleted, 1);
+  assert.deepEqual((await call("GET", `${t}/todos`, null, p.token))[1].items, []);
+  assert.deepEqual((await call("GET", `${t}/transcript`, null, p.token))[1].todos, []);
+  assert.equal((await call("PATCH", `${t}/todos/${first.id}`, { generation: 1, expectedVersion: 1, status: "pending" }, p.token))[0], 404);
+});
+
+test("도착 브리핑은 현재 여행 주차·최신 위치·장소 범위를 모두 확인합니다(T103)", async () => {
+  const [, trip] = await call("POST", "/api/trips", {}), t = `/api/trips/${trip.code}`;
+  const [, p] = await join(trip.code, "운전자", "ROW_1_LEFT");
+  await call("POST", `${t}/utterances`, { device: "car", generation: 1, items: [
+    { seq: 1, at: Date.now(), text: "마트에서 우유 사자" }, { seq: 2, at: Date.now() + 1, text: "숙소에서 가방 꺼내자" },
+  ] }, p.token);
+  const point = { lat: 37.75, lng: 128.9 };
+  const input = { generation: 1, place: { name: "이마트 강릉점", ...point }, position: point, parked: true, observedAt: Date.now(), source: "browser" };
+  const briefing = (body = input, token = p.token) => call("POST", `${t}/arrival-briefing`, body, token);
+  assert.equal((await briefing(input, ""))[0], 401);
+  assert.equal((await briefing())[1].reason, "not_parked", "여행 상태가 주차가 아니면 위치만으로 브리핑하지 않습니다");
+  await call("PATCH", t, { status: "parked" });
+  const result = (await briefing())[1];
+  assert.equal(result.eligible, true); assert.equal(result.items.length, 1);
+  assert.equal(result.items[0].place, "마트"); assert.equal(result.distanceMeters, 0);
+  assert.equal(result.source, "browser");
+  for (const [change, reason] of [[{ parked: false }, "not_parked"], [{ observedAt: Date.now() - 61000 }, "stale_position"], [{ position: { ...point, lat: 38 } }, "outside_place"]]) {
+    const r = (await briefing({ ...input, ...change }))[1];
+    assert.equal(r.eligible, false); assert.equal(r.reason, reason); assert.deepEqual(r.items, []);
+  }
+  for (const change of [{ position: {} }, { place: { ...point } }, { source: "made-up" }, { observedAt: Date.now() + 10000 }, { parked: "yes" }]) assert.equal((await briefing({ ...input, ...change }))[0], 400);
+  assert.equal((await briefing({ ...input, generation: 2 }))[0], 409);
+  const todo = result.items[0];
+  await call("PATCH", `${t}/todos/${todo.id}`, { generation: 1, expectedVersion: 0, status: "done" }, p.token);
+  assert.deepEqual((await briefing())[1].items, [], "완료 항목과 다른 장소 항목은 도착 브리핑에서 빠집니다");
 });
 
 test("웹 첫 전사는 실제 공급자 계약·전원 동의·세대·취소를 지키며 원음을 저장하지 않습니다(T96)", async (t) => {
