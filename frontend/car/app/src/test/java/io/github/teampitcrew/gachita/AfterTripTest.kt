@@ -40,12 +40,9 @@ class AfterTripTest {
         assertEquals("가나…", clipText("가나다라", 3))
     }
 
-    @Test fun barsAndMockAndProgress() {
+    @Test fun barsAndProgress() {
         assertEquals(listOf(0.58f, 1f, 0.58f, 0f), afterBars(listOf(0L, 10, 15, 19, 25, 99), 0, 40, 4).map { Math.round(it * 100) / 100f })
         assertEquals(listOf(0f, 0f, 0f), afterBars(listOf(5L), 10, 10, 3))
-        assertEquals(0.82f, mockUploadProgress(0, 8_200, 10_000), 1e-6f)
-        assertEquals(1f, mockUploadProgress(0, 20_000, 10_000), 0f)
-        assertEquals(0f, mockUploadProgress(5_000, 0, 10_000), 0f)
         assertEquals(0.55f, phaseProgress(Phase.RENDER, .5f), 1e-6f)
         assertEquals(1f, phaseProgress(Phase.DONE), 0f)
     }

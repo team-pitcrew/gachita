@@ -36,7 +36,7 @@ import java.util.UUID
  * 여행 마무리 → 추천 장면 고르기 → 생성 → 결과(최종 시안 C22–C32, 흐름 F5). 폰은 frontend/web/after-trip.js.
  * - 처리 위치 원칙: 장면 후보는 차 안 규칙(Scenes.kt suggestScenes), 고른 장면은 POST /moments로 남기고(폰이 같은 기록을 읽음),
  *   장면 소리는 이 차가 이미 하는 장면 클립 올리기(MainActivity.clips, POST /recordings)로만 나간다. 영상은 기기 기본 영상(exportShortVideo) → short-assets.
- * - mock: 전체 음성 실제 업로드는 오너의 보관 결정 전까지 끈다(계획 '속도 우선' ③). C22의 진행률은 시간으로 흉내 내고, 차는 /audio를 부르지 않는다.
+ * - 전체 음성: 여행을 마치면 이 차가 원음 전체를 올린다(FullAudio.kt, T132, 다 올린 때부터 2일 보관). C22는 그 실제 진행을 보인다.
  * - 받아 적은 말은 이 차의 보관함(Live.outbox, 지금 동의 세대·글 있는 줄)에서 읽는다. 이 차가 받아 적지 않은 여행이면(줄이 4개 미만) 서버 기록본으로.
  */
 
@@ -109,10 +109,6 @@ internal fun afterBars(ats: List<Long>, origin: Long, end: Long, count: Int = 56
     val max = bins.maxOrNull() ?: 0
     return bins.map { if (max == 0) 0f else Math.sqrt(it.toDouble() / max).toFloat() }
 }
-
-// mock: 실제 업로드가 꺼진 동안 C22에 보일 진행(시안 '전체 음성 업로드 중 82%'). 화면을 처음 연 때부터 ms 동안 0→1.
-internal const val MOCK_UPLOAD_MS = 12_000L
-internal fun mockUploadProgress(openedAt: Long, now: Long, ms: Long = MOCK_UPLOAD_MS): Float = ((now - openedAt).toFloat() / ms).coerceIn(0f, 1f)
 
 /** 장면 하나의 진행: 장면 남김 0.1 → 소리 준비 0.25 → 녹화 0.25~0.85 → 보관 0.9 → 완성 1(폰과 같음). */
 internal enum class Phase { WAIT, MOMENT, VOICE, RENDER, SAVE, DONE, FAILED }
@@ -288,17 +284,17 @@ internal fun AfterTrip(trip: Trip, lines: List<AfterLine>, base: String, token: 
     var step by remember(trip.code, trip.generation) { mutableStateOf(if (running != null) AfterStep.MAKE else start) }
     if (step == AfterStep.MAKE && running?.finished == true && !running.active) step = AfterStep.DONE
     val chosen = remember(trip.code, trip.generation) { mutableStateListOf<Long>() }
-    // mock: C22 진행률. 처음 연 때부터 12초.
-    val openedAt = remember(trip.code, trip.generation) { System.currentTimeMillis() }
-    var now by remember { mutableStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(step) { while (step == AfterStep.UPLOAD || step == AfterStep.MAKE) { now = System.currentTimeMillis(); delay(500) } }
-    val upload = mockUploadProgress(openedAt, now)
-    val seconds = (end - origin) / 1000
+    // 이 차의 전체 음성 올리기(FullAudio). 다른 여행·세대의 상태면 아직 시작 전.
+    val mine = FullAudio.key == "${trip.code}:${trip.generation}"
+    val audio = if (mine) FullAudio.state else AudioState.IDLE
+    val upload = if (!mine) 0f else if (audio == AudioState.READY || audio == AudioState.EXPIRED) 1f else FullAudio.progress
+    // 받아 적은 말이 없으면(이 차가 받아 적지 못함) 올린 전체 음성의 길이로 주행 시간과 눈금을 보인다
+    val seconds = ((end - origin) / 1000).takeIf { it > 0 } ?: (if (mine) FullAudio.seconds.toLong() else 0L)
 
     Column(modifier, verticalArrangement = Arrangement.spacedBy(20.dp)) {
         val (title, sub) = when (step) {
             AfterStep.UPLOAD -> "오늘의 주행을 기록했어요" to (if (trip.status == "ended") "여행을 마쳤어요" else "주차 후 여행 마무리")
-            AfterStep.SELECT -> "남기고 싶은 순간을 골라요" to (if (picks.isEmpty()) "아직 추천할 장면을 찾지 못했어요" else "받아 적은 대화에서 찾은 추천 장면 ${picks.size}개")
+            AfterStep.SELECT -> "남기고 싶은 순간을 골라요" to (if (picks.isEmpty()) "아직 추천할 장면을 찾지 못했어요" else "${if (audio == AudioState.READY) "전체 음성" else "받아 적은 대화"}에서 찾은 추천 장면 ${picks.size}개")
             AfterStep.MAKE -> "우리의 콘텐츠를 만들어요" to "선택한 장면에 캐릭터와 자막을 입히는 중"
             AfterStep.DONE -> "우리의 순간이 완성됐어요" to "선택한 장면을 콘텐츠 기록에 저장했어요."
         }
@@ -310,8 +306,8 @@ internal fun AfterTrip(trip: Trip, lines: List<AfterLine>, base: String, token: 
             when (step) {
                 AfterStep.UPLOAD -> Split(trip) {
                     Summary("우리 일행 ${trip.people.size}명" + afterDuration(seconds).let { if (it.isEmpty()) "" else " / $it" }, dayRange(origin, end))
-                    WaveCard(if (upload >= 1f) "전체 음성 업로드 완료" else "전체 음성 업로드 중  ${minOf(99, (upload * 100).toInt())}%", bars, upload, seconds)
-                    Text(if (upload >= 1f) "추천 장면을 골라 주세요." else "여행 음성을 업로드하고 추천 장면을 준비하고 있어요.", fontSize = 24.sp, color = c.onSurfaceVariant)
+                    WaveCard(audioLabel(audio, upload), bars, upload, seconds)
+                    Text(audioNote(audio), fontSize = 24.sp, color = c.onSurfaceVariant)
                 }
                 AfterStep.SELECT -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                     PickWave("${trip.title.ifBlank { "함께 탄 여행" }} / 전체 ${afterClock(seconds * 1000)}", bars, picks, origin, end, chosen.toSet()) { k -> if (k in chosen) chosen.remove(k) else chosen.add(k) }

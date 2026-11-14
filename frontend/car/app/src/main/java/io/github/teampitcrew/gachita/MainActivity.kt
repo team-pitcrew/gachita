@@ -541,6 +541,7 @@ class MainActivity : ComponentActivity() {
                 upload(t, resync, prune) // 받은 여행의 동의 세대를 보관함에 반영한(철회면 글을 지운) 뒤에만 올린다
                 speakers(t) // 올릴 새 발화가 없어도 밀린 대조와 고침을 잇는다
                 s.trip?.let(::clips)
+                s.trip?.let(::fullAudio)
                 loadTodos()
                 s.trip?.let(::places)
             }
@@ -668,6 +669,19 @@ class MainActivity : ComponentActivity() {
      * 구간이 끝나고 3초가 지난 장면만 본다(아직 녹음 중인 구간을 자르지 않게). 원음이 이 차에 없거나 서버가 버리라고 하면(400·404·409·413) 다시 하지 않는다.
      * ponytail: 차 앱이 켜져 있을 때만 올린다. 폰에서 장면을 고른 뒤 차가 꺼져 있으면 동의가 유효한 채 다음에 앱을 켤 때.
      */
+    /**
+     * 여행을 마치면(주차·종료, 녹음 안 함, 모두 동의, 끄기 대기 없음) 이 차의 원음 전체를 올린다(T132, ADR-0024, FullAudio.kt).
+     * 올리는 사람은 발화를 올린 그 참가자(서버는 그 기기만 받는다). 조각마다 다시 본다: 다시 출발하거나 동의를 끄면 멈추고 다음 조회에서 이어 간다.
+     */
+    private fun fullAudio(t: Trip) {
+        if (t.status !in setOf("parked", "ended") || !s.consented || s.offPending || CaptureService.running) return
+        val up = tokens.minByOrNull { it.key }?.value ?: return
+        val code = t.code; val gen = t.generation
+        FullAudio.start(filesDir, Live.seal(this), server, code, gen, up) {
+            clipsAllowed && !CaptureService.running && s.trip?.let { it.code == code && it.generation == gen && it.status in setOf("parked", "ended") } == true
+        }
+    }
+
     private fun clips(t: Trip) {
         val up = tokens.minByOrNull { it.key }?.value ?: return
         val now = System.currentTimeMillis()
