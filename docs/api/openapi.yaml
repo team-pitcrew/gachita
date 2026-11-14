@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: 가치타 API
-  version: 0.15.0
+  version: 0.16.0
   summary: 여행 세션, 기기 프로필과 이메일 계정, 동승 연결, 부탁, 장면, 기록본, 화자 대조
   description: |
     웹앱(frontend/web)과 차량 앱(frontend/car)이 부르는 API입니다. 구현은 backend/api/server.js입니다.
@@ -1854,7 +1854,7 @@ paths:
       tags: [기록본]
       summary: 원발화가 연결된 장소별 할 일
       description: |
-        현재 세대의 살아 있는 전사에서 차량 Todos.kt와 같은 장소·권유/의무형 규칙으로 추출합니다(place-rules-v1, LLM 없음).
+        현재 세대의 살아 있는 전사에서 장소·권유/의무형 규칙으로 추출합니다(place-rules-v2, LLM 없음). v1(차량 Todos.kt와 같은 '…에서 …자')에 '…가면/가서 …'와 '요'·'급해' 끝을 더했고, 항목마다 분류(`category`)·제목(`title`)·물건(`items`)·요청한 사람(`requestedBy`)을 줍니다(T141, v2 도착 브리핑). v1이 뽑던 문장의 id는 그대로입니다.
         수동 교정본 → 자동 교정본 → 원문 순으로 읽으며, 같은 장소·문장은 하나로 묶고 모든 원발화를 sources에 남깁니다.
         id는 장소·문장의 해시이므로 내용이 바뀌면 바뀝니다. 상태만 따로 저장하며 원문을 지우면 목록에서 사라집니다.
       security: [{ participantToken: [] }]
@@ -1952,7 +1952,7 @@ paths:
                   observedAt: { type: integer }
                   place: { type: object }
                   distanceMeters: { type: integer }
-                  method: { type: string, const: place-rules-v1 }
+                  method: { type: string, const: place-rules-v2 }
                   items: { type: array, items: { $ref: "#/components/schemas/Todo" } }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
@@ -2017,12 +2017,28 @@ components:
               text: { type: string, description: 원전사 }
               displayText: { type: string, description: 교정 우선순위를 적용한 전사 }
               participantId: { type: string, description: 확인된 화자가 있을 때만 }
+        category:
+          type: string
+          enum: [first, buy, remember, bring]
+          description: "도착 브리핑의 묶음(T141). first = 먼저 할 일(화장실·먼저·급해), buy = 잊지 말고 살 것(사다·사 가자·사 오자), bring = 챙길 것(챙기다·가져가다·내리다·꺼내다, 물건이 있을 때), remember = 잊지 말기(나머지). 앞의 것이 먼저"
+        title: { type: string, description: "행동 이름. 끝(자·야지·야 돼)을 떼고 마지막 동사를 '…하기'꼴로. 예: '화장실 먼저 다녀오기', '고기는 바로 냉장 보관', '가방 챙기기'" }
+        items:
+          type: array
+          description: "한 부탁 안의 물건. 살 것·챙길 것은 동사 앞 말을 랑·이랑·하고·와·과·쉼표·그리고로 나눔(예: '삼겹살 600g이랑 귤 한 봉지 사 가자' → 삼겹살 600g, 귤 1봉지). 먼저 할 일·잊지 말기는 동사를 뺀 말 하나. 물건을 말하지 않았으면 빈 배열"
+          items:
+            type: object
+            required: [name, qty]
+            properties:
+              name: { type: string }
+              qty: { type: [string, "null"], description: "숫자+단위(g·kg·개·병·봉지·팩·캔·마리) 또는 한·두·세…+단위를 '600g'·'1봉지'·'2병'으로. 그 밖의 단위는 이름에 남기고 null" }
+        requestedBy: { type: array, items: { type: string }, description: 출처 발화의 확인된 화자(participantId), 중복 없이 처음 말한 순서. 화자가 없으면 빈 배열 }
+        method: { type: string, const: place-rules-v2 }
     TodoList:
       type: object
       required: [generation, method, items]
       properties:
         generation: { type: integer }
-        method: { type: string, const: place-rules-v1 }
+        method: { type: string, const: place-rules-v2 }
         items: { type: array, items: { $ref: "#/components/schemas/Todo" } }
         arrival:
           description: 마지막으로 도착 판정(eligible=true)을 받은 장소(T119). 없거나 다시 출발했으면 null. 좌표는 없습니다. 클라이언트가 보낸 관측에 대한 판정이며 서버가 차량 센서를 확인했다는 뜻이 아닙니다.
@@ -2324,7 +2340,7 @@ components:
         generation: { type: integer }
         utterances: { type: array, items: { $ref: "#/components/schemas/Utterance" } }
         requests: { type: array, items: { $ref: "#/components/schemas/Request" } }
-        todos: { type: array, items: { $ref: "#/components/schemas/Todo" }, description: 실제 전사의 장소별 할 일과 사용자 상태(place-rules-v1) }
+        todos: { type: array, items: { $ref: "#/components/schemas/Todo" }, description: 실제 전사의 장소별 할 일과 사용자 상태(place-rules-v2) }
         places: { type: array, items: { $ref: "#/components/schemas/Place" }, description: "차가 남긴 장소, at 순서(T136). GET /places와 같음" }
     FeedItem:
       type: object
