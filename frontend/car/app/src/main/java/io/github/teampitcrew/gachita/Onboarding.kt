@@ -17,7 +17,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -37,10 +36,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -51,9 +50,11 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
 
@@ -62,7 +63,7 @@ import java.util.concurrent.Executors
  * 시작 → 계정 만들기·로그인(이 차의 프로필 토큰) → 기록 동의 → 이름·캐릭터 → 사진 → 15초 목소리 → 등록 완료.
  * 목소리는 차 마이크로 15초를 모아 Voice.kt의 embed(pcmSamples(...))로 값(112차원)을 만들고 값만 올린다(ADR-0023). 소리는 차를 떠나지 않는다.
  * 계정 동의가 켜져 있지 않으면 마이크를 열지 않는다.
- * 계정 토큰이 있거나 '나중에'를 누르면 지금의 여행 만들기(Setup)로 간다. 디버그 실행 인자 --ez onboarding false로 건너뛴다(기존 e2e 스크립트).
+ * 계정 토큰이 있으면 지금의 여행 만들기(Setup)로 간다. 디버그 실행 인자 --ez onboarding false로 건너뛴다(기존 e2e 스크립트).
  */
 
 const val VOICE_SECONDS = 15
@@ -110,9 +111,6 @@ class Onboarding(private val context: Context, private val prefs: SharedPreferen
 
     /** 처음 화면의 '계정·목소리'에서 다시 연다. */
     fun reopen() { skipped = false; finished = false; prefs.edit().putBoolean("onboardingSkipped", false).putBoolean("onboardingDone", false).apply(); step = null; start() }
-
-    /** '나중에': 지금의 여행 만들기로. 이 차에 기억한다. */
-    fun later() { stopRecording(); skipped = true; prefs.edit().putBoolean("onboardingSkipped", true).apply() }
 
     /** 디버그 실행 인자 --ez onboarding false(기존 e2e 스크립트가 처음 화면을 여행 만들기로 본다). */
     fun skipForDebug() { skipped = true; prefs.edit().putBoolean("onboardingSkipped", true).apply() }
@@ -175,7 +173,7 @@ class Onboarding(private val context: Context, private val prefs: SharedPreferen
     /** C03: 계정 동의. */
     fun agree() { val t = token ?: return go(OnboardStep.SIGNUP); work({ AccountApi(server()).consent(t) }) { adopt(it); go(OnboardStep.PROFILE) } }
 
-    /** C04·C05: 이름·캐릭터(와 고른 사진)를 저장하고 목소리로. */
+    /** C04 '목소리 등록하기': 이름·캐릭터(와 C05에서 고른 사진)를 저장하고 목소리로. */
     fun saveProfile() {
         val t = token ?: return go(OnboardStep.SIGNUP)
         val n = name.trim().ifEmpty { note = "함께 타는 사람들에게 보일 이름을 적어 주세요"; return }.take(20)
@@ -225,6 +223,9 @@ class Onboarding(private val context: Context, private val prefs: SharedPreferen
 
     fun stopRecording() { recorder?.cancel(); recorder = null }
 
+    /** C07 '다시 녹음' → C06(녹음 전): 지금 녹음을 버리고 '녹음 시작'을 다시 누르게 한다(docs/car-frames.md 행선). */
+    fun again() { stopRecording(); pcm = null; heard = 0.0; levels = DoubleArray(0); recordDone = false; submitWhenStopped = false; go(OnboardStep.VOICE) }
+
     /** C07 '녹음 완료': 멈추고 차 안에서 값으로 바꿔 올린다. */
     fun submitVoice() {
         val t = token ?: return go(OnboardStep.SIGNUP)
@@ -262,23 +263,19 @@ fun OnboardingScreen(o: Onboarding, gear: String?, onFamily: () -> Unit) {
     val shownName = p?.name?.takeIf { it.isNotBlank() } ?: o.name
     ParkedFrame(
         gear = gear ?: "P",
-        // '나중에'는 시안에 없지만 계정을 강요하지 않는 길(지금의 여행 만들기로)이라 머리 줄 끝에 둔다.
-        headerExtra = {
-            TextButton({ o.later() }, Modifier.height(64.dp), enabled = !o.busy) { Text("나중에", style = CarText.Label, color = c.onSurfaceVariant) }
-        },
         bottom = {
             when (step) {
                 OnboardStep.WELCOME -> CarButton("가치타 시작하기") { o.go(OnboardStep.SIGNUP) }
-                OnboardStep.SIGNUP -> CarButton(if (o.busy) "확인 중" else if (o.login) "로그인하고 계속" else "가입하고 계속", enabled = !o.busy) { o.submitAccount() }
-                OnboardStep.CONSENT -> CarButton(if (o.busy) "저장 중" else "동의하고 계속", enabled = !o.busy) { o.agree() }
-                OnboardStep.PROFILE -> CarButton(if (o.busy) "저장 중" else "목소리 등록하기", enabled = !o.busy) { o.saveProfile() }
-                OnboardStep.PHOTO -> CarButton(if (o.busy) "저장 중" else if (o.photo != null) "사진으로 계속" else "캐릭터로 계속", enabled = !o.busy) { o.saveProfile() }
+                OnboardStep.SIGNUP -> CarButton(if (o.login) "로그인하고 계속" else "가입하고 계속", enabled = !o.busy) { o.submitAccount() }
+                OnboardStep.CONSENT -> CarButton("동의하고 계속", enabled = !o.busy) { o.agree() }
+                OnboardStep.PROFILE -> CarButton("목소리 등록하기", enabled = !o.busy) { o.saveProfile() }
+                OnboardStep.PHOTO -> CarButton(if (o.photo != null) "사진으로 계속" else "캐릭터로 계속") { o.go(OnboardStep.PROFILE) } // 시안 행선: C05 → C04(저장은 C04에서)
                 OnboardStep.VOICE -> CarButton("녹음 시작", enabled = !o.busy) {
                     if (ctx.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) o.startRecording() else mic.launch(Manifest.permission.RECORD_AUDIO)
                 }
                 OnboardStep.RECORDING -> { // 시안 C07: 보조 440 + 큰 단추(나머지), 간격 24
-                    CarButton("다시 녹음", Modifier.width(440.dp), CarButtonKind.Secondary, enabled = !o.busy) { o.startRecording() }
-                    CarButton(if (o.busy) "등록 중" else "녹음 완료", Modifier.weight(1f), enabled = !o.busy && o.heard >= MIN_VOICE_SECONDS) { o.submitVoice() }
+                    CarButton("다시 녹음", Modifier.width(440.dp), CarButtonKind.Secondary, enabled = !o.busy) { o.again() }
+                    CarButton("녹음 완료", Modifier.weight(1f), enabled = !o.busy && o.heard >= MIN_VOICE_SECONDS) { o.submitVoice() }
                 }
                 OnboardStep.DONE -> CarButton("가족 그룹 만들기") { o.done(); onFamily() }
             }
@@ -313,7 +310,7 @@ fun OnboardingScreen(o: Onboarding, gear: String?, onFamily: () -> Unit) {
                     OnboardStep.SIGNUP -> {
                         NoAutofill()
                         CarField("이메일", o.email, { o.email = it }, KeyboardType.Email, placeholder = "minjun@example.com")
-                        CarField("비밀번호", o.password, { o.password = it }, KeyboardType.Password, secret = true, placeholder = "8자 이상")
+                        CarField("비밀번호", o.password, { o.password = it }, KeyboardType.Password, secret = true)
                         InfoCard(if (o.login) "처음이신가요?" else "이미 계정이 있나요?", if (o.login) "새 계정을 만들어 시작해요." else "같은 계정으로 로그인해 기록을 불러와요.", onClick = o::toggleLogin)
                     }
                     OnboardStep.CONSENT -> {
@@ -329,12 +326,13 @@ fun OnboardingScreen(o: Onboarding, gear: String?, onFamily: () -> Unit) {
                     OnboardStep.PROFILE -> {
                         CarField("이름 또는 별명", o.name, { o.name = it.take(20) }, KeyboardType.Text, placeholder = "민준")
                         Text("내 캐릭터", style = CarText.Label, color = c.onSurfaceVariant)
-                        // 시안 '캐릭터 선택': surface, 모서리 32, 여백 24, 캐릭터 140(모서리 48) 간격 30. 시안 넷(안경·힐링·캡모자·기본) 뒤에 나머지 여섯을 가로로 이어 둔다.
+                        // 시안 '캐릭터 선택': surface, 모서리 32, 여백 24, 캐릭터 넷(안경·힐링·캡모자·기본) 140(모서리 48) 간격 30.
+                        // 시안에는 고른 상태 그림이 없어, 눌러 고른 뒤에만 말하는 사람 고리와 같은 테두리를 보인다(처음 화면은 시안 그대로).
+                        var tapped by remember { mutableStateOf(false) }
                         Surface(Modifier.fillMaxWidth(), CarShape.Card, color = c.surface) {
-                            Row(Modifier.horizontalScroll(rememberScrollState()).padding(24.dp), horizontalArrangement = Arrangement.spacedBy(30.dp)) {
-                                CHARS.forEach { (key, res) ->
-                                    // 고른 캐릭터는 말하는 사람 고리와 같은 테두리
-                                    Box(Modifier.clip(CarShape.Face).clickable { o.character = key }) { CharAvatar(res, 140.dp, CarShape.Face, ring = key == o.character) }
+                            Row(Modifier.padding(24.dp), horizontalArrangement = Arrangement.spacedBy(30.dp)) {
+                                CHARS.take(4).forEach { (key, res) ->
+                                    Box(Modifier.clip(CarShape.Face).clickable { o.character = key; tapped = true }) { CharAvatar(res, 140.dp, CarShape.Face, ring = tapped && key == o.character) }
                                 }
                             }
                         }
@@ -360,7 +358,7 @@ fun OnboardingScreen(o: Onboarding, gear: String?, onFamily: () -> Unit) {
                         if (!rec) Text("등록한 목소리로 차량에서 발화자를 구분해요.", style = CarText.Label, color = c.onSurfaceVariant)
                     }
                     OnboardStep.DONE -> {
-                        MeCard(shownName, if (p?.hasVoice == true) "캐릭터와 음성 특징 저장 완료" else "캐릭터 저장 완료", charDrawable(o.character), o.photo)
+                        InfoCard(shownName, "캐릭터와 음성 특징 저장 완료", soft = true, face = charDrawable(o.character), photo = o.photo) // 시안 '민준 / 아빠': 호칭 값이 없어 이름만
                         InfoCard("다음은 우리 가족", "아이의 프로필도 ${shownName}님이 만들어 줄 수 있어요.")
                     }
                 }
@@ -380,26 +378,27 @@ private fun Moment(label: String, title: String, detail: String) = Column(vertic
 }
 
 /**
- * 시안 C01의 보관 카드 예시('Archive / galleryCar / 1', 400 × 550, tint-2, 모서리 25, 여백 30, 간격 20): 날짜·여행, 한마디, 목소리의 주인공 둘(140 동그라미), 설명, 가치타 · 길이.
- * 처음 화면의 고정 그림(실제 기록이 아님)이라 글은 시안 그대로다. 시안의 18.75·16.25 글자는 차의 가장 작은 글자(Label 24)로 올렸다.
+ * 시안 C01의 보관 카드 예시('Archive / galleryCar / 1', 400 × 550, 밝은 종이 tint-2, 모서리 25, 여백 30, 간격 20): 날짜·여행 18.75, 한마디 40/55,
+ * 목소리의 주인공 둘(140 동그라미, 간격 15), 설명 16.25 Regular, 가치타 · 길이 18.75. 처음 화면의 고정 그림(실제 기록이 아님)이라 글은 시안 그대로다.
  * 콘텐츠 기록(F6, C33)의 갤러리 카드와 같은 조각이라, 그쪽이 CarDesign.kt로 올라가면 그것으로 바꾼다.
  */
 @Composable
 private fun ArchivePreview() {
-    val c = MaterialTheme.colorScheme
-    Surface(Modifier.size(400.dp, 550.dp), RoundedCornerShape(25.dp), color = CarTints[1], contentColor = c.onSurface) {
+    val small = CarText.Label.copy(fontSize = 18.75.sp, lineHeight = 27.5.sp)
+    Surface(Modifier.size(400.dp, 550.dp), RoundedCornerShape(25.dp), color = CarPaper.Tints[1], contentColor = CarPaper.Ink) {
         Column(Modifier.padding(30.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
-            Text("11.14  강릉 가족 여행", style = CarText.Label, color = c.onSurfaceVariant)
-            Text("아빠, 아까부터\n바다 보이는데?", style = CarText.Title)
+            Text("11.14  강릉 가족 여행", style = small, color = CarPaper.Ink2)
+            Text("아빠, 아까부터\n바다 보이는데?", style = CarText.Title.copy(lineHeight = 55.sp), color = CarPaper.Ink)
             Spacer(Modifier.weight(1f))
             Row(Modifier.fillMaxWidth(), Arrangement.spacedBy(15.dp, Alignment.CenterHorizontally)) {
                 CharAvatar(R.drawable.char_glasses, 140.dp, CircleShape) // 아빠
                 CharAvatar(R.drawable.char_cap, 140.dp, CircleShape) // 서준
             }
-            Text("서준의 한마디에 모두 웃음", Modifier.fillMaxWidth(), style = CarText.Label, color = c.onSurfaceVariant, textAlign = TextAlign.Center)
+            Text("서준의 한마디에 모두 웃음", Modifier.fillMaxWidth(), style = CarText.Label.copy(fontSize = 16.25.sp, lineHeight = 22.5.sp, fontWeight = FontWeight.Normal),
+                color = CarPaper.Ink2, textAlign = TextAlign.Center)
             Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween) {
-                Text("가치타", style = CarText.Label, color = c.onSurfaceVariant)
-                Text("▶ 0:32", style = CarText.Label)
+                Text("가치타", style = small, color = CarPaper.Ink2)
+                Text("▶ 0:32", style = small, color = CarPaper.Ink)
             }
         }
     }
@@ -427,22 +426,6 @@ private fun VoiceTimeline(rec: Boolean, done: Boolean, heard: Double, levels: Do
             Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween) {
                 Text(if (rec) "00:%02d".format(s.toInt()) else "00:00", style = CarText.Label, color = c.onSurfaceVariant)
                 Text("00:%02d".format(VOICE_SECONDS), style = CarText.Label, color = c.onSurfaceVariant)
-            }
-        }
-    }
-}
-
-/** 시안 C08 '민준 / 아빠' 카드. 사진을 골랐으면 캐릭터 대신 사진(92, 모서리 48)을 보인다. 그 밖은 InfoCard 그대로. */
-@Composable
-private fun MeCard(name: String, detail: String, face: Int, photo: Bitmap?) {
-    if (photo == null) { InfoCard(name, detail, soft = true, face = face); return }
-    val c = MaterialTheme.colorScheme
-    Surface(Modifier.fillMaxWidth(), CarShape.Card, color = c.primaryContainer, contentColor = c.onSurface) {
-        Row(Modifier.padding(26.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(24.dp)) {
-            Image(photo.asImageBitmap(), "프로필 사진", Modifier.size(92.dp).clip(CarShape.Face), contentScale = ContentScale.Crop)
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(name, style = CarText.Headline)
-                Text(detail, style = CarText.Label, color = c.onSurfaceVariant)
             }
         }
     }
