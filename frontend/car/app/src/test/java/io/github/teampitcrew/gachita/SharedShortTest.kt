@@ -18,6 +18,15 @@ class SharedShortTest {
     private fun item(hash: String = "b".repeat(64)) = JSONObject().put("id", id).put("origin", "local-render").put("state", "completed")
         .put("momentId", "moment-1").put("generation", 2).put("sourceHash", "a".repeat(64))
         .put("result", JSONObject().put("url", "/api/trips/ABCD/short-assets/$id/file").put("sha256", hash).put("mimeType", "video/mp4"))
+    // 리허설 run2: 같은 요청 키를 다시 보내 409 — 목록에 같은 파일이 보관 완료면 성공, 아니면 실패
+    @Test fun sameUploadAlreadyStoredCountsOnlyForTheSameFile() {
+        val source = parseSharedShortSource(sourceValue()); val b = "b".repeat(64)
+        assertEquals(id, storedShort(JSONArray().put(item("c".repeat(64))).put(item()), source, b)?.getString("id"))
+        assertEquals(null, storedShort(JSONArray().put(item("c".repeat(64))), source, b)) // 다른 파일
+        assertEquals(null, storedShort(JSONArray().put(item().put("sourceHash", "d".repeat(64))), source, b)) // 원음이 바뀐 뒤 것
+        assertEquals(null, storedShort(JSONArray().put(item().put("state", "uploading").apply { remove("result") }), source, b)) // 아직 보관 중
+        assertEquals(null, storedShort(JSONArray().put(item().put("generation", 3)), source, b))
+    }
     @Test fun sourceMustBindOneMomentAndConsentGeneration() {
         val good = parseSharedShortSource(sourceValue())
         assertEquals("moment-1", good.short.scenes.single().momentId)

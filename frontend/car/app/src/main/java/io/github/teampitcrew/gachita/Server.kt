@@ -81,23 +81,19 @@ class Server(base: String, private val open: (URL) -> HttpURLConnection = { it.o
             .let { it.getInt("generation") to sharedTodo(it.getJSONObject("item")) }
     }
 
+    /** 차가 P에서 D로 나가면 여행을 주행으로 바꾼다. 서버는 모두 동의했을 때만 기록 표시(recording)를 켠다. */
+    fun departed(code: String, token: String): Got = got(call("PATCH", "/api/trips/$code", JSONObject().put("status", "driving"), token)!!)
+
     /** 실제 차량 P 관측으로 호출하며, 서버가 확인한 주차 상태 뒤에 도착 판정을 요청합니다. */
     fun parkedForArrival(code: String, token: String): Got = got(call("PATCH", "/api/trips/$code", JSONObject().put("status", "parked"), token)!!)
     /** 여행을 마친다(최종 목적지 브리핑의 '여행 마치고 기록 보기'). 서버의 여행 상태만 바꾸고 기록·동의는 그대로 둔다. */
     fun endTrip(code: String, token: String): Got = got(call("PATCH", "/api/trips/$code", JSONObject().put("status", "ended"), token)!!)
 
-    /** 내비에서 읽은 장소를 여행에 남긴다(T131 `POST /places`). kind: approaching·arrived·destination. */
-    fun place(code: String, token: String, name: String, kind: String, lat: Double? = null, lng: Double? = null, etaSeconds: Int? = null) {
-        val body = JSONObject().put("name", name).put("kind", kind).apply {
-            if (lat != null && lng != null) put("lat", lat).put("lng", lng)
-            etaSeconds?.let { put("etaSeconds", it) }
-        }
-        call("POST", "/api/trips/$code/places", body, token)
-    }
-
     fun arrivalBriefing(code: String, token: String, generation: Int, observation: VehicleArrival): SharedArrival =
         sharedArrival(call("POST", "/api/trips/$code/arrival-briefing", observation.body(generation, parked = true), token)!!)
 
+    /** 장소 기록(T131). 참가자 토큰으로, 관측 시각(at)과 함께. */
+    fun place(code: String, token: String, n: PlaceNote) { call("POST", "/api/trips/$code/places", n.body(), token) }
     fun shortform(code: String, token: String): String = call("GET", "/api/trips/$code/shortform", null, token)!!
     /** 콘텐츠 기록(F6): 이 여행 하나의 구성원·장소·경로·콘텐츠(docs/api/places.md). 녹음에 동의한 참가자 토큰만. */
     fun contents(code: String, token: String): String = call("GET", "/api/trips/$code/contents", null, token, timeoutMs = 10000)!!
@@ -184,6 +180,16 @@ class Server(base: String, private val open: (URL) -> HttpURLConnection = { it.o
         call("POST", "/api/trips/$code/recordings?moment=" + java.net.URLEncoder.encode(moment, "UTF-8") + "&generation=$generation&from=$from", wav, token)
     }
 
+    /** 여행 전체 음성(T132, ADR-0024, FullAudio.kt): 올리기 상태·시작·조각·완료. 이 여행의 발화를 올린 참가자 토큰으로. */
+    fun audioStatus(code: String, token: String): JSONObject = JSONObject(call("GET", "/api/trips/$code/audio", null, token)!!)
+    fun audioStart(code: String, token: String, generation: Int, bytes: Long, seconds: Double, startedAt: Long): JSONObject =
+        JSONObject(call("POST", "/api/trips/$code/audio/start", JSONObject().put("generation", generation).put("expectedBytes", bytes).put("seconds", seconds).put("startedAt", startedAt), token)!!)
+    fun audioPart(code: String, token: String, n: Int, generation: Int, pcm: ByteArray) {
+        call("PUT", "/api/trips/$code/audio/parts/$n?generation=$generation", pcm, token, timeoutMs = 60_000, type = "application/octet-stream")
+    }
+    fun audioComplete(code: String, token: String, generation: Int, parts: Int, seconds: Double, sha256: String): JSONObject =
+        JSONObject(call("POST", "/api/trips/$code/audio/complete", JSONObject().put("generation", generation).put("parts", parts).put("seconds", seconds).put("sha256", sha256), token, timeoutMs = 120_000)!!)
+
     /** 사람이 고른 장면 남기기(POST /moments, 흐름 F5). 이 차 참가자의 토큰으로. 남긴 장면 id. */
     fun moment(code: String, token: String, at: Long, from: Long, to: Long, label: String, lat: Double?, lng: Double?): String =
         JSONObject(call("POST", "/api/trips/$code/moments", JSONObject().put("at", at).put("from", from).put("to", to).put("label", label).apply { if (lat != null && lng != null) put("lat", lat).put("lng", lng) }, token)!!).getString("id")
@@ -220,7 +226,7 @@ class Server(base: String, private val open: (URL) -> HttpURLConnection = { it.o
      * deadlineMs를 주면 호출 전체(연결·보내기·받기)의 마감이다. connect·readTimeout은 단계마다 따로 걸리고, 본문이 조금씩 오면
      * readTimeout이 매번 다시 시작해 끝없이 기다릴 수 있다. 마감에 연결을 끊으면 막힌 읽기가 바로 예외로 풀린다.
      */
-    private fun call(method: String, path: String, body: Any?, token: String? = null, timeoutMs: Int = 5000, deadlineMs: Int? = null): String? {
+    private fun call(method: String, path: String, body: Any?, token: String? = null, timeoutMs: Int = 5000, deadlineMs: Int? = null, type: String? = null): String? {
         val c = open(URL(base + path))
         val expire = deadlineMs?.let { DEADLINES.schedule({ c.disconnect() }, it.toLong(), TimeUnit.MILLISECONDS) }
         try {
@@ -231,7 +237,7 @@ class Server(base: String, private val open: (URL) -> HttpURLConnection = { it.o
             if (body != null) {
                 c.doOutput = true
                 val bytes = if (body is ByteArray) body.also { c.setFixedLengthStreamingMode(it.size) } else body.toString().toByteArray()
-                c.setRequestProperty("Content-Type", if (body is ByteArray) "audio/wav" else "application/json")
+                c.setRequestProperty("Content-Type", type ?: if (body is ByteArray) "audio/wav" else "application/json")
                 c.outputStream.use { it.write(bytes) }
             }
             val code = c.responseCode
