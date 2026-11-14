@@ -336,7 +336,8 @@ class MainActivity : ComponentActivity() {
                     CompositionLocalProvider(LocalMe provides me) {
                         Box(Modifier.fillMaxSize()) {
                             // 여행이 없고 온보딩을 마쳤으면 주차 중 처음 화면은 가족 흐름(C16 groups·C43 → '이 가족과 출발'). 닫아도 같은 화면에 남는다
-                            val family = !carStatus.restricted && (familyOpen || t == null && !onboarding.showing)
+                            // 계정이 없으면 가족 흐름 대신 시작 화면(C01·C02) — 토큰 없는 가족 흐름은 그리지 않는다
+                            val family = !carStatus.restricted && signedIn && (familyOpen || t == null && !onboarding.showing)
                             when {
                                 // 로그아웃(2220:5864) → C01: 여행이 남아 있어도 계정이 없으면 시작 화면부터
                                 !signedIn && onboarding.showing -> OnboardingScreen(onboarding, carStatus.gear, driving = carStatus.restricted) { familyOpen = true }
