@@ -1651,7 +1651,7 @@ class MainActivity : ComponentActivity() {
             TripHeader(parked, carStatus.gear, s.online, listening = s.recording && Live.mic == Mic.ON && !muted && handoff.state == Handoff.State.OFF) { WindowSize() }
             TripTabs(Destination.entries.map { it.label }, destination.ordinal, { parked || it != Destination.SHORTS.ordinal }) { i ->
                 val tab = Destination.entries[i]
-                if (destination != tab) { stopShort(); closeBoarding(); managing = false; shortsCreate = false; destination = tab }
+                if (destination != tab) { stopShort(); closeBoarding(); managing = false; shortsCreate = false; studioOpen = false; destination = tab }
             }
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 val b = brief?.takeIf { vehicleParked() && offer?.stage.let { it == null || it == Offer.Stage.FINDING } } // 실제 P이고 제한이 풀린 동안만, 휴게소 제안이 먼저
@@ -1763,7 +1763,7 @@ class MainActivity : ComponentActivity() {
             },
             canPick = scope != null && s.online,
             onRefresh = ::loadTranscript, onFixSpeakers = { managing = true },
-            onPick = { stopShort(); closeBoarding(); shortsCreate = true; destination = Destination.SHORTS }, modifier = modifier,
+            onPick = { stopShort(); closeBoarding(); shortsCreate = true; studioOpen = true; destination = Destination.SHORTS }, modifier = modifier,
             live = if (live) liveChip(s.recording && !muted && handoff.state == Handoff.State.OFF && Live.mic == Mic.ON) else null,
             onBack = { destination = Destination.RIDE })
     }
@@ -1776,7 +1776,7 @@ class MainActivity : ComponentActivity() {
         if (!appVisible || carStatus.restricted || t.status == "driving") return
         val scope = contentScope()
         val url = server
-        if (!studioOpen && !shortsCreate && shortNote != "숏폼을 받고 있어요") { // '추천 장면 고르기'로 왔으면 갤러리 없이 만들기부터(develop의 shortsCreate)
+        if (!studioOpen && shortNote != "숏폼을 받고 있어요") {
             androidx.compose.runtime.key(url, t.code, t.generation, scope?.token) {
                 ContentsRecord(url, t.code, scope?.token,
                     canRead = { appVisible && !isDestroyed && s.online && !carStatus.restricted && scope != null && contentScope() == scope && server == url && s.trip?.status != "driving" && handoff.state == Handoff.State.OFF },
@@ -1795,7 +1795,7 @@ class MainActivity : ComponentActivity() {
                 ShortStudio(url, t.code, t.generation, scope?.token, t.title,
                     canRead = { appVisible && !isDestroyed && s.online && !carStatus.restricted && scope != null && contentScope() == scope && server == url && s.trip?.people?.all { it.consent } == true && s.trip?.status != "driving" && handoff.state == Handoff.State.OFF },
                     canPlay = { appVisible && !isDestroyed && !carStatus.restricted && s.trip?.status != "driving" && handoff.state == Handoff.State.OFF },
-                    onClose = { shortsCreate = false; studioOpen = false }, // 갤러리로 돌아간다(#409). 대화 기록에서 바로 만들기로 왔으면 그 표시도 끈다
+                    onClose = { studioOpen = false; shortsCreate = false },
                     onActiveChange = ::shortStudioActiveChanged, participantId = tokens.entries.singleOrNull { it.value == scope?.token }?.key, modifier = Modifier.weight(1f).fillMaxWidth(),
                     startCreate = shortsCreate)
             }
