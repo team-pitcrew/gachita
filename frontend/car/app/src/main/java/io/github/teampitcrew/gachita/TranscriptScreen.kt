@@ -111,10 +111,10 @@ internal fun TranscriptScreen(
                 OutlinedButton(onRefresh, Modifier.heightIn(min = 56.dp), enabled = !loading, shape = RoundedCornerShape(24.dp)) { Text("새로고침", fontSize = 24.sp) }
             }
         }
+        Surface(Modifier.fillMaxWidth(), RoundedCornerShape(28.dp), color = c.primaryContainer) { // 넘겨도 칩은 남는다
+            Text(live ?: tripRange(trip.createdAt, lines), Modifier.padding(20.dp), color = c.onSurface, fontSize = 24.sp, lineHeight = 32.sp)
+        }
         Column(Modifier.weight(1f).verticalScroll(scroll), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Surface(Modifier.fillMaxWidth(), RoundedCornerShape(28.dp), color = c.primaryContainer) {
-                Text(live ?: tripRange(trip.createdAt, lines), Modifier.padding(20.dp), color = c.onSurface, fontSize = 24.sp, lineHeight = 32.sp)
-            }
             transcriptItems(lines, asks, places).forEach { item ->
                 when (item) {
                     is Said.Head -> Text(listOfNotNull(clock(item.at), item.place).joinToString(" / "), color = c.onSurfaceVariant, fontSize = 24.sp, lineHeight = 32.sp)
