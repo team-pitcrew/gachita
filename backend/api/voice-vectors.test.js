@@ -57,6 +57,12 @@ test("임베더가 공유 시험 벡터와 같은 값을 낸다(ADR-0023)", () =
   assert.ok(quiet.slice(52).every((x) => x === 0), "음높이를 못 잡으면 그 묶음은 0");
 });
 
+test("말소리가 없는 소리의 값은 등록하지 않는다", () => {
+  const silent = embed(new Float32Array(160000)); // 10초 무음: 세 묶음의 길이가 모두 0
+  assert.ok(silent.every((x) => x === 0));
+  assert.throws(() => checkVector(silent), (e) => e.status === 400 && e.error === "말소리가 없어 등록할 수 없음");
+});
+
 test("기기가 올린 값의 모양을 본다", () => {
   const ok = fixture.cases[0].vector;
   for (const bad of [null, "x", ok.slice(1), [...ok.slice(1), NaN], ok.map((x) => x * 2), ok.map((x) => x + 0.01), new Array(DIMS).fill(0)])
