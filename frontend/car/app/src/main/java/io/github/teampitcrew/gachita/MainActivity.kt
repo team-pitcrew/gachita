@@ -156,6 +156,7 @@ class MainActivity : ComponentActivity() {
     private var shortRequest = 0
     private var carStatus by mutableStateOf(CarStatus())
     private var server by mutableStateOf(DEFAULT_SERVER)
+    private var shortStudioOpen by mutableStateOf(false)
     private val picked = mutableStateListOf<String>().apply { addAll(FAMILY.map { it.name }) }
     private var error by mutableStateOf("")
     private var offer by mutableStateOf<Offer?>(null) // 지금 보이는 경유지 제안(T9)
@@ -312,7 +313,7 @@ class MainActivity : ComponentActivity() {
         car = Car(this) {
             carStatus = it
             if (it.restricted) cancelShortExport("주행 중에는 영상 만들기를 멈춰요")
-            if (it.restricted) { managing = false; conversationOpen = false; destination = Destination.RIDE; clearTranscript() }
+            if (it.restricted) { managing = false; conversationOpen = false; shortStudioOpen = false; destination = Destination.RIDE; clearTranscript() }
             if (it.restricted) closeCamera() // 주행 중에는 카메라를 닫는다(T11). 카드도 그리지 않는다
             if (it.restricted && shortOf != null) stopShort() // 주행 중에는 숏폼을 틀지 않는다(T11)
             val was = s.gear
@@ -356,7 +357,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onStart() { super.onStart(); visible = true; main.removeCallbacks(tick); main.post(tick) }
-    override fun onStop() { visible = false; closeCamera(); stopShort(); super.onStop() }
+    override fun onStop() { visible = false; shortStudioOpen = false; closeCamera(); stopShort(); super.onStop() }
 
     override fun onResume() {
         super.onResume()
@@ -1387,6 +1388,16 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun ShortsLibrary(t: Trip, modifier: Modifier) {
         val c = MaterialTheme.colorScheme
+        val scope = contentScope()
+        if (shortStudioOpen && scope != null && !carStatus.restricted && t.status != "driving" && t.people.all { it.consent } && s.online) {
+            val url = server
+            androidx.compose.runtime.key(url, scope) {
+                ShortStudio(url, scope.code, scope.generation, scope.token,
+                    canRead = { visible && !isDestroyed && s.online && !carStatus.restricted && contentScope() == scope && server == url && s.trip?.people?.all { it.consent } == true && s.trip?.status != "driving" },
+                    onClose = { shortStudioOpen = false }, modifier = modifier)
+            }
+            return
+        }
         Card(modifier = modifier) {
             Text("우리 여행의 쇼츠", fontSize = 36.sp, fontWeight = FontWeight.Bold)
             Text("함께 남긴 목소리를 짧은 장면으로 다시 들어요", color = c.onSurfaceVariant)
@@ -1399,7 +1410,8 @@ class MainActivity : ComponentActivity() {
             }
             Text(shortNote.ifEmpty { "장면 클립이 있으면 소리와 자막이 함께 재생돼요" }, color = c.onSurfaceVariant, fontSize = 22.sp, maxLines = 2)
             if (savedShortVideo != null) ShortExportControls(canCreate = false)
-            Button(::showShort, Modifier.fillMaxWidth().height(72.dp), enabled = contentScope() != null && shortNote != "숏폼을 받고 있어요" && handoff.state == Handoff.State.OFF) { Text("생성된 쇼츠 보기") }
+            Button({ shortStudioOpen = true }, Modifier.fillMaxWidth().height(72.dp), enabled = scope != null && t.people.all { it.consent } && s.online && handoff.state == Handoff.State.OFF) { Text("AI 쇼츠 제작·보관함") }
+            OutlinedButton(::showShort, Modifier.fillMaxWidth().height(64.dp), enabled = scope != null && shortNote != "숏폼을 받고 있어요" && handoff.state == Handoff.State.OFF) { Text("기본 영상으로 만들기") }
         }
     }
 

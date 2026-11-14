@@ -41,9 +41,17 @@ class Server(base: String) {
 
     fun shortform(code: String, token: String): String = call("GET", "/api/trips/$code/shortform", null, token)!!
 
+    fun shortTemplates(): JSONObject = JSONObject(call("GET", "/api/short-templates", null)!!)
+    fun shortPlan(code: String, token: String, template: String, audio: Boolean): JSONObject = JSONObject(call("POST", "/api/trips/$code/short-plans", JSONObject().put("templateId", template).put("audioReference", audio), token)!!)
+    fun shortJobs(code: String, token: String): JSONArray = JSONObject(call("GET", "/api/trips/$code/short-generations", null, token)!!).getJSONArray("items")
+    fun shortJob(code: String, token: String, id: String): JSONObject = JSONObject(call("GET", "/api/trips/$code/short-generations/$id", null, token)!!)
+    fun completedShortJob(code: String, token: String, id: String): JSONObject = shortJob(code, token, id).also { if (it.optString("state") != "completed") throw ApiError(409, "영상이 취소되었거나 아직 완성되지 않았어요") }
+    fun createShortJob(code: String, token: String, body: JSONObject): JSONObject = JSONObject(call("POST", "/api/trips/$code/short-generations", body, token)!!)
+    fun cancelShortJob(code: String, token: String, id: String) { call("DELETE", "/api/trips/$code/short-generations/$id", null, token) }
+
     /** 미리듣기·영상 만들기용 클립 받기. 주소는 shortClipAddress로 제한하고 요청이 연결·파일을 소유합니다. */
     fun downloadShort(url: String, token: String, file: File, cancelled: () -> Boolean, connection: (HttpURLConnection?) -> Unit,
-        openOutput: () -> OutputStream = { file.outputStream() }) {
+        openOutput: () -> OutputStream = { file.outputStream() }, maxBytes: Long = 5_000_000L, mimeType: String? = null) {
         val c = URL(url).openConnection() as HttpURLConnection
         var complete = false
         fun checkCancelled() { if (cancelled() || Thread.currentThread().isInterrupted) throw java.util.concurrent.CancellationException("장면 받기를 취소했어요") }
@@ -56,6 +64,7 @@ class Server(base: String) {
             connection(c)
             checkCancelled()
             if (c.responseCode !in 200..299) throw ApiError(c.responseCode, "장면 소리를 받지 못했어요")
+            require(mimeType == null || c.contentType?.substringBefore(';') == mimeType) { "영상 형식을 확인하지 못했어요" }
             checkCancelled()
             c.inputStream.use { input -> checkCancelled(); openOutput().use { output ->
                 val bytes = ByteArray(8192)
@@ -66,7 +75,7 @@ class Server(base: String) {
                     checkCancelled()
                     if (read < 0) break
                     total += read
-                    if (total > 5_000_000L) throw IllegalArgumentException("장면 소리가 너무 커요")
+                    if (total > maxBytes) throw IllegalArgumentException("장면 파일이 너무 커요")
                     output.write(bytes, 0, read)
                 }
             } }

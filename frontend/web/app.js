@@ -10,6 +10,7 @@ import qrcode from "/qrcode.js";
 import { createRecords } from "/records.js";
 import { createConversations } from "/conversations.js";
 import { CHARACTER_OPTIONS, characterKey, characterImage, createShortFilm, exportShortFilm, recordingFormat } from "/short-film.js";
+import { createShortStudio } from "/short-studio.js";
 
 const TRIP = {
   boarding: ["탑승 중", "모두 타면 운전자가 출발을 눌러요."],
@@ -112,10 +113,12 @@ const conversations = createConversations({
   onCaptions: () => captions.open(),
   onShorts: () => launchShort(),
 });
-const launchShort = () => {
+const launchLocalShort = () => {
   const me = trip?.participants.find((p) => p.id === myId());
   if (me) openShort(me).catch((e) => toast(e.status === 0 ? "연결이 끊겨서 열지 못했어요." : e.message));
 };
+const studio = createShortStudio({ getTrip: () => trip, getParticipant: () => trip?.participants.find((p) => p.id === myId()), getToken: myToken, onLocal: launchLocalShort });
+const launchShort = () => studio.open();
 const openConversations = () => {
   if (trip?.code === code()) return conversations.open();
   const last = store("trip");
@@ -906,6 +909,7 @@ function shortView() {
 }
 
 function render() {
+  studio.sync();
   shares.sync();
   captions.sync();
   records.sync();
