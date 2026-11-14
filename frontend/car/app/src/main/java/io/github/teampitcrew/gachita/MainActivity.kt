@@ -884,32 +884,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** 차에서 이름으로 참가한 본인이 한 사람의 동의만 켠다. QR 참가자의 토큰은 차에 없다. */
-    private fun agreePerson(id: String) {
-        val trip = s.trip ?: return
-        val token = tokens[id] ?: return
-        if (carStatus.restricted || s.blockOn() != null || trip.people.none { it.id == id }) return
-        val url = server
-        car.readGear { gear ->
-            s = s.withGear(gear)
-            if (s.trip?.code != trip.code || carStatus.restricted || s.blockOn() != null) return@readGear
-            s = s.copy(busy = true, note = "동의를 저장하고 있어요")
-            bg({ Server(url).agree(trip.code, id, token) }) { result -> // 켜기는 한 번만, 뒤의 조회만 다시 묻는다(T122)
-                if (s.trip?.code != trip.code || server != url) return@bg
-                result.onSuccess { s = s.copy(busy = false, note = "본인의 동의를 저장했어요. 모두 동의하면 출발할 때 자동으로 기록해요").withTrip(keep(it)) }
-                    .onFailure { s = s.agreeFailed(it) }
-            }
-        }
-    }
-
-    /** 철회는 네트워크·주행 상태와 무관하게 즉시 수음을 멈춘다. 전송 대기와 대상은 재시작 후에도 보존한다. */
-    private fun turnOff(id: String? = null) {
-        dropPrints() // 철회는 서버 응답을 기다리지 않고 이 차의 목소리 대조 값부터 지운다
-        s = s.turnOff(id).copy(note = "동의를 철회했어요. 원음과 대화를 지우고 있어요")
-        s.trip?.let { dropRawAll(it.code) }
-        refresh()
-    }
-
     private fun recordingAction() {
         cancelRecordingStart?.invoke()
         when {
@@ -1281,23 +1255,12 @@ class MainActivity : ComponentActivity() {
                 revokeInvite()
                 boarding = boarding.copy(invite = null, issuing = false, note = "참석 QR 시간이 끝났어요. 새 QR을 만들어 주세요.")
             }
-            BoardingAction.AddName -> if (!carStatus.restricted && !s.busy) {
-                revokeInvite()
-                boarding = BoardingState(BoardingPage.NAME)
-            }
-            is BoardingAction.Name -> if (!s.busy) boarding = boarding.copy(name = action.value)
             is BoardingAction.PickSeat -> if (!s.busy) boarding = boarding.copy(seat = action.seat, note = "")
             is BoardingAction.Move -> if (!carStatus.restricted && !s.busy) {
                 revokeInvite()
                 boarding = BoardingState(BoardingPage.SEAT, personId = action.person.id, seat = Seat.entries.firstOrNull { it.name == action.person.seat })
             }
-            is BoardingAction.Consent -> if (!carStatus.restricted) {
-                revokeInvite()
-                boarding = BoardingState(BoardingPage.CONSENT, personId = action.person.id)
-            }
             BoardingAction.Connect -> connectPassenger()
-            BoardingAction.Agree -> boarding.personId?.let(::agreePerson)
-            BoardingAction.Withdraw -> boarding.personId?.takeIf { it in tokens }?.let(::turnOff)
         }
     }
 
@@ -1331,45 +1294,27 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** 참가·자리 변경은 현재 빈자리와 주차 상태를 다시 확인한다. 늦은 결과는 다른 화면의 입력을 덮지 않는다. */
+    /** 자리 변경(동승자 설정 → 자리 변경)은 현재 빈자리와 주차 상태를 다시 확인한다. 새 동승자는 휴대폰 QR로만 들어온다. 늦은 결과는 다른 화면의 입력을 덮지 않는다. */
     private fun connectPassenger() {
         val trip = s.trip ?: return
         val form = boarding
         val seat = form.seat ?: return
-        if (carStatus.restricted || s.gear != "P" || s.busy || !s.online || !selectableSeat(trip, carStatus.seats, seat, form.personId)) return
-        if (form.personId == null && form.page != BoardingPage.NAME) return
-        if (form.page == BoardingPage.NAME && form.name.isBlank()) return
+        val id = form.personId ?: return
+        if (carStatus.restricted || s.gear != "P" || s.busy || !s.online || !selectableSeat(trip, carStatus.seats, seat, id)) return
         val url = server
         val request = ++boardingRequest
         s = s.copy(busy = true)
         boarding = form.copy(note = "")
         bg({
             val api = Server(url)
-            // 토큰은 최초 응답에만 온다. 후속 조회가 실패해도 잃지 않도록 반환한다.
-            val joined: Pair<String, String>?
-            val person: Person?
-            when {
-                form.personId != null -> { api.seat(trip.code, form.personId, seat); joined = null; person = trip.people.first { it.id == form.personId }.copy(seat = seat.name) }
-                form.page == BoardingPage.NAME -> { joined = api.join(trip.code, Member(form.name.trim(), seat)); person = Person(joined.first, form.name.trim(), seat.name, false) }
-                else -> error("참가 입력이 없어요")
-            }
-            Triple(person, joined, runCatching { api.trip(trip.code)!! }.getOrNull())
+            api.seat(trip.code, id, seat)
+            runCatching { api.trip(trip.code)!! }.getOrNull()
         }) { result ->
             if (s.trip?.code != trip.code || server != url) return@bg
             s = s.copy(busy = false)
-            result.onSuccess { (person, joined, got) ->
-                joined?.let {
-                    tokens = tokens + it
-                    prefs.edit().putString("tokens", Live.seal(this).line(JSONObject(tokens).toString())).commit()
-                    s = s.copy(ours = tokens.keys)
-                }
+            result.onSuccess { got ->
                 if (got != null) s = s.withTrip(keep(got))
-                else if (form.personId == null) s = s.copy(started = false, note = "연결 후 동의 상태를 확인하고 있어요")
-                if (request == boardingRequest && !carStatus.restricted) {
-                    boarding = if (form.personId != null) BoardingState(BoardingPage.PEOPLE)
-                        else BoardingState(BoardingPage.RESULT, name = person!!.name, personId = person.id, seat = seat,
-                            note = if (got == null) "연결됐어요. 최신 동의 상태를 다시 불러오고 있어요" else "")
-                }
+                if (request == boardingRequest && !carStatus.restricted) boarding = BoardingState(BoardingPage.PEOPLE)
                 refresh()
             }.onFailure { error ->
                 if (request == boardingRequest) {
