@@ -9,7 +9,7 @@ import pg from "pg";
 import { migrate, server, sweep } from "./server.js";
 import { endStores, tripsDb } from "./db.js";
 import { captureLog } from "./log.js";
-import { AUDIO_MAX_BYTES, PART_MAX } from "./trip-audio.js";
+import { AUDIO_KEEP_MS, AUDIO_MAX_BYTES, PART_MAX } from "./trip-audio.js";
 
 let base, adminUrl, names, fakeS3;
 // objects: 키 → 바이트. uploads: 멀티파트 id → {key, parts}. log: 받은 요청 {method, key, range, query}
@@ -197,8 +197,9 @@ test("뒤섞이고 다시 보낸 조각을 순서대로 이어 하나로 두고,
   assert.equal(whole.length, 1);
   assert.ok(s3.objects.get(whole[0]).equals(pcm), "조각을 순서대로 이은 것이 원음과 같다");
   assert.equal((await call("POST", `${t}/audio/complete`, { generation: 1, parts: 3, seconds: 300, sha256: sha(pcm) }, car.token)).status, 200, "완료를 다시 불러도 같은 답");
+  const readyAt = (await tripsDb().query("SELECT ready_at FROM trip_audio WHERE trip_code = $1", [trip.code])).rows[0].ready_at.getTime();
   assert.deepEqual((await call("GET", `${t}/audio`, undefined, phone.token)).data,
-    { state: "ready", generation: 1, receivedParts: 3, receivedBytes: pcm.length, expectedBytes: pcm.length, seconds: 300, startedAt, progress: 1 });
+    { state: "ready", generation: 1, receivedParts: 3, receivedBytes: pcm.length, expectedBytes: pcm.length, seconds: 300, startedAt, progress: 1, expiresAt: readyAt + AUDIO_KEEP_MS });
   assert.equal((await put(t, 0, parts[0], car.token)).status, 409, "다 올린 뒤 늦게 온 조각은 받지 않는다(새로 올리려면 start부터)");
 
   // 차가 클립을 따로 올리지 않은 장면: 전체 음성에서 그 구간만 범위로 읽어 WAV로 준다
@@ -292,7 +293,8 @@ test("sha256이 틀리면 409로 받은 조각을 버리고, 빠진 조각·크�
   const longer = pcmOf(6);
   assert.equal((await call("POST", `${t}/audio/start`, { generation: 1, expectedBytes: longer.length, seconds: 6, startedAt }, car.token)).status, 200);
   const mid = (await call("GET", `${t}/audio`, undefined, phone.token)).data;
-  assert.deepEqual([mid.state, mid.previous], ["uploading", { bytes: pcm.length, seconds: 4, startedAt }]);
+  assert.deepEqual([mid.state, { ...mid.previous, expiresAt: undefined }], ["uploading", { bytes: pcm.length, seconds: 4, startedAt, expiresAt: undefined }]);
+  assert.ok(mid.previous.expiresAt > Date.now() + AUDIO_KEEP_MS - 60_000, "앞의 전체 음성도 2일 뒤 만료");
   assert.equal((await put(t, 0, longer, car.token)).status, 201);
   assert.equal((await call("POST", `${t}/audio/complete`, { generation: 1, parts: 1, seconds: 6, sha256: sha(longer) }, car.token)).status, 200);
   await sweep();
@@ -489,4 +491,43 @@ test("장면 자르기와 장면 후보는 전체 음성이 덮는 구간만, �
   const afterItems = (await call("GET", `${h.t}/scene-suggestions`, undefined, h.phone.token)).data.items;
   assert.deepEqual(afterItems.map((x) => x.at), [before[0].at]);
   void car;
+});
+
+test("다 올린 뒤 2일이 지나거나 버킷에서 사라지면 만료로 보이고, 장면은 차가 올린 클립만 준다(11/15 보관 결정)", async () => {
+  const f = await setup();
+  const { trip, t, car, phone } = f;
+  const pcm = pcmOf(40);
+  await upload(f, pcm, { startedAt: trip.createdAt });
+  const cutOne = (await call("POST", `${t}/moments`, { at: trip.createdAt + 10_000, from: trip.createdAt + 5000, to: trip.createdAt + 15_000 }, phone.token)).data;
+  const own = (await call("POST", `${t}/moments`, { at: trip.createdAt + 30_000, from: trip.createdAt + 25_000, to: trip.createdAt + 35_000 }, phone.token)).data;
+  const res = await fetch(`${base}/api${t}/recordings?moment=${own.id}&generation=1&from=${trip.createdAt + 25_000}`, { method: "POST", headers: { authorization: `Bearer ${car.token}`, "content-type": "audio/wav" }, body: wav(Buffer.alloc(320_000, 5)) });
+  assert.equal(res.status, 201);
+
+  // 2일이 지남(버킷 수명 규칙이 지울 때): 상태는 expired, 장면을 새로 자르지 않고 404, 차가 올린 클립은 그대로
+  await tripsDb().query("UPDATE trip_audio SET ready_at = now() - interval '2 days 1 minute' WHERE trip_code = $1", [trip.code]);
+  const s = (await call("GET", `${t}/audio`, undefined, phone.token)).data;
+  assert.equal(s.state, "expired");
+  assert.ok(s.expiresAt < Date.now());
+  const before = s3.log.length;
+  assert.equal((await call("GET", `${t}/recordings/${cutOne.id}`, undefined, phone.token)).status, 404);
+  assert.equal(s3.log.slice(before).filter((x) => x.range).length, 0, "만료된 전체 음성은 읽지 않는다");
+  assert.equal((await call("GET", `${t}/recordings/${own.id}`, undefined, phone.token)).status, 200, "차가 올린 장면 클립 경로는 그대로");
+  assert.equal((await call("GET", `${t}/shortform`, undefined, phone.token)).data.scenes.length, 1);
+  assert.equal((await call("POST", `${t}/audio/complete`, { generation: 1, parts: 1, seconds: 40, sha256: sha(pcm) }, car.token)).status, 409, "완료를 다시 불러도 만료됐다고 알린다");
+
+  // 2일 전이라도 버킷에서 이미 사라졌으면(404) 만료로 적고 500 없이 404
+  const g = await setup();
+  await upload(g, pcmOf(20), { startedAt: g.trip.createdAt });
+  const m = (await call("POST", `${g.t}/moments`, { at: g.trip.createdAt + 10_000 }, g.phone.token)).data;
+  for (const k of keysOf(g.trip.code, "audio/")) s3.objects.delete(k);
+  assert.equal((await call("GET", `${g.t}/recordings/${m.id}`, undefined, g.phone.token)).status, 404);
+  assert.equal((await call("GET", `${g.t}/audio`, undefined, g.phone.token)).data.state, "expired");
+  assert.equal((await call("GET", `${g.t}/shortform`, undefined, g.phone.token)).status, 200);
+
+  // 새로 다 올리면 만료가 풀린다(다시 출발한 여행)
+  const again = pcmOf(10);
+  assert.equal((await call("POST", `${g.t}/audio/start`, { generation: 1, expectedBytes: again.length, seconds: 10, startedAt: g.trip.createdAt }, g.car.token)).status, 200);
+  assert.equal((await put(g.t, 0, again, g.car.token)).status, 201);
+  assert.equal((await call("POST", `${g.t}/audio/complete`, { generation: 1, parts: 1, seconds: 10, sha256: sha(again) }, g.car.token)).status, 200);
+  assert.equal((await call("GET", `${g.t}/audio`, undefined, g.phone.token)).data.state, "ready");
 });

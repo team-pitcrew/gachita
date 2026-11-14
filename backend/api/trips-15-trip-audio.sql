@@ -1,6 +1,8 @@
 -- 여행 전체 음성(ADR-0024, 2026-11-14). 주차한 뒤 차가 여행의 원음 전체(16 kHz 모노 s16le PCM)를 조각으로 올리고,
 -- 서버는 조각을 클립 버킷에 따로 두었다가 완료 때 순서대로 이어 객체 하나로 둔다. 장면 클립은 그 객체에서 잘라
 -- 일반 클립 줄(recordings)로 남긴다(cut_from_audio). 소리는 버킷에, 여기에는 정보만 둔다.
+-- 보관: 다 올린 뒤 2일(11/15 오너 결정). 클립 버킷의 수명 규칙(올린 뒤 2일)이 객체를 지우고, API는 ready_at에서 2일이 지났거나
+-- 버킷에 없으면(404) 만료로 보고 장면을 자르지 않는다.
 -- 지우기: 동의 세대가 오르거나(누구든 철회) 여행 줄이 지워지면 아래 트리거가 같은 트랜잭션에서 키를 clip_trash에 적고
 -- 줄을 지운다 — 어느 판의 서버가 세대를 올리든 지워지게(옛 이미지도 clip_trash는 비운다). 버킷은 커밋 뒤에 비운다.
 BEGIN;
@@ -25,6 +27,7 @@ CREATE TABLE IF NOT EXISTS trip_audio (
   sha256 text,
   part_count int,
   ready_at timestamptz,
+  expired_at timestamptz,                    -- 버킷에서 사라진 것을 본 때(수명 규칙 2일). ready_at에서 2일이 지나도 만료로 본다
   deleted_at timestamptz,
   updated_at timestamptz NOT NULL DEFAULT now()
 );

@@ -26,6 +26,9 @@ const PART_NUMBER = /^(0|[1-9][0-9]{0,3})$/; // n: 0~9999
 const CHUNK = 8 * 1024 * 1024; // 합칠 때 멀티파트 한 조각(S3는 마지막 빼고 5 MiB 이상)
 const LEASE_MINUTES = 10; // 합치는 동안 다른 완료를 받지 않는 시간. 8시간 음성도 넉넉히 끝나는 값
 const SCENES_PER_CALL = 20;
+// 보관(11/15 오너 결정 '2일 뒤 만료'): 다 올린 뒤 2일. 지우는 것은 클립 버킷의 수명 규칙(올린 뒤 2일)이고, API는 그때부터 만료로 본다.
+export const AUDIO_KEEP_MS = 2 * 86_400_000;
+const KEEP = "interval '2 days'";
 // ponytail: 파드마다 동시에 받는 조각과 합치기 수. 메모리는 조각 4 MiB, 합치기 약 16 MiB씩이다.
 const RECEIVING_MAX = 8;
 const ASSEMBLING_MAX = 2;
@@ -73,9 +76,12 @@ function overlap(span, audio) {
 // 상태 응답. 계약(최종 개편 계획 A4)의 칸에 generation·startedAt·partNumbers·previous·deleted를 더했다.
 function view(r, parts = []) {
   if (!r || r.deleted_at) return { state: "none", receivedParts: 0, receivedBytes: 0, progress: 0, ...(r?.deleted_at ? { deleted: true } : {}) };
-  const ready = r.object_key ? { bytes: Number(r.bytes), seconds: r.seconds, startedAt: Number(r.started_at) } : null;
+  // 만료(r.expired): 다 올린 뒤 2일이 지났거나 버킷에서 사라짐. 장면을 자르지 않는다(차가 올린 장면 클립은 그대로)
+  const ready = r.object_key && !r.expired ? { bytes: Number(r.bytes), seconds: r.seconds, startedAt: Number(r.started_at), expiresAt: new Date(r.ready_at).getTime() + AUDIO_KEEP_MS } : null;
+  if (!r.upload_id && r.object_key && r.expired)
+    return { state: "expired", generation: r.generation, receivedParts: r.part_count, receivedBytes: Number(r.bytes), expectedBytes: Number(r.bytes), seconds: r.seconds, startedAt: Number(r.started_at), progress: 1, expiresAt: new Date(r.ready_at).getTime() + AUDIO_KEEP_MS };
   if (!r.upload_id)
-    return { state: "ready", generation: r.generation, receivedParts: r.part_count, receivedBytes: ready.bytes, expectedBytes: ready.bytes, seconds: ready.seconds, startedAt: ready.startedAt, progress: 1 };
+    return { state: "ready", generation: r.generation, receivedParts: r.part_count, receivedBytes: ready.bytes, expectedBytes: ready.bytes, seconds: ready.seconds, startedAt: ready.startedAt, progress: 1, expiresAt: ready.expiresAt };
   const receivedBytes = parts.reduce((sum, p) => sum + p.bytes, 0);
   const expected = r.expected_bytes == null ? null : Number(r.expected_bytes);
   return {
@@ -99,7 +105,8 @@ export function tripAudio({ withTrip, participantOf, sweepClips, queueRetranscri
   const store = () => audioStore() ?? fail(503, "클립 저장소가 없음"); // CLIPS_BUCKET이 없는 환경(로컬·E2E)
   // leased: 합치는 중(시각은 DB의 시계로 잰다 — 파드마다 시계가 조금씩 달라도 같게)
   const rowOf = async (client, code) =>
-    (await client.query("SELECT *, COALESCE(assembling_until > now(), false) AS leased FROM trip_audio WHERE trip_code = $1", [code])).rows[0] ?? null;
+    (await client.query(`SELECT *, COALESCE(assembling_until > now(), false) AS leased,
+       (object_key IS NOT NULL AND (expired_at IS NOT NULL OR ready_at < now() - ${KEEP})) AS expired FROM trip_audio WHERE trip_code = $1`, [code])).rows[0] ?? null;
   const partsOf = async (client, code, uploadId) =>
     (await client.query("SELECT n, bytes, object_key FROM trip_audio_parts WHERE trip_code = $1 AND upload_id = $2 ORDER BY n", [code, uploadId])).rows;
   const trashIn = (client, keys) => client.query("INSERT INTO clip_trash (object_key) SELECT unnest($1::text[]) ON CONFLICT DO NOTHING", [keys]);
@@ -286,7 +293,10 @@ export function tripAudio({ withTrip, participantOf, sweepClips, queueRetranscri
       const sha = typeof b.sha256 === "string" && /^[0-9a-fA-F]{64}$/.test(b.sha256) ? b.sha256.toLowerCase() : fail(400, "sha256: 16진수 64자");
       const startedAtBody = b.startedAt === undefined ? null : intOf(b.startedAt, trip.createdAt - 60_000, Date.now() + 60_000, "startedAt");
       if (!r?.upload_id) {
-        if (r?.object_key && r.sha256 === sha) return { done: r }; // 완료 응답을 못 받고 다시 부름(멱등)
+        if (r?.object_key && r.sha256 === sha) {
+          if (r.expired) fail(409, "이미 다 올렸고 보관 기간(2일)이 지나 지워졌음"); // 차는 버린다
+          return { done: r }; // 완료 응답을 못 받고 다시 부름(멱등)
+        }
         fail(409, "올리는 중인 전체 음성이 없음 — start부터 다시 올려 주세요");
       }
       if (leased(r)) fail(429, "합치는 중 — 잠시 뒤 상태를 확인해 주세요");
@@ -340,7 +350,7 @@ export function tripAudio({ withTrip, participantOf, sweepClips, queueRetranscri
         const seconds = Math.round(plan.total / BYTES_PER_MS) / 1000;
         await client.query(
           `UPDATE trip_audio SET upload_id = NULL, expected_bytes = NULL, upload_seconds = NULL, upload_started_at = NULL, assembling_until = NULL,
-             object_key = $2, bytes = $3, seconds = $4, started_at = $5, sha256 = $6, part_count = $7, participant_id = $8, ready_at = now(), updated_at = now()
+             object_key = $2, bytes = $3, seconds = $4, started_at = $5, sha256 = $6, part_count = $7, participant_id = $8, ready_at = now(), expired_at = NULL, updated_at = now()
            WHERE trip_code = $1`,
           [trip.code, key, plan.total, seconds, plan.startedAt, plan.sha, plan.count, plan.caller.id]
         );
@@ -380,7 +390,8 @@ export function tripAudio({ withTrip, participantOf, sweepClips, queueRetranscri
 
   // 다 올린 전체 음성(지금 세대). 세대가 오르면 트리거가 줄을 지우므로 남아 있으면 지금 세대다.
   const readyOf = async (client, code) =>
-    (await client.query("SELECT * FROM trip_audio WHERE trip_code = $1 AND object_key IS NOT NULL AND deleted_at IS NULL", [code])).rows[0] ?? null;
+    (await client.query(`SELECT * FROM trip_audio WHERE trip_code = $1 AND object_key IS NOT NULL AND deleted_at IS NULL
+       AND expired_at IS NULL AND ready_at >= now() - ${KEEP}`, [code])).rows[0] ?? null;
 
   // 차의 클립이 없는 장면을 전체 음성에서 잘라 클립 줄로 남긴다. 녹음에 동의한 참가자가 들으려 할 때(GET /recordings/:id)와
   // 숏폼 구성을 읽을 때(GET /shortform)만 돈다. 클립 줄이 이미 있으면(차가 올림, 사람이 지운 표시) 건드리지 않는다.
@@ -417,7 +428,12 @@ export function tripAudio({ withTrip, participantOf, sweepClips, queueRetranscri
       // 시각은 정수 밀리초라 표본(1 ms = 16)과 바이트(32)에 딱 맞는다
       const start = (span.from - startedAt) * BYTES_PER_MS;
       const pcm = await s3.range(plan.audio.object_key, start, Math.min(Number(plan.audio.bytes), (span.to - startedAt) * BYTES_PER_MS));
-      if (!pcm?.length) return; // 버킷에서 사라짐(수명 규칙) — 클립 경로가 404
+      if (!pcm?.length) {
+        // 버킷에서 사라짐(수명 규칙 2일): 만료로 적고 자르기를 멈춘다. 클립 경로는 차가 올린 클립이 있으면 그것을, 없으면 404
+        await tripsDb().query("UPDATE trip_audio SET expired_at = now() WHERE trip_code = $1 AND object_key = $2 AND expired_at IS NULL", [plan.tripCode, plan.audio.object_key]);
+        log("info", "trip_audio_expired", {});
+        return;
+      }
       const key = `${plan.tripCode}/${id}-${randomUUID().slice(0, 8)}.wav`;
       const wav = Buffer.concat([wavHead(pcm.length), pcm]);
       const seconds = Math.round(pcm.length / BYTES_PER_MS) / 1000;
