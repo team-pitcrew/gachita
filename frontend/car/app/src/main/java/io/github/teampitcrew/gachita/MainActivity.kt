@@ -36,6 +36,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -58,6 +59,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -337,7 +339,7 @@ class MainActivity : ComponentActivity() {
         if (savedInstanceState == null) gleo(intent) // 다시 만들어진 화면이 지난 호출에 또 답하지 않게
         setContent {
             GachitaTheme {
-                // ponytail: 에뮬레이터는 창을 나누지 않아 반쪽 창을 --ei widthDp 841로 흉내 낸다. 실제 분할 창 확인은 실차에서
+                // ponytail: --ei widthDp 841은 창을 나누지 않고 반쪽 너비만 흉내 낸다(e2e.py). 실제 반쪽 창은 Pleos 창 바(⋮)로 나눈다(README)
                 val w = if (debug) intent.getIntExtra("widthDp", 0) else 0
                 Surface(if (w > 0) Modifier.fillMaxHeight().width(w.dp) else Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     val t = s.trip
@@ -1373,7 +1375,10 @@ class MainActivity : ComponentActivity() {
         val c = MaterialTheme.colorScheme
         Column(Modifier.fillMaxSize().padding(32.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
             AppBar(TITLE, listening = false, *pills(online = null))
-            OutlinedButton(onClick = { destination = Destination.SHORTS }, shape = RoundedCornerShape(10.dp)) { Text("저장한 쇼츠", fontSize = 24.sp) }
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                OutlinedButton(onClick = { destination = Destination.SHORTS }, shape = RoundedCornerShape(10.dp)) { Text("저장한 쇼츠", fontSize = 24.sp) }
+                WindowSize()
+            }
             Spacer(Modifier.height(8.dp))
             Text("누구랑 같이 타나요?", fontSize = 40.sp, fontWeight = FontWeight.Bold)
             Text("같이 타는 가족을 골라 주세요", color = c.onSurfaceVariant)
@@ -1389,6 +1394,25 @@ class MainActivity : ComponentActivity() {
                 Text(if (s.busy) "여행을 만들고 있어요" else "${picked.size}명으로 여행 만들기", fontSize = 30.sp, fontWeight = FontWeight.Bold)
             }
         }
+    }
+
+    /**
+     * 창 크기 단추(T112). 창의 자리와 크기는 Pleos가 정하고 운전자가 창 바(⋮)로 바꾼다. 앱은 바꾸지 못한다
+     * (11/14 에뮬레이터: 방향 요청은 레터박스, setLaunchBounds·FLAG_ACTIVITY_LAUNCH_ADJACENT는 무시). 그래서 누르면 창 바 쓰는 법을 알린다.
+     * 반쪽 창(1000dp 미만)은 '전체화면', 넓은 창은 '반쪽 창'. 토스트는 Pleos가 띄우지 않아 대화 상자로 보인다. 주행 중에는 숨긴다.
+     */
+    @Composable
+    private fun WindowSize() {
+        if (carStatus.restricted) return
+        val wide = LocalConfiguration.current.screenWidthDp >= 1000
+        var open by remember { mutableStateOf(false) }
+        OutlinedButton({ open = true }, shape = RoundedCornerShape(10.dp)) { Text(if (wide) "반쪽 창" else "전체화면", fontSize = 24.sp, maxLines = 1) }
+        if (open) AlertDialog({ open = false }, confirmButton = { TextButton({ open = false }) { Text("확인", fontSize = 24.sp) } },
+            title = { Text(if (wide) "내비 옆 반쪽 창으로 보기" else "전체화면으로 보기", fontSize = 28.sp, fontWeight = FontWeight.Bold) },
+            text = { // 대화 상자 본문 기본 줄 높이(20sp)는 24sp 글자에 겹친다
+                Text(if (wide) "오른쪽 끝 ⋮를 왼쪽으로 끌면 화면이 둘로 나뉘어요. 가운데 ⋮를 누르면 내비가 왼쪽, 가치타가 오른쪽으로 바뀌어요."
+                    else "가운데 ⋮를 왼쪽 끝까지 끌면 가치타가 넓어져요. 창의 자리와 크기는 차량 화면이 정해서 앱이 바꿀 수 없어요.", fontSize = 24.sp, lineHeight = 34.sp)
+            })
     }
 
     /** 가족 한 사람(C6). 누르면 같이 탐·안 탐을 바꾼다(체크 상태라 화면 트리에 checked로 보인다). */
@@ -1453,6 +1477,7 @@ class MainActivity : ComponentActivity() {
                 }
                 Pill(if (parked) "주차 중" else "주행 중")
                 Pill(if (s.online) "서버 연결됨" else "연결 대기", ok = s.online)
+                WindowSize()
             }
             Row(Modifier.fillMaxWidth().height(68.dp).clip(RoundedCornerShape(12.dp)).background(c.surfaceVariant).padding(5.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 Destination.entries.forEach { tab ->
