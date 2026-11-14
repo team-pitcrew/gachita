@@ -115,13 +115,14 @@ class Injector:
         subprocess.run([sys.executable, "-m", "grpc_tools.protoc", "-I" + str(PROTO.parent), "-I" + str(pathlib.Path(grpc_tools.__file__).parent / "_proto"),
                         "--python_out=" + tmp, "--grpc_python_out=" + tmp, str(PROTO)], check=True, capture_output=True)
         sys.path.insert(0, tmp); self.pb = importlib.import_module("emulator_controller_pb2"); svc = importlib.import_module("emulator_controller_pb2_grpc")
+        grpc_port = os.environ.get("GACHITA_GRPC_PORT", "8556")
         found = []
         for ini in (pathlib.Path.home() / "Library/Caches/TemporaryItems/avd/running").glob("pid_*.ini"):
             kv = dict(l.split("=", 1) for l in ini.read_text().splitlines() if "=" in l)
-            if kv.get("grpc.port") == "8556" and kv.get("grpc.token"): found.append(kv["grpc.token"])
-        if len(found) != 1: raise SystemExit(f"gRPC 8556과 토큰으로 켠 에뮬레이터가 하나여야 합니다(찾은 수 {len(found)})")
+            if kv.get("grpc.port") == grpc_port and kv.get("grpc.token"): found.append(kv["grpc.token"])
+        if len(found) != 1: raise SystemExit(f"gRPC {grpc_port}과 토큰으로 켠 에뮬레이터가 하나여야 합니다(찾은 수 {len(found)})")
         self.md = [("authorization", "Bearer " + found[0])]
-        self.stub = svc.EmulatorControllerStub(grpc.insecure_channel("127.0.0.1:8556")); self.grpc = grpc
+        self.stub = svc.EmulatorControllerStub(grpc.insecure_channel("127.0.0.1:" + grpc_port)); self.grpc = grpc
         if self.stub.getMicrophoneState(Empty(), metadata=self.md, timeout=5).realAudioEnabled:
             self.stub.setMicrophoneState(self.pb.MicrophoneState(realAudioEnabled=False), metadata=self.md, timeout=5)
         if self.stub.getMicrophoneState(Empty(), metadata=self.md, timeout=5).realAudioEnabled: raise SystemExit("호스트 마이크가 켜져 있어 멈춥니다")

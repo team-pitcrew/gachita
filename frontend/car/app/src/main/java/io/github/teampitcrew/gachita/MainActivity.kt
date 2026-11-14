@@ -146,7 +146,6 @@ class MainActivity : ComponentActivity() {
     private var destination by mutableStateOf(Destination.RIDE)
     private var managing by mutableStateOf(false)
     private var conversationOpen by mutableStateOf(false)
-    private var navigationNote by mutableStateOf("")
     private data class ContentScope(val code: String, val generation: Int, val token: String)
     private var transcriptOf: ContentScope? = null
     private var transcript by mutableStateOf(emptyList<TranscriptLine>())
@@ -849,6 +848,10 @@ class MainActivity : ComponentActivity() {
     /** 읽은 QR의 사람을 고른 자리에 넣는다. 자리 충돌은 QR을 쓰지 않으므로 다른 자리로 다시 고를 수 있다. 동의는 그 사람의 폰에서만 켠다. */
     private fun seatRider(seat: Seat) {
         val t = s.trip ?: return
+        if (seat !in freeSeats(t, carStatus.seats)) {
+            rideNote = "차에서 확인한 빈자리를 다시 골라 주세요"
+            return
+        }
         val qr = rideQr
         val code = qr?.let(::rideCode) ?: return
         val url = server
@@ -1240,7 +1243,7 @@ class MainActivity : ComponentActivity() {
                     Text(t.title.takeUnless { it.isBlank() || it == "가치타" } ?: "함께하는 여행", fontSize = 22.sp, color = c.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 Pill(if (parked) "주차 중" else "주행 중")
-                if (!s.online) Pill("연결 대기", ok = false)
+                Pill(if (s.online) "서버 연결됨" else "연결 대기", ok = s.online)
             }
             Row(Modifier.fillMaxWidth().height(68.dp).clip(RoundedCornerShape(22.dp)).background(c.surfaceVariant).padding(5.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 Destination.entries.forEach { tab ->
@@ -1305,8 +1308,8 @@ class MainActivity : ComponentActivity() {
                 if (!carStatus.restricted) Text("여행 관리", Modifier.clickable { managing = true }.padding(horizontal = 12.dp, vertical = 8.dp), color = c.primary, fontSize = 24.sp)
             }
             if (!carStatus.restricted) Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                FilledTonalButton(::scan, Modifier.weight(1f).height(64.dp), enabled = freeSeats(t).isNotEmpty(), colors = ButtonDefaults.filledTonalButtonColors(containerColor = c.primaryContainer, contentColor = c.onPrimaryContainer)) { Text("동승자 연결") }
-                OutlinedButton({ navigationNote = requestNavigationAlongside(this@MainActivity).message }, Modifier.weight(1f).height(64.dp)) { Text("기본 내비 열기") }
+                FilledTonalButton(::scan, Modifier.weight(1f).height(64.dp), enabled = freeSeats(t, carStatus.seats).isNotEmpty(), colors = ButtonDefaults.filledTonalButtonColors(containerColor = c.primaryContainer, contentColor = c.onPrimaryContainer)) { Text("동승자 연결") }
+                OutlinedButton({ android.widget.Toast.makeText(this@MainActivity, requestNavigationAlongside(this@MainActivity).message, android.widget.Toast.LENGTH_LONG).show() }, Modifier.weight(1f).height(64.dp)) { Text("기본 내비 열기") }
             }
         }
     }
@@ -1484,7 +1487,7 @@ class MainActivity : ComponentActivity() {
             Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(st.big, fontSize = 32.sp, fontWeight = FontWeight.Bold, color = st.bigColor, maxLines = 1)
-                    Text(navigationNote.ifEmpty { st.sub }, fontSize = 24.sp, color = if (st.strong) c.onSurface else c.onSurfaceVariant, fontWeight = if (st.strong) FontWeight.Bold else null, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(st.sub, fontSize = 24.sp, color = if (st.strong) c.onSurface else c.onSurfaceVariant, fontWeight = if (st.strong) FontWeight.Bold else null, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 if (s.recording && muted) Button({ mute(false); syncCapture() }, Modifier.heightIn(min = 72.dp)) { Text("다시 기록", fontSize = 26.sp) }
             }
@@ -1506,7 +1509,7 @@ class MainActivity : ComponentActivity() {
 
     /**
      * 일행 자리 지도. 칸은 차가 알려 준 좌석(CarStatus.seats)에서 만든다. 이름 아래에는 동의만 적는다.
-     * compact(좁은 창 주행 중): 캐릭터를 줄이고 동의 줄을 빼서 부탁 수와 기록 동의가 한 화면에 들어오게 한다. fill이면 남은 높이 가운데에 둔다.
+     * compact(좁은 창 주행 중): 캐릭터를 줄이되 동의 상태는 유지한다. fill이면 남은 높이 가운데에 둔다.
      */
     @Composable
     private fun People(t: Trip, modifier: Modifier = Modifier, compact: Boolean = false, fill: Boolean = false) {
@@ -1523,7 +1526,7 @@ class MainActivity : ComponentActivity() {
             val map = @Composable {
                 SeatMap(
                     t.people, last?.seatZone, highlight = last?.let { u -> speakers?.takeIf { it.trip == t.code }?.get(u.seq)?.who }, compact = compact, size = if (compact) 48.dp else if (fill) 96.dp else 80.dp, car = carStatus,
-                    note = if (compact) null else { p -> if (p.consent) "동의" to c.tertiary else if (s.waitsFor(p)) "동의 대기" to c.secondary else "동의 전" to c.onSurfaceVariant },
+                    note = { p -> if (p.consent) "동의" to c.tertiary else if (s.waitsFor(p)) "동의 대기" to c.secondary else "동의 전" to c.onSurfaceVariant },
                 )
             }
             if (fill) Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) { map() } else map()
@@ -1693,7 +1696,7 @@ class MainActivity : ComponentActivity() {
                 Text("어느 자리에 앉았나요?", fontSize = 30.sp, fontWeight = FontWeight.Bold)
                 Text("빈자리를 눌러 주세요 · 기록 동의는 그 사람이 폰에서 직접 켜요", color = c.onSurfaceVariant)
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    freeSeats(t).forEach { seat -> Button({ seatRider(seat) }, Modifier.heightIn(min = 88.dp), enabled = rideNote != "연결하고 있어요") { Text(seat.label, fontSize = 28.sp) } }
+                    freeSeats(t, carStatus.seats).forEach { seat -> Button({ seatRider(seat) }, Modifier.heightIn(min = 88.dp), enabled = rideNote != "연결하고 있어요") { Text(seat.label, fontSize = 28.sp) } }
                 }
                 Spacer(Modifier.weight(1f))
                 OutlinedButton({ rideQr = null; rideNote = "" }, Modifier.fillMaxWidth().height(72.dp)) { Text("취소") }

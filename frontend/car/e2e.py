@@ -10,10 +10,11 @@
 """
 import hashlib, json, os, pathlib, re, subprocess, sys, threading, time, urllib.request
 
-ADB = [str(pathlib.Path.home() / "Library/Android/sdk/platform-tools/adb"), "-s", "emulator-5554"]
+ADB = [str(pathlib.Path.home() / "Library/Android/sdk/platform-tools/adb"), "-s", os.environ.get("ANDROID_SERIAL", "emulator-5554")]
 PKG = "io.github.teampitcrew.gachita"
 PORT = int(os.environ.get("GACHITA_PORT", "8787"))
 API = f"http://localhost:{PORT}"
+VC = os.environ.get("GACHITA_VC_URL", "http://127.0.0.1:8088")
 OUT = pathlib.Path(sys.argv[2] if len(sys.argv) > 2 else ".")
 log = []
 
@@ -25,6 +26,15 @@ def note(step, **kw):
 
 def adb(*a):
     return subprocess.run(ADB + list(a), capture_output=True, text=True).stdout
+
+
+def trip_code():
+    """새로 비운 디버그 앱의 파일 이름에서 식별자만 읽는다. 암호화된 기록·토큰은 읽지 않는다."""
+    files = adb("shell", "run-as", PKG, "--user", "10", "ls", "files")
+    codes = set(re.findall(r"(?:speakers|utterances)-([A-Z0-9]{6})\.", files))
+    if len(codes) != 1:
+        raise RuntimeError(f"새 시험 여행을 하나로 식별할 수 없음: {len(codes)}개")
+    return codes.pop()
 
 
 def shot(name):
@@ -84,14 +94,14 @@ def tap_switch():
 def heartbeat():
     """Virtual Console은 브라우저 세션이 1초마다 살아 있다고 알려야 차량 값을 바꾼다."""
     while True:
-        try: urllib.request.urlopen(urllib.request.Request("http://127.0.0.1:8088/browser/session?client=gachita-car-e2e", method="POST"), timeout=2).read()
+        try: urllib.request.urlopen(urllib.request.Request(f"{VC}/browser/session?client=gachita-car-e2e", method="POST"), timeout=2).read()
         except Exception: pass
         time.sleep(1)
 
 
 def gear(v):
     """Virtual Console로 기어를 바꾼다(Park, Drive). 콘솔 세션이 꺼져 있으면 200이어도 안 바뀌므로 앱 화면의 기어 글자로 확인한다."""
-    with urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:8088/vehicle/gear?gear={v}", method="PUT"), timeout=10) as r:
+    with urllib.request.urlopen(urllib.request.Request(f"{VC}/vehicle/gear?gear={v}", method="PUT"), timeout=10) as r:
         note("gear", to=v, vc=r.status)
     time.sleep(2)
 
@@ -178,11 +188,11 @@ def main(apk):
     gear("Park"); time.sleep(1); ui = texts()
     check("기어 P로 돌아오면 여행 만들기가 다시 보임", making(ui))
     tap_make(); time.sleep(4)
-    ui = texts(); code = next((t.split()[-1] for t in ui if t.startswith("여행 코드")), None)
+    ui = texts(); code = trip_code()
     shot("02-trip-consent-off"); note("ui", texts=ui)
     t = server(code)
     check("서버에 여행과 가족 4명, 동의는 모두 꺼짐", len(t["participants"]) == 4 and not any(p["consent"] for p in t["participants"]))
-    check("기록 꺼짐 화면과 기어 P", "기록 꺼짐" in ui and any(u.startswith("기어 P") for u in ui))
+    check("기록 꺼짐 화면과 기어 P", "기록 꺼짐" in ui and "주차 중" in ui)
     # 폰으로 한 명이 더 들어온다(T68). 차는 이 사람의 토큰이 없어 동의를 켜지 못한다
     phone = phone_join(code); time.sleep(12)
     ui = texts(); note("ui", texts=ui)
@@ -217,7 +227,7 @@ def main(apk):
     # 통신 끊김: 서버를 내리고 다음 조회(10초)를 기다린다
     stop_server(); time.sleep(12)
     shot("08-offline-last-state"); ui = texts(); note("ui", texts=ui)
-    check("끊겨도 마지막 여행과 기록 중을 보여 줌", "연결이 끊겼어요 · 마지막으로 확인한 정보예요" in ui and "● 기록 중" in ui and "일행 5명" in ui)
+    check("끊겨도 마지막 여행과 기록 중을 보여 줌", "연결 대기" in ui and "● 기록 중" in ui and "일행 5명" in ui)
     tap_switch(); time.sleep(0.5)
     shot("09-off-while-offline"); ui = texts(); note("ui", texts=ui)
     check("끊긴 채로 끄면 바로 멈춤", "기록 꺼짐" in ui and "● 기록 중" not in ui)
@@ -225,15 +235,16 @@ def main(apk):
     adb("shell", "am", "force-stop", "--user", "10", PKG)
     adb("shell", "am", "start", "--user", "10", "-n", f"{PKG}/.MainActivity"); time.sleep(5)
     shot("10-restart-offline-still-off"); ui = texts(); note("ui", texts=ui)
-    check("앱을 다시 켜도 멈춘 채", "기록 꺼짐" in ui and "● 기록 중" not in ui and "연결이 끊겼어요 · 마지막으로 확인한 정보예요" in ui)
+    check("앱을 다시 켜도 멈춘 채", "기록 꺼짐" in ui and "● 기록 중" not in ui and "연결 대기" in ui)
     start_server(); time.sleep(12)
     t = server(code)
     check("서버가 돌아오면 끄기가 서버에 반영됨", not any(p["consent"] for p in t["participants"]))
     shot("11-synced"); ui = texts(); note("ui", texts=ui)
-    check("다시 연결됨, 앱을 다시 켠 뒤에도 P에서 주행 제한이 풀림", "서버 연결됨" in ui and "기록 꺼짐" in ui and "새 여행 만들기" in ui)
+    check("다시 연결됨, 앱을 다시 켠 뒤에도 P에서 주행 제한이 풀림", "서버 연결됨" in ui and "기록 꺼짐" in ui and "여행 관리" in ui and switch_enabled())
     # 반쪽 창(약 841): 에뮬레이터가 창을 나누지 않아 앱 안에서 폭을 줄여 그린다(디버그 빌드)
     adb("shell", "am", "start", "--user", "10", "-S", "-n", f"{PKG}/.MainActivity", "--ei", "widthDp", "841")
     time.sleep(4); shot("12-half-width-841"); ui = texts(); note("ui", texts=ui)
+    check("반쪽 폭에서 뒷줄 이름과 5명의 동의 상태가 잘리지 않음", all(n in ui for n in ("아빠", "엄마", "서준", "하은", "이모")) and ui.count("동의 전") == 4 and "동의 대기" in ui)
     check("반쪽 폭에서도 기록 상태·일행·부탁·동의가 보임", all(any(x in u for u in ui) for x in ("기록 꺼짐", "일행 5명", "보관한 부탁", "대화 기록 동의")))
     (OUT / "results.json").write_text(json.dumps({"code": code, "log": log}, ensure_ascii=False, indent=1))
     fails = [e["name"] for e in log if e["step"] == "check" and not e["ok"]]
