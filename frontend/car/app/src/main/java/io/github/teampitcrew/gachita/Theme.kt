@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -171,38 +170,5 @@ fun Pill(text: String, ok: Boolean = true) {
     Row(Modifier.clip(CircleShape).background(bg).padding(horizontal = 20.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         Canvas(Modifier.size(12.dp)) { drawCircle(fg) }
         Text(text, color = fg, maxLines = 1)
-    }
-}
-
-@Composable
-fun SeatMap(
-    people: List<Person>, zone: Int?, highlight: String? = null, size: Dp = 80.dp, car: CarStatus = CarStatus(),
-    note: ((Person) -> Pair<String, Color>)?, compact: Boolean = false,
-) {
-    val c = MaterialTheme.colorScheme
-    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(40.dp)).background(c.surfaceVariant).padding(if (compact) 8.dp else 16.dp), verticalArrangement = Arrangement.spacedBy(if (compact) 4.dp else 8.dp)) {
-        for ((row, seats) in seatRows(car.seats).withIndex()) {
-            Row(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(28.dp)).then(if (zone == row) Modifier.background(c.primaryContainer).border(3.dp, c.onPrimaryContainer, RoundedCornerShape(28.dp)) else Modifier).padding(vertical = if (compact) 6.dp else 12.dp),
-                horizontalArrangement = Arrangement.SpaceEvenly,
-            ) {
-                for (seat in seats) {
-                    val p = people.firstOrNull { it.seat == seat.name }
-                    Column(if (compact) Modifier.weight(1f) else Modifier.width(size + 40.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(if (compact) 4.dp else 6.dp)) {
-                        val label = p?.name ?: if (seat.name in car.occupied) "앉아 있어요" else "빈자리"
-                        if (compact) {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                if (p == null) EmptySeat(36.dp) else Character(seat.ordinal, 36.dp, ring = p.id == highlight)
-                                Text(label, fontWeight = if (p != null) FontWeight.Bold else null, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            }
-                        } else {
-                            if (p == null) EmptySeat(size) else Character(seat.ordinal, size, ring = p.id == highlight)
-                            Text(label, fontWeight = if (p != null) FontWeight.Bold else null, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        }
-                        if (p != null) note?.invoke(p)?.let { (text, color) -> Text(text, color = color, maxLines = 1, overflow = TextOverflow.Ellipsis) }
-                    }
-                }
-            }
-        }
     }
 }
