@@ -19,6 +19,7 @@ import org.junit.Test
 class ArrivalBriefTest {
     private val people = F4Mock.people
     private fun List<BriefRow>.noId() = map { it.copy(id = "") }
+    private fun kind(c: BriefCard) = when (c) { is BriefCard.First -> "first"; is BriefCard.Buy -> "buy"; is BriefCard.Task -> "task" }
 
     @Test fun demoNotesReplaceTheRequesterLineOnlyWhenGiven() {
         val rows = briefRows(F4Mock.lodge, people)
@@ -48,8 +49,17 @@ class ArrivalBriefTest {
         assertEquals(listOf(BriefRow(RESTROOM, "화장실 먼저 다녀오기", "하은이 요청", "")), rows.first)
         assertEquals(listOf(BriefRow(MEAT, "삼겹살", "엄마 요청", "600g"), BriefRow(FRUIT, "귤", "엄마 요청", "1봉지"),
             BriefRow(SNACK, "젤리", "서준이 요청", "1봉지"), BriefRow(DRINK, "탄산수", "아빠 요청", "2병")), rows.buy)
-        assertEquals("계속", arrivalButton(false)) // C20·D19 단추
-        assertEquals("먼저 할 일과 살 것을 모았어요", arrivalSub(false))
+        assertEquals("계속", ARRIVAL_BUTTON) // C20·D19 단추
+        assertEquals("먼저 할 일과 살 것을 모았어요", ARRIVAL_SUB)
+    }
+
+    @Test fun waypointCardsFollowC20() { // C20 2005:3369: 먼저 할 일 · 잊지 말고 살 것(한 칸) · 쓰레기 정리
+        val cards = briefRows(F4Mock.mart, people).cards()
+        assertEquals(listOf("first", "buy", "task"), cards.map(::kind))
+        assertEquals(listOf("화장실 먼저 다녀오기"), (cards[0] as BriefCard.First).rows.map { it.name })
+        assertEquals(listOf("삼겹살", "귤", "젤리", "탄산수"), (cards[1] as BriefCard.Buy).rows.map { it.name })
+        assertEquals(BriefRow(TRASH, "쓰레기 정리하기", "빈 병과 과자 봉지 챙겨 분리배출", ""), (cards.last() as BriefCard.Task).row)
+        assertEquals(listOf("task"), briefRows(emptyList(), people).cards().map(::kind)) // 할 일이 없어도 쓰레기 정리 카드는 있다
     }
 
     @Test fun finalDestinationHasFirstRememberBring() {
@@ -57,8 +67,14 @@ class ArrivalBriefTest {
         assertEquals(listOf("화장실 먼저 다녀오기"), rows.first.map { it.name })
         assertEquals(listOf(BriefRow(COLD, "고기는 바로 냉장 보관", "엄마 요청", "")), rows.remember)
         assertEquals(listOf(BriefRow(LUGGAGE, "체크인하고 가방 내리기", "아빠 요청", "")), rows.bring)
-        assertEquals("여행 마치고 기록 보기", arrivalButton(true))
-        assertEquals("내리기 전, 할 일과 챙길 것", arrivalSub(true)) // finalBrief 2043:1890
+    }
+
+    @Test fun finalDestinationIsDrawnAsC20() { // C 프레임이 없으니 C20 모양: 잊지 말기·챙길 것 칸 대신 할 일마다 한 카드, 단추 '계속'
+        val cards = briefRows(F4Mock.lodge, people).withDetails(F4Mock.lodgeDetails).cards()
+        assertEquals(listOf("first", "task", "task", "task"), cards.map(::kind))
+        assertEquals(listOf("고기는 바로 냉장 보관" to "엄마가 부탁한 장본 짐 정리", "체크인하고 가방 내리기" to "예약자 민준 / 트렁크의 가족 가방", "쓰레기 정리하기" to "빈 병과 과자 봉지 챙겨 분리배출"),
+            cards.drop(1).map { (it as BriefCard.Task).row.let { r -> r.name to r.who } })
+        assertEquals(listOf(COLD, LUGGAGE, TRASH), cards.drop(1).map { (it as BriefCard.Task).row.icon })
     }
 
     @Test fun olderServerAskIsOneRememberRow() {
