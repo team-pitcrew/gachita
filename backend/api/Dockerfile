@@ -12,6 +12,7 @@ COPY backend/api/trip-audio.js backend/api/
 COPY backend/api/rest-stops.js backend/api/rest-stops.json backend/api/
 COPY backend/api/providers backend/api/providers
 COPY backend/api/boarding-invites.js backend/api/
+COPY backend/api/accounts.js backend/api/
 COPY frontend/web frontend/web
 USER node
 EXPOSE 8787
