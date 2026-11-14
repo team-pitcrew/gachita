@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- C14 '가족 좌석 바꾸기' 제목줄의 뒤로 글리프(원본 Figma Y7zFqGUEAFDWTumG30MsOs 2131:6243, 21×32, get_design_context 에셋 그대로) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="21dp" android:height="32dp" android:viewportWidth="21" android:viewportHeight="32">
+    <path android:fillColor="#F4F1EC"
+        android:pathData="M20.4378 0.471778C21.1874 1.10081 21.1874 2.12525 20.4378 2.77225L4.65298 16L20.4378 29.2277C21.1874 29.8568 21.1874 30.8812 20.4378 31.5282C19.6668 32.1573 18.4674 32.1573 17.6963 31.5282L0.562213 17.1502C-0.187404 16.5032 -0.187404 15.4788 0.562213 14.8498L17.6963 0.471778C18.4674 -0.157259 19.6668 -0.157259 20.4378 0.471778Z" />
+</vector>
