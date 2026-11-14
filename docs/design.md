@@ -4,11 +4,16 @@
 
 이 문서의 원칙·캐릭터·색은 11/14 03시 지환님이 정한 '디자인 1급 문서'(저장소 밖 작업 공간, 시안·웹·차가 따르는 기준)를 저장소에 옮긴 것입니다. 원본 캐릭터 시트는 저장소에 넣지 않고 앱이 쓰는 캐릭터별 그림만 넣습니다.
 
+**11/15부터 화면 기준은 [민준 개선안](design-screens.md)입니다.** 색·모서리·글자 단계는 그 시안의 Figma 변수 모음 '가치타 2 / 토큰'(밝은·어두운 두 모드)과 글자 스타일(`Car/…`·`Phone/…`)을 따르고, 아래 3·4절이 그 값과 코드 이름을 한 표로 잇습니다. 값은 11/15 02:55 KST 복제본에서 읽었고, 04시 무렵부터는 Figma MCP가 원본을 바로 읽습니다(읽기만).
+
 ## 1. 원칙
 
-- **먹선과 파스텔.** 테두리 없는 흰 카드 위에 먹색 글자, 강조는 파스텔 바탕. 캐릭터가 선 그림이라 카드에는 선을 두르지 않습니다.
-- **한 화면에 한 가지 일.** 주 단추만 상징색, 칩 선택은 먹색, 숫자·진행은 먹색. 이모지와 이름 글자 얼굴은 쓰지 않습니다([한국형 UI 기준](https://github.com/vmc-inner-circle/k-style-ui-ux/blob/68afa2e/plugins/k-style-ui-ux/core/references/principles.md)).
+- **가족의 대화를 기억하고, 도착할 때 필요한 일을 꺼내 줍니다**(시안 '00 읽어보기'). 주행 중에는 기록 상태와 짧은 브리핑만, 가입·편집·콘텐츠 재생은 주차 중에만. 기록 일시정지는 언제든 한 번에.
+- **차는 어둡게, 폰은 밝게.** 시안의 차 화면 146장은 어두운 모드, 폰 화면 58장은 밝은 모드입니다. 차 앱은 늘 어두운 화면이고(#428) 폰은 밝은 화면이 기본입니다(기기가 어두운 모드면 같은 토큰의 어두운 값).
+- **먹선과 파스텔.** 테두리 없는 카드 위에 먹색(어두운 화면에서는 미색) 글자, 강조는 연한 바탕(`-soft`). 캐릭터가 선 그림이라 카드에는 선을 두르지 않습니다.
+- **한 화면에 한 가지 일.** 주 단추만 상징색, 칩 선택은 먹색, 숫자·진행은 먹색. 이름 글자 얼굴과 글자 이모지는 쓰지 않습니다. 단 도착 브리핑의 할 일 그림은 시안 수정본(D19 `2131:6137`)대로 'Briefing / emoji'(Twemoji 컬러 그림, CC-BY 4.0)를 쓰고 출처를 표기합니다(11/15 오너 "맞지 않는 파트 모두 맞춰서 수렴시켜") ([한국형 UI 기준](https://github.com/vmc-inner-circle/k-style-ui-ux/blob/68afa2e/plugins/k-style-ui-ux/core/references/principles.md)).
 - **차 주행 화면은 Pleos 가이드가 먼저.** 글자 24sp 이상(결정할 글자는 32sp), 움직이거나 깜박이는 표시 없음, 말하는 사람은 그 자리 캐릭터에 링 하나([Pleos 주행 안전 가이드](https://document.pleos.ai/docs/pleos-only/vehicle-app-planning-guide/driver-distraction-guideline)). 폰의 골격(하단 고정 단추 등)은 차에 대지 않습니다.
+- **시안이 기준(11/15 오너: "맞지 않는 파트 모두 맞춰서 수렴시켜").** 폰·차 화면은 원본 시안과 레이아웃·글자·색·간격까지 맞춥니다. 시안에 없는 단추·화면은 두지 않고, 남기는 것은 법·동의 고지, 차 주행 안전 규칙, 오너가 따로 넣으라고 한 것(오른쪽 위 프로필)뿐입니다.
 - **말투는 해요체.** 문구는 화면 문서의 '문구' 표 그대로 씁니다.
 
 ## 2. 캐릭터: 원본 '말랑' 10종
@@ -35,63 +40,86 @@
 
 ## 3. 색
 
-**상징색은 민트 #60C090**입니다. 원본 시트의 '여행' 색이고, 차에서 초록은 '정상·듣는 중'으로 읽혀 기록 중 빨강과 확실히 갈립니다. 이전의 바이올렛 #5b47b0은 쓰지 않습니다. 바탕·글자는 [k-style-ui-ux](https://github.com/vmc-inner-circle/k-style-ui-ux)의 토큰 도구(`derive.py --brand "#60C090" --tone warm`)가 만든 따뜻한 미색·먹색입니다.
+**상징색은 민트**입니다(밝은 #60C090, 어두운 #6FD3A6). 원본 시트의 '여행' 색이고, 차에서 초록은 '정상·듣는 중'으로 읽혀 기록 중 빨강과 확실히 갈립니다. 바이올렛 #5b47b0은 쓰지 않습니다. 바탕·글자는 따뜻한 미색·먹색입니다([k-style-ui-ux](https://github.com/vmc-inner-circle/k-style-ui-ux) `derive.py --brand "#60C090" --tone warm`에서 시작해 시안이 그대로 씀).
 
-| 토큰 | 밝은 | 어두운(밤·차) | 쓰는 곳 |
-|---|---|---|---|
-| `bg` | #F6F4F1 | #12110F | 화면 바탕 |
-| `surface` | #FFFFFF | #1C1A17 | 카드 |
-| `surface-2` | #F1EEE9 | #26231F | 묶음, 좌석 지도 |
-| `ink` | #28221B | #F4F1EC | 글자, 그림의 선 |
-| `ink-2` | #5A5044 | #B5ADA2 | 보조 글 |
-| `line` | #EDEAE6 | #34302A | 구분선 |
-| `accent-fill` | #60C090 | #6FD3A6 | 주 단추 바탕 |
-| `on-accent` | #28221B | #12110F | 민트 위 글자 |
-| `accent` | #2B7A53 | #7FDDB2 | 민트 글자·링·테두리 |
-| `accent-soft` | #E4F4EC | #1C3A2D | 고른 것·제안 바탕 |
-| `rec` | #B3261E | #FF8A80 | 기록 중 표시에만 |
-| `ok` | #2B7A53 | #7FDDB2 | 완료·반영(상징색과 같은 뜻: 잘 됐어요) |
-| `warn` | #8C6400 | #F5C766 | 기다림, 기록 잠시 멈춤 |
-| `tint-1`~`5` | #ECEAFB #FCF0D9 #FBE7EE #E4F4EC #E5F0FB | #2A2840 #3A3020 #3A2530 #1E3A2E #1F2F40 | 장면 카드 바탕(사람마다) |
+이름은 시안의 Figma 변수(`color/…`) 기준입니다. 웹은 `frontend/web/style.css`의 CSS 변수, 차는 `Theme.kt`의 Material 역할입니다. **웹의 `--accent`는 시안의 `accent-text`(글자 색)이고, 시안의 `accent`(바탕 색)는 웹에서 `--accent-fill`입니다** — 이름이 엇갈리니 옮길 때 이 표를 봅니다.
 
-- **주 단추는 먹색 글자입니다.** 민트 바탕은 흰 글자와 대비가 2.2:1이라, 밝은 상징색의 예외로 글자를 먹색(`on-accent`, 7.1:1)으로 둡니다. 링·테두리·글자에는 짙은 민트(`accent`, 바탕 위 4.8:1)를 씁니다. 글자 대비는 모두 4.5:1 이상이고 웹은 `contrast.test.mjs`가 검사합니다.
-- **차의 주 단추는 낮과 밤이 다릅니다**(#217). 낮(밝은 화면)에는 짙은 민트(`accent`) 바탕에 흰 글자, 밤(어두운 화면)에는 밝은 민트(`accent-fill`) 바탕에 먹색 글자입니다. 낮에 같은 색을 쓰는 Material 테두리 단추의 글자 대비를 맞추려는 것입니다.
-- **빨강은 기록 중에만.** 막힘·실패는 빨강 글자에 경고 아이콘을 더해 색만으로 전하지 않습니다.
+| 시안 변수 | 밝은(폰) | 어두운(차) | 웹 | 차 | 쓰는 곳 |
+|---|---|---|---|---|---|
+| `bg` | #F6F4F1 | #12110F | `--bg` | `background` | 화면 바탕 |
+| `surface` | #FFFFFF | #1C1A17 | `--surface` | `surface` | 카드 |
+| `surface-2` | #F1EEE9 | #26231F | `--surface-2` | `surfaceVariant` | 묶음, 좌석 지도, 탭 바탕 |
+| `ink` | #28221B | #F4F1EC | `--ink` | `onSurface` | 글자, 그림의 선 |
+| `ink-2` | #5A5044 | #B5ADA2 | `--ink-2` | `onSurfaceVariant` | 보조 글 |
+| `line` | #EDEAE6 | #34302A | `--line` | `outlineVariant` | 구분선 |
+| `accent` | #60C090 | #6FD3A6 | `--accent-fill` | `primary` | 주 단추·고른 것의 바탕 |
+| `on-accent` | #28221B | #12110F | `--on-accent` | `onPrimary` | 민트 바탕 위 글자(먹색) |
+| `accent-text` | #2B7A53 | #7FDDB2 | `--accent` | `onPrimaryContainer` | 민트 글자·링·테두리 |
+| `accent-soft` | #E4F4EC | #1C3A2D | `--accent-soft` | `primaryContainer` | 고른 것·제안·'연결됨' 바탕 |
+| `rec` | #B3261E | #FF8A80 | `--rec` | `error` | 기록 중 표시와 타이머에만 |
+| `rec-soft` | #FCE8E6 | #3A1F1E | (없음) | `errorContainer` | 기록 중 상태 바탕 |
+| `ok` | #2B7A53 | #7FDDB2 | `--ok` | `tertiary` | 완료·반영 |
+| `ok-soft` | #E4F4EC | #1C3A2D | (없음) | `tertiaryContainer` | 완료 바탕 |
+| `warn` | #8C6400 | #F5C766 | `--warn` | `secondary` | 기다림, 기록 일시정지 |
+| `warn-soft` | #FBF1DC | #3A2F17 | (없음) | `secondaryContainer` | 일시정지·도착 전 바탕 |
+| `tint-1`~`5` | #ECEAFB #FCF0D9 #FBE7EE #E4F4EC #E5F0FB | #2A2840 #3A3020 #3A2530 #1E3A2E #1F2F40 | (없음) | (없음) | 사람마다 다른 장면 카드 바탕(시안에만, 코드는 아직 안 씀) |
+
+- **주 단추는 민트 바탕에 먹색 글자입니다.** 민트 바탕은 흰 글자와 대비가 2.2:1이라 글자를 먹색(`on-accent`)으로 둡니다. 민트를 글자·링·테두리에 쓸 때는 `accent-text`입니다(시안 변수 설명 그대로). 글자 대비는 모두 4.5:1 이상이고 웹은 `contrast.test.mjs`가 검사합니다.
+- **차는 늘 어두운 값입니다**(#428). 낮·밤으로 단추 색을 바꾸던 규칙(#217)은 없앴습니다.
+- **빨강은 기록 중에만.** 기록 타이머(시안 C17 '19:11')와 기록 상태 점이 `rec`입니다. 막힘·실패는 빨강 글자에 경고 아이콘을 더해 색만으로 전하지 않습니다.
+- **노랑은 멈춤과 기다림.** 기록 일시정지·도착 전 안내 바탕은 `warn-soft`, 글자는 `warn`입니다.
 
 ## 4. 글자와 모양
 
+글꼴은 폰·차 모두 **Pretendard**입니다(시안 글자 스타일 전부). 차는 앱에 글꼴 파일을 담습니다 — Pleos 시스템의 'pretendard' 이름은 다른 글꼴(AstaSans)로 이어지므로 시스템 이름으로 부르지 않습니다(차 글꼴 PR 진행 중). 폰은 `"Pretendard Variable", Pretendard`를 먼저 부르고 없으면 기기 한글 글꼴입니다.
+
+| 시안 스타일 | 크기/줄 높이 | 굵기 | 쓰는 곳 |
+|---|---|---|---|
+| `Car/Status 56` | 56/64 | Bold, 자간 -2 | 기록 타이머, 큰 상태 |
+| `Car/Title 40` | 40/50 | Bold, 자간 -2 | 화면 제목 |
+| `Car/Headline 32` | 32/42 | Bold, 자간 -1 | 카드 제목, 결정할 글자 |
+| `Car/Body 28` | 28/40 | Medium | 본문, 대화 |
+| `Car/Label 24` | 24/32 | Medium | 단추·탭·보조 글(차의 가장 작은 글자) |
+| `Phone/Display 28` | 28/38 | Bold, 자간 -2 | 큰 제목 |
+| `Phone/Title 22` | 22/30 | Bold, 자간 -1 | 화면 제목 |
+| `Phone/Headline 19` | 19/28 | Bold, 자간 -1 | 카드 제목 |
+| `Phone/Body 17` | 17/26 | Regular | 본문 |
+| `Phone/Label 15` | 15/22 | Medium | 단추·탭 |
+| `Phone/Caption 13` | 13/18 | Regular | 시각·보조 글 |
+
 | | 폰(웹) | 차(Compose) |
 |---|---|---|
-| 글꼴 | Pretendard(받지 못하면 기기 한글 글꼴) | 시스템 글꼴 |
-| 글자 크기 | 본문 17, 큰 제목 28, 작은 제목 20(px) | 20·24·28·32·36·44·56(sp) 일곱 단계. 주행 중 24 이상, 결정 글자 32 |
-| 모서리 | 카드 24, 단추·입력·칩 16, 배지·상태는 알약 | 카드 32, 단추 24 |
+| 모서리 | 카드 24(`radius/phone-card`, `--r-phone-card`), 단추·입력·칩 16(`radius/phone-ctl`), 배지·상태는 알약 | 카드 32(`radius/car-card`), 단추 24(`radius/car-ctl`) |
 | 누르는 곳 | 48px 이상 | 단추 64dp 이상, 스위치 48dp |
 
-한국어는 낱말 중간에서 줄을 바꾸지 않습니다(`word-break: keep-all`). 숫자·단계는 원본 시트의 번호처럼 동그란 배지로 씁니다.
+- 차의 글자는 24 아래로 내리지 않습니다(주행 중 24sp 이상). 지금 코드의 20sp 글자(동의 화면의 긴 안내 등)는 시안 단계에 없으니 24로 올리거나 주차 중 화면에만 둡니다.
+- 웹의 옛 반경(`--r-card` 14, `--r-ctl` 10)은 새 시안으로 바꾼 화면부터 `--r-phone-card`·`--r-phone-ctl`로 옮깁니다.
+- 한국어는 낱말 중간에서 줄을 바꾸지 않습니다(`word-break: keep-all`). 숫자·단계는 원본 시트의 번호처럼 동그란 배지로 씁니다.
 
-## 5. 화면별 구성(와이어프레임)
+## 5. 공통 구성 요소
 
-시안은 [개편 · 차와 폰](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=0-1)에 있고, 들어오는 길과 문서 절은 [화면 지도](../frontend/spec/README.md)에 있습니다. 아래는 화면마다 첫눈에 가장 크게 둘 것과 주 조작입니다.
+화면마다 새로 그리지 않고 아래 조각을 씁니다. 값은 원본 시안(폰 P 프레임, 차 C17·C17m·로그아웃 확인 `2220:5864`)에서 읽었고, 색은 3절 토큰 이름, 글자는 4절 스타일 이름입니다. 폰은 밝은 값, 차는 어두운 값입니다. 프레임별로 어디에 쓰였는지는 [화면 기준](design-screens.md)에 있습니다(폰 6절).
 
-| 화면 | 가장 크게 | 주 조작 | 주행 중 |
+| 조각 | 폰(390) | 차(1682·841) | 색 |
 |---|---|---|---|
-| C6 여행 만들기 | 같이 타는 가족 | 여행 만들기 | 안내 한 줄만 |
-| C5 출발 전 | 기록 동의와 동승자 | 동승자 연결, 기록 동의 켜기, 목소리 등록 | 숨김 |
-| C7 자리 고르기 | 빈자리 지도('어디에 앉았나요?'). QR에는 이름이 없어 넣은 뒤에 '{이름} 님이 {자리}에 탔어요' | 빈자리 누르기(동의는 그 사람 폰에서) | 숨김 |
-| C1 기록 중 | 기록 상태, 좌석 지도와 말한 사람 링 | 기록 동의 끄기(한 번 누름) | 이 화면 |
-| C2 휴게소 제안 | '{휴게소}에 들를까요?'와 거리·시간 | 말로 답, 단추 둘 | 이 화면(답은 말로) |
-| C4 기록 잠시 멈춤 | '기록 잠시 멈춤 · 운전대 버튼을 누르세요'(기다림 색) | 없음(끝나면 저절로 돌아옴) | 이 화면 |
-| C3 도착 브리핑 | '{장소}에서 할 일' 목록 | 항목마다 완료 | 숨김(할 일 수만) |
-| P1 홈 | 내 얼굴과 이름 | 동승 연결 | |
-| P2 프로필 만들기 | 캐릭터 10종 | 저장(이름·캐릭터·사진) | |
-| P3 동승 연결 QR | QR과 남은 시간 | 새로 띄우기 | |
-| P4 탔어요·기록 동의 | '{자리}에 탔어요'와 동의 문구 | 동의해요 / 동의하지 않아요 | |
-| P5 여행 중 | 기록 상태와 챙길 부탁 | 부탁 남기기, 내 동의 끄기 | |
-| P6 부탁 남기기 | 자주 쓰는 부탁 | 남기기 | |
-| P7 기록본 | 장면과 대화(말한 사람 얼굴) | 장면 고르기, 숏폼 보기 | |
-| P8 숏폼 9:16 | 클립과 자막, 말한 사람 | 다시 보기, 닫기 | 차는 주차 중에만 |
+| 머리 줄 | 350×32. 마스코트 24 + '가치타' 19 Bold. 오른쪽에 연결 상태(점 6 + `Phone/Caption 13`)와 **내 얼굴 단추 32**(누름 44) | 777×64. 마스코트 48 + '가치타' 32 Bold. 오른쪽 **내 얼굴 단추 64**(사진 54) | 글자 `ink`, 연결 점 `ok`·끊김 `rec` |
+| 상위 탭 | 350×48, 모서리 14, 칸 셋 | 777×76, 모서리 20, 칸 모서리 16 | 바탕 `surface-2`, 고른 칸 `accent-soft` + `ink`, 나머지 `ink-2` |
+| 카드 | 모서리 24(`radius/phone-card`), 안쪽 16–18 | 모서리 32(`radius/car-card`), 안쪽 24–46 | `surface` |
+| 강조 카드 | 모서리 20, 안쪽 16 | 모서리 18–28 | `accent-soft`(요약·고른 것), `ok-soft`(현재 동승 그룹), `warn-soft`(일시정지·도착 전) |
+| 목록 행 단추 | 높이 52, 모서리 16, 글 17 Bold + 오른쪽 '›' | 높이 66, 모서리 16, 글 25 Bold + '›' | `surface-2` + `ink` |
+| 주 단추 | 높이 52, 모서리 16(`radius/phone-ctl`), 글 17 Bold | 높이 68–96, 모서리 24(`radius/car-ctl`), 글 24–30 Bold | `accent` 바탕 + `on-accent` 글자 |
+| 보조 단추 | 같은 크기 | 같은 크기 | `surface-2` + `ink` |
+| 위험 단추(로그아웃·지우기) | 같은 크기, 앞에 아이콘 | 높이 60, 아이콘 26 | `rec-soft` 바탕 + `rec` 글자 |
+| 얼굴 | 원. 사진은 채워 자르고, 캐릭터는 전신을 틀 안에 맞춤. 32·40·48·72 | 48·54·80 | 틀 바탕 `surface-2` |
+| 그룹 얼굴 2×2 | 72(부품 `Group / 2x2 / … / Phone`) | 144(`… / Car`) | 칸 사이 4 |
+| 드롭다운 | 오른쪽 위 얼굴 단추 아래로 열림, 폭 = 화면 − 32, 모서리 24, 안쪽 16, 칸 사이 12 | 480 폭, 모서리 26, 안쪽 26 | `surface`, 테두리 #7A9C87 2(시안 값, 변수 아님), 그림자, 바깥 #000 56% |
+| 확인 대화상자 | 가운데, 폭 = 화면 − 48, 제목 `Phone/Title 22` + 설명 `Phone/Body 17` `ink-2` + 단추 둘(취소·위험) | 480×232, 제목 30 Bold, 설명 21 | 드롭다운과 같음, 바깥 #000 62%. 바깥을 누르면 취소 |
+| 상태 알약 | 높이 28, 점 + `Phone/Label 15` | 높이 48, 점 + `Car/Label 24` | 연결됨 `ok`, 기록 중 `rec`, 일시정지 `warn`(각 `-soft` 바탕) |
+| 좌석 지도 | 차 몸 모서리 28, 자리 얼굴 48 | 차 몸 `surface-2` 모서리 40, 자리 얼굴 80 | 말하는 사람 링 `accent-text`, 빈자리 점선 `ink-2` |
+| 알림('복사했어요' 등) | 아래 가운데, 모서리 16 | 위 가운데 | `accent-soft` + `ink` |
 
-11/14 #239(Codex)는 이 시안을 바탕으로 차와 폰을 다시 나눴습니다. 차는 기본 내비 옆 반쪽 창에 '함께 타는 중'·'대화 기록'·'쇼츠' 탭을 두고, 목소리 등록·말한 사람 고치기·새 여행은 '여행 관리'로 모았습니다. 폰 여행 화면도 '여행'·'대화'·'쇼츠' 탭이고, 쇼츠는 위아래로 넘기는 세로 화면입니다. 시안에는 탭과 대화방이 없고, 반쪽 창은 주행 중 두 장(C1n·C2n)만 있습니다. 실제 배치는 [차량 화면](../frontend/spec/car.md)의 화면 요소 표를 따릅니다.
+- **내 얼굴 단추와 드롭다운(11/15).** 모든 머리 줄 오른쪽 끝에 내 얼굴 단추를 둡니다. 누르면 드롭다운: 얼굴·이름과 닫기 → 현재 동승 그룹(그룹 얼굴 2×2, 이름, 인원) → 목록 행(내 프로필·동승 그룹 변경·좌석 배정·갤러리 바로가기) → 로그아웃(위험). 차는 주행 중에 '그룹 변경과 좌석 배정은 주차 후에 이용해 주세요.'를 보이고 그 둘을 막습니다. 로그아웃은 확인 대화상자('로그아웃할까요? / 로그아웃하면 시작 화면으로 돌아가요.')를 거칩니다.
+- 화면에 직접 색 값·글자 크기를 적지 않습니다. 새 값이 필요하면 시안 변수에 먼저 있는지 보고, 없으면 이 표에 더한 뒤 씁니다.
 
 ## 6. 구현 상태(11/14 develop `ca3d56a`)
 
@@ -107,11 +135,12 @@
 
 | 파일 | 담은 것 | 기준 |
 |---|---|---|
-| [개편 · 차와 폰](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=0-1) | 차 9장: [C1 주행 중 기록과 말하는 사람 강조](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=2-2), [C2 휴게소 제안과 말로 수락](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=2-121), [C3 도착 브리핑](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=3-93), [C4 Gleo 쓰는 동안 기록 잠시 멈춤](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=3-537), [C5 출발 전](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=3-647), [C6 여행 만들기](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=3-1116), [C7 QR 읽은 뒤 자리 고르기](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=12-531)(1682 × 1210), [C1n](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=4-254)·[C2n](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=4-357)(841 × 1210). 폰 8장(390 × 844). [근거 보드](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=8-512), [토큰 보드](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=8-598) | 11/13 문구정리본, 11/14 디자인 1급 |
+| [민준 개선안](https://www.figma.com/design/Y7zFqGUEAFDWTumG30MsOs?node-id=2004-57) | 차 전체(1682 × 1210)·좁은 창(841 × 1210)·폰(390 × 844) 화면과 시연판(D01–D33), [시연 플로우 35단계](https://www.figma.com/design/Y7zFqGUEAFDWTumG30MsOs?node-id=2045-1782). 어두운 화면 | **지금 기준**(11/15 오너 결정). 프레임 → 흐름·코드 대응과 남은 것은 [화면 기준](design-screens.md) |
+| [개편 · 차와 폰](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=0-1) | 차 9장: [C1 주행 중 기록과 말하는 사람 강조](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=2-2), [C2 휴게소 제안과 말로 수락](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=2-121), [C3 도착 브리핑](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=3-93), [C4 Gleo 쓰는 동안 기록 잠시 멈춤](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=3-537), [C5 출발 전](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=3-647), [C6 여행 만들기](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=3-1116), [C7 QR 읽은 뒤 자리 고르기](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=12-531)(1682 × 1210), [C1n](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=4-254)·[C2n](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=4-357)(841 × 1210). 폰 8장(390 × 844). [근거 보드](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=8-512), [토큰 보드](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=8-598) | 이전 기준(11/13 문구정리본, 11/14 디자인 1급) |
 | [가치타 차량 화면](https://www.figma.com/design/Qc58INq2ECd1ODzzmM7Nja) | 12개 앱 창 × 주행 중·정차·도착 후와 추가 상태, 120프레임(밝은 화면만) | 기획서 v4, T17([PR #54](https://github.com/team-pitcrew/gachita/pull/54)). 바이올렛 시절의 기록 |
 
 - 개편 파일은 11/14 결정(폰의 동승 연결 QR을 차가 읽음, 그룹 없음, 자리는 차에서 고름)에 맞춰 같은 날 C5·C7과 폰 P1~P5를 고쳤습니다.
-- 두 파일 모두 지환의 피그마 계정(개편 파일은 Pro 팀)에 있고, 팀원과 심사위원에게 보기 권한을 아직 주지 않았습니다.
+- 이전 두 파일은 지환의 피그마 계정(개편 파일은 Pro 팀)에 있고, 팀원과 심사위원에게 보기 권한을 아직 주지 않았습니다. 민준 개선안은 민준님 파일이고, Figma MCP로 읽는 작업본은 지환의 복제본(노드 id 같음)입니다.
 
 ## 8. 한국형 UI 기준에 대 본 결과
 
