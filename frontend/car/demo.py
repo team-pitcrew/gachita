@@ -260,12 +260,13 @@ def trip_tokens(code):
 
 
 # ---- 차 화면 ----------------------------------------------------------------------------------------------
-NODE = re.compile(r'<node [^>]*?text="([^"]*)"[^>]*?class="([^"]*)"[^>]*?checkable="(\w+)"[^>]*?checked="(\w+)"[^>]*?enabled="(\w+)"[^>]*?bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"')
+NODE = re.compile(r'<node [^>]*?text="([^"]*)"[^>]*?class="([^"]*)"[^>]*?content-desc="([^"]*)"[^>]*?checkable="(\w+)"[^>]*?checked="(\w+)"[^>]*?enabled="(\w+)"[^>]*?bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"')
 
 
 def ui():
+    """화면 트리의 칸(글, 종류, 체크, 켜짐, 자리). 글이 없는 그림 단추(C17 녹음 막대의 ⏸ '일시정지'·● '녹화 재개')는 접근성 이름(content-desc)을 글로 쓴다."""
     adb("shell", "uiautomator", "dump", "/data/local/tmp/t150-ui.xml")
-    return [(t, c, k == "true", e == "true", tuple(map(int, b))) for t, c, k, _, e, *b in NODE.findall(adb("exec-out", "cat", "/data/local/tmp/t150-ui.xml"))]
+    return [(t or d, c, k == "true", e == "true", tuple(map(int, b))) for t, c, d, k, _, e, *b in NODE.findall(adb("exec-out", "cat", "/data/local/tmp/t150-ui.xml"))]
 
 
 def words():
@@ -476,6 +477,9 @@ def only(n):
     return int(lo) <= n <= int(hi or lo)
 
 
+FACE = "프로필 메뉴 열기"  # TripHeader의 '내 얼굴' 단추(Drive.kt MeButton) 접근성 이름
+
+
 def step(n, needles, timeout=15, note_="", seeded=False):
     """단계 n의 화면 글(needles 중 하나)이 보이면 캡처하고 '보임'(시드·목업으로 띄운 화면이면 '시드'). 없으면 '없음'과 그 흐름의 PR 상태."""
     meta = next(s for s in STEPS if s[0] == n)
@@ -484,6 +488,10 @@ def step(n, needles, timeout=15, note_="", seeded=False):
     if got:
         e2e.shot(shot.removesuffix(".png"))
         results[n] = {"result": "시드" if seeded else "보임", "matched": got, "note": note_, "shot": shot}
+        # 11/15 오너 "모든 페이지 우측상단은 프로필 고정, 예외 없음": 단계마다 머리 줄 '내 얼굴'(접근성 이름)이 화면 트리에 있는지
+        face = seen(FACE) is not None
+        results[n]["face"] = face
+        check(f"{n} 오른쪽 위 프로필", face)
     else:
         results[n] = {"result": "없음", "note": note_ or f"화면 글 {needles[0]!r}이 {timeout}초 안에 안 보임 — {flow_state(meta[4])}", "shot": None}
     check(f"{n} {meta[1]}", got, matched=got)
@@ -594,7 +602,7 @@ def group_screens():
 # 스크립트가 누르거나 기다리는 차 화면 글. --check가 앱 소스에 그대로 있는지 본다(에뮬레이터 없이 화면 글이 바뀐 것을 잡음).
 TAPS = {"Onboarding.kt": ["가치타 시작하기", "가입하고 계속", "동의하고 계속", "목소리 등록하기", "녹음 시작", "녹음 완료", "가족 그룹 만들기"],
         "Family.kt": ["가족 계정 초대하기", "아이 프로필 만들기", "참여 확인", "동의하고 목소리 등록", "가족 그룹에 저장", "이 가족과 출발", "내 동승 그룹", "+ 새 그룹 만들기", "초대 코드, QR 또는 링크로 함께할 사람을 초대해 주세요.", "동승자 초대하기", "초대 코드와 링크를 만들었어요", "그룹으로 돌아가기", "전체 그룹 보기", "우리 가족 보기", "오늘 함께 탈 가족과 좌석을 확인해 주세요.", "좌석 배정", "좌석을 누르고 앉을 사람을 선택해 주세요.", "빈자리", "누가 앉나요?", "좌석 배정으로", "그룹으로", "이 그룹과 출발", "우리 가족 추가", "코드 복사", "까지 준비됐어요"],
-        "Drive.kt": ["일시정지", "계속 기록", "마지막 대화", "분 후 도착"],
+        "Drive.kt": ["일시정지", "녹화 재개", "방금 받아 적은 말", "멈추기 전 마지막 대화", "도착까지 약"],
         "Arrival.kt": ["먼저 할 일과 살 것을 모았어요", "잊지 말고 살 것", "계속", "여행 마치고 기록 보기", "내리기 전, 할 일과 챙길 것"],
         "AfterTrip.kt": ["오늘의 주행을 기록했어요", "남기고 싶은 순간을 골라요", "장면을 선택해 주세요", "콘텐츠를 만들어요", "콘텐츠 생성 중", "순간이 완성됐어요", "콘텐츠 기록 보기"],
         "Contents.kt": ["우리 가족 / 차량과 폰에서 이어보기", "갤러리", "타임라인", "지도", "주행 지도 자세히 보기 →", "이 장면 보기", "영상 내보내기", "영상이 준비됐어요", "콘텐츠 기록으로"]}
@@ -756,18 +764,18 @@ def drive_steps_seed(code):
     rec_part(2)
     if not split(): note("split.fail")
     drive(); seed_status(code, "driving"); seed_place(code, "start", "출발"); seed_place(code, "destination", "강릉 숙소"); seed_lines(code, "A")
-    f4("drive"); step(17, ["일시정지"], note_="차 목업 drive + 서버 기록본 5줄(화자 분리)", seeded=True)
-    f4("drivePaused"); step(18, ["마지막 대화", "계속 기록"], note_="차 목업 drivePaused", seeded=True)
-    f4("driveResumed"); step(19, ["일시정지"], note_="차 목업 driveResumed", seeded=True)
+    f4("drive"); step(17, ["방금 받아 적은 말"], note_="차 목업 drive + 서버 기록본 5줄(화자 분리)", seeded=True)
+    f4("drivePaused"); step(18, ["멈추기 전 마지막 대화"], note_="차 목업 drivePaused", seeded=True)
+    f4("driveResumed"); step(19, ["방금 받아 적은 말"], note_="차 목업 driveResumed", seeded=True)
     seed_lines(code, "B"); seed_place(code, "approaching", "하나로마트", eta=180)
-    f4("near"); step(20, ["분 후 도착"], note_="차 목업 near + 서버 approaching", seeded=True)
+    f4("near"); step(20, ["정차하면 자세히"], note_="차 목업 near + 서버 approaching", seeded=True)
     park(); seed_arrive(code, "하나로마트")
     f4("mart"); step(21, ["먼저 할 일과 살 것을 모았어요", "잊지 말고 살 것"], note_="차 목업 mart + 서버 도착 브리핑", seeded=True)
     tap("계속", timeout=4)
     drive(); seed_status(code, "driving"); seed_lines(code, "C")
-    f4("driveContinue"); step(22, ["내일도 같이 타면 안 돼", "일시정지"], note_="차 목업 driveContinue + 서버 기록본 5줄", seeded=True)
+    f4("driveContinue"); step(22, ["내일도 같이 타면 안 돼", "방금 받아 적은 말"], note_="차 목업 driveContinue + 서버 기록본 5줄", seeded=True)
     seed_place(code, "approaching", "강릉 숙소", eta=60)
-    f4("finalNear"); step(23, ["분 후 도착"], note_="차 목업 finalNear + 서버 approaching", seeded=True)
+    f4("finalNear"); step(23, ["도착까지 약"], note_="차 목업 finalNear + 서버 approaching", seeded=True)
     park(); seed_arrive(code, "강릉 숙소")
     f4("final"); step(24, ["여행 마치고 기록 보기", "내리기 전, 할 일과 챙길 것"], note_="차 목업 final + 서버 도착 브리핑", seeded=True)
     tap("여행 마치고 기록 보기", timeout=4)  # 목업은 화면만 넘기므로 여행은 폰의 '여행 끝내기'와 같은 요청으로 마친다
@@ -782,24 +790,24 @@ def drive_steps(code):
     tap("함께 타는 중", timeout=3); drive()
     wait(["아래 버튼으로 언제든 멈출 수 있어요"], 15)
     say("talk")
-    step(17, ["일시정지"], 30, "대사 5줄(서준·아빠·하은·엄마)")
-    tap("일시정지"); step(18, ["마지막 대화", "계속 기록"])
-    tap("계속 기록"); step(19, ["일시정지"], 8)
+    step(17, ["방금 받아 적은 말"], 30, "대사 5줄(서준·아빠·하은·엄마)")
+    tap("일시정지"); step(18, ["멈추기 전 마지막 대화"])
+    tap("녹화 재개"); step(19, ["방금 받아 적은 말"], 8)
     say("mart")
     here = navi_here()
     # 길로 가까운 쪽: 11/15 emulator-5586 내비에서 GPS의 서쪽 200 m는 '1분 · 140m', 남쪽 200 m는 '1분 · 260m', 북·동쪽은 5–6분(1.5–1.7 km 돌아감)
     mart, lodge = near(here, 0, -NEAR_M), near(here, -NEAR_M, 0)
     launch("--es", "route", f"{lodge[0]},{lodge[1]},강릉 숙소", "--es", "stops", f"{mart[0]},{mart[1]},하나로마트", "--ei", "approachSeconds", APPROACH_S)
     split(); tap("함께 타는 중", timeout=3)
-    step(20, ["분 후 도착"], 25, f"시연 경로: 경유 하나로마트 {mart}, 목적지 강릉 숙소 {lodge}(내비 위치 {here}에서 약 {NEAR_M:.0f} m)")
+    step(20, ["정차하면 자세히"], 25, f"시연 경로: 경유 하나로마트 {mart}, 목적지 강릉 숙소 {lodge}(내비 위치 {here}에서 약 {NEAR_M:.0f} m)")
     park(); step(21, ["먼저 할 일과 살 것을 모았어요", "잊지 말고 살 것"], 25)
     if results[21]["result"] == "없음" and seen("도착했어요"): results[21] = {**results[21], "result": "다른 화면", "note": "develop의 T123 도착 카드(v1) — " + flow_state("F4")}
     tap("계속", "닫기", timeout=4)
     launch("--es", "route", f"{FAR_LODGE[0]},{FAR_LODGE[1]},강릉 숙소"); split(); tap("함께 타는 중", timeout=3)
     drive(); say("lodge")
-    step(22, ["내일도 같이 타면 안 돼", "일시정지"], 20, "대사 5줄(하은·엄마·아빠)")
+    step(22, ["내일도 같이 타면 안 돼", "방금 받아 적은 말"], 20, "대사 5줄(하은·엄마·아빠)")
     launch("--es", "route", f"{lodge[0]},{lodge[1]},강릉 숙소", "--ei", "approachSeconds", APPROACH_S); split(); tap("함께 타는 중", timeout=3)
-    step(23, ["분 후 도착"], 25)
+    step(23, ["도착까지 약"], 25)
     park(); step(24, ["여행 마치고 기록 보기", "내리기 전, 할 일과 챙길 것"], 25)
     if not tap("여행 마치고 기록 보기", timeout=4):
         # 차의 최종 브리핑이 없으면 폰의 '여행 끝내기'와 같은 요청으로 여행을 마친다(PATCH status ended)

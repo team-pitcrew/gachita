@@ -70,3 +70,31 @@ class VoiceRecorder(private val progress: (Double, Double) -> Unit, private val 
     /** 버린다(done을 부르지 않는다). */
     fun cancel() { cancelled = true }
 }
+
+/**
+ * 마이크 소리 크기만 0.1초 조각마다 잰다. 녹음 화면 A안 파형의 시연 목업 경로(디버그 `--es f4 drive…`)에서, 수음 서비스(CaptureService)가
+ * 마이크를 쥐고 있지 않을 때만 쓴다. 형식은 수음·목소리 등록과 같고(MIC, 16 kHz 2채널), 소리는 모으지도 남기지도 않는다.
+ * level(0~1, meterLevel 눈금)은 녹음 스레드에서 불린다. 마이크를 못 열면 아무것도 부르지 않는다(파형은 납작한 채로 둔다).
+ */
+class MicLevels(private val level: (Float) -> Unit) {
+    @Volatile private var stop = false
+    fun start() {
+        Thread {
+            val mask = AudioFormat.CHANNEL_IN_STEREO
+            val enc = AudioFormat.ENCODING_PCM_16BIT
+            val r = try {
+                AudioRecord(MediaRecorder.AudioSource.MIC, RATE, mask, enc, maxOf(AudioRecord.getMinBufferSize(RATE, mask, enc) * 4, RATE * 2))
+                    .also { check(it.state == AudioRecord.STATE_INITIALIZED) }
+            } catch (t: Throwable) { return@Thread }
+            try {
+                r.startRecording()
+                val buf = ShortArray(CHUNK_FRAMES * 2)
+                while (!stop) {
+                    val n = r.read(buf, 0, buf.size)
+                    if (n > 0) level(meterLevel(chunkRms(downmix(buf, n), n)).toFloat())
+                }
+            } finally { runCatching { r.stop() }; r.release() }
+        }.apply { isDaemon = true; name = "mic-levels" }.start()
+    }
+    fun stop() { stop = true }
+}

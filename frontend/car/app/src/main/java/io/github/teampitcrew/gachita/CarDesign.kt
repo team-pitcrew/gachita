@@ -90,12 +90,28 @@ object CarPaper {
 }
 
 /**
+ * 시안 C17 계열 아래 녹음 막대('기록 컨트롤 / 상태와 동작' 2014:943)와 좌석 지도의 말하는 사람 고리('화자 링 / 민트' 2209:5864)에만 있는 색.
+ * 시안이 변수 없이 적은 값이라 Material 역할에 없다.
+ */
+object CarRecord {
+    val Timer = Color(0xFFF23424) // 기록 중 경과 시간 '19:11'
+    val WaveBg = Color(0xFF110C10) // '녹화 파형' 292×84 칸 바탕: 시안 화면에 보이는 색(그림 2196:5878 원본은 #231D1F, 프레임 안에서 18 어둡게 그려진다)
+    val Edge = Color.Black // 막대 테두리 1
+    val StopRing = Color.White // ■ 정지 단추 테두리 2
+    val Ring = listOf(0f to Color(0xFFE8FFF5), 0.33f to Color(0xFF7DFFC9), 0.72f to Color(0xFF30E094), 1f to Color(0xFF1A8563)) // 고리 4.5 그러데이션
+    val RingGlow = Color(0xFF38E0A1).copy(alpha = 0.38f) // 고리 둘레 빛(그림자 흐림 4)
+    val RingInner = Color(0xFFD9FFED).copy(alpha = 0.64f) // 안쪽 하이라이트 1.2
+}
+
+/**
  * 시안의 '내 얼굴' 프로필 메뉴(2200:5854)와 로그아웃 확인(2220:5866)에만 있는 색. 시안이 변수 없이 적은 값이라 Material 역할에 없다.
  * 바깥 어둡게는 검정 56%(드롭다운)·62%(확인).
  */
 object CarMenu {
     val Surface = Color(0xFF262824) // 드롭다운·확인 바탕
     val Line = Color(0xFF7A9C87) // 테두리 2
+    val CountWide = Color(0xFFADC2B8) // 주차 1682 메뉴(2257:5886) 동승자 수
+    val InkWide = Color(0xFFF5F2ED) // 주차 1682 메뉴(2257:5902) '갤러리 바로가기'
     val Ink = Color(0xFFF5F2ED) // 확인 제목·취소, '갤러리 바로가기' 글
     val Ink2 = Color(0xFFB8BAB0) // 확인 설명
     val Count = Color(0xFFADC2B8) // 동승 그룹 인원
@@ -137,7 +153,7 @@ fun TitleBlock(title: String, sub: String, modifier: Modifier = Modifier) = Colu
 
 /**
  * 주차 화면 틀(시안 C01–C16·C20·C22–C38): 여백 40, 머리 줄 80('가치타' · '주차 중  P'), 위 탭(있으면, 76), 칸 간격 24, 본문, 아래 단추 줄(간격 24).
- * [tab]이 null이면 탭을 그리지 않는다.
+ * [tab]이 null이면 탭을 그리지 않는다. 머리 줄 오른쪽 위 '내 얼굴'은 TripHeader가 늘 그린다('주차 중  P' 다음).
  */
 @Composable
 fun ParkedFrame(

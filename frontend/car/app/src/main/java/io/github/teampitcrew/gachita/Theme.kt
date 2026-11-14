@@ -101,11 +101,13 @@ fun GachitaTheme(content: @Composable () -> Unit) =
     }
 
 /**
- * 여행 화면의 두 껍데기(시안). RIDE: 함께 타는 중·대화 기록(녹음 화면 A안 2107:5597·C44 2019:1966, 여백 32, 머리 줄 64·간격 12, 칸 간격 24).
- * PARKED: 도착 브리핑·콘텐츠 기록(C20·D19·C22–C38, 여백 40, 머리 줄 80·간격 18, 칸 간격 24).
+ * 여행 화면의 껍데기(시안). RIDE: 함께 타는 중(C17 2005:3267·ended 2026:2410, 여백 좌우 32·위아래 28, 머리 줄 64·간격 12, 칸 간격 16, 탭 76).
+ * TALK: 대화 기록(C44 2019:1966·liveTranscript 2026:2308, 여백 32, 칸 간격 24, 탭 80). PARKED: 도착 브리핑·콘텐츠 기록(C20·C22–C38, 여백 40,
+ * 머리 줄 80·간격 18, 칸 간격 24).
  */
 enum class Shell(val padH: Dp, val padV: Dp, val head: Dp, val headGap: Dp, val gap: Dp) {
-    RIDE(32.dp, 32.dp, 64.dp, 12.dp, 24.dp),
+    RIDE(32.dp, 28.dp, 64.dp, 12.dp, 16.dp),
+    TALK(32.dp, 32.dp, 64.dp, 12.dp, 24.dp),
     PARKED(40.dp, 40.dp, 80.dp, 18.dp, 24.dp),
 }
 
@@ -171,17 +173,6 @@ fun Mascot(listening: Boolean, size: Dp = 56.dp) {
         modifier = Modifier.size(size),
         contentScale = ContentScale.Fit,
     )
-}
-
-/** 화면 맨 위 줄: 마스코트, 이름, 여행 제목, 오른쪽에 상태 알약(주차 중 · P, 서버 연결됨 — 시안 C1·C5·C6). 알약은 (글, 괜찮은지). */
-@Composable
-fun AppBar(title: String, listening: Boolean, vararg pills: Pair<String, Boolean>) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-        Mascot(listening)
-        Text("가치타", fontSize = 32.sp, fontWeight = FontWeight.Bold)
-        Text(title, Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        pills.forEach { (text, ok) -> Pill(text, ok) }
-    }
 }
 
 /** 상태 알약: 점과 글. 괜찮으면 민트, 아니면 빨강 기운. 움직이지 않는다. */

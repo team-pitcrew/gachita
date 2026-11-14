@@ -232,6 +232,7 @@ internal fun BoardingQrScreen(state: BoardingState, session: Session, onAction: 
     val joined = session.trip?.people.orEmpty().filter { it.id !in state.joinedBefore }
     Surface(Modifier.fillMaxSize(), color = c.surface) {
         Column(Modifier.fillMaxSize().padding(28.dp), verticalArrangement = Arrangement.spacedBy(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            TripHeader(Shell.PARKED, "P", session.online, listening = false) // 전체 화면이어도 머리 줄(오른쪽 위 '내 얼굴')은 같다
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text("참석 QR", Modifier.weight(1f), fontSize = 30.sp, fontWeight = FontWeight.Bold)
                 OutlinedButton({ onAction(BoardingAction.Back) }, shape = RoundedCornerShape(10.dp), modifier = Modifier.heightIn(min = 56.dp)) { Text("닫기") }

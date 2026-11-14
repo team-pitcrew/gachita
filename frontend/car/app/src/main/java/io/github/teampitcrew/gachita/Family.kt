@@ -251,6 +251,9 @@ private fun detailOf(g: CarGroup?) = if (g != null && soloGuest(g)) FamilyView.G
 private fun tabless(view: FamilyView, guest: Boolean) =
     view == FamilyView.MEMBER || view == FamilyView.CHILD || view == FamilyView.CHILD_VOICE || view == FamilyView.INVITE || (!guest && view == FamilyView.GROUP_INVITE)
 
+/** 프로필 메뉴에서 가족 흐름으로 바로 가는 곳: '동승 그룹 변경' → C16 groups, '좌석 배정' → C16B. */
+enum class FamilyJump { GROUPS, SEATS }
+
 /** 아이 목소리 파형(C12·C42 '파형'): 막대 64개, 폭 칸 나눔·간격 7, 높이 126 안. */
 private const val CHILD_WAVE_BARS = 64
 
@@ -287,9 +290,11 @@ private fun Face(key: String, size: Dp) = CharAvatar(charRes(key), size, CarShap
 /**
  * 가족 흐름 전체. server는 API 주소, token은 이 차에 로그인한 프로필 토큰(없으면 시연 가족, mock).
  * onStart(groupId)는 '이 가족과 출발' — 부르는 쪽(MainActivity)이 POST /api/trips {groupId}로 여행을 만든다.
+ * 머리 줄 오른쪽 위 '내 얼굴'은 TripHeader가 늘 그리고, 그 프로필 메뉴는 MainActivity가 띄운다. 메뉴의 '동승 그룹 변경'·'좌석 배정'은
+ * [jump]로 들어와 C16 groups·C16B를 연다(처음 불러오기가 끝난 뒤). 연 뒤 [onJumped].
  */
 @Composable
-fun FamilyFlow(server: String, token: String?, onClose: () -> Unit, onStart: (String) -> Unit) {
+fun FamilyFlow(server: String, token: String?, onClose: () -> Unit, onStart: (String) -> Unit, jump: FamilyJump? = null, onJumped: () -> Unit = {}) {
     val c = MaterialTheme.colorScheme
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -361,6 +366,11 @@ fun FamilyFlow(server: String, token: String?, onClose: () -> Unit, onStart: (St
     }
     // 전체 그룹을 열 때마다 다시 읽는다: 폰에서 초대로 들어온 사람, 다른 기기에서 바꾼 자리.
     LaunchedEffect(view) { if (view == FamilyView.GROUPS && token != null) runCatching { load() }.onFailure { note = failureText(it) } }
+    LaunchedEffect(jump, busy) {
+        if (jump == null || busy) return@LaunchedEffect // 처음 불러오기(LaunchedEffect(token))가 정한 화면 뒤에 연다
+        if (jump == FamilyJump.SEATS) { val now = current(); groupId = now?.id; seats = now?.members.orEmpty(); view = FamilyView.ASSIGN } else view = FamilyView.GROUPS
+        onJumped()
+    }
     BackHandler {
         if (sharing) { sharing = false; return@BackHandler }
         view = when (view) {

@@ -38,13 +38,11 @@ object Live {
     var recent by mutableStateOf(emptyList<Utterance>())
     var count by mutableStateOf(0)
     var pending by mutableStateOf(0)
-    /** 최근 0.1초 조각들의 소리 크기(0..1, 새 것이 끝). 조각마다 메인 스레드가 민다. 화면은 이것을 직접 그리지 않는다. */
-    var levels: List<Float> = emptyList()
     /**
-     * 함께 타는 중의 파형(시안 A D17): 받아 적은 말이 하나 들어올 때 그때까지의 [levels]를 찍어 둔 것. 주행 중 움직이는 표시를 두지 않으려고
-     * 0.1초마다가 아니라 새 말이 들어올 때만 바뀐다(Pleos 운전자 주의 분산 기준).
+     * 최근 [WAVE_BARS]개 0.1초 조각의 최댓값(dBFS, 새 것이 끝, 무음 −120; Drive.kt chunkPeakDb — 애플 음성 메모처럼 조각의 첨두). 조각마다 메인 스레드가 민다.
+     * C17 녹음 막대의 파형(Drive.kt Wave)이 이것을 그린다 — 새 막대가 가운데 커서에 붙고 왼쪽으로 흐른다(11/15 오너 지시, 실시간 파형).
      */
-    var wave by mutableStateOf(emptyList<Float>())
+    var levels by mutableStateOf(emptyList<Float>())
     /**
      * 원음(T63): 화면이 모두 동의한 것을 확인한 동의 세대. 수음 스레드는 이 세대로만 원음 파일을 연다(0이면 남기지 않음).
      * 동의 철회 뒤 화면이 알기 전에 읽힌 소리가 새 세대 파일로 넘어가지 않게.
@@ -69,7 +67,7 @@ object Live {
     /** 여행의 차 안 파일을 지웠을 때(서버에서 여행 삭제 또는 디버그 만료 시험). 그 여행의 보관함을 놓는다. */
     fun forget(trip: String) {
         if (box?.trip != trip) return
-        box = null; recent = emptyList(); count = 0; pending = 0; levels = emptyList(); wave = emptyList()
+        box = null; recent = emptyList(); count = 0; pending = 0; levels = emptyList()
     }
 
     fun show(o: Outbox) { recent = o.recent(2); count = o.size; pending = o.pending }
@@ -176,7 +174,6 @@ class CaptureService : Service() {
                 else asm.final(text, now, audio)?.let { d ->
                     val u = box.add(d, Live.fix, levels.zone(d.audioFromMs + LEAD_MS / 2, d.audioToMs)) // 대조에 보내는 구간과 같게(첫 결과 쪽 0.5초를 뺌)
                     Live.show(box)
-                    Live.wave = Live.levels
                     Log.i(TAG, "발화 ${u.seq} ${u.text.length}자 ${u.endedAt - u.startedAt}ms 구역 ${u.seatZone ?: "모름"}") // 글자는 보관함에만
                     if (u.text.isNotEmpty()) Live.onHeard?.invoke(u) // 동의 철회 사이의 말은 글 없이 남는다
                 }
@@ -283,7 +280,7 @@ class CaptureService : Service() {
     private fun chunk(c: Chunk, now: Long) {
         if (stopping) return
         block.chunk(c.allZero, now)
-        Live.levels = (Live.levels + meterLevel(chunkRms(c, c.mono.size)).toFloat()).takeLast(WAVE_BARS) // 목소리 등록 막대(T142)와 같은 눈금. mono 바이트 수 = 2채널 값의 수
+        Live.levels = (Live.levels + chunkPeakDb(c.mono)).takeLast(WAVE_BARS) // 0.1초 조각의 첨두(voice-memos-waveform.md 1절)
         if (sttReady) runCatching { stt?.sendAudio(c.mono) }.onFailure { Log.w(TAG, "sendAudio 실패", it) }
         judge()
     }
