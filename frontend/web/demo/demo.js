@@ -5,6 +5,7 @@
 // 사용자가 쓴 글은 textContent로만 넣는다. 차량은 운전석 참가자로 들어가 참가자 토큰을 받고, 여행 코드·토큰·순번은 localStorage에 둔다.
 
 import { SEATS, SEAT, api as request, h, toast } from "/shared.js";
+import { createVehicleBoarding } from "/vehicle-boarding.js";
 
 // 강릉 가족 여행 대사(docs/demo-video.md, frontend/car/demo.py). [누가, 자리, 말]
 const LINES = [
@@ -18,7 +19,7 @@ const LINES = [
 // 위치를 모를 때 차량 앱이 고르는 첫 휴게소(Asks.kt REST_STOPS, 서울 → 강릉). 시연에는 위치가 없다.
 const STOP = "용인휴게소";
 const TITLE = "가치타 가족 여행"; // 차량 앱의 여행 이름(MainActivity.TITLE)
-const DRIVER = ["아빠", "ROW_1_LEFT"]; // 차가 넣는 사람. 시연은 운전석만 넣고 나머지는 폰 QR로 들어온다
+const DRIVER = ["아빠", "ROW_1_LEFT"]; // 차가 넣는 사람. 시연은 운전석만 넣고 나머지는 차 QR을 휴대폰으로 스캔해 참여한다
 const DEVICE = "car-web-demo";
 const KEY = "gachita-demo";
 const POLL_MS = 2000;
@@ -49,7 +50,7 @@ let online = true;
 let busy = false;
 let navi = null; // { id, stage: "adding" | "added" | "failed" } 경유지 반영 흉내
 let loadErr = "";
-let ride = null; // 동승 연결 무대: { code } 읽은 QR. null이면 무대 없음
+let ride = null; // 이전 화면 상태와 호환하며 새 참여는 vehicleBoarding을 사용합니다.
 let rideNote = "";
 let short = null; // 숏폼 무대: { title, scenes, at, pos }
 let tab = "ride";
@@ -57,6 +58,7 @@ let managing = false;
 let chat = false; // 대화록을 대화방으로 연 상태(주차 중, 왼쪽 무대 전체)
 let note = ""; // 도구 줄 알림(차량 앱의 rideNote·shortNote 자리)
 let setupErr = "";
+const vehicleBoarding = createVehicleBoarding({ getTrip: () => trip, getToken: () => car?.token, onNotice: toast });
 
 function load() {
   try {
@@ -101,11 +103,11 @@ function plain(e) {
     : e.status === 403 && m.includes("동의하지 않은") ? "동의하지 않은 탑승자가 있어 받아 적은 말을 올리지 않았어요. 모두 동의하면 다시 보낼 수 있어요."
     : e.status === 403 && m.includes("동의한 참가자만") ? "기록에 동의한 참가자만 기록본을 볼 수 있어요."
     : e.status === 403 ? "이 참가자는 할 수 없는 일이에요."
-    : e.status === 404 && m.includes("동승 연결") ? "QR이 만료됐거나 없어요. 폰에서 새로 띄워 주세요."
+    : e.status === 404 && m.includes("동승 연결") ? "QR이 만료됐거나 없어요. 차에서 새 QR을 열어 주세요."
     : e.status === 404 ? "여행이 지워졌거나 연결한 주소를 찾을 수 없어요."
     : e.status === 409 && m.includes("동의하지 않은") ? "동의하지 않은 탑승자가 있어 기록을 켤 수 없어요."
     : e.status === 409 && m.includes("주행 중에만") ? "주행 중에만 기록할 수 있어요."
-    : e.status === 409 && m.includes("이미 사용한") ? "이미 쓴 QR이에요. 폰에서 새로 띄워 주세요."
+    : e.status === 409 && m.includes("이미 사용한") ? "이미 쓴 QR이에요. 차에서 새 QR을 열어 주세요."
     : e.status === 409 && m.includes("주차 중에만") ? "주차 중에만 동승자를 연결할 수 있어요."
     : e.status === 409 && m.includes("이미 참가한") ? "그 폰은 이미 이 여행에 있어요."
     : e.status === 409 && m.includes("자리") ? "그 자리에는 이미 다른 사람이 앉아 있어요."
@@ -149,7 +151,7 @@ async function createTrip() {
     const p = await api("POST", `/${t.code}/participants`, { seat: DRIVER[1], name: DRIVER[0], consent: true });
     car = { code: t.code, id: p.id, token: p.token, seq: 0 };
     save();
-    speak("여행을 만들었어요. 폰에서 동승 연결 QR을 띄워 주세요");
+    speak("여행을 만들었어요. 차의 참석 QR을 휴대폰 카메라로 스캔해 주세요");
   } catch (e) {
     setupErr = `여행을 만들지 못했어요 · ${plain(e)}`;
   }
@@ -261,30 +263,8 @@ function answerOf(text) {
   return "";
 }
 
-// 동승자 연결(#71, T46): 차의 '폰 QR 읽기' → 카메라로 탑승자 폰의 1회용 QR → 고른 빈자리에 넣는다.
-// 시연의 '카메라'는 같은 출처인 오른쪽 폰 칸(iframe)의 QR 값을 읽고, 자리 고르기와 API는 차와 같다.
-function scan() {
-  const payload = els.phone.contentDocument?.querySelector(".qr")?.dataset.payload;
-  rideNote = "";
-  ride = { code: payload ? JSON.parse(payload).code : null };
-  if (!payload) rideNote = "폰 화면에 동승 연결 QR이 없어요. 오른쪽 폰에서 '동승 연결'을 눌러 주세요.";
-  render();
-}
-
-async function seatRider(seat) {
-  rideNote = "연결하고 있어요";
-  await act(async () => {
-    try {
-      const r = await api("POST", path("/ride-links"), { code: ride.code, seat });
-      ride = null;
-      rideNote = `${r.participant.name} 님을 ${SEAT[r.participant.seat]}에 넣었어요 · 폰에서 기록에 동의하면 함께 기록해요`;
-      speak(`${r.participant.name} 님이 ${SEAT[r.participant.seat]}에 탔어요`);
-    } catch (e) {
-      rideNote = plain(e);
-      if (e.status === 404) ride.code = null;
-    }
-  });
-}
+// 차에 참석 QR을 표시하고 동승자는 실제 휴대폰 카메라로 URL을 엽니다.
+const scan = () => vehicleBoarding.open();
 
 // 숏폼(T43): 차와 같은 GET /shortform(차의 참가자 토큰). 시연은 자막만 장면 길이대로 넘기고 소리는 틀지 않는다(차에서 원음으로 들려줌).
 async function showShort() {
@@ -391,7 +371,7 @@ function appBar(title, listening, ...pills) {
   return div("appbar", div("mascot-box", mascot(listening)), div("brand", h("b", {}, "가치타"), h("span", { className: "title" }, title)), ...pills);
 }
 
-// 여행 만들기(C6). 시연은 운전석만 차가 넣고 동승자는 폰 QR로 들어온다(서버 주소 칸 없음).
+// 여행 만들기(C6). 시연은 운전석만 차가 넣고 동승자는 차의 QR을 스캔해 들어온다(서버 주소 칸 없음).
 function setupScreen() {
   return div(
     "setup",
@@ -496,12 +476,12 @@ function people() {
   );
 }
 
-// 주차 중 도구(C5): 폰 QR 읽기·숏폼 보기, 여행 코드와 진단(알림이 있으면 그 자리에), 새 여행 만들기.
+// 주차 중 도구(C5): 차량 참석 QR·숏폼 보기, 여행 코드와 진단(알림이 있으면 그 자리에), 새 여행 만들기.
 // 차량 앱의 '이 차에 둔 원음 지우기'는 웹에 차 원음이 없어 두지 않는다.
 function tools() {
   return div("row2 ride-tools",
-    btn("동승자 연결", () => { ride = {code: null}; rideNote = ""; render(); }, "tonal"),
-    btn("기본 내비 열기", () => speak("웹 시연에서는 기본 내비를 열지 않아요 · 실제는 Pleos 내비"), "outline"));
+    btn("참석 QR", () => vehicleBoarding.open(), "tonal"),
+    btn("동승자 설정", () => { managing = true; render(); }, "outline"));
 }
 
 function consent() {
@@ -510,30 +490,6 @@ function consent() {
     "consent",
     div("", h("b", {}, "대화 기록 동의"), text("sub", driving() ? "끄기는 주행 중에도 한 번에 돼요" : "기본값은 꺼짐 · 주차 중에만 켤 수 있어요")),
     h("span", { className: `switch${on ? " on" : ""}`, role: "switch", "aria-checked": String(on), "aria-disabled": "true", title: "시연에서는 운전석 동의를 여행 만들 때 켜요" }, h("i")),
-  );
-}
-
-// 동승 연결 무대(C7): 왼쪽 무대 전체. 카메라 자리는 시연 그림, 읽으면 빈자리 단추.
-function rideStage() {
-  const free = SEATS.filter(([id]) => !trip.participants.some((p) => p.seat === id));
-  return card(
-    "stagecard accent",
-    h("h3", {}, "동승자 연결"),
-    ride.code
-      ? [
-          pill("동승 연결 QR을 읽었어요"),
-          h("h4", {}, "어느 자리에 앉았나요?"),
-          text("sub", "빈자리를 눌러 주세요 · 기록 동의는 그 사람이 폰에서 직접 켜요"),
-          div("seatbtns", free.map(([id, label]) => btn(label, () => seatRider(id), "primary xl"))),
-          h("span", { className: "grow" }),
-          btn("취소", () => ((ride = null), (rideNote = ""), render()), "outline wide"),
-        ]
-      : [
-          text("sub", "폰의 동승 QR을 카메라에 보여 주세요"),
-          div("camera", text("", "카메라 시연 · 확장 제어에서 폰 QR을 읽어 주세요")),
-          div("row2", btn("닫기", () => ((ride = null), (rideNote = ""), render()), "outline")),
-        ],
-    text("note20", rideNote),
   );
 }
 
@@ -566,8 +522,7 @@ function tripScreen() {
     b.disabled = busy || (!parked && id !== "ride"); return b;
   }));
   let body;
-  if (parked && ride) body = rideStage();
-  else if (parked && managing) body = card("manage", h("h3", {}, "여행 관리"), text("sub", `여행 코드 ${trip.code}`), btn("새 여행 만들기", newTrip, "outline"), btn("닫기", () => { managing = false; render(); }, "outline"));
+  if (parked && managing) body = card("manage", h("h3", {}, "여행 관리"), text("sub", `여행 코드 ${trip.code}`), btn("새 여행 만들기", newTrip, "outline"), btn("닫기", () => { managing = false; render(); }, "outline"));
   else if (parked && tab === "chat") body = chatStage();
   else if (parked && tab === "shorts") body = short ? shortStage() : card("manage", h("h3", {}, "쇼츠"), text("sub", note || "남긴 장면을 골라 자막 미리보기를 열어요"), btn("쇼츠 미리보기", showShort, "tonal"));
   else body = div("overview", statusHero(), div("overview-panels", people(), focus()), counts(), parked && tools());
@@ -617,12 +572,13 @@ function renderPhone() {
   els.phoneEmpty.hidden = !!code;
   if (code && code !== phoneCode) {
     phoneCode = code;
-    els.phone.src = "/"; // 폰은 여행 코드로 들어가지 않는다. 처음 화면에서 '동승 연결' QR을 띄운다
+    els.phone.src = "/"; // 실제 휴대폰은 차의 QR URL을 열어 같은 서버 여행에 참여합니다.
     els.phoneOpen.href = "/";
   }
 }
 
 function render() {
+  vehicleBoarding.sync();
   els.app.replaceChildren(!car ? setupScreen() : !trip ? loading() : tripScreen());
   renderSystem();
   renderExt();

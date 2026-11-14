@@ -1,6 +1,7 @@
-import test from "node:test";
-import assert from "node:assert/strict";
-import { createBoarding, remainingTime } from "./boarding.js";
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { createBoarding, remainingTime, boardingToken } from './boarding.js';
+import { boardingUrl, createVehicleBoarding } from './vehicle-boarding.js';
 
 class Element {
   constructor(tag) { this.tag = tag; this.children = []; this.attrs = {}; }
@@ -12,110 +13,100 @@ class Element {
   remove() { if (this.parent) this.parent.children = this.parent.children.filter((child) => child !== this); this.parent = null; }
 }
 const elements = (el) => [el, ...el.children.filter((child) => child instanceof Element).flatMap(elements)];
-const content = (el) => el instanceof Element ? el.children.map(content).join(" ") : String(el);
+const content = (el) => el instanceof Element ? el.children.map(content).join(' ') : String(el);
 const defer = () => { let resolve; const promise = new Promise((r) => { resolve = r; }); return { promise, resolve }; };
+const origin = 'https://gachita.test';
+const opaque = 'opaque_boarding_invitation_12345';
 function fixture(t) {
-  const body = new Element("body"), storage = new Map(), timers = [], calls = [], joined = [], decisions = [], left = [];
-  const descriptors = new Map(["document", "sessionStorage"].map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
-  globalThis.document = { body, hidden: false, createElement: (tag) => new Element(tag), createElementNS: (ns, tag) => Object.assign(new Element(tag), { namespaceURI: ns }) };
-  globalThis.sessionStorage = { getItem: (key) => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value), removeItem: (key) => storage.delete(key) };
-  t.mock.method(globalThis, "setInterval", (fn) => { timers.push(fn); return timers.length; });
-  t.mock.method(globalThis, "setTimeout", () => 0);
-  t.mock.method(globalThis, "clearTimeout", () => {});
-  t.mock.method(globalThis, "clearInterval", () => {});
-  let now = 1_800_000_000_000;
-  t.mock.method(Date, "now", () => now);
-  const profile = { id: "profile", name: "동승자", character: "basic" };
-  const participant = { id: "person", profileId: profile.id, consent: false, seat: "ROW_2_LEFT" };
-  const trip = { code: "TRIP12", title: "바다 여행", generation: 1, participants: [participant] };
-  const ride = { id: "link", qr: JSON.stringify({ type: "gachita-ride", version: 1, code: "one-use-code" }), expiresAt: now + 300_000, participantToken: "phone-only-token" };
-  const data = { linked: false, scannedDuringDelete: false, respond: null };
-  t.mock.method(globalThis, "fetch", async (path, options) => {
-    calls.push({ path, ...options });
-    if (data.respond) return data.respond(path, options);
-    if (options.method === "POST") return Response.json(ride, { status: 201 });
-    if (options.method === "DELETE") return data.scannedDuringDelete ? Response.json({ error: "이미 차에 연결됨" }, { status: 409 }) : new Response(null, { status: 204 });
-    if (options.method === "PATCH") { participant.consent = JSON.parse(options.body).consent; return Response.json(participant); }
-    if (path.includes("/ride-links/")) return Response.json(data.linked ? { status: "linked", tripCode: trip.code, participant } : { status: "pending", expiresAt: ride.expiresAt });
+  const storage=new Map();
+  const body = new Element('body'), timers = [], calls = [], joined = [], decisions = [], left = [];
+  const descriptors = new Map(['document','location','history','sessionStorage'].map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+  globalThis.sessionStorage={getItem:(key)=>storage.get(key)??null,setItem:(key,value)=>storage.set(key,value),removeItem:(key)=>storage.delete(key)};
+  globalThis.document = { body, hidden:false, createElement:(tag)=>new Element(tag),createElementNS:(ns,tag)=>new Element(tag) };
+  globalThis.location = { href:`${origin}/?join=${opaque}`, origin };
+  globalThis.history = { replaceState:(_,__,url)=>{globalThis.location.href=String(url);} };
+  t.mock.method(globalThis,'setInterval',(fn)=>{timers.push(fn);return timers.length;});
+  t.mock.method(globalThis,'setTimeout',()=>0);t.mock.method(globalThis,'clearTimeout',()=>{});t.mock.method(globalThis,'clearInterval',()=>{});
+  let now=1_800_000_000_000;t.mock.method(Date,'now',()=>now);
+  const profile={id:'profile',name:'동승자',character:'basic'};
+  const participant={id:'person',profileId:profile.id,consent:false,seat:'ROW_2_LEFT'};
+  const trip={code:'TRIP12',title:'바다 여행',status:'boarding',generation:1,participants:[participant]};
+  const preview={title:trip.title,seats:['ROW_2_LEFT','ROW_1_RIGHT'],expiresAt:now+300_000};
+  const invite={id:'invite-id',url:`/?join=${opaque}`,expiresAt:preview.expiresAt};
+  const data={respond:null};
+  t.mock.method(globalThis,'fetch',async(path,options)=>{
+    calls.push({path,...options});if(data.respond)return data.respond(path,options);
+    if(options.method==='DELETE')return new Response(null,{status:204});
+    if(options.method==='PATCH'){participant.consent=JSON.parse(options.body).consent;return Response.json(participant);}
+    if(path.endsWith('/boarding-invites')&&options.method==='POST')return Response.json(invite,{status:201});
+    if(path.endsWith('/participants'))return Response.json({tripCode:trip.code,participant,token:'phone-only-token'},{status:201});
+    if(path.includes('/boarding-invites/'))return Response.json(preview);
     return Response.json(trip);
   });
-  const boarding = createBoarding({ getProfile: () => profile, getToken: () => "profile-token", consentText: ["서버와 같은 동의 안내"], consentOffMessage: "동의를 끌까요?", onLinked: (value) => joined.push(value), onDecision: (value) => decisions.push(value), onLeave: (value) => left.push(value) });
-  t.after(() => { boarding.close(); for (const [key, descriptor] of descriptors) { if (descriptor) Object.defineProperty(globalThis, key, descriptor); else delete globalThis[key]; } });
-  return { boarding, body, profile, participant, trip, ride, data, calls, storage, joined, decisions, left,
-    now: (value) => { now = value; }, tick: async () => { timers.at(-1)?.(); await new Promise(setImmediate); },
-    button: (label) => elements(body).find((el) => el.tag === "button" && content(el) === label),
-    qr: () => elements(body).find((el) => el.attrs["data-payload"]),
+  const boarding=createBoarding({getProfile:()=>profile,getToken:()=>'profile-token',consentText:['동의 안내'],consentOffMessage:'동의를 끌까요?',onLinked:(v)=>joined.push(v),onDecision:(v)=>decisions.push(v),onLeave:(v)=>left.push(v)});
+  const car=createVehicleBoarding({getTrip:()=>trip,getToken:()=>'driver-token',getOrigin:()=>origin});
+  t.after(()=>{boarding.close();trip.status='ended';car.sync();for(const[key,descriptor]of descriptors){if(descriptor)Object.defineProperty(globalThis,key,descriptor);else delete globalThis[key];}});
+  return {boarding,car,body,profile,participant,trip,preview,invite,data,calls,joined,decisions,left,now:(v)=>{now=v;},tick:async()=>{for(const fn of timers)fn();await new Promise(setImmediate);},
+    button:(label)=>elements(body).find((el)=>el.tag==='button'&&content(el)===label),
+    choose:(seat)=>elements(body).find((el)=>el.tag==='input'&&el.value===seat).onchange(),
+    qr:()=>elements(body).find((el)=>el.attrs['data-payload']),
   };
 }
 
-test("QR은 5분을 초로 표시하고 만료 시 스캔할 SVG를 화면에서 없앤다", async (t) => {
-  const f = fixture(t);
-  await f.boarding.open();
-  assert.equal(remainingTime(f.ride.expiresAt), "05:00");
-  assert.equal(f.qr().attrs["data-payload"], f.ride.qr);
-  assert.ok(!f.qr().attrs["data-payload"].includes(f.ride.participantToken));
-  f.now(f.ride.expiresAt); await f.tick();
-  assert.equal(f.qr(), undefined);
-  assert.ok(content(f.body).includes("QR이 만료됐어요"));
+test('QR URL은 같은 서비스의 초대만 읽고 인증 토큰이나 다른 사이트로 이동하지 않는다',()=>{
+  assert.equal(boardingToken(`${origin}/?join=${opaque}`,origin),opaque);
+  for(const bad of [`https://other.test/?join=${opaque}`,`${origin}/?join=x`,`${origin}/profile?join=${opaque}`])assert.equal(boardingToken(bad,origin),null);
+  assert.equal(boardingUrl(`/?join=${opaque}`,origin),`${origin}/?join=${opaque}`);
+  assert.throws(()=>boardingUrl(`https://other.test/?join=${opaque}`,origin));
+});
+test('차량이 QR을 발급하고 만료되면 스캔 가능한 SVG를 제거한다',async(t)=>{
+  const f=fixture(t);await f.car.open();assert.equal(f.qr().attrs['data-payload'],`${origin}${f.invite.url}`);
+  assert.equal(remainingTime(f.invite.expiresAt),'05:00');assert.equal(f.calls[0].headers.authorization,'Bearer driver-token');
+  f.now(f.invite.expiresAt);await f.tick();assert.equal(f.qr(),undefined);assert.ok(content(f.body).includes('QR을 다시 열어 주세요'));
+});
+test('차에서 닫으면 서버 초대를 폐기하고 주행 전환 때도 QR을 숨긴다',async(t)=>{
+  const f=fixture(t);await f.car.open();await f.button('닫기').onclick();assert.equal(f.body.children.length,0);
+  assert.equal(f.calls.at(-1).method,'DELETE');assert.equal(f.calls.at(-1).path,'/api/trips/TRIP12/boarding-invites/invite-id');
+  await f.car.open();f.trip.status='driving';f.car.sync();assert.equal(f.qr(),undefined);assert.equal(f.body.children.length,0);
+});
+test('휴대폰은 차 QR을 조회하고 선택한 자리로 참가한 뒤 자기 토큰으로만 동의한다',async(t)=>{
+  const f=fixture(t);await f.boarding.open();assert.equal(f.qr(),undefined);assert.equal(f.calls[0].headers.authorization,undefined);
+  assert.equal(f.calls.filter((c)=>c.method==='POST').length,0);f.choose('ROW_2_LEFT');await f.button('이 자리로 함께 타기').onclick();
+  const join=f.calls.find((c)=>c.method==='POST');assert.equal(join.path,`/api/boarding-invites/${opaque}/participants`);assert.deepEqual(JSON.parse(join.body),{seat:'ROW_2_LEFT'});assert.equal(join.headers.authorization,'Bearer profile-token');
+  assert.equal(f.calls.filter((c)=>c.method==='PATCH').length,0);assert.equal(f.joined[0].token,'phone-only-token');assert.equal(f.joined[0].code,'TRIP12');
+  await f.button('기록에 동의하기').onclick();const patch=f.calls.find((c)=>c.method==='PATCH');assert.equal(patch.headers.authorization,'Bearer phone-only-token');assert.deepEqual(JSON.parse(patch.body),{consent:true});
+  assert.ok(content(f.body).includes('내 기록 동의 켜짐'));f.button('여행으로 돌아가기').onclick();assert.equal(f.left[0].code,'TRIP12');
+});
+test('기록 없이 참여하면 동의는 꺼진 채 합석한다',async(t)=>{
+  const f=fixture(t);await f.boarding.open();f.choose('ROW_2_LEFT');await f.button('이 자리로 함께 타기').onclick();await f.button('기록 없이 함께 타기').onclick();
+  assert.equal(f.participant.consent,false);assert.equal(f.decisions.length,1);assert.ok(content(f.body).includes('내 기록 동의 꺼짐'));
+});
+test('좌석 충돌 뒤 성공 화면을 만들지 않고 빈자리를 다시 조회한다',async(t)=>{
+  const f=fixture(t);await f.boarding.open();f.choose('ROW_2_LEFT');f.data.respond=()=>Response.json({error:'좌석 충돌'},{status:409});await f.button('이 자리로 함께 타기').onclick();
+  assert.equal(f.joined.length,0);assert.ok(content(f.body).includes('다른 동승자가 먼저'));f.preview.seats=['ROW_1_RIGHT'];f.data.respond=null;await f.button('다시 확인').onclick();assert.equal(f.button('이 자리로 함께 타기').disabled,true);
+});
+for(const change of ['close','profile'])test(`휴대폰 조회 중 ${change} 변경 뒤 늦은 응답을 표시하지 않는다`,async(t)=>{
+  const f=fixture(t),pending=defer();f.data.respond=()=>pending.promise;const wait=f.boarding.open();if(change==='close')f.boarding.close();else{f.profile.id='other';f.boarding.sync();}
+  pending.resolve(Response.json(f.preview));await wait;assert.equal(f.body.children.length,0);assert.equal(f.joined.length,0);
+});
+test('만료 또는 조회 오류 뒤 폰은 참여 성공을 표시하지 않는다',async(t)=>{
+  const f=fixture(t);f.data.respond=()=>Response.json({error:'expired'},{status:410});await f.boarding.open();assert.equal(f.button('이 자리로 함께 타기'),undefined);assert.ok(content(f.body).includes('만료됐거나'));
+  f.data.respond=null;await f.button('다시 확인').onclick();f.now(f.preview.expiresAt);await f.tick();assert.equal(f.button('이 자리로 함께 타기'),undefined);
 });
 
-test("스캔은 동의를 켜지 않고 본인 동의 버튼만 폰의 참가자 토큰으로 보낸다", async (t) => {
-  const f = fixture(t); await f.boarding.open();
-  f.data.linked = true; await f.tick();
-  assert.equal(f.qr(), undefined);
-  assert.ok(content(f.body).includes("뒤 왼쪽"));
-  assert.equal(f.calls.filter((call) => call.method === "PATCH").length, 0);
-  assert.equal(f.joined[0].token, "phone-only-token");
-  assert.equal(f.storage.has("gachita:ride"), false);
-  await f.button("동의하고 함께 타기").onclick();
-  const patch = f.calls.find((call) => call.method === "PATCH");
-  assert.equal(patch.path, "/api/trips/TRIP12/participants/person");
-  assert.equal(patch.headers.authorization, "Bearer phone-only-token");
-  assert.deepEqual(JSON.parse(patch.body), { consent: true });
-  assert.ok(content(f.body).includes("내 기록 동의 켜짐"));
-  assert.ok(content(f.body).includes("실제 녹음은 모두 동의한 뒤 차에서 시작해요"));
-  f.button("여행으로 돌아가기").onclick();
-  assert.equal(f.left[0].code, "TRIP12");
-  assert.equal(f.body.children.length, 0);
+test('참여 응답을 잃은 뒤 다시 열어도 이미 찬 자리로 멱등 재확인한다',async(t)=>{
+  const f=fixture(t);await f.boarding.open();f.choose('ROW_2_LEFT');f.data.respond=()=>{throw new Error('connection lost');};await f.button('이 자리로 함께 타기').onclick();
+  f.boarding.close();f.preview.seats=[];f.data.respond=null;await f.boarding.open();
+  assert.equal(f.button('참여 결과 다시 확인').disabled,false);await f.button('참여 결과 다시 확인').onclick();assert.equal(f.joined[0].participant.seat,'ROW_2_LEFT');assert.equal(f.joined[0].participant.consent,false);
+});
+test('가입 응답 대기 중 만료되어도 화면 오류나 거짓 참가 결과가 생기지 않는다',async(t)=>{
+  const f=fixture(t);await f.boarding.open();f.choose('ROW_2_LEFT');const pending=defer();f.data.respond=()=>pending.promise;const joining=f.button('이 자리로 함께 타기').onclick();
+  f.now(f.preview.expiresAt);await f.tick();pending.resolve(Response.json({error:'expired'},{status:410}));await joining;
+  assert.equal(f.joined.length,0);assert.equal(f.button('이 자리로 함께 타기'),undefined);assert.ok(content(f.body).includes('QR이 만료됐어요'));
 });
 
-test("기록 없이 함께 타기는 동의를 끈 상태로 합석을 마친다", async (t) => {
-  const f = fixture(t); await f.boarding.open(); f.data.linked = true; await f.tick();
-  await f.button("기록 없이 함께 타기").onclick();
-  assert.deepEqual(JSON.parse(f.calls.find((call) => call.method === "PATCH").body), { consent: false });
-  assert.ok(content(f.body).includes("내 기록 동의 꺼짐"));
-  assert.equal(f.decisions.length, 1);
-});
-
-test("새 QR 요청 중 차가 먼저 읽으면 새 토큰을 발급하지 않고 기존 합석으로 이어진다", async (t) => {
-  const f = fixture(t); await f.boarding.open();
-  f.data.scannedDuringDelete = true; f.data.linked = true;
-  await f.button("QR 새로 만들기").onclick();
-  assert.equal(f.calls.filter((call) => call.method === "POST").length, 1);
-  assert.equal(f.joined[0].token, "phone-only-token");
-  assert.ok(content(f.body).includes("이 자리에 앉았나요?"));
-});
-
-for (const change of ["close", "profile"]) {
-  test(`QR 발급 중 ${change} 변경 뒤에는 늦은 토큰과 화면을 되살리지 않는다`, async (t) => {
-    const f = fixture(t), pending = defer(); f.data.respond = () => pending.promise;
-    const wait = f.boarding.open();
-    if (change === "close") f.boarding.close();
-    else { f.profile.id = "another-profile"; f.boarding.sync(); }
-    pending.resolve(Response.json(f.ride)); await wait;
-    assert.equal(f.body.children.length, 0);
-    assert.equal(f.storage.has("gachita:ride"), false);
-  });
-}
-
-test("저장한 QR은 서버 확인 전 표시하지 않고 네트워크 오류 뒤 같은 연결을 다시 확인한다", async (t) => {
-  const f = fixture(t);
-  f.storage.set("gachita:ride", JSON.stringify({ id: f.ride.id, qr: f.ride.qr, expiresAt: f.ride.expiresAt, token: f.ride.participantToken, profileId: f.profile.id }));
-  f.data.respond = () => { throw new Error("offline"); };
-  await f.boarding.open();
-  assert.equal(f.qr(), undefined);
-  assert.ok(content(f.body).includes("연결 상태를 확인하지 못했어요"));
-  f.data.respond = null; await f.button("다시 확인").onclick();
-  assert.ok(f.qr());
-  assert.equal(f.calls.filter((call) => call.method === "POST").length, 0);
+test('연결 완료 화면도 다른 기기에서 바뀐 동의를 다시 반영한다',async(t)=>{
+  const f=fixture(t);await f.boarding.open();f.choose('ROW_2_LEFT');await f.button('이 자리로 함께 타기').onclick();await f.button('기록에 동의하기').onclick();
+  const changed={...f.participant,consent:false};f.boarding.openConsent({...f.trip,participants:[changed]},changed,'phone-only-token');
+  assert.ok(content(f.body).includes('대화를 기록할까요?'));assert.ok(!content(f.body).includes('내 기록 동의 켜짐'));
 });

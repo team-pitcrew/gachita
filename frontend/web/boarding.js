@@ -1,188 +1,203 @@
-import { api, h, SEAT } from "./shared.js";
-import qrcode from "./qrcode.js";
-import { characterImage } from "./short-film.js";
+import { api, h, SEAT } from './shared.js';
+import { characterImage } from './short-film.js';
 
-const KEY = "gachita:ride";
-const button = (label, onclick, className = "", disabled = false) => h("button", { type: "button", onclick, className, disabled }, label);
+const button = (label, onclick, className = '', disabled = false) => h('button', { type: 'button', onclick, className, disabled }, label);
 export const remainingTime = (expiresAt, now = Date.now()) => {
   const seconds = Math.max(0, Math.ceil((expiresAt - now) / 1000));
-  return `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+  return `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
 };
-function qrSvg(text) {
-  const qr = qrcode(0, "M"); qr.addData(text); qr.make();
-  const n = qr.getModuleCount(), d = [];
-  for (let row = 0; row < n; row++) for (let column = 0; column < n; column++) if (qr.isDark(row, column)) d.push(`M${column + 4} ${row + 4}h1v1h-1z`);
-  const ns = "http://www.w3.org/2000/svg";
-  const el = (tag, attrs) => Object.entries(attrs).reduce((node, [key, value]) => (node.setAttribute(key, value), node), document.createElementNS(ns, tag));
-  const svg = el("svg", { viewBox: `0 0 ${n + 8} ${n + 8}`, class: "boarding-qr", role: "img", "aria-label": "참석 QR", "shape-rendering": "crispEdges", "data-payload": text });
-  svg.append(el("rect", { width: n + 8, height: n + 8, fill: "#fff" }), el("path", { d: d.join(""), fill: "#000" }));
-  return svg;
+export function boardingToken(url, origin) {
+  try { const target = new URL(url, origin); const token = target.searchParams.get('join'); return target.origin === origin && target.pathname === '/' && /^[A-Za-z0-9_-]{20,120}$/.test(token || '') ? token : null; }
+  catch { return null; }
 }
 
-// 프로필 토큰은 조회·발급에, 폰에만 발급된 참가자 토큰은 본인 동의에 쓴다.
-export function createBoarding({ getProfile, getToken, consentText, consentOffMessage, onLinked, onDecision, onLeave }) {
+// 차가 표시한 초대 URL을 폰에서 연다. 참가자 토큰은 QR이 아니라 참가 응답으로 이 폰에만 전달된다.
+export function createBoarding({ getProfile, getToken, consentText, consentOffMessage, onLinked, onDecision, onLeave, onProfile }) {
   let state;
-  const readSaved = () => { try { return JSON.parse(sessionStorage.getItem(KEY) || "null"); } catch { return null; } };
-  const save = (s, ride) => {
-    s.ride = ride;
-    if (ride) sessionStorage.setItem(KEY, JSON.stringify({ ...ride, profileId: s.profileId }));
-    else sessionStorage.removeItem(KEY);
-  };
+  const PENDING = 'gachita:boarding-pending';
+  const savedJoin = () => { try { const saved = JSON.parse(sessionStorage.getItem(PENDING) || 'null'); return saved?.profileId === getProfile()?.id ? saved : null; } catch { return null; } };
+  const rememberJoin = (s) => sessionStorage.setItem(PENDING, JSON.stringify({ invite: s.invite, profileId: s.profileId, seat: s.seat }));
+  const currentInvite = () => boardingToken(location.href, location.origin);
+  const forgetInvite = () => { const url = new URL(location.href); url.searchParams.delete('join'); history.replaceState(null, '', url); };
   const valid = (s) => state === s && getProfile()?.id === s.profileId && getToken() === s.profileToken;
-  function close() { const s = state; if (!s) return; state = null; clearInterval(s.timer); s.controller.abort(); s.dialog.close(); s.dialog.remove(); s.focus?.focus(); }
-  const sync = () => { if (state && !valid(state)) close(); };
+  const stopCamera = (s) => { clearTimeout(s.cameraTimer); s.stream?.getTracks().forEach((track) => track.stop()); s.stream = null; };
+  function close(clear = false) {
+    const s = state; if (!s) return;
+    state = null; stopCamera(s); clearInterval(s.timer); s.controller.abort(); s.dialog.close(); s.dialog.remove(); s.focus?.focus();
+    if (clear) forgetInvite();
+  }
+  const sync = (latest) => {
+    if (state && !valid(state)) return close();
+    const s = state;
+    if (!s?.joined || latest?.code !== s.joined.code) return;
+    const person = latest.participants.find((p) => p.id === s.joined.participant.id && p.profileId === s.profileId);
+    if (!person) return close();
+    const changed = person.consent !== s.joined.participant.consent || person.seat !== s.joined.participant.seat;
+    s.trip = latest; s.joined.participant = person;
+    if (changed && !s.busy) { s.phase = person.consent ? 'complete' : 'consent'; paint(s); }
+  };
   async function request(s, method, path, body, token = s.profileToken) {
-    if (!valid(s)) throw new Error("프로필을 다시 확인해 주세요.");
+    if (!valid(s)) throw new Error('프로필이 바뀌었어요. 다시 확인해 주세요.');
     const controller = new AbortController(), abort = () => controller.abort();
-    s.controller.signal.addEventListener("abort", abort, { once: true });
+    s.controller.signal.addEventListener('abort', abort, { once: true });
     const timeout = setTimeout(abort, 10000);
     try {
       const result = await api(method, path, body, token, controller.signal);
-      if (!valid(s)) throw new Error("프로필이 바뀌었어요.");
+      if (!valid(s)) throw new Error('연결 화면이 바뀌었어요.');
       return result;
-    } finally { clearTimeout(timeout); s.controller.signal.removeEventListener("abort", abort); }
+    } finally { clearTimeout(timeout); s.controller.signal.removeEventListener('abort', abort); }
   }
   function begin() {
-    close(); const profile = getProfile();
-    if (!profile || !getToken()) return null;
-    const s = { profileId: profile.id, profileToken: getToken(), controller: new AbortController(), phase: "qr", busy: false, checking: false, error: "", focus: document.activeElement };
-    s.dialog = h("dialog", { className: "boarding-dialog", "aria-label": "참석 QR과 동승 연결", oncancel: (event) => { event.preventDefault(); dismiss(s); } });
-    state = s; document.body.append(s.dialog); s.dialog.showModal();
-    return s;
+    close();
+    const s = { profileId: getProfile()?.id, profileToken: getToken(), controller: new AbortController(), phase: 'scan', busy: false, error: '', focus: document.activeElement };
+    s.dialog = h('dialog', { className: 'boarding-dialog', 'aria-label': '차량 QR로 동승 참여', oncancel: (event) => { event.preventDefault(); if (!s.busy) close(true); } });
+    state = s; document.body.append(s.dialog); s.dialog.showModal(); return s;
   }
-  async function connection(s) {
-    s.phase = "connecting"; paint(s);
-    const trip = await request(s, "GET", `/trips/${s.joined.code}`);
-    const me = trip.participants.find((person) => person.id === s.joined.participant.id && person.profileId === s.profileId);
-    if (!me) throw new Error("연결된 자리를 찾지 못했어요. 차에서 동승자 설정을 확인해 주세요.");
-    s.trip = trip; s.joined.participant = me; s.phase = me.consent ? "complete" : "consent";
-  }
-  async function linked(s, result) {
-    const ride = s.ride;
-    const joined = { code: result.tripCode, participant: result.participant, token: ride.token };
-    onLinked(joined); // 저장이 끝나기 전에는 1회 연결의 토큰을 지우지 않는다.
-    s.joined = joined;
-    save(s, null); s.qr = null; s.error = "";
-    await connection(s);
-  }
-  async function poll(s, duringWrite = false) {
-    if (!valid(s) || !s.ride || s.checking || (s.busy && !duringWrite)) return;
+  async function preview(s) {
+    if (!valid(s) || !s.invite || s.busy || s.checking || s.joined) return;
     s.checking = true;
     try {
-      const result = await request(s, "GET", `/ride-links/${s.ride.id}`);
-      s.error = ""; s.checked = true;
-      if (result.status === "linked") await linked(s, result);
-    } catch (error) {
+      const result = await request(s, 'GET', `/boarding-invites/${encodeURIComponent(s.invite)}`, null, null);
+      s.preview = result; s.error = ''; s.phase = 'seat';
+      if (!s.recovering && !result.seats.includes(s.seat)) s.seat = null;
+    } catch (e) {
       if (!valid(s)) return;
-      if (error.status === 404 && !s.joined) { save(s, null); s.qr = null; s.phase = "expired"; s.error = ""; }
-      else { s.checked = false; s.error = error.status === 0 ? "연결 상태를 확인하지 못했어요. 다시 확인해 주세요." : error.message; }
+      s.error = e.status === 404 || e.status === 410 ? 'QR이 만료됐거나 차에서 닫혔어요. 차의 새 QR을 다시 스캔해 주세요.' : e.message;
+      s.preview = null; s.phase = 'unavailable';
     } finally { s.checking = false; if (valid(s)) paint(s); }
   }
-  async function withdraw(s) {
-    if (!s.ride) return true;
-    try { await request(s, "DELETE", `/ride-links/${s.ride.id}`); }
-    catch (error) {
-      if (error.status === 409) { await poll(s, true); return false; }
-      if (error.status !== 404) throw error;
-    }
-    save(s, null); s.qr = null; return true;
-  }
-  async function generate(s) {
-    if (!valid(s) || s.busy || s.checking) return;
-    s.busy = true; s.error = ""; paint(s);
+  async function join(s) {
+    if (!valid(s) || s.busy || !s.seat || !s.preview || s.preview.expiresAt <= Date.now()) return;
+    if (!getProfile() || !getToken()) { close(); onProfile?.(); return; }
+    s.busy = true; s.error = ''; paint(s);
     try {
-      if (!(await withdraw(s))) return;
-      const result = await request(s, "POST", "/ride-links", {});
-      save(s, { id: result.id, qr: result.qr, expiresAt: result.expiresAt, token: result.participantToken });
-      s.phase = "qr"; s.checked = true;
-    } catch (error) { if (valid(s)) s.error = error.status === 0 ? "QR을 만들지 못했어요. 연결을 확인한 뒤 다시 눌러 주세요." : error.message; }
-    finally { s.busy = false; if (valid(s)) paint(s); }
+      // 응답을 받지 못하고 새로고침해도 같은 프로필·초대·자리로 멱등 재확인을 합니다.
+      rememberJoin(s); s.recovering = true;
+      const result = await request(s, 'POST', `/boarding-invites/${encodeURIComponent(s.invite)}/participants`, { seat: s.seat });
+      const joined = { code: result.tripCode, participant: result.participant, token: result.token };
+      onLinked(joined); s.joined = joined; sessionStorage.removeItem(PENDING); forgetInvite();
+      await connection(s);
+    } catch (e) {
+      if (valid(s)) {
+        if (e.status === 409) { s.recovering = false; sessionStorage.removeItem(PENDING); }
+        s.error = e.status === 409 ? '그 자리에 다른 동승자가 먼저 참여했거나 여행 상태가 바뀌었어요. 빈자리를 다시 확인해 주세요.' : e.status === 410 ? 'QR이 만료됐어요. 차의 새 QR을 스캔하면 이미 참여한 자리를 다시 연결할 수 있어요.' : e.message;
+        s.phase = s.joined ? 'connecting' : s.preview && s.preview.expiresAt > Date.now() ? 'seat' : 'unavailable';
+      }
+    } finally { s.busy = false; if (valid(s)) paint(s); }
+  }
+  async function connection(s) {
+    s.phase = 'connecting'; paint(s);
+    const trip = await request(s, 'GET', `/trips/${s.joined.code}`, null, s.joined.token);
+    const me = trip.participants.find((p) => p.id === s.joined.participant.id && p.profileId === s.profileId);
+    if (!me) throw new Error('참여한 자리를 확인하지 못했어요. 다시 확인해 주세요.');
+    s.trip = trip; s.joined.participant = me; s.phase = me.consent ? 'complete' : 'consent';
   }
   async function retry(s) {
-    if (!valid(s) || s.busy || s.checking) return;
-    if (!s.joined) return s.ride ? poll(s) : generate(s);
-    s.busy = true; s.error = ""; paint(s);
-    try { await connection(s); }
-    catch (error) { if (valid(s)) s.error = error.message; }
+    if (!valid(s) || s.busy) return;
+    if (!s.joined) return preview(s);
+    s.busy = true; s.error = '';
+    try { await connection(s); } catch (e) { if (valid(s)) s.error = e.message; }
     finally { s.busy = false; if (valid(s)) paint(s); }
   }
-  function finish(s) { const joined = s.joined; close(); if (joined) onLeave(joined); }
-  async function dismiss(s) {
-    if (!valid(s) || s.busy || s.checking) return;
-    if (s.joined) return finish(s);
-    s.busy = true; s.error = ""; paint(s);
-    try { if (await withdraw(s)) close(); }
-    catch (error) { if (valid(s)) s.error = "QR을 닫지 못했어요. 연결을 확인한 뒤 다시 눌러 주세요."; }
-    finally { s.busy = false; if (valid(s)) paint(s); }
-  }
+  function finish(s) { const joined = s.joined; close(true); if (joined) onLeave(joined); }
   async function decide(s, consent) {
-    if (!valid(s) || s.busy || !s.joined || s.phase !== "consent") return;
+    if (!valid(s) || s.busy || !s.joined || s.phase !== 'consent') return;
     if (!consent && s.joined.participant.consent && !confirm(consentOffMessage)) return;
-    s.busy = true; s.error = ""; paint(s);
+    s.busy = true; s.error = ''; paint(s);
     try {
-      await request(s, "PATCH", `/trips/${s.joined.code}/participants/${s.joined.participant.id}`, { consent }, s.joined.token);
+      await request(s, 'PATCH', `/trips/${s.joined.code}/participants/${s.joined.participant.id}`, { consent }, s.joined.token);
       await connection(s);
-      if (s.joined.participant.consent !== consent) throw new Error("동의 상태가 바뀌었어요. 다시 확인해 주세요.");
-      onDecision(s.joined); s.phase = "complete";
-    } catch (error) { if (valid(s)) { s.error = error.status === 0 ? "동의 결과를 확인하지 못했어요. 다시 확인해 주세요." : error.message; s.phase = "connecting"; } }
+      if (s.joined.participant.consent !== consent) throw new Error('동의 상태가 바뀌었어요. 다시 확인해 주세요.');
+      onDecision(s.joined); s.phase = 'complete';
+    } catch (e) { if (valid(s)) { s.error = e.message; s.phase = 'connecting'; } }
+    finally { s.busy = false; if (valid(s)) paint(s); }
+  }
+  async function scan(s) {
+    if (!valid(s) || s.busy) return;
+    if (!globalThis.BarcodeDetector || !navigator.mediaDevices?.getUserMedia) { s.error = '휴대폰의 기본 카메라로 차 화면의 QR을 비추고 표시되는 링크를 눌러 주세요.'; paint(s); return; }
+    s.busy = true; s.error = ''; paint(s);
+    try {
+      const detector = new BarcodeDetector({ formats: ['qr_code'] });
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: 'environment' } } });
+      if (!valid(s)) { stream.getTracks().forEach((track) => track.stop()); return; }
+      s.stream = stream;
+      s.video = h('video', { muted: true, autoplay: true, playsInline: true, className: 'boarding-camera', 'aria-label': '차량 QR을 비추는 카메라' });
+      s.video.srcObject = stream; s.busy = false; paint(s); await s.video.play();
+      const detect = async () => {
+        if (!valid(s) || !s.stream) return;
+        try {
+          const results = await detector.detect(s.video);
+          if (!valid(s) || s.stream !== stream) return;
+          const token = results.map((result) => boardingToken(result.rawValue, location.origin)).find(Boolean);
+          if (token) { stopCamera(s); s.invite = token; s.phase = 'loading'; const url = new URL(location.href); url.searchParams.set('join', token); history.replaceState(null, '', url); paint(s); await preview(s); return; }
+        } catch { /* 프레임이 준비되지 않으면 다음 실제 프레임을 확인합니다. */ }
+        if (valid(s) && s.stream) s.cameraTimer = setTimeout(detect, 200);
+      };
+      detect();
+    } catch (e) { if (valid(s)) { stopCamera(s); s.error = e.name === 'NotAllowedError' ? '카메라 사용을 허용하거나 휴대폰의 기본 카메라로 차량 QR을 스캔해 주세요.' : '카메라를 열지 못했어요. 휴대폰의 기본 카메라로 차량 QR을 스캔해 주세요.'; } }
     finally { s.busy = false; if (valid(s)) paint(s); }
   }
   function paint(s) {
     if (!valid(s)) return;
     const profile = getProfile(), me = s.joined?.participant;
-    const ready = s.phase === "qr" && s.checked && s.ride && s.ride.expiresAt > Date.now();
-    const expired = s.phase === "expired" || (s.ride && s.ride.expiresAt <= Date.now());
-    const title = s.phase === "consent" ? "탔어요" : s.phase === "complete" ? "연결 완료" : "참석 QR";
-    const heading = h("header", { className: "boarding-heading" }, button("닫기", () => dismiss(s), "plain", s.busy || s.checking), h("strong", {}, title));
+    const heading = h('header', { className: 'boarding-heading' }, button('닫기', () => s.joined ? finish(s) : close(true), 'plain', s.busy), h('strong', {}, s.joined ? '동승 연결' : '차량 QR로 참여'));
     let body;
-    if (s.phase === "consent") {
-      body = h("section", { className: "boarding-content" }, h("h1", {}, `${profile.name} 님,`, h("br"), "이 자리에 앉았나요?"),
-        h("div", { className: "boarding-seat" }, characterImage(profile.character), h("h2", {}, SEAT[me.seat] || "연결한 자리"), h("p", {}, s.trip.title || "함께한 여행")),
-        h("h2", {}, "대화를 기록할까요?"), h("p", {}, "함께 나눈 목소리를 받아 적고, 고른 장면을 쇼츠로 남겨요. 모두 동의한 동안만 기록할 수 있어요."),
-        h("p", { className: "meta" }, "내 동의는 기록을 허락하는 설정이에요. 실제 녹음은 차에서 따로 시작해요."),
-        h("details", { className: "boarding-consent" }, h("summary", {}, "기록에 쓰는 정보와 보관·삭제 안내"), h("ul", {}, consentText.map((line) => h("li", {}, line)))),
-        h("div", { className: "boarding-actions" }, button("동의하고 함께 타기", () => decide(s, true), "primary", s.busy), button("기록 없이 함께 타기", () => decide(s, false), "boarding-secondary", s.busy)),
-        h("p", { className: "meta" }, "자리가 다르면 차의 동승자 설정에서 다시 골라 주세요."));
-    } else if (s.phase === "complete") {
-      body = h("section", { className: "boarding-content boarding-complete" }, characterImage(profile.character), h("h1", {}, `${profile.name} 님이`, h("br"), "함께 타고 있어요"),
-        h("p", { className: "meta" }, `${SEAT[me.seat] || "연결한 자리"} · ${s.trip.title || "함께한 여행"}`),
-        h("div", { className: "boarding-status" }, h("strong", {}, `내 기록 동의 ${me.consent ? "켜짐" : "꺼짐"}`), h("p", {}, me.consent ? "기록을 허락했어요. 실제 녹음은 모두 동의한 뒤 차에서 시작해요." : "기록에 동의하지 않고 함께 타고 있어요. 부탁과 여행 정보는 그대로 이용할 수 있어요.")),
-        h("div", { className: "boarding-actions" }, button("여행으로 돌아가기", () => finish(s), "primary"), button("내 동의 설정", () => { s.phase = "consent"; paint(s); }, "boarding-secondary")));
-    } else if (s.phase === "connecting") {
-      body = h("section", { className: "boarding-content" }, h("h1", {}, "내 자리를 확인하고 있어요"), h("p", {}, "차에 연결했어요. 여행과 내 동의 상태를 확인해요."));
-    } else {
-      const code = ready ? s.qr ||= qrSvg(s.ride.qr) : null;
-      s.countdown = h("p", { className: "boarding-countdown" }, ready ? `${remainingTime(s.ride.expiresAt)} 뒤 만료` : expired ? "QR이 만료됐어요" : "");
-      body = h("section", { className: "boarding-content" }, h("h1", {}, "차에 QR을", h("br"), "보여 주세요"),
-        h("div", { className: "boarding-person" }, characterImage(profile.character), h("div", {}, h("strong", {}, profile.name), h("p", {}, "오늘 함께 탈 사람"))),
-        h("div", { className: "boarding-code" }, code || h("p", { role: "status" }, expired ? "새 QR로 다시 연결해 주세요." : s.error ? "연결을 확인해 주세요." : "QR을 준비하고 있어요.")),
-        s.countdown, h("p", { className: "meta" }, "차에서 동승자 설정 → 참석 QR 읽기를 눌러 주세요."),
-        button("QR 새로 만들기", () => generate(s), expired ? "primary" : "boarding-secondary", s.busy || s.checking),
-        h("p", { className: "boarding-hint meta" }, "차가 읽으면 자동으로 다음 화면으로 넘어가요."));
-    }
-    s.dialog.replaceChildren(heading, body, ...[s.error && h("div", { className: "boarding-error", role: "alert" }, h("p", {}, s.error), button("다시 확인", () => retry(s), "boarding-secondary", s.busy || s.checking))].filter(Boolean));
+    if (s.phase === 'consent') {
+      body = h('section', { className: 'boarding-content' }, h('h1', {}, `${profile.name} 님,`, h('br'), '함께 탔어요'),
+        h('div', { className: 'boarding-seat' }, characterImage(profile.character), h('h2', {}, SEAT[me.seat]), h('p', {}, s.trip.title)),
+        h('h2', {}, '대화를 기록할까요?'), h('p', {}, '함께 나눈 목소리를 받아 적고, 고른 장면을 쇼츠로 남겨요. 모두 동의한 동안만 기록할 수 있어요.'),
+        h('p', { className: 'meta' }, '참여와 기록 동의는 별개예요. 실제 녹음은 차에서 따로 시작해요.'),
+        h('details', { className: 'boarding-consent' }, h('summary', {}, '기록에 쓰는 정보와 보관·삭제 안내'), h('ul', {}, consentText.map((line) => h('li', {}, line)))),
+        h('div', { className: 'boarding-actions' }, button('기록에 동의하기', () => decide(s, true), 'primary', s.busy), button('기록 없이 함께 타기', () => decide(s, false), 'boarding-secondary', s.busy)));
+    } else if (s.phase === 'complete') {
+      body = h('section', { className: 'boarding-content boarding-complete' }, characterImage(profile.character), h('h1', {}, `${profile.name} 님이`, h('br'), '함께 타고 있어요'),
+        h('p', { className: 'meta' }, `${SEAT[me.seat]} · ${s.trip.title}`),
+        h('div', { className: 'boarding-status' }, h('strong', {}, `내 기록 동의 ${me.consent ? '켜짐' : '꺼짐'}`), h('p', {}, me.consent ? '기록을 허락했어요. 실제 녹음은 모두 동의한 뒤 차에서 시작해요.' : '기록에 동의하지 않고 함께 타고 있어요.')),
+        h('div', { className: 'boarding-actions' }, button('여행으로 돌아가기', () => finish(s), 'primary'), button('내 동의 설정', () => { s.phase = 'consent'; paint(s); }, 'boarding-secondary')));
+    } else if (s.phase === 'seat') {
+      s.countdown = h('p', { className: 'boarding-countdown' }, `${remainingTime(s.preview.expiresAt)} 안에 참여해 주세요`);
+      body = h('section', { className: 'boarding-content' }, h('h1', {}, s.preview.title || '함께 탈 여행'),
+        profile ? h('div', { className: 'boarding-person' }, characterImage(profile.character), h('strong', {}, profile.name)) : h('p', {}, '차량 QR을 확인했어요. 내 프로필을 만든 뒤 자리를 골라 참여해 주세요.'),
+        profile ? h('fieldset', { className: 'boarding-seats' }, h('legend', {}, '어느 자리에 앉았나요?'), s.preview.seats.map((seat) => h('label', { className: 'boarding-seat-option' }, h('input', { type: 'radio', name: 'boarding-seat', value: seat, checked: s.seat === seat, disabled: s.busy, onchange: () => { s.seat = seat; paint(s); } }), SEAT[seat]))) : null,
+        !s.preview.seats.length && h('p', {}, '빈자리가 없어요. 차에서 동승자 설정을 확인해 주세요.'), s.countdown,
+        profile ? button(s.busy ? '참여 중' : s.recovering ? '참여 결과 다시 확인' : '이 자리로 함께 타기', () => join(s), 'primary', s.busy || !s.seat) : button('내 프로필 만들기', () => { close(); onProfile?.(); }, 'primary'),
+        profile && !s.preview.seats.length && !s.recovering && button('이미 참여한 자리 다시 연결', () => { s.seat = 'ROW_1_LEFT'; s.recovering = true; join(s); }, 'boarding-secondary', s.busy),
+        h('p', { className: 'meta' }, '참여한 뒤 내 휴대폰에서 기록 동의를 따로 정해요.'));
+    } else if (s.phase === 'scan') {
+      body = h('section', { className: 'boarding-content' }, h('h1', {}, '차 화면의 QR을', h('br'), '휴대폰으로 스캔해요'),
+        h('p', {}, '차에서 동승자 설정 → 참석 QR을 열어 주세요. 휴대폰의 기본 카메라로 QR을 비추고 나타나는 링크를 누르면 참여할 수 있어요.'),
+        s.stream ? s.video : button('카메라로 QR 스캔', () => scan(s), 'primary', s.busy),
+        s.stream && button('카메라 닫기', () => { stopCamera(s); paint(s); }, 'boarding-secondary'));
+    } else body = h('section', { className: 'boarding-content' }, h('h1', {}, s.phase === 'unavailable' ? '참여할 QR을 확인해 주세요' : s.joined ? '내 자리를 확인하고 있어요' : '차량 QR을 확인하고 있어요'));
+    s.dialog.replaceChildren(heading, body, ...[s.error && h('div', { className: 'boarding-error', role: 'alert' }, h('p', {}, s.error), s.invite && button('다시 확인', () => retry(s), 'boarding-secondary', s.busy))].filter(Boolean));
   }
-  async function open() {
+  async function open(invite = currentInvite()) {
     if (state && valid(state)) return;
-    const s = begin(); if (!s) return;
-    const saved = readSaved();
-    if (saved && (!saved.profileId || saved.profileId === s.profileId)) s.ride = saved;
-    else sessionStorage.removeItem(KEY);
+    const s = begin(); s.invite = invite; s.phase = invite ? 'loading' : 'scan';
+    const pending = savedJoin(); if (pending?.invite === invite) { s.seat = pending.seat; s.recovering = true; }
     paint(s);
-    if (s.ride) await poll(s); else await generate(s);
+    if (invite) await preview(s);
     if (!valid(s)) return;
     s.timer = setInterval(() => {
       sync(); if (!valid(s)) return;
-      if (s.ride?.expiresAt <= Date.now() && s.qr) { s.qr = null; paint(s); }
-      else if (s.countdown && s.ride?.expiresAt > Date.now()) s.countdown.textContent = `${remainingTime(s.ride.expiresAt)} 뒤 만료`;
-      if (!document.hidden && !s.joined && Date.now() - (s.polledAt || 0) >= 2000) { s.polledAt = Date.now(); poll(s); }
+      if (s.joined && !s.busy && !s.checking && Date.now() - (s.polledAt || 0) >= 2000) {
+        s.polledAt = Date.now(); s.checking = true;
+        request(s, 'GET', `/trips/${s.joined.code}`, null, s.joined.token).then((trip) => sync(trip), () => {}).finally(() => { s.checking = false; });
+      }
+      if (document.hidden && s.stream) { stopCamera(s); paint(s); }
+      if (!s.joined && s.preview && s.preview.expiresAt <= Date.now()) { s.preview = null; s.phase = 'unavailable'; s.error = 'QR이 만료됐어요. 차의 새 QR을 다시 스캔해 주세요.'; paint(s); }
+      else if (s.countdown && s.preview) s.countdown.textContent = `${remainingTime(s.preview.expiresAt)} 안에 참여해 주세요`;
     }, 1000);
   }
   function openConsent(trip, participant, token) {
     if (!token || participant.profileId !== getProfile()?.id) return;
-    if (state?.joined?.code === trip.code && valid(state)) return;
-    const s = begin(); if (!s) return;
-    s.joined = { code: trip.code, participant, token }; s.trip = trip; s.phase = "consent"; paint(s);
+    if (state?.joined?.code === trip.code && valid(state)) {
+      const s = state, changed = s.joined.participant.consent !== participant.consent || s.joined.participant.seat !== participant.seat;
+      s.trip = trip; s.joined = { code: trip.code, participant, token };
+      if (changed && !s.busy) { if (!participant.consent) s.phase = 'consent'; paint(s); }
+      return;
+    }
+    const s = begin(); s.joined = { code: trip.code, participant, token }; s.trip = trip; s.phase = 'consent'; paint(s);
   }
-  return { open, openConsent, close, sync, resume: () => readSaved() && open() };
+  return { open, openConsent, close, sync, resume: () => currentInvite() && open(), pending: currentInvite };
 }
