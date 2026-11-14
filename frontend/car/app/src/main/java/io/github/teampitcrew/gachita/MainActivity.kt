@@ -283,6 +283,8 @@ class MainActivity : ComponentActivity() {
     /** 이 차가 참가시킨 사람의 참가자 토큰(id → 토큰). 그 사람의 동의 켜기와 발화 올리기에 쓴다(T68). 참가할 때 한 번만 온다. */
     private var tokens: Map<String, String> = emptyMap()
     private var refreshing = false
+    private var placeLog: PlaceLog? = null // 지금 여행의 장소 기록(T131)
+    private var placing = false // 장소 올리기가 통신 줄에 있음
     private var uploading = false // 올리기가 통신 줄에 있음. 느린 길에서 조회마다 쌓여 동의 확인을 밀어내지 않게
 
     /** 화면이 보이는 동안, 그리고 수음 중이면 화면 뒤에서도 조회해 폰에서 끈 동의를 반영한다. */
@@ -505,6 +507,7 @@ class MainActivity : ComponentActivity() {
                 speakers(t) // 올릴 새 발화가 없어도 밀린 대조와 고침을 잇는다
                 s.trip?.let(::clips)
                 loadTodos()
+                s.trip?.let(::places)
             }
                 .onFailure {
                     if (it is Gone) forget(t.code) else s = s.pollFailed(it) // 조회를 못 하면 이번에는 올리지 않는다
@@ -512,8 +515,42 @@ class MainActivity : ComponentActivity() {
                     if (it !is Gone && s.trip?.code == t.code) s = s.consentUnseen(System.currentTimeMillis() - consentSeenAt)
                     // 서버에 닿지 않아도(끊김) 차 안 대조는 잇는다: 마지막으로 동의를 확인한 지 5분 안이고 그때 모두 동의였을 때만.
                     // 서버가 거절한 것(ApiError)은 동의·권한이 달라졌을 수 있어 잇지 않는다
-                    if (it !is ApiError && it !is Gone && System.currentTimeMillis() - consentSeenAt < CONSENT_FRESH_MS && s.trip?.code == t.code) speakers(t)
+                    if (it !is ApiError && it !is Gone && System.currentTimeMillis() - consentSeenAt < CONSENT_FRESH_MS && s.trip?.code == t.code) { speakers(t); s.trip?.let(::places) } // 장소도 끊긴 동안 쌓았다 나중에 보낸다
                 }
+        }
+    }
+
+    private fun placesOf(code: String) = placeLog?.takeIf { it.trip == code } ?: PlaceLog(filesDir, code, Live.seal(this)).also { placeLog = it }
+
+    /**
+     * 장소 기록(T131): 여행 조회가 성공한 뒤(끊겼으면 마지막 동의 확인 5분 안에서만), 모두 동의한 동안에만 내비의 출발·목적지·곧 도착을 남기고 밀린 것을 보낸다(도착·경유는 arrive()).
+     * 콘텐츠 기록 타임라인·지도의 장소 이름과 폰의 '…로 이동 중'이 이것을 읽는다. 위치는 기록 중에 물어 둔 마지막 위치(1분 안)만 붙인다.
+     */
+    private fun places(t: Trip) {
+        if (!s.consented || s.offPending) return
+        car.destinationNamed { dest, remain ->
+            if (s.trip?.code != t.code || !s.consented || s.offPending) return@destinationNamed
+            val now = System.currentTimeMillis()
+            val gear = carStatus.gear
+            placesOf(t.code).see(gear != null && gear != "P", dest, remain, Live.fix?.takeIf { now - it.at in 0..60_000 }, t.generation, now)
+            sendPlaces(t)
+        }
+    }
+
+    /** 밀린 장소를 하나씩 보낸다. 끊기거나 서버 오류면 남겨 두었다 다음 조회에 다시(관측 시각 at을 붙여 보내므로 제자리에 들어감). */
+    private fun sendPlaces(t: Trip) {
+        val log = placesOf(t.code)
+        val up = tokens.minByOrNull { it.key }?.value ?: return
+        if (placing || !s.consented || s.offPending) return
+        val next = log.next(t.generation) ?: return
+        placing = true
+        val url = server
+        bg({ Server(url).place(t.code, up, next) }) { r ->
+            placing = false
+            val e = r.exceptionOrNull()
+            if (e != null && !(e is ApiError && e.status == 400)) { Log.w(TAG, "장소 올리기 못 함 ${if (e is ApiError) e.message else "연결"}"); return@bg }
+            log.done(next) // 400: 서버가 받지 않는 값(여행 전 시각 등)은 다시 보내지 않는다
+            if (s.trip?.code == t.code) sendPlaces(t)
         }
     }
 
@@ -718,6 +755,7 @@ class MainActivity : ComponentActivity() {
     private fun forget(code: String) {
         val current = s.trip?.code == code
         if (current) newTrip() // 기록을 멈추고 처음 화면으로
+        if (placeLog?.trip == code) placeLog = null
         dropTrip(filesDir, code); Live.forget(code) // 새 여행을 만든 뒤 늦게 온 앞 여행의 404여도 그 사본은 지운다
         if (current) error = "서버에 없는 여행이라 이 차에 남은 기록도 지웠어요"
     }
@@ -1090,6 +1128,8 @@ class MainActivity : ComponentActivity() {
                         if (!current()) return@checked
                         arrivalLoading = false
                         val answer = checked.getOrElse { failed("도착 확인을 마치지 못했어요 · ${reason(it)}"); return@checked }
+                        // 장소 기록(T131): 서버가 이 장소에 닿았다고 본 도착은 목적지면 도착, 아니면 경유로 남긴다(모두 동의한 동안만)
+                        if (answer.eligible && s.consented) s.trip?.takeIf { it.code == scope.trip }?.let { t -> if (placesOf(t.code).arrived(place, t.generation, observed.observedAt)) sendPlaces(t) }
                         if (!canReadArrival(answer, observed, scope, todoScope(), vehicleParked(), System.currentTimeMillis())) {
                             failed(when (answer.reason) {
                                 "outside_place" -> "아직 이 장소에 도착하지 않았어요"

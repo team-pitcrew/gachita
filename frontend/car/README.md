@@ -177,6 +177,13 @@ adb shell am start --user 10 -n io.github.teampitcrew.gachita/.MainActivity --es
 
 빌드·단위 테스트와 실제 휴대폰 스캔·에뮬레이터 참여 결과는 각각 기록합니다. 이전 `ride_e2e.py`는 폐기된 폰 QR → 차량 카메라 흐름의 과거 검증이며 새 방향의 완료 근거로 사용하지 않습니다.
 
+## 장소 기록(T131·T149)
+
+- **무엇을:** 내비의 출발(`start`, 이름 '출발'과 기록 중에 물어 둔 마지막 위치), 목적지 정함·바꿈(`destination`), 곧 도착(`approaching`, 내비 남은 시간 5분 이하, `etaSeconds`), 경유지에 들름(`stop`)·도착(`arrived`)을 `POST /api/trips/{code}/places`(참가자 토큰)로 남깁니다. 콘텐츠 기록의 타임라인·지도 장소 이름과 폰의 '…로 이동 중'이 이것을 읽습니다([장소 기록](../../docs/api/places.md)).
+- **언제:** 출발·목적지·곧 도착은 10초 여행 조회 뒤(끊겼으면 화자 대조처럼 마지막 동의 확인 5분 안에서만) 내비 상태(`Car.destinationNamed`: 목적지 이름·좌표·남은 시간)와 기어로 정합니다. 도착·경유는 도착 판정(T113)에서 서버가 그 장소에 닿았다고 본 때, 내비 목적지면 도착, 아니면 경유입니다. 같은 일은 한 번만 남깁니다(같은 곳에 머무는 동안 한 번, 다시 움직이면 다음 도착을 받음).
+- **동의와 끊김:** 모두 동의한 동안에만 쌓고 보냅니다. 못 보낸 것은 관측 시각 `at`과 함께 `places-<여행>.json`에 암호화해 두었다(`Vault.kt` 방식, 여행을 지우면 같이 지움) 다음 조회에 하나씩 보냅니다. 서버가 받지 않는 값(400)은 버립니다. 동의 세대가 오르면 옛 세대에 쌓인 것은 보내지 않고 버립니다. 보낸 뒤 응답을 잃으면 같은 장소가 한 번 더 남을 수 있습니다(서버에 요청 키가 없음).
+- 단위 시험 `PlacesTest.kt`. 에뮬레이터와 실차의 내비 값(남은 시간, 경유지 좌표)으로는 확인하지 않았습니다.
+
 ## 로컬 E2E
 
 차량 앱에서 여행을 만들어 서버에 생기는 것까지 한 번에 확인합니다. 에뮬레이터를 다른 사람이 쓰는 중이면 먼저 물어봅니다.
@@ -226,6 +233,7 @@ Gleo와 마이크 주고받기(T41)는 `python3 frontend/car/gleo_e2e.py <APK> <
 | `assets/schema.json` | Gleo 함수 목록(T40·T41). 이름을 바꾸면 `MainActivity`의 `GLEO_*`와 매니페스트의 intent-filter도 같이 |
 | `Raw.kt` | 원음 파일 쓰기·자르기, 장면 구간, WAV(T63, 단위 테스트 `RawTest.kt`) |
 | `Scenes.kt` | 장면 후보 규칙, 서버 `scenes.js`와 같은 값(T144, 단위 테스트 `ScenesTest.kt`) |
+| `Places.kt` | 내비 장소 기록(출발·목적지·곧 도착·경유·도착)과 못 보낸 것 보관(T131, 단위 테스트 `PlacesTest.kt`) |
 | `Vault.kt` | 차 안 파일의 암호화(Android Keystore AES-GCM), 명시적 삭제와 디버그 만료 시험(단위 테스트 `VaultTest.kt`) |
 | `Trip.kt` | 여행 응답 해석과 기록 동의 규칙(단위 테스트 `TripTest.kt`) |
 | `Server.kt` | 가치타 API 호출(`docs/api/openapi.yaml`) |

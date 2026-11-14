@@ -84,6 +84,8 @@ class Server(base: String, private val open: (URL) -> HttpURLConnection = { it.o
     fun arrivalBriefing(code: String, token: String, generation: Int, observation: VehicleArrival): SharedArrival =
         sharedArrival(call("POST", "/api/trips/$code/arrival-briefing", observation.body(generation, parked = true), token)!!)
 
+    /** 장소 기록(T131). 참가자 토큰으로, 관측 시각(at)과 함께. */
+    fun place(code: String, token: String, n: PlaceNote) { call("POST", "/api/trips/$code/places", n.body(), token) }
     fun shortform(code: String, token: String): String = call("GET", "/api/trips/$code/shortform", null, token)!!
 
     fun shortTemplates(): JSONObject = JSONObject(call("GET", "/api/short-templates", null)!!)
