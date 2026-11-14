@@ -1,5 +1,5 @@
 export const activeGeneration = (job) => ["queued", "submitting", "generating", "composing"].includes(job.state);
-export const generationState = (job) => ({ queued: "제작 대기", submitting: "장면 보내는 중", generating: "장면 만드는 중", composing: "원음과 자막을 담는 중", completed: "영상 완성", failed: "제작 실패", canceled: "제작 취소", submission_unknown: "접수 확인 필요 · 다시 생성하지 말고 문의해 주세요" })[job.state] || "상태 확인 중";
+export const generationState = (job) => ({ uploading: "서버에 보관 중", source_changed: "원음·자막이 바뀌어 다시 제작 필요", deleted: "삭제됨", queued: "제작 대기", submitting: "장면 보내는 중", generating: "장면 만드는 중", composing: "원음과 자막을 담는 중", completed: "영상 완성", failed: "제작 실패", canceled: "제작 취소", submission_unknown: "접수 확인 필요 · 다시 생성하지 말고 문의해 주세요" })[job.state] || "상태 확인 중";
 
 // 전송 결과를 못 받은 경우에도 같은 요청을 보관합니다. 새 키로 다시 만들면 중복 비용이 생깁니다.
 export class ShortGeneration {
@@ -20,7 +20,11 @@ export class ShortGeneration {
     this.catalog = await this.call("GET", "/short-templates");
     await this.refresh();
   }
-  async refresh() { this.items = (await this.call("GET", this.path("/short-generations"))).items; }
+  async refresh() {
+    const data = await this.call("GET", this.path("/short-assets"));
+    if (data.generation !== this.generation) throw new Error("기록 동의가 바뀌었어요.");
+    this.items = data.items;
+  }
   async preview(templateId, audioReference = false, momentId) {
     if (this.busy || this.pending) throw new Error("먼저 이전 요청의 접수 여부를 확인해 주세요.");
     this.busy = true; this.plan = null;
@@ -57,11 +61,11 @@ export class ShortGeneration {
     } finally { this.busy = false; }
   }
   async cancel(id) {
-    await this.call("DELETE", this.path(`/short-generations/${encodeURIComponent(id)}`));
+    await this.call("DELETE", this.path(`/${this.items.find((item) => item.id === id)?.origin === "local-render" ? "short-assets" : "short-generations"}/${encodeURIComponent(id)}`));
     await this.refresh();
   }
   filePath(job) {
-    const path = `/api${this.path(`/short-generations/${encodeURIComponent(job.id)}/file`)}`;
+    const path = `/api${this.path(`/${job.origin === "local-render" ? "short-assets" : "short-generations"}/${encodeURIComponent(job.id)}/file`)}`;
     if (job.state !== "completed" || job.result?.url !== path) throw new Error("완성된 영상 주소를 확인하지 못했어요.");
     return path;
   }

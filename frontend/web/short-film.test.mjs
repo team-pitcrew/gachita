@@ -122,3 +122,17 @@ test("이미 숨겨진 화면에서는 권한 조회나 녹화를 시작하지 �
     checkAccess: async () => { called = true; }, getAudio: async () => new ArrayBuffer(8) }), /화면을 벗어나/);
   assert.equal(called, false); assert.equal(state.recorders.length, 0); assert(state.contexts[0].closed);
 });
+
+test("공급자의 익명 화자 번호는 요청 창 안에서만 같은 인물로 표시한다", () => {
+  const scene = { cues: [
+    { start: 0, end: 1, speakerLabel: 'spk:0', speakerScope: 'window-a' },
+    { start: 1, end: 2, speakerLabel: 'spk:1', speakerScope: 'window-a' },
+    { start: 2, end: 3, speakerLabel: 'spk:0', speakerScope: 'window-b' },
+  ] };
+  const first = filmSpeakers([{ participantId: 'driver', name: '운전자' }], scene, .5);
+  const later = filmSpeakers([], scene, 2.5);
+  assert.equal(first.active.name, '화자 1 · 이 구간');
+  assert.equal(first.people.length, 2);
+  assert.notEqual(first.active.participantId, later.active.participantId);
+  assert.equal(later.people.length, 1);
+});

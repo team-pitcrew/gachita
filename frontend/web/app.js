@@ -1,3 +1,4 @@
+import { mediaButton, mediaIcon, setMediaButton, audioPeaks, drawWaveform } from "/media-controls.js";
 // 가치타 모바일 화면(gachita.mangowhois.ai). 빌드 없이 브라우저가 그대로 읽는다.
 // 주소: /#코드는 이 폰이 들어간 여행, /#me는 내 프로필. 여행에는 차가 표시한 참석 QR을 이 폰의 카메라로 읽어 참여한다.
 // 이 폰이 누구인지(프로필 토큰, 여행마다 참가자 id와 토큰)는 localStorage에 둔다. 폰에서는 수음하지 않는다. 차가 표시한 참석 QR을 폰 카메라로 읽어 참여한다.
@@ -51,8 +52,11 @@ const app = document.getElementById("app");
 const sheet = document.getElementById("sheet");
 const code = () => (location.hash === "#me" ? "" : location.hash.slice(1).toUpperCase());
 // 이 폰이 기억하는 것. store(키)는 읽기, store(키, 값)은 쓰기, store(키, null)은 지우기.
+const vehicleView = new URLSearchParams(location.search).get("vehicle-view") === "1";
+const identityStorage = vehicleView ? sessionStorage : localStorage;
+const identityPrefix = vehicleView ? "gachita:vehicle-view:" : "gachita:";
 const store = (key, value) =>
-  value === undefined ? localStorage.getItem(`gachita:${key}`) : value === null ? localStorage.removeItem(`gachita:${key}`) : localStorage.setItem(`gachita:${key}`, value);
+  value === undefined ? identityStorage.getItem(`${identityPrefix}${key}`) : value === null ? identityStorage.removeItem(`${identityPrefix}${key}`) : identityStorage.setItem(`${identityPrefix}${key}`, value);
 const myId = () => store(code());
 const myToken = () => store(`${code()}:token`); // 참가자 토큰: 동의 켜기와 음성 경로의 인증(T68, ADR-0007)
 
@@ -566,10 +570,9 @@ function tripView(me) {
       toast(deleted ? `내 이름이 붙은 글 ${deleted}줄을 지웠어요.` : "지울 내 글이 없어요.");
     });
   const open = trip.requests.filter((r) => !CLOSED.includes(r.status));
-  const rec = trip.recording ? ["차량 기록 설정 켜짐", ""] : waiting.length ? ["기록 동의 대기", ""] : ["차량 기록 설정 꺼짐", ""];
+  const recordingSwitch = h("button", { type: "button", className: "record-setting-switch", role: "switch", "aria-label": "차량 기록 설정", "aria-checked": String(!!trip.recording), disabled: trip.status !== "driving" || Boolean(waiting.length) || offline, onclick: async (e) => { const control = e.currentTarget; control.disabled = true; try { await patch("", { recording: !trip.recording })(); } finally { if (control.isConnected) control.disabled = offline; } } }, h("span", { className: "switch-track", "aria-hidden": "true" }, h("i")));
   const next = NEXT_TRIP[trip.status];
   const controls = [
-    trip.status === "driving" && !waiting.length && button(trip.recording ? "차량 기록 끄기" : "차량 기록 켜기", patch("", { recording: !trip.recording })),
     driver && next && button(next[0], patch("", { status: next[1] }), "primary grow"),
   ].filter(Boolean);
 
@@ -600,7 +603,8 @@ function tripView(me) {
     h(
       "section",
       { className: "card" },
-      h("div", { className: "between" }, h("p", { className: "state" }, TRIP[trip.status][0]), h("span", { className: `pill ${rec[1]}` }, rec[0])),
+      h("p", { className: "state" }, TRIP[trip.status][0]),
+      h("div", { className: "record-setting" }, h("span", { className: "record-setting-icon", "aria-hidden": "true" }, mediaIcon("mic")), h("div", { className: "grow" }, h("strong", {}, "차량 기록 설정"), h("p", { className: "meta" }, trip.recording ? "켜짐" : "꺼짐")), recordingSwitch),
       h("p", { className: "sub" }, waiting.length ? `${waiting.join(", ")} 님의 기록 동의를 기다리고 있어요.` : TRIP[trip.status][1]),
       h("p", { className: "meta" }, "실제 녹음 상태는 차 화면에서 확인해 주세요."),
       controls.length > 0 && h("div", { className: "row" }, controls),
@@ -671,7 +675,7 @@ let openingShort;
 const shortReadReason = (s) => trip?.code !== s.code || code() !== s.code ? "여행이 바뀌어 쇼츠를 닫았어요."
   : !trip.participants.find((p) => p.id === s.participantId)?.consent || trip.generation !== s.generation ? "기록 동의가 바뀌어 쇼츠를 닫았어요."
   : !myToken() || myToken() !== s.token ? "동승 연결을 다시 확인해 주세요." : "";
-const clearFilmFile = (s) => { if (s.fileUrl) URL.revokeObjectURL(s.fileUrl); s.fileUrl = null; s.file = null; s.libraryId = null; };
+const clearFilmFile = (s) => { if (s.fileUrl) URL.revokeObjectURL(s.fileUrl); s.fileUrl = null; s.file = null; s.libraryId = null; s.assetSource = null; };
 const cancelFilm = (s) => { s.exportJob?.abort(); s.exportJob = null; s.exportProgress = 0; };
 const checkFilmAccess = async (s, signal) => {
   const control = new AbortController();
@@ -683,6 +687,10 @@ const checkFilmAccess = async (s, signal) => {
     if (shortReadReason(s) || offline) throw new Error("지금은 기록 권한을 확인할 수 없어요. 연결 후 다시 시도해 주세요.");
     const data = await api("GET", `/trips/${s.code}/transcript`, null, s.token, control.signal);
     if (data.generation !== s.generation || shortReadReason(s)) throw new Error("기록 동의가 바뀌어 영상 만들기를 멈췄어요.");
+    if (s.assetSource) {
+      const latest = await api("GET", `/trips/${s.code}/short-assets/source?moment=${encodeURIComponent(s.assetSource.momentId)}`, null, s.token, control.signal);
+      if (latest.sourceHash !== s.assetSource.sourceHash || latest.generation !== s.generation) throw new Error("원음·자막·화자가 바뀌었어요. 최신 내용으로 다시 만들어 주세요.");
+    }
   } finally { clearTimeout(timeout); signal.removeEventListener("abort", cancel); }
 };
 
@@ -692,6 +700,11 @@ async function makeShortFilm(s) {
   const controller = s.exportJob = new AbortController();
   s.exportError = ""; s.exportProgress = 0; clearFilmFile(s); audio.pause(); s.paint?.();
   try {
+    const source = await api("GET", `/trips/${s.code}/short-assets/source?moment=${encodeURIComponent(s.scenes[index].momentId)}`, null, s.token, controller.signal);
+    if (source.generation !== s.generation || shortReadReason(s)) throw new Error("원음과 기록 동의를 다시 확인해 주세요.");
+    s.assetSource = source;
+    s.title = source.source.title; s.cast = source.source.cast; s.scenes[index] = source.source.scenes[0];
+    s.film.dispose(); s.film = createShortFilm({ title: s.title, cast: s.cast });
     const file = await exportShortFilm({ title: s.title, cast: s.cast, scene: s.scenes[index], signal: controller.signal,
       canRead: () => short === s && s.exportJob === controller && s.at === index && !shortReadReason(s) && !offline,
       checkAccess: (signal) => checkFilmAccess(s, signal),
@@ -713,16 +726,23 @@ async function makeShortFilm(s) {
 }
 
 async function saveShortFilm(s) {
-  if (!s.file || shortReadReason(s)) return;
+  if (!s.file || shortReadReason(s) || s.saving || !s.assetSource) return;
+  s.saving = true; s.paint?.();
   try {
-    const id = await studio.keepFile(s.file, { id: s.libraryId ||= `local:${crypto.randomUUID()}`, title: s.scenes[s.at].label || s.title, seconds: s.scenes[s.at].seconds, tripCode: s.code, tripTitle: s.title, tripCreatedAt: s.createdAt, momentId: s.scenes[s.at].momentId, verify: () => checkFilmAccess(s, s.controller.signal) });
-    closeShort(); studio.open({ selectedId: id }); toast("이 기기 보관함에 저장했어요.");
-  } catch (e) { toast(e.message); }
+    await checkFilmAccess(s, s.controller.signal);
+    const { momentId, generation, sourceHash } = s.assetSource;
+    const key = s.libraryId ||= crypto.randomUUID();
+    const query = new URLSearchParams({ moment: momentId, generation, sourceHash, key });
+    const value = await api("POST", `/trips/${s.code}/short-assets?${query}`, s.file, s.token, AbortSignal.any([s.controller.signal, AbortSignal.timeout(150000)]));
+    if (short !== s || shortReadReason(s)) return;
+    closeShort(); studio.open({ selectedId: `asset:${s.code}:${value.id}` }); toast("서버 보관함에 저장했어요. 차량과 휴대폰에서 함께 볼 수 있어요.");
+  } catch (e) { s.exportError = e.message; toast(e.message); }
+  finally { s.saving = false; if (short === s) s.paint?.(); }
 }
 async function shareShortFilm(s) {
   if (!s.file || shortReadReason(s)) return;
   if (!navigator.canShare?.({ files: [s.file] })) { s.exportError = "이 브라우저는 파일 공유를 지원하지 않아요. 영상을 저장해 공유해 주세요."; s.paint?.(); return; }
-  try { await navigator.share({ files: [s.file], title: s.scenes[s.at].label || "가치타 쇼츠" }); }
+  try { await checkFilmAccess(s, s.controller.signal); if (short !== s || !s.file) return; await navigator.share({ files: [s.file], title: s.scenes[s.at].label || "가치타 쇼츠" }); }
   catch (error) { if (error.name !== "AbortError") { s.exportError = "공유를 마치지 못했어요. 영상을 저장해 다시 공유해 주세요."; s.paint?.(); } }
 }
 
@@ -741,7 +761,7 @@ async function openShort(me, momentId) {
   if (at < 0) return toast("선택한 장면의 원음을 다시 확인해 주세요.");
   // 연 때의 여행·동의 세대를 남긴다: 보는 사이 바뀌면 render()가 닫는다
   if (short) closeShort();
-  short = { ...data, code: c, generation, participantId: me.id, token: myToken(), createdAt: trip.createdAt, at, clips: [], started: false, req: 0, controller: new AbortController() };
+  short = { ...data, code: c, generation, participantId: me.id, token: myToken(), createdAt: trip.createdAt, at, clips: [], waveforms: [], started: false, req: 0, controller: new AbortController() };
   short.film = createShortFilm({ title: short.title, cast: short.cast });
   const current = short;
   const animate = () => {
@@ -771,7 +791,10 @@ const clipAddress = (s, i) => {
 const clip = async (s, i) => {
   return (s.clips[i] ??= fetch(clipAddress(s, i), { headers: { authorization: `Bearer ${s.token}` }, signal: s.controller.signal })
     .then((r) => (r.ok ? r.blob() : Promise.reject(new Error(`장면 소리를 받지 못했어요(${r.status}).`))))
-    .then((b) => URL.createObjectURL(b))
+    .then((b) => {
+      audioPeaks(b).then((peaks) => { if (short === s && !shortReadReason(s)) { s.waveforms[i] = peaks; s.paint?.(); } }).catch(() => {});
+      return URL.createObjectURL(b);
+    })
     .catch((e) => {
       s.clips[i] = null;
       throw e instanceof TypeError ? Object.assign(new Error("연결이 끊겨서 소리를 받지 못했어요."), { status: 0 }) : e;
@@ -821,14 +844,16 @@ function shortView() {
   const status = h("p", { className: "short-state", role: "status" });
   const caption = h("p", { className: "visually-hidden", "aria-live": "polite" });
   const toggle = () => s.loading || s.exportJob ? undefined : !s.started || audio.ended ? playing(s.at) : audio.paused ? audio.play().catch((e) => toast(e.message)) : audio.pause();
-  const playControl = button("재생", toggle, "short-play");
-  const mute = button("음소거", () => { audio.muted = !audio.muted; });
-  const prev = button("이전", () => playing(s.at - 1));
-  const next = button("다음", () => playing(s.at + 1));
+  const playControl = mediaButton("play", "원음 재생", toggle, "short-play");
+  const mute = mediaButton("sound", "음소거", () => { audio.muted = !audio.muted; });
+  const prev = mediaButton("up", "이전 쇼츠", () => playing(s.at - 1));
+  const next = mediaButton("down", "다음 쇼츠", () => playing(s.at + 1));
+  const waveform = h("canvas", { className: "audio-waveform", width: 880, height: 96, "aria-hidden": "true" });
+  const seek = h("input", { type: "range", className: "audio-seek", min: 0, max: 1, step: .01, value: 0, "aria-label": "원음 재생 위치", oninput: (e) => { if (s.started && !s.loading && !s.exportJob && Number.isFinite(audio.duration)) { audio.currentTime = Number(e.target.value); s.paint?.(); } } });
   prev.setAttribute("aria-label", "이전 쇼츠"); next.setAttribute("aria-label", "다음 쇼츠");
   const make = button("영상 만들기", () => makeShortFilm(s), "short-make");
   const cancel = button("취소", () => { cancelFilm(s); s.exportError = "영상 만들기를 취소했어요."; s.paint?.(); });
-  const save = button("보관함에 저장", () => saveShortFilm(s), "short-make");
+  const save = button("서버 보관함에 저장", () => saveShortFilm(s), "short-make");
   const share = button("공유", () => shareShortFilm(s));
   const progress = h("progress", { className: "film-progress", max: 1, value: 0, "aria-label": "영상 만드는 중" });
   const exportNote = h("p", { className: "film-note", role: "status" });
@@ -842,16 +867,23 @@ function shortView() {
     count.textContent = `${s.at + 1} / ${s.scenes.length}`;
     clock.textContent = `${elapsed(t)} / ${elapsed(scene.seconds)}`;
     status.textContent = s.loading ? "장면 소리를 불러오고 있어요" : exporting ? `영상 만드는 중 · ${Math.round(s.exportProgress * 100)}%` : !s.started ? "우리의 목소리를 말랑 쇼츠로" : audio.ended ? "다시 듣고 싶은 순간" : audio.paused ? "잠시 멈춤" : "원래 목소리로 재생 중";
-    playControl.textContent = s.loading ? "불러오는 중" : !s.started ? "재생" : audio.ended ? "다시 보기" : audio.paused ? "이어 듣기" : "일시정지";
-    playControl.disabled = Boolean(s.loading || exporting); playControl.setAttribute("aria-label", playControl.textContent);
-    mute.textContent = audio.muted ? "소리 켜기" : "음소거"; mute.setAttribute("aria-pressed", String(audio.muted)); mute.disabled = exporting;
+    const playing = s.started && !audio.paused && !audio.ended;
+    setMediaButton(playControl, playing ? "pause" : "play", s.loading ? "원음 불러오는 중" : playing ? "원음 일시정지" : "원음 재생");
+    playControl.disabled = Boolean(s.loading || exporting);
+    setMediaButton(mute, audio.muted ? "muted" : "sound", audio.muted ? "소리 켜기" : "음소거"); mute.setAttribute("aria-pressed", String(audio.muted)); mute.disabled = exporting;
+    const duration = s.started && Number.isFinite(audio.duration) ? audio.duration : scene.seconds;
+    seek.max = duration || 1; seek.value = t;
+    seek.disabled = !s.started || !!s.loading || exporting;
+    seek.setAttribute("aria-valuetext", `${elapsed(t)} / ${elapsed(duration)}`);
+    drawWaveform(waveform, s.waveforms[s.at], duration ? t / duration : 0);
     prev.disabled = exporting || s.at === 0; next.disabled = exporting || s.at === s.scenes.length - 1;
     make.hidden = exporting || Boolean(s.file); make.disabled = !supported || Boolean(s.loading);
     cancel.hidden = !exporting; save.hidden = share.hidden = !s.file;
+    save.disabled = !!s.saving; save.textContent = s.saving ? "서버에 보관 중" : "서버 보관함에 저장";
     share.disabled = Boolean(s.file && !navigator.canShare?.({ files: [s.file] }));
     progress.hidden = !exporting; progress.value = s.exportProgress || 0;
     const format = s.file?.type.startsWith("video/mp4") ? "MP4" : "WebM";
-    exportNote.textContent = s.exportError || (exporting ? "소리와 함께 만드는 중이에요. 이 화면을 유지해 주세요." : s.file ? `${format} 영상이 준비됐어요.${share.disabled ? " 저장한 뒤 다른 앱에서 공유할 수 있어요." : ""}` : !supported ? "이 브라우저는 영상 만들기를 지원하지 않아요." : "현재 장면을 소리와 함께 만들어요.") + " 저장한 영상은 동의를 꺼도 기기에 남아요.";
+    exportNote.textContent = s.exportError || (exporting ? "소리와 함께 만드는 중이에요. 이 화면을 유지해 주세요." : s.file ? `${format} 영상이 준비됐어요.${share.disabled ? " 저장한 뒤 다른 앱에서 공유할 수 있어요." : ""}` : !supported ? "이 브라우저는 영상 만들기를 지원하지 않아요." : "현재 장면을 소리와 함께 만들어요.") + " 서버에 보관한 영상은 같은 여행에서 함께 봅니다. 내려받거나 공유한 사본은 동의를 꺼도 남아요.";
     const cue = scene.cues.find((c) => c.start <= t && t < c.end);
     const spoken = cue?.text || "";
     if (caption.textContent !== spoken) caption.textContent = spoken;
@@ -880,11 +912,12 @@ function shortView() {
     ? button("동승자에게 장면 카드 공유", () => { const id = s.scenes[s.at].momentId; closeShort(); shares.openCompose({ momentId: id }); }, "short-existing-share") : null;
   return [h("section", { className: "short", "aria-label": "가공한 쇼츠 재생과 공유" },
     h("div", { className: "short-shell" },
-      h("header", { className: "short-top" }, h("span", { className: "what" }, "추천 쇼츠"), count, button("닫기", () => closeShort(), "short-close")),
+      h("header", { className: "short-top" }, h("span", { className: "what" }, "추천 쇼츠"), count, mediaButton("back", "쇼츠 닫기", () => closeShort(), "short-close")),
       h("div", { className: "segs", "aria-hidden": "true" }, segs),
       movie,
       h("div", { className: "short-controls" },
         status,
+        h("div", { className: "audio-timeline" }, waveform, seek),
         h("div", { className: "short-transport" }, playControl, clock, mute),
         h("div", { className: "short-pages" }, prev, h("span", {}, "위아래로 넘겨 보세요"), next),
         h("div", { className: "film-export" }, progress, actions, exportNote), h("div", { className: "short-options" }, editConversation, connectedShare),
@@ -964,7 +997,10 @@ await loadProfile();
 boarding.resume();
 fillDraft();
 if (back) Object.assign(pdraft, back); // 구글에서 실패·취소로 돌아오면 쓰던 입력을 되돌린다
-refresh(true);
+await refresh(true);
+const initialView = new URLSearchParams(location.search).get("view");
+if (initialView === "shorts" && trip) launchShort();
+else if (initialView === "conversation" && trip) conversations.open();
 navigator.serviceWorker?.register("/sw.js").catch(() => {}); // 홈 화면 설치와 끊겼을 때의 마지막 화면(T6)
 // 처음 설치되는 방문에서는 여행을 워커가 맡기 전에 읽었고 그 뒤 폴링은 304라 캐시에 여행이 없다.
 // 워커가 이 화면을 맡는 순간 한 번 더 읽어 끊겼을 때 보일 여행을 남긴다.

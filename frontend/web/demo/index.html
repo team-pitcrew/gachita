@@ -1,134 +1,35 @@
 <!doctype html>
 <html lang="ko">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="color-scheme" content="light dark" />
-    <title>가치타 웹 시연</title>
-    <!-- 차 화면 글꼴: Pleos의 sans-serif는 42dot Asta Sans다(에뮬레이터 /product/etc/fonts_customization.xml). 웹앱의 Pretendard처럼 CDN에서 읽고, 못 읽으면 시스템 글꼴 -->
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource-variable/asta-sans@5.3.0/index.css" />
-    <!-- /demo(끝에 / 없음)로 열리므로 파일은 절대 경로로 부른다. 빌드 없음, 의존성 없음. -->
-    <link rel="stylesheet" href="/demo/demo.css" />
-  </head>
-  <body>
-    <header class="page">
-      <h1>가치타 <span>웹 시연</span></h1>
-      <p class="warn" role="note">웹 재현 · 실제 차량·에뮬레이터 화면 아님</p>
-      <ol class="steps" aria-label="시연 순서">
-        <li>여행 만들기</li>
-        <li>차량 QR 스캔·동의</li>
-        <li>출발</li>
-        <li>받아쓰기</li>
-        <li>부탁 처리</li>
-        <li>장면 남기기 · 주차</li>
-      </ol>
-    </header>
-
-    <main class="stage">
-      <section class="car-col" aria-label="차량 화면(웹 재현)">
-        <!-- 에뮬레이터 창. 안의 2560 × 1440 화면은 Pleos 에뮬레이터 캡처(11/14, 복제 AVD)의 좌표를 그대로 쓰고 통째로 줄인다 -->
-        <div class="emu">
-          <p class="emu-bar"><i></i><i></i><i></i><span>Pleos Connect · 2560 × 1440 · 웹 재현(실제 에뮬레이터 화면 아님)</span></p>
-          <p class="scroll-hint">차 화면을 좌우로 밀어 전체를 볼 수 있어요.</p>
-          <div id="fit" class="fit">
-            <div id="screen" class="screen">
-              <!-- 차량 앱 밖 시스템 영역. 실제 차량 값 없이 공간만 구분한다. -->
-              <aside class="dv" aria-label="차량 시스템 영역 생략">
-                <div class="system-placeholder"><span>차량 시스템 영역</span><small>이 시연은 오른쪽 가치타 앱을 재현합니다</small></div>
-              </aside>
-
-              <header class="sb" aria-label="상태 표시줄">
-                <i class="lock"></i><i class="search"></i>
-                <span class="sb-right">
-                  <i class="me">운</i><i class="bt"></i><i class="sig"></i><i class="mic" id="mic" hidden></i><b class="div"></b><time id="clock"></time>
-                </span>
-              </header>
-
-              <!-- 가치타 앱 창(1680 × 1208). demo.js가 차량 앱(frontend/car, T83)의 칸을 그대로 그린다 -->
-              <section id="app" class="app" aria-label="가치타 앱 창"></section>
-              <p class="handle" aria-hidden="true"><i></i><i></i><i></i></p>
-
-              <footer class="dock" aria-hidden="true">
-                <i class="ch dn" style="left: 56px"></i><span class="fan" style="left: 142px">꺼짐</span><i class="ch up" style="left: 306px"></i>
-                <i class="ico defrost" style="left: 405px"></i><i class="ico seat" style="left: 532px"></i><i class="ico wheel" style="left: 642px"></i>
-                <i class="tile car" style="left: 1001px"></i><i class="tile nav" style="left: 1117px"></i><i class="tile call" style="left: 1233px"></i>
-                <i class="grid" style="left: 1369px"></i><b class="div" style="left: 1453px"></b><i class="tile app" style="left: 1483px"></i>
-                <i class="ico seat" style="left: 1862px"></i><i class="ico air" style="left: 1973px"></i><i class="ico seat a" style="left: 2093px"></i>
-                <i class="ch dn" style="left: 2218px"></i><span class="fan" style="left: 2304px">꺼짐</span><i class="ch up" style="left: 2468px"></i>
-              </footer>
-            </div>
-          </div>
-        </div>
-
-        <!-- 확장 제어: Android 에뮬레이터의 확장 제어판처럼 차 화면 밖에서 차량 값·마이크를 넣는다. 모두 시연이다 -->
-        <section class="ext" aria-label="확장 제어(시연 조작)">
-          <h2>확장 제어 <span>시연 조작 · 차 화면 밖</span></h2>
-          <div class="ext-grid">
-            <section class="grp">
-              <h3>차량 데이터</h3>
-              <p class="tag">기어는 시연(실제는 차량 기어)</p>
-              <p class="tag">시연은 운전석 동의를 켜고 시작해요. 실제 차는 기본 꺼짐입니다.</p>
-              <div class="seg" id="gear-ctl" role="group" aria-label="기어">
-                <button type="button" data-g="P">P · 주차</button>
-                <button type="button" data-g="D">D · 출발</button>
-              </div>
-              <div class="row">
-                <button type="button" id="rec-ctl">기록 일시정지</button>
-                <button type="button" id="end-ctl">여행 끝</button>
-              </div>
-            </section>
-
-            <form class="grp mic" id="stt">
-              <h3>마이크 · 받아쓰기</h3>
-              <p class="tag">받아쓰기는 시연(실제는 차량 Pleos STT)</p>
-              <p class="state" id="stt-state"></p>
-              <div class="lines" id="stt-lines"></div>
-              <div class="row">
-                <select id="stt-seat" aria-label="말한 자리"></select>
-                <input id="stt-text" maxlength="500" autocomplete="off" placeholder="직접 쓰기 · 예: 휴게소에서 핫바 먹자" aria-label="직접 쓰기" />
-                <button id="stt-send">받아 적기</button>
-              </div>
-              <p class="err" id="stt-err" role="alert"></p>
-            </form>
-
-            <section class="grp">
-              <h3>스피커 · 카메라 · 내비</h3>
-              <button type="button" id="scan-ctl">참석 QR 열기</button>
-              <p class="tag">음성 안내는 시연(실제는 차량 TTS)</p>
-              <p class="speaker" id="said">아직 안내가 없어요</p>
-              <p class="tag">차의 참석 QR을 실제 휴대폰 카메라로 스캔하면 같은 서버의 여행에 참여합니다.</p>
-              <p class="tag">경유지 반영은 시연(실제는 Pleos 내비)</p>
-            </section>
-
-            <section class="grp">
-              <h3>장면</h3>
-              <p class="tag">지금 시각을 장면으로 남겨요(위치 없음)</p>
-              <button type="button" id="moment-ctl">장면 남기기</button>
-              <p class="meta" id="moment-meta"></p>
-            </section>
-          </div>
-        </section>
-      </section>
-
-      <aside class="phone-col" aria-label="탑승자 폰 화면">
-        <div class="between">
-          <h2>탑승자 폰 <span>웹앱</span></h2>
-          <a id="phone-open" target="_blank" rel="noopener" hidden>다른 폰으로 열기 ↗</a>
-        </div>
-        <!-- 폰 칸: 에뮬레이터 창 같은 기기 틀(CSS만). 상표 없음. 안은 실제 웹앱(/) -->
-        <div class="device">
-          <div class="device-screen">
-            <p class="device-status"><time id="phone-clock"></time><i class="hole"></i><span class="device-icons"><i class="bars"><i></i><i></i><i></i><i></i></i><i class="battery"></i></span></p>
-            <iframe id="phone" title="탑승자 폰 화면(가치타 웹앱)" hidden></iframe>
-            <p id="phone-empty" class="phone-empty">여행을 만들면 탑승자 폰 화면이 여기에 열려요.</p>
-            <p class="device-nav"><i></i></p>
-          </div>
-        </div>
-        <p class="note">차에서 참석 QR을 열고 실제 휴대폰 카메라로 스캔해 주세요. 휴대폰에서 프로필과 자리를 선택하면 차의 동승자 목록에 나타납니다. 같은 브라우저의 새 탭은 이 폰과 같은 프로필이에요. 다른 사람은 시크릿 창이나 다른 기기에서 여세요.</p>
-      </aside>
-    </main>
-
-    <p id="toast" role="status" hidden></p>
-    <script type="module" src="/demo/demo.js"></script>
-  </body>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light dark" />
+  <title>가치타 · 함께 탄 이야기를 남겨요</title>
+  <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="/icons/gachita-180.png" />
+  <meta property="og:image" content="https://gachita.mangowhois.ai/brand/gachita-social.png" />
+  <link rel="stylesheet" href="/style.css" />
+  <link rel="stylesheet" href="/demo/demo.css" />
+</head>
+<body class="web-capture">
+  <header class="demo-header">
+    <a class="brand" href="/demo/"><img src="/icons/gachita-192.png" alt="" />가치타 <span>함께 탄 이야기</span></a>
+    <div class="demo-tools"><span id="connection" role="status">서버 연결 중</span><a href="/" target="_blank" rel="noopener">내 휴대폰 화면 ↗</a></div>
+  </header>
+  <main class="workspace">
+    <section class="journey-workspace" aria-label="여행 기록">
+      <div id="trip-heading"></div>
+      <nav id="journey-nav" class="workspace-nav" aria-label="여행 메뉴"></nav>
+      <div id="workspace-body"></div>
+    </section>
+    <aside class="companion" aria-label="동승자의 휴대폰">
+      <header><h2>동승자의 휴대폰</h2><p>같은 여행의 대화와 쇼츠를 이어 봅니다.</p></header>
+      <iframe id="phone" src="/" title="실제 가치타 모바일 앱"></iframe>
+    </aside>
+  </main>
+  <dialog id="viewer" class="demo-viewer" aria-label="대화와 쇼츠"><header><span id="viewer-title"></span><button id="viewer-close" type="button" aria-label="닫기">닫기</button></header><iframe title="여행의 대화와 쇼츠" id="viewer-frame"></iframe></dialog>
+  <dialog id="settings" class="demo-settings" aria-labelledby="settings-title"></dialog>
+  <p id="toast" role="status" hidden></p>
+  <script type="module" src="/demo/demo.js"></script>
+</body>
 </html>

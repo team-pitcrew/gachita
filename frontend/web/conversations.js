@@ -48,7 +48,7 @@ export function createConversations({ getTrip, getParticipant, getToken, request
   const sync = () => { if (state && !state.unavailable) { const reason = invalid(state); if (reason) unavailable(reason); } };
 
   const who = (s, line) => getTrip()?.participants.find((person) => person.id === line.participantId);
-  const speaker = (s, line) => who(s, line)?.name ?? SEAT[line.seatArea] ?? (line.seatArea?.startsWith("ROW_1") ? "앞줄" : line.seatArea?.startsWith("ROW_2") ? "뒷줄" : "말한 사람 미확인");
+  const speaker = (s, line) => who(s, line)?.name ?? (line.speakerLabel ? `화자 ${Number(line.speakerLabel.split(":")[1]) + 1} · 이 구간` : null) ?? SEAT[line.seatArea] ?? (line.seatArea?.startsWith("ROW_1") ? "앞줄" : line.seatArea?.startsWith("ROW_2") ? "뒷줄" : "말한 사람 미확인");
   const nav = (s) => h("nav", { className: "journey-tabs", "aria-label": "여행 메뉴" },
     button("여행", close),
     h("button", { type: "button", className: "selected", "aria-current": "page", onclick: () => { s.view = "list"; paint(s); } }, "대화"),
@@ -95,7 +95,7 @@ export function createConversations({ getTrip, getParticipant, getToken, request
           const person = who(s, line);
           const self = person?.id === s.participantId;
           const previous = s.lines[index - 1];
-          const identity = (item) => item.participantId ?? item.seatArea ?? item.device;
+          const identity = (item) => item.participantId ?? (item.speakerScope && item.speakerLabel ? `${item.speakerScope}:${item.speakerLabel}` : null) ?? item.seatArea ?? item.device;
           const grouped = previous && identity(previous) === identity(line) && line.at - previous.at < 60000;
           return h("article", { className: `conversation-message${self ? " mine" : ""}${grouped ? " grouped" : ""}` },
             h("span", { className: "message-face", "aria-hidden": "true" }, !grouped && avatar(person)),
