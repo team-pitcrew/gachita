@@ -1258,6 +1258,116 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
         "503": { $ref: "#/components/responses/Error" }
+  /api/trips/{code}/todos:
+    parameters: [{ $ref: "#/components/parameters/code" }]
+    get:
+      tags: [기록본]
+      summary: 원발화가 연결된 장소별 할 일
+      description: |
+        현재 세대의 살아 있는 전사에서 차량 Todos.kt와 같은 장소·권유/의무형 규칙으로 추출합니다(place-rules-v1, LLM 없음).
+        수동 교정본 → 자동 교정본 → 원문 순으로 읽으며, 같은 장소·문장은 하나로 묶고 모든 원발화를 sources에 남깁니다.
+        id는 장소·문장의 해시이므로 내용이 바뀌면 바뀝니다. 상태만 따로 저장하며 원문을 지우면 목록에서 사라집니다.
+      security: [{ participantToken: [] }]
+      responses:
+        "200":
+          description: 현재 할 일과 동의 세대
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TodoList" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /api/trips/{code}/todos/{id}:
+    parameters: [{ $ref: "#/components/parameters/code" }, { $ref: "#/components/parameters/id" }]
+    patch:
+      tags: [기록본]
+      summary: 할 일 완료·취소·다시 열기
+      description: 동의한 참가자가 현재 generation·version으로 저장합니다. 원문이 없어지면 404, 다른 사람이 먼저 바꾸거나 동의 세대가 바뀌면 409입니다.
+      security: [{ participantToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [generation, expectedVersion, status]
+              properties:
+                generation: { type: integer, minimum: 1, maximum: 2147483647 }
+                expectedVersion: { type: integer, minimum: 0, maximum: 2147483646 }
+                status: { type: string, enum: [pending, done, cancelled] }
+      responses:
+        "200":
+          description: 저장한 할 일
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [generation, item]
+                properties:
+                  generation: { type: integer }
+                  item: { $ref: "#/components/schemas/Todo" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /api/trips/{code}/arrival-briefing:
+    parameters: [{ $ref: "#/components/parameters/code" }]
+    post:
+      tags: [기록본]
+      summary: 입력된 위치·주차 근거에 따른 장소별 도착 브리핑
+      description: |
+        여행 상태가 parked/ended이고 parked=true, 관측이 60초 이내이며 장소에서 250m 이내일 때만 해당 장소의 pending 항목을 반환합니다.
+        장소 매칭은 차량 Todos.kt와 같은 이름 포함 규칙입니다. 다른 장소·완료·취소 항목은 제외합니다.
+        source는 클라이언트가 제공한 관측 출처입니다. 서버가 실차 센서를 직접 확인했다는 뜻이 아닙니다.
+        좌표나 관측값을 저장하거나 외부 제공자로 보내지 않으며 내비·여행 상태를 바꾸지 않습니다.
+      security: [{ participantToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [generation, place, position, parked, observedAt, source]
+              properties:
+                generation: { type: integer, minimum: 1, maximum: 2147483647 }
+                place:
+                  allOf:
+                    - { $ref: "#/components/schemas/TodoPosition" }
+                    - type: object
+                      required: [name]
+                      properties:
+                        name: { type: string, minLength: 1, maxLength: 100 }
+                position: { $ref: "#/components/schemas/TodoPosition" }
+                parked: { type: boolean }
+                observedAt: { type: integer, minimum: 0, description: 관측 시각 epoch ms. 미래는 5초까지만 허용합니다. }
+                source: { type: string, enum: [vehicle, browser] }
+      responses:
+        "200":
+          description: 판단과 해당 장소의 미완료 목록. 조건이 맞지 않으면 eligible=false와 빈 items입니다.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [generation, eligible, reason, source, observedAt, place, distanceMeters, method, items]
+                properties:
+                  generation: { type: integer }
+                  eligible: { type: boolean }
+                  reason: { type: [string, "null"], enum: [not_parked, stale_position, outside_place, null] }
+                  source: { type: string, enum: [vehicle, browser] }
+                  observedAt: { type: integer }
+                  place: { type: object }
+                  distanceMeters: { type: integer }
+                  method: { type: string, const: place-rules-v1 }
+                  items: { type: array, items: { $ref: "#/components/schemas/Todo" } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
 components:
   securitySchemes:
     profileToken:
@@ -1288,6 +1398,40 @@ components:
       headers:
         x-request-id: { schema: { type: string }, description: "요청 id(로그와 맞춰 볼 때). 성공 응답에도 같은 머리말이 있다(경로마다 적지 않음)" }
   schemas:
+    TodoPosition:
+      type: object
+      required: [lat, lng]
+      properties:
+        lat: { type: number, minimum: -90, maximum: 90 }
+        lng: { type: number, minimum: -180, maximum: 180 }
+    Todo:
+      type: object
+      required: [id, place, text, status, version, sources]
+      properties:
+        id: { type: string, pattern: "^[0-9a-f]{32}$" }
+        place: { type: string }
+        text: { type: string, description: 현재 표시 전사에서 추출한 문장. 요약·재작성하지 않습니다. }
+        status: { type: string, enum: [pending, done, cancelled] }
+        version: { type: integer, minimum: 0 }
+        sources:
+          type: array
+          items:
+            type: object
+            required: [device, seq, at, text, displayText]
+            properties:
+              device: { type: string }
+              seq: { type: integer }
+              at: { type: integer }
+              text: { type: string, description: 원전사 }
+              displayText: { type: string, description: 교정 우선순위를 적용한 전사 }
+              participantId: { type: string, description: 확인된 화자가 있을 때만 }
+    TodoList:
+      type: object
+      required: [generation, method, items]
+      properties:
+        generation: { type: integer }
+        method: { type: string, const: place-rules-v1 }
+        items: { type: array, items: { $ref: "#/components/schemas/Todo" } }
     ShortPlanInput:
       type: object
       properties:
@@ -1493,7 +1637,7 @@ components:
         generation: { type: integer }
         utterances: { type: array, items: { $ref: "#/components/schemas/Utterance" } }
         requests: { type: array, items: { $ref: "#/components/schemas/Request" } }
-        todos: { type: array, items: { type: object }, description: 도착 할 일. 뽑기(LLM) 구현 전까지 빈 배열 }
+        todos: { type: array, items: { $ref: "#/components/schemas/Todo" }, description: 실제 전사의 장소별 할 일과 사용자 상태(place-rules-v1) }
     FeedItem:
       type: object
       required: [kind, tripCode, at]
