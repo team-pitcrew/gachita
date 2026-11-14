@@ -1,0 +1,120 @@
+package io.github.teampitcrew.gachita
+
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
+
+// 차에서 하는 계정·온보딩(T142)의 서버 호출과 단계 규칙. 계약: docs/api/accounts.md(T128 #366), 프로필 목소리 값(T125 #356, ADR-0023).
+// 차는 이메일 로그인으로 이 차의 프로필 토큰을 받고(POST /api/sessions, 기기 '차'), 그 토큰으로 동의·이름·사진·목소리 값을 올린다.
+// Server.kt의 여행 경로와 섞지 않으려고 따로 둔다(Server.voice·voicePrints는 그대로).
+
+/** 본인에게만 오는 프로필 모양(GET /api/profiles/me). */
+data class AccountProfile(
+    val id: String, val name: String, val character: String, val email: String?,
+    val consent: Boolean, val hasVoice: Boolean, val hasPhoto: Boolean,
+)
+
+fun parseAccountProfile(json: String): AccountProfile = JSONObject(json).let { o ->
+    AccountProfile(
+        id = o.getString("id"), name = o.optString("name"), character = o.optString("character"),
+        email = o.optString("email").takeIf { !o.isNull("email") && it.isNotEmpty() },
+        consent = o.optBoolean("consent"), hasVoice = o.optBoolean("hasVoice"), hasPhoto = o.optBoolean("hasPhoto"),
+    )
+}
+
+/** 시안 C01–C08의 단계. RECORDING은 C07(녹음 중·녹음 끝). */
+enum class OnboardStep { WELCOME, SIGNUP, CONSENT, PROFILE, PHOTO, VOICE, RECORDING, DONE }
+
+/** 처음 열 때: 토큰이 없으면 시작, 동의 전이면 동의, 그 밖은 프로필부터(목소리 다시 등록). */
+fun firstOnboardStep(p: AccountProfile?, hasToken: Boolean): OnboardStep = when {
+    !hasToken || p == null -> OnboardStep.WELCOME
+    !p.consent -> OnboardStep.CONSENT
+    else -> OnboardStep.PROFILE
+}
+
+/** 가입·로그인 뒤: 동의가 없으면 동의, 로그인했고 목소리까지 있으면 끝(null), 아니면 프로필. */
+fun nextAfterAccount(p: AccountProfile, login: Boolean): OnboardStep? = when {
+    !p.consent -> OnboardStep.CONSENT
+    login && p.hasVoice -> null
+    else -> OnboardStep.PROFILE
+}
+
+/** 읽을 문장의 이름 부르기: 받침이 있으면 '이야', 없으면 '야'(시안 '나는 민준이야'). */
+fun callName(name: String): String {
+    val n = name.trim()
+    val code = (n.lastOrNull() ?: ' ').code - 0xAC00
+    return n + if (code in 0 until 11172 && code % 28 == 0) "야" else "이야"
+}
+
+/** 서버가 가입 때 이름을 꼭 받는다. 이메일 앞부분을 임시 이름으로 보내고 C04에서 고친다. */
+fun provisionalName(email: String): String = email.substringBefore('@').ifEmpty { "나" }.take(20)
+
+private val EMAIL = Regex("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$")
+fun validEmail(email: String) = EMAIL.matches(email.trim())
+fun validPassword(password: String) = password.codePointCount(0, password.length) in 8..72
+
+/** 서버 오류를 화면 문장으로. 로그인 실패는 이메일과 비밀번호 중 무엇이 틀렸는지 말하지 않는다(서버와 같음). */
+fun accountError(e: Throwable, login: Boolean): String = when {
+    e !is ApiError -> "연결이 끊겨서 보내지 못했어요"
+    e.status == 409 -> "이미 가입한 이메일이에요. 로그인해 주세요"
+    e.status == 401 && login -> "이메일 또는 비밀번호가 맞지 않아요"
+    e.status == 400 && "password" in (e.message ?: "") -> "비밀번호는 8~72자로 적어 주세요"
+    e.status == 400 && "email" in (e.message ?: "") -> "이메일 주소를 확인해 주세요"
+    else -> failureText(e)
+}
+
+/** 계정·프로필 경로. 메인 스레드에서 부르지 않는다. 토큰은 머리말로만 보낸다. */
+class AccountApi(base: String, private val open: (URL) -> HttpURLConnection = { it.openConnection() as HttpURLConnection }) {
+    private val base = base.trim().trimEnd('/')
+
+    /** 새 계정과 이 차의 토큰(201). */
+    fun signup(email: String, password: String): Pair<AccountProfile, String> =
+        withToken(call("POST", "/api/accounts", JSONObject().put("email", email.trim()).put("password", password).put("name", provisionalName(email.trim())).put("device", DEVICE))!!)
+
+    /** 같은 계정으로 이 차에 들어오기(새 기기 토큰). */
+    fun login(email: String, password: String): Pair<AccountProfile, String> =
+        withToken(call("POST", "/api/sessions", JSONObject().put("email", email.trim()).put("password", password).put("device", DEVICE))!!)
+
+    fun me(token: String): AccountProfile = parseAccountProfile(call("GET", "/api/profiles/me", null, token)!!)
+
+    /** 계정 동의(C03). 판은 보내지 않아 서버의 지금 판으로 남는다. */
+    fun consent(token: String): AccountProfile = parseAccountProfile(call("PATCH", "/api/profiles/me", JSONObject().put("consent", true), token)!!)
+
+    fun profile(token: String, name: String, character: String): AccountProfile =
+        parseAccountProfile(call("PATCH", "/api/profiles/me", JSONObject().put("name", name).put("character", character), token)!!)
+
+    /** 프로필 사진(JPEG, 640px로 다시 그린 것). 서버는 형식을 매직 바이트로 본다. */
+    fun photo(token: String, jpeg: ByteArray) { call("PUT", "/api/profiles/me/photo", jpeg, token, "image/jpeg") }
+
+    /** 차 안에서 계산한 목소리 값만 올린다(ADR-0023). 소리는 보내지 않는다. */
+    fun voice(token: String, vector: DoubleArray, seconds: Double) { call("POST", "/api/profiles/me/voice", voiceValue(vector, seconds), token) }
+
+    private fun withToken(json: String) = parseAccountProfile(json) to JSONObject(json).getString("token")
+
+    private fun call(method: String, path: String, body: Any?, token: String? = null, type: String = "application/json"): String? {
+        val c = open(URL(base + path))
+        try {
+            c.requestMethod = method
+            c.connectTimeout = 5000
+            c.readTimeout = 10000
+            c.instanceFollowRedirects = false
+            token?.let { c.setRequestProperty("Authorization", "Bearer $it") }
+            if (body != null) {
+                val bytes = if (body is ByteArray) body else body.toString().toByteArray()
+                c.doOutput = true
+                c.setFixedLengthStreamingMode(bytes.size)
+                c.setRequestProperty("Content-Type", type)
+                c.outputStream.use { it.write(bytes) }
+            }
+            val code = c.responseCode
+            if (code == 204) return null
+            val text = (if (code < 400) c.inputStream else c.errorStream)?.bufferedReader()?.use { it.readText() }.orEmpty()
+            if (code >= 400) throw ApiError(code, runCatching { JSONObject(text).getString("error") }.getOrNull() ?: text)
+            return text
+        } finally {
+            c.disconnect()
+        }
+    }
+
+    companion object { const val DEVICE = "차" }
+}
