@@ -25,7 +25,6 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -401,9 +400,7 @@ private fun Centered(content: @Composable ColumnScope.() -> Unit) = Box(Modifier
  * ponytail: CarButton의 꺼진 모양이 시안과 같아지면 enabled만 넘긴다.
  */
 @Composable
-private fun AfterButton(label: String, enabled: Boolean = true, onClick: () -> Unit) =
-    if (enabled) CarButton(label, onClick = onClick)
-    else CarButton(label, Modifier.fillMaxWidth().alpha(.45f).semantics { disabled() }, onClick = {})
+private fun AfterButton(label: String, enabled: Boolean = true, onClick: () -> Unit) = CarButton(label, enabled = enabled, onClick = onClick)
 
 /** 파형 막대(시안 '파형'·'음성 파형'): 첫 막대는 왼쪽 끝, 마지막 막대는 오른쪽 끝에 붙고 사이는 고르게. 말이 없던 칸은 가장 낮은 막대. */
 private fun DrawScope.waveBars(bars: List<Float>, width: Float, radius: Float, centerY: Float, low: Float, high: Float, color: Color) {
@@ -506,9 +503,6 @@ private fun Tick(on: Boolean) {
  * 시안 'Archive / galleryCar'(C32 완성 장면·C33 갤러리의 표지)는 어두운 화면 위에서도 밝은 종이 색으로 고정돼 있다. design.md 3절 표의 밝은 열 값(tint-1–5·ink·ink-2)이고
  * Material 역할(어두운 색표)에 없는 값이라 여기 둔다. ponytail: F6 갤러리(C33)도 같은 표지를 쓰니 CarDesign.kt로 올린다.
  */
-private val PaperTints = listOf(Color(0xFFECEAFB), Color(0xFFFCF0D9), Color(0xFFFBE7EE), Color(0xFFE4F4EC), Color(0xFFE5F0FB))
-private val PaperInk = Color(0xFF28221B)
-private val PaperInk2 = Color(0xFF5A5044)
 
 /**
  * C32 '완성 장면'(폭 400, 간격 16): 표지 400×550(여백 30, 간격 20, 모서리 24 — 시안 25, 종이 tint-2부터 차례로) — '날짜  여행 제목' · 대사 줄(Title 40) · 여백 ·
@@ -520,10 +514,10 @@ private fun DoneScene(item: AfterItem, index: Int, trip: Trip, origin: Long, onO
     val c = MaterialTheme.colorScheme
     val ok = item.phase == Phase.DONE
     val p = item.pick
-    val ink = if (ok) PaperInk else c.onSurface
-    val ink2 = if (ok) PaperInk2 else c.onSurfaceVariant
+    val ink = if (ok) CarPaper.Ink else c.onSurface
+    val ink2 = if (ok) CarPaper.Ink2 else c.onSurfaceVariant
     Column(Modifier.width(400.dp).then(if (ok) Modifier.clickable(onClick = onOpen) else Modifier), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        Surface(Modifier.fillMaxWidth().height(550.dp), CarShape.Ctl, color = if (ok) PaperTints[(index + 1) % PaperTints.size] else c.surface) {
+        Surface(Modifier.fillMaxWidth().height(550.dp), CarShape.Ctl, color = if (ok) CarPaper.Tints[(index + 1) % CarPaper.Tints.size] else c.surface) {
             Column(Modifier.padding(30.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
                 Text("${SimpleDateFormat("M.d", Locale.KOREA).format(Date(p.at))}  ${trip.title.ifBlank { "함께 탄 여행" }}", style = CarText.Label, color = ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(p.line.ifEmpty { p.title }, style = CarText.Title, color = ink, maxLines = 3, overflow = TextOverflow.Ellipsis)
