@@ -320,11 +320,6 @@ class Outbox(dir: File, val trip: String, private val seal: Seal) {
 
 // ---- 말한 사람(T37): 좌석 구역 + 차 안의 목소리 대조(Voice.kt, ADR-0023) ----
 
-/** 출발 전 목소리 등록에서 읽는 두 문장(약 7초, #65 정확도 표의 '2문장'). 등록하는 동안 받아 적힌 말은 보관함에 넣지 않는다. */
-val ENROLL_LINES = listOf("오늘도 안전하게 같이 타고 가요.", "바다가 보이면 창문을 조금 열어 볼까요?")
-const val ENROLL_MS = 10_000L
-const val ENROLL_BYTES = (ENROLL_MS * RATE / 1000 * 2).toInt() // 10초 16 kHz 모노
-
 /** 발화 한 건의 말한 사람: 참가자 id(모르면 null), 대조 확신도, 사람이 화면에서 고쳤는지, 서버에 남겼는지(차가 찾은 사람과 사람이 고친 것 모두). */
 data class Speaker(val who: String?, val confidence: Double, val byPerson: Boolean = false, val sent: Boolean = true)
 
