@@ -19,3 +19,5 @@ PNG 파생본은 macOS `sips -z 높이 너비 원본 --out 대상`으로 만들�
 웹의 maskable 아이콘은 중심에서 반지름 40%인 안전 영역을 기준으로 확인합니다. 원본에서 검은 윤곽의 최대 반지름은 이미지 폭의 37.10%입니다. Android는 108dp 레이어의 중앙 66dp 안전 영역에 맞춰 foreground 각 변에 12% 여백을 적용합니다. 여백 적용 뒤 윤곽 반지름은 28.20%로, 안전 반지름 30.56% 안에 들어갑니다. 원형과 둥근 사각형으로 자른 브라우저 미리보기에서도 팔과 발을 확인했습니다. 이 검수는 자산과 마스크 검수이며, 기기에 설치한 launcher의 검수와 구분합니다.
 
 안전 영역 기준은 [Web App Manifest](https://www.w3.org/TR/appmanifest/#icon-masks)와 [Android adaptive icon 문서](https://developer.android.com/develop/ui/compose/system/icon_design_adaptive)를 따릅니다. 마스터 원본의 바깥 그림자는 핵심 윤곽 측정에서 제외했습니다.
+
+`mascot.svg`는 최종 시안(민준 개선안)의 가치타 본체 마스코트 `Mascot`(Figma 노드 `7:544`, 상태=기록 중) 24×24 선 그림입니다. 폰 머리 줄(app bar)에 씁니다. Figma MCP의 에셋 주소에서 받은 SVG에서 표시용 속성(`style`, `preserveAspectRatio`)과 레이어 id만 지웠고 경로는 그대로입니다. 대표 캐릭터(앱 아이콘)와 다른 실루엣입니다.

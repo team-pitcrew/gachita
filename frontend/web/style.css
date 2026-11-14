@@ -23,8 +23,10 @@
   --r-ctl: 10px;
   --r-phone-card: 24px; /* 최종 시안(민준 개선안) 폰 카드·컨트롤 반경. 새로 바꾼 여행 화면부터 쓴다 */
   --r-phone-ctl: 16px;
+  --r-phone-char: 48px; /* 시안 Character 조각(사진·캐릭터 틀) 반경 */
   --pad: 20px;
   --mascot: url("/icons/gachita-192.png");
+  --mascot-mark: url("/brand/mascot.svg"); /* 시안 Mascot(7:544) 24px 선 그림, 머리 줄(app bar)에 쓴다 */
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -59,7 +61,7 @@ main {
   max-width: 480px;
   min-height: 100dvh;
   margin: 0 auto;
-  padding: 16px var(--pad) calc(112px + env(safe-area-inset-bottom));
+  padding: 20px var(--pad) calc(112px + env(safe-area-inset-bottom));
   display: grid;
   align-content: start;
   gap: 16px;
@@ -377,7 +379,7 @@ legend {
   left: 0;
   right: 0;
   bottom: 0;
-  padding: 12px var(--pad) calc(12px + env(safe-area-inset-bottom));
+  padding: 12px var(--pad) calc(20px + env(safe-area-inset-bottom)); /* 시안 하단 작업: 화면 아래 20px */
   background: linear-gradient(to top, var(--bg) 78%, transparent);
 }
 .bar > div {
@@ -940,9 +942,9 @@ input[type="file"]::file-selector-button {
 
 /* 함께 타는 중(최종 시안 P17–P21). 색은 위의 밝은·어두운 토큰, 반경은 --r-phone-*를 쓴다. 글꼴은 앱의 Pretendard(시안은 Noto Sans KR). */
 .ride-view { gap: 12px; }
-.app-bar { min-height: 44px; }
-button.brand-home { min-height: 44px; padding: 0 4px 0 0; background: none; color: var(--ink); font-size: 19px; font-weight: 700; }
-.app-bar .brand::before { width: 24px; height: 24px; border-radius: 7px; }
+.app-bar { min-height: 32px; } /* 시안 app bar 350×32. 처음으로 단추는 44px 누름 영역을 위아래 6px씩 넘겨 둔다 */
+button.brand-home { min-height: 44px; margin-block: -6px; padding: 0 4px 0 0; gap: 10px; background: none; color: var(--ink); font-size: 19px; font-weight: 700; letter-spacing: -0.01em; }
+.app-bar .brand::before { width: 24px; height: 24px; border-radius: 0; background: center / contain no-repeat var(--mascot-mark); }
 .link-state { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink-2); }
 .link-state::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); }
 .link-state.is-offline::before { background: var(--rec); }
@@ -986,46 +988,50 @@ main:has(.bar .big) { padding-bottom: calc(196px + env(safe-area-inset-bottom));
 
 /* 계정·온보딩(T142, 최종 시안 P01–P08). 카드 24·컨트롤 16, Display 28 / Headline 19 / Label 15 / Caption 13. */
 .onboarding-view { gap: 12px; }
-.ob-title { display: grid; gap: 4px; }
+.ob-title { display: grid; gap: 8px; }
 .ob-title h1 { margin: 0; font-size: 28px; line-height: 38px; letter-spacing: -0.02em; overflow-wrap: anywhere; }
 .ob-title .sub { margin: 0; font-size: 15px; font-weight: 500; line-height: 22px; }
-.ob-card { display: flex; align-items: center; gap: 14px; width: 100%; min-height: 0; padding: 16px; border-radius: var(--r-phone-card); background: var(--surface); color: var(--ink); text-align: left; font-weight: 400; }
+.ob-card { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 0; padding: 16px; border-radius: var(--r-phone-card); background: var(--surface); color: var(--ink); text-align: left; font-weight: 400; }
 .ob-card.soft { background: var(--accent-soft); }
 button.ob-card:active { transform: scale(0.99); }
-.ob-copy { display: grid; gap: 4px; min-width: 0; }
-.ob-copy strong { font-size: 19px; line-height: 28px; font-weight: 700; overflow-wrap: anywhere; }
-.ob-copy span { font-size: 15px; line-height: 22px; color: var(--ink-2); }
-.ob-face, .ob-avatar { flex: none; width: 48px; height: 48px; border-radius: 50%; overflow: hidden; background: var(--surface); display: grid; place-items: center; }
+.ob-copy { display: grid; gap: 5px; min-width: 0; }
+.ob-copy strong { font-size: 19px; line-height: 28px; font-weight: 700; letter-spacing: -0.01em; overflow-wrap: anywhere; }
+.ob-copy span { font-size: 15px; line-height: 22px; font-weight: 500; color: var(--ink-2); }
+.ob-face, .ob-avatar { flex: none; width: 44px; height: 44px; border-radius: 50%; overflow: hidden; display: grid; place-items: center; }
 .ob-face img, .ob-avatar img { width: 100%; height: 100%; object-fit: cover; }
 .ob-face .ob-avatar { width: 100%; height: 100%; }
 .ob-note { margin: 0; font-size: 13px; line-height: 18px; color: var(--ink-2); }
+.ob-note.body { font-size: 17px; line-height: 26px; } /* P05 안내는 시안 Body 17 */
 .ob-form { display: grid; gap: 12px; }
-.ob-field > span { font-size: 15px; font-weight: 500; }
-.ob-field input:not([type="radio"]), .onboarding-view .ob-field input:not([type="radio"]) { border: 0; border-radius: var(--r-phone-ctl); background: var(--surface-2); font-size: 17px; }
+.ob-field { gap: 12px; }
+.ob-field > span { font-size: 15px; line-height: 22px; font-weight: 500; }
+.ob-field input:not([type="radio"]), .onboarding-view .ob-field input:not([type="radio"]) { padding: 0 15px; border: 0; border-radius: var(--r-phone-card); background: var(--surface-2); font-size: 17px; }
 .ob-field input:not([type="radio"]):focus { outline: 2px solid var(--accent); }
 button.ob-other { justify-self: start; min-height: 40px; font-size: 13px; font-weight: 500; text-decoration: underline; }
 .ob-steps { margin: 0; display: flex; gap: 12px; font-size: 15px; font-weight: 500; color: var(--ink-2); }
-.ob-chars legend { margin-bottom: 8px; font-size: 15px; font-weight: 500; }
-.ob-chars > div { display: flex; gap: 8px; overflow-x: auto; padding: 12px; border-radius: var(--r-phone-card); background: var(--surface); scrollbar-width: none; }
-.ob-char { position: relative; flex: none; width: 76px; height: 70px; border-radius: 18px; display: grid; place-items: center; cursor: pointer; }
+.ob-chars legend { margin-bottom: 12px; font-size: 15px; line-height: 22px; font-weight: 500; }
+.ob-chars > div { display: flex; gap: 8px; overflow-x: auto; padding: 14px; border-radius: var(--r-phone-card); background: var(--surface); scrollbar-width: none; }
+.ob-char { position: relative; flex: none; width: 66px; height: 66px; border-radius: var(--r-phone-char); display: grid; place-items: center; cursor: pointer; }
 .ob-char input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
-.ob-char img { width: 70px; height: 70px; object-fit: contain; }
+.ob-char img { width: 66px; height: 66px; object-fit: contain; }
 .ob-char:has(input:checked) { background: var(--accent-soft); outline: 2px solid var(--accent-fill); }
 .ob-char:has(input:focus-visible) { outline: 3px solid var(--accent); }
 .onboarding-view > button.secondary, .onboarding-view .bar button.secondary { min-height: 56px; border-radius: var(--r-phone-ctl); background: var(--surface-2); color: var(--ink); font-size: 19px; font-weight: 700; }
 .onboarding-view .bar button { border-radius: var(--r-phone-ctl); }
+.onboarding-view .bar button { letter-spacing: -0.01em; }
 .onboarding-view .bar button.primary { font-size: 19px; }
-.ob-portrait { width: 160px; height: 160px; border-radius: var(--r-phone-card); overflow: hidden; background: #fbe9ef; display: grid; place-items: center; }
+.ob-portrait { width: 160px; height: 160px; border-radius: var(--r-phone-char); overflow: hidden; background: #fbe9ef; display: grid; place-items: center; }
 .ob-portrait img { width: 100%; height: 100%; object-fit: cover; }
 .ob-script { display: grid; gap: 4px; padding: 16px; border-radius: var(--r-phone-card); background: var(--accent-soft); }
-.ob-script strong { font-size: 19px; line-height: 28px; }
-.ob-script span { font-size: 15px; line-height: 22px; color: var(--ink-2); }
-.ob-meter { display: grid; gap: 12px; padding: 18px 18px 14px; border-radius: var(--r-phone-card); background: var(--surface); }
-.ob-meter > span { font-size: 15px; line-height: 22px; color: var(--ink-2); }
+.ob-script { gap: 5px; }
+.ob-script strong { font-size: 19px; line-height: 28px; letter-spacing: -0.01em; }
+.ob-script span { font-size: 15px; line-height: 22px; font-weight: 500; color: var(--ink-2); }
+.ob-meter { display: grid; gap: 12px; padding: 18px; border-radius: var(--r-phone-card); background: var(--surface); }
+.ob-meter > span { font-size: 15px; line-height: 22px; font-weight: 500; color: var(--ink-2); }
 .ob-meter > span b { font-weight: 500; }
-.ob-meter > p { margin: 0; display: flex; gap: 96px; font-size: 13px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
-.ob-wave { display: flex; align-items: center; justify-content: space-between; height: 64px; }
-.ob-wave i { width: 4px; border-radius: 2px; background: var(--line); }
+.ob-meter > p { margin: 0; display: flex; gap: 96px; font-size: 13px; line-height: 18px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.ob-wave { display: flex; align-items: center; justify-content: space-between; height: 72px; } /* 시안 파형 314×72, 막대 36개 5px·반경 3 */
+.ob-wave i { width: 5px; border-radius: 3px; background: var(--line); }
 .ob-wave i.on { background: var(--accent-fill); }
 .ob-terms { font-size: 13px; line-height: 18px; color: var(--ink-2); }
 .ob-terms summary { min-height: 32px; cursor: pointer; font-weight: 600; }
