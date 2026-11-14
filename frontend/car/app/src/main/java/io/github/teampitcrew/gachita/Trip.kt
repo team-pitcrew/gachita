@@ -110,6 +110,7 @@ data class Session(
     fun blockStart(): String? = when {
         busy -> "처리하고 있어요"
         !agreed -> "탑승자 모두의 녹음 동의가 필요해요"
+        trip?.status == "ended" -> "끝난 여행이에요. 새 여행에서 녹음을 시작해 주세요"
         !online -> "연결을 확인한 뒤 녹음을 시작해 주세요"
         gear != "P" -> "주차(P)한 뒤 녹음을 시작할 수 있어요"
         else -> null
@@ -164,7 +165,7 @@ data class Session(
     fun withTrip(t: Trip): Session {
         val pending = offPending && t.people.any { it.consent && (withdrawn.isEmpty() || it.id in withdrawn) }
         return copy(trip = t, online = true, offPending = pending, withdrawn = if (pending) withdrawn else emptySet(),
-            started = started && trip?.generation == t.generation).settle()
+            started = started && trip?.generation == t.generation && t.status != "ended").settle() // 끝난 여행은 녹음하지 않는다(기록·동의는 그대로)
     }
 
     fun withGear(g: String?) = copy(gear = g).settle()
