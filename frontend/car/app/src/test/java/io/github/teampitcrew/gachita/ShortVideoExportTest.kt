@@ -64,6 +64,15 @@ class ShortVideoExportTest {
         }
     }
 
+    @Test fun sharedSingleSceneKeepsItsWhole60SecondAudio() {
+        val scene = Scene("대화", "/clip", 60.0, emptyList(), "moment-1")
+        withWav(wav(ByteArray(16_000 * 2 * 60) { 42 })) { file ->
+            val parts = exportTimeline(Short("여행", listOf(scene)), listOf(file), ShortExportControl(), maxSeconds = 60)
+            assertEquals(60_000_000L, parts.single().durationUs)
+            assertEquals("moment-1", parts.single().scene.momentId)
+        }
+    }
+
     @Test fun cancellationPreventsReadingAndPublishing() {
         val control = ShortExportControl().apply { cancel() }
         assertTrue(control.isCancelled)

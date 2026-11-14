@@ -61,16 +61,18 @@ private data class FeedShort(val key: String, val title: String, val durationMs:
 /** 피드는 완성된 MP4만, 제작 설정은 별도 화면에서 다룹니다. */
 @Composable
 internal fun ShortStudio(base: String, code: String, generation: Int, token: String?, tripTitle: String,
-    canRead: () -> Boolean, canPlay: () -> Boolean, onClose: () -> Unit, onLocal: () -> Unit,
-    onActiveChange: (Boolean) -> Unit, modifier: Modifier = Modifier) {
+    canRead: () -> Boolean, canPlay: () -> Boolean, onClose: () -> Unit,
+    onActiveChange: (Boolean) -> Unit, modifier: Modifier = Modifier, participantId: String? = null) {
     val context = LocalContext.current
     val remoteAccess by rememberUpdatedState(canRead)
     val playbackAccess by rememberUpdatedState(canPlay)
     val activeChange by rememberUpdatedState(onActiveChange)
     val api = remember(base) { Server(base) }
+    val sharedApi = remember(base, code, generation, token) { SharedShortApi(base) }
+    var createShared by remember { mutableStateOf(false) }
+    var deletingShared by remember { mutableStateOf<JSONObject?>(null) }
     val scope = rememberCoroutineScope()
     val alive = remember { AtomicBoolean(true) }
-    val enteringLocal = remember { AtomicBoolean(false) }
     val prefs = remember { context.getSharedPreferences("short-generation", Context.MODE_PRIVATE) }
     val pendingKey = remember { "$code:$generation:" + java.security.MessageDigest.getInstance("SHA-256").digest("$base|$token".toByteArray()).joinToString("") { "%02x".format(it) } }
     var pending by remember { mutableStateOf(prefs.getString(pendingKey, null)?.let { runCatching { JSONObject(it) }.getOrNull() }) }
@@ -101,9 +103,8 @@ internal fun ShortStudio(base: String, code: String, generation: Int, token: Str
     val cache = remember { mutableMapOf<String, File>() }
     val thumbs = remember { mutableStateMapOf<String, Bitmap>() }
     val completed = jobs.filter { it.optString("state") == "completed" }
-    val savedUris = library.map { it.uri.toString() }.toSet()
-    val feed = (completed.filterNot { prefs.getString("saved:${it.getString("id")}", null) in savedUris }.map { j ->
-        FeedShort("job:${j.getString("id")}", prefs.getString("title:${j.getString("id")}", null) ?: tripTitle.ifBlank { "함께 남긴 대화" },
+    val feed = (completed.map { j ->
+        FeedShort("job:${sharedShortKey(j)}", prefs.getString("title:${j.getString("id")}", null) ?: tripTitle.ifBlank { "함께 남긴 대화" },
             (j.getJSONObject("result").getDouble("seconds") * 1000).toLong(), runCatching { java.time.Instant.parse(j.getString("createdAt")).toEpochMilli() }.getOrDefault(0), job = j)
     } + library.map { FeedShort(it.uri.toString(), it.title, it.durationMs, it.savedAt, stored = it) }).sortedByDescending { it.whenMs }
     val selected = feed.find { it.key == selectedKey } ?: feed.firstOrNull()
@@ -125,7 +126,10 @@ internal fun ShortStudio(base: String, code: String, generation: Int, token: Str
         }
     }
     fun array(a: JSONArray) = (0 until a.length()).map(a::getJSONObject)
-    suspend fun refreshJobs() { if (token != null && remoteAccess()) jobs = array(io { api.shortJobs(code, token) }) else jobs = emptyList() }
+    suspend fun refreshJobs() {
+        try { jobs = if (token != null && remoteAccess()) array(io { sharedApi.list(code, token, generation) }) else emptyList() }
+        catch (e: Exception) { jobs = emptyList(); throw e }
+    }
     suspend fun refreshLibrary() { library = io(false) { storedShorts(context) } }
     suspend fun previewPlan() { plan = null; plan = io { api.shortPlan(code, requireNotNull(token), template, audio).also { require(it.getInt("generation") == generation) } } }
     fun rememberPending(value: JSONObject?) {
@@ -138,9 +142,9 @@ internal fun ShortStudio(base: String, code: String, generation: Int, token: Str
         val at = feed.indexOfFirst { it.key == selected?.key }
         feed.getOrNull(at + step)?.let { clearVideo(); selectedKey = it.key }
     }
-    fun share(uri: Uri) {
+    fun share(uri: Uri, mimeType: String) {
         context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
-            type = "video/mp4"; putExtra(Intent.EXTRA_STREAM, uri); clipData = ClipData.newRawUri("가치타 쇼츠", uri); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            type = mimeType; putExtra(Intent.EXTRA_STREAM, uri); clipData = ClipData.newRawUri("가치타 쇼츠", uri); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }, "쇼츠 공유"))
     }
     suspend fun saveCurrent(): Uri {
@@ -150,22 +154,23 @@ internal fun ShortStudio(base: String, code: String, generation: Int, token: Str
         item.stored?.let { savedUri = it.uri; return it.uri }
         val job = requireNotNull(currentJob)
         check(item.job?.getString("id") == job.getString("id")) { "영상이 준비된 뒤 다시 시도해 주세요" }
-        val file = requireNotNull(cache[job.getString("id")])
+        val file = requireNotNull(cache[sharedShortKey(job)])
+        val mime = sharedShortMime(job)
         val uri = io {
-            api.completedShortJob(code, requireNotNull(token), job.getString("id"))
+            sharedApi.item(code, requireNotNull(token), job)
             val resolver = context.contentResolver
             val target = requireNotNull(resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, ContentValues().apply {
-                put(MediaStore.Video.Media.DISPLAY_NAME, "가치타_${UUID.randomUUID()}.mp4"); put(MediaStore.Video.Media.TITLE, item.title)
-                put(MediaStore.Video.Media.MIME_TYPE, "video/mp4"); put(MediaStore.Video.Media.RELATIVE_PATH, "${Environment.DIRECTORY_MOVIES}/Gachita"); put(MediaStore.Video.Media.IS_PENDING, 1)
+                put(MediaStore.Video.Media.DISPLAY_NAME, "가치타_${UUID.randomUUID()}.${if (mime == "video/webm") "webm" else "mp4"}"); put(MediaStore.Video.Media.TITLE, item.title)
+                put(MediaStore.Video.Media.MIME_TYPE, mime); put(MediaStore.Video.Media.RELATIVE_PATH, "${Environment.DIRECTORY_MOVIES}/Gachita"); put(MediaStore.Video.Media.IS_PENDING, 1)
             }))
             try {
                 requireNotNull(resolver.openOutputStream(target)).use { out -> file.inputStream().use { it.copyTo(out) } }
-                api.completedShortJob(code, token, job.getString("id")); checkRemote()
+                sharedApi.item(code, token, job); checkRemote()
                 check(resolver.update(target, ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) }, null, null) == 1)
                 target
             } catch (e: Exception) { resolver.delete(target, null, null); throw e }
         }
-        prefs.edit().putString("saved:${job.getString("id")}", uri.toString()).apply()
+        prefs.edit().putString("saved:${sharedShortKey(job)}", uri.toString()).apply()
         savedUri = uri
         refreshLibrary()
         selectedKey = uri.toString()
@@ -177,7 +182,7 @@ internal fun ShortStudio(base: String, code: String, generation: Int, token: Str
         CaptureService.hold(true)
         video.setOnPreparedListener { media -> player = media; media.isLooping = true; media.setVolume(if (muted) 0f else 1f, if (muted) 0f else 1f); if (page == ShortsPage.FEED && playbackAccess()) { video.start(); playing = true } else video.seekTo(1) }
         video.setOnErrorListener { _, _, _ -> playing = false; note = "영상을 재생하지 못했어요. 다른 쇼츠를 선택한 뒤 다시 열어 주세요."; true }
-        onDispose { alive.set(false); video.stopPlayback(); cache.values.forEach { it.delete() }; thumbs.clear(); if (!enteringLocal.get()) CaptureService.hold(false); activeChange(false) }
+        onDispose { alive.set(false); sharedApi.cancel(); video.stopPlayback(); cache.values.forEach { it.delete() }; thumbs.clear(); CaptureService.hold(false); activeChange(false) }
     }
     LaunchedEffect(Unit) {
         try {
@@ -192,7 +197,7 @@ internal fun ShortStudio(base: String, code: String, generation: Int, token: Str
             if (!playbackAccess()) { onClose(); break }
             if (!busy && remoteAccess()) try {
                 refreshJobs()
-                currentJob?.let { io { api.completedShortJob(code, requireNotNull(token), it.getString("id")) } }
+                currentJob?.let { io { sharedApi.item(code, requireNotNull(token), it) } }
             } catch (e: CancellationException) { throw e } catch (e: Exception) { if (currentJob != null) clearVideo(); note = e.message ?: "연결을 확인해 주세요" }
         }
     }
@@ -201,12 +206,13 @@ internal fun ShortStudio(base: String, code: String, generation: Int, token: Str
         clearVideo()
         try {
             val uri = selected.stored?.uri ?: selected.job?.let { job ->
-                val id = job.getString("id")
-                val file = cache[id] ?: File.createTempFile("short-generated-", ".mp4", context.cacheDir).also { file ->
-                    try { io { api.downloadShort(generationFile(base, code, job), requireNotNull(token), file, { !alive.get() }, {}, maxBytes = 100_000_000, mimeType = "video/mp4"); api.completedShortJob(code, token, id) }; cache[id] = file }
+                val id = sharedShortKey(job)
+                val mime = sharedShortMime(job)
+                val file = cache[id] ?: File.createTempFile("short-generated-", if (mime == "video/webm") ".webm" else ".mp4", context.cacheDir).also { file ->
+                    try { io { api.downloadShort(sharedShortFile(base, code, job), requireNotNull(token), file, { !alive.get() }, {}, maxBytes = SHARED_SHORT_MAX_BYTES, mimeType = mime); sharedApi.item(code, token, job); if (sharedShortOrigin(job) == "local-render") require(shortFileHash(file) == job.getJSONObject("result").getString("sha256")) { "다운로드한 파일을 확인하지 못했어요" } }; cache[id] = file }
                     catch (e: Exception) { file.delete(); throw e }
                 }
-                io { api.completedShortJob(code, requireNotNull(token), id) }
+                io { sharedApi.item(code, requireNotNull(token), job) }
                 currentJob = job
                 Uri.fromFile(file)
             }
@@ -234,6 +240,17 @@ internal fun ShortStudio(base: String, code: String, generation: Int, token: Str
             } }, enabled = !busy, shape = ShortButtonShape) { Text("삭제", color = MaterialTheme.colorScheme.error) } })
     }
 
+    if (createShared && token != null) SharedShortCreator(base, code, generation, token,
+        canUse = { alive.get() && remoteAccess() && playbackAccess() }, onClose = { createShared = false },
+        onSaved = { item -> createShared = false; jobs = listOf(item) + jobs.filter { sharedShortKey(it) != sharedShortKey(item) }; selectedKey = "job:${sharedShortKey(item)}"; page = ShortsPage.FEED; note = "함께 타는 사람들의 보관함에 저장했어요" })
+    deletingShared?.let { item -> AlertDialog(onDismissRequest = { if (!busy) deletingShared = null },
+        title = { Text("공용 보관함에서 삭제할까요?") }, text = { Text("같이 탄 사람들의 보관함에서 사라져요. 이미 내보낸 기기 사본은 남아요.") },
+        dismissButton = { TextButton(onClick = { deletingShared = null }, enabled = !busy) { Text("취소") } },
+        confirmButton = { TextButton(onClick = { perform {
+            io { sharedApi.delete(code, requireNotNull(token), item.getString("id")) }
+            if (currentJob?.let(::sharedShortKey) == sharedShortKey(item)) clearVideo()
+            cache.remove(sharedShortKey(item))?.delete(); deletingShared = null; refreshJobs(); note = "공용 보관함에서 삭제했어요"
+        } }, enabled = !busy) { Text("공용 영상 삭제") } }) }
     val dark = page == ShortsPage.FEED
     val ink = if (dark) MediaInk else MaterialTheme.colorScheme.onSurface
     Column(modifier.background(if (dark) MediaBackground else MaterialTheme.colorScheme.background)) {
@@ -249,10 +266,11 @@ internal fun ShortStudio(base: String, code: String, generation: Int, token: Str
                 onToggle = { if (video.isPlaying) { video.pause(); playing = false } else { video.start(); playing = true } },
                 onSave = { perform { saveCurrent(); note = "이 기기 보관함에 저장했어요" } },
                 onShare = { perform {
-                    val jobId = currentJob?.getString("id")
+                    val remoteItem = currentJob
+                    val mime = remoteItem?.let(::sharedShortMime) ?: selected?.stored?.mimeType ?: "video/mp4"
                     val uri = saveCurrent()
-                    if (jobId != null) io { api.completedShortJob(code, requireNotNull(token), jobId) }
-                    checkLocal(); share(uri)
+                    if (remoteItem != null) io { sharedApi.item(code, requireNotNull(token), remoteItem) }
+                    checkLocal(); share(uri, mime)
                 } },
                 onMute = { muted = !muted; val volume = if (muted) 0f else 1f; runCatching { player?.setVolume(volume, volume) } },
                 onMove = ::move, modifier = Modifier.weight(1f).fillMaxWidth())
@@ -260,7 +278,8 @@ internal fun ShortStudio(base: String, code: String, generation: Int, token: Str
                 onQuery = { query = it },
                 onCancel = { job -> perform { io { api.cancelShortJob(code, requireNotNull(token), job.getString("id")) }; refreshJobs() } },
                 onSelect = { item -> if (!busy) { clearVideo(); selectedKey = item.key; page = ShortsPage.FEED; note = "" } },
-                onDelete = { if (!busy) deleting = it }, modifier = Modifier.weight(1f).fillMaxWidth())
+                onDelete = { if (!busy) deleting = it },
+                participantId = participantId, onDeleteShared = { if (!busy) deletingShared = it }, modifier = Modifier.weight(1f).fillMaxWidth())
             ShortsPage.CREATE, ShortsPage.CONFIRM, ShortsPage.PROGRESS -> ShortCreationPage(page,
                 ShortCreationUi(catalog, plan, pending != null, template, audio, expanded, options, busy, remoteAccess()),
                 onLibrary = { if (!busy) page = ShortsPage.LIBRARY },
@@ -280,7 +299,7 @@ internal fun ShortStudio(base: String, code: String, generation: Int, token: Str
                 onExpand = { expanded = !expanded }, onOptions = { options = !options },
                 onAudio = { audio = it; perform { previewPlan() } },
                 onReview = { page = ShortsPage.CONFIRM },
-                onLocal = { enteringLocal.set(true); CaptureService.hold(false); onLocal() },
+                onLocal = { createShared = true },
                 onRecommend = { perform { previewPlan() } }, modifier = Modifier.weight(1f).fillMaxWidth())
         }
     }
@@ -347,7 +366,7 @@ private fun ShortFeedPage(feed: List<FeedShort>, selected: FeedShort?, loading: 
 @Composable
 private fun ShortLibraryPage(feed: List<FeedShort>, jobs: List<JSONObject>, thumbs: MutableMap<String, Bitmap>,
     busy: Boolean, query: String, onQuery: (String) -> Unit, onCancel: (JSONObject) -> Unit,
-    onSelect: (FeedShort) -> Unit, onDelete: (LibraryShort) -> Unit, modifier: Modifier) {
+    onSelect: (FeedShort) -> Unit, onDelete: (LibraryShort) -> Unit, participantId: String?, onDeleteShared: (JSONObject) -> Unit, modifier: Modifier) {
     val filtered = feed.filter { it.title.contains(query, ignoreCase = true) }
     Column(modifier.padding(horizontal = 18.dp)) {
         OutlinedTextField(value = query, onValueChange = onQuery, placeholder = { Text("쇼츠 제목 검색") }, singleLine = true, shape = ShortButtonShape, modifier = Modifier.fillMaxWidth())
@@ -357,15 +376,16 @@ private fun ShortLibraryPage(feed: List<FeedShort>, jobs: List<JSONObject>, thum
                 Text("이번 여행 · 제작 상태", fontSize = 22.sp, fontWeight = FontWeight.Bold)
                 unfinished.forEach { job -> Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text(generationLabel(job), fontSize = 18.sp, modifier = Modifier.weight(1f))
-                    if (generationActive(job)) TextButton(onClick = { onCancel(job) }, enabled = !busy, shape = ShortButtonShape) { Text("취소", fontSize = 20.sp) }
+                    if (sharedShortOrigin(job) == "provider" && generationActive(job)) TextButton(onClick = { onCancel(job) }, enabled = !busy, shape = ShortButtonShape) { Text("취소", fontSize = 20.sp) }
+                    if (sharedShortOrigin(job) == "local-render" && job.optString("createdBy") == participantId) TextButton(onClick = { onDeleteShared(job) }, enabled = !busy, shape = ShortButtonShape) { Text("공용 삭제", fontSize = 20.sp) }
                 } }
             }
             if (filtered.isEmpty()) item { Text(if (query.isBlank()) "아직 보관한 쇼츠가 없어요" else "검색 결과가 없어요", fontSize = 24.sp, modifier = Modifier.padding(vertical = 32.dp)) }
             items(filtered.chunked(3)) { row -> Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-                row.forEach { item -> ShortTile(item, thumbs[item.key], Modifier.weight(1f), enabled = !busy, onBitmap = { thumbs[item.key] = it }, onClick = { onSelect(item) }, onDelete = onDelete) }
+                row.forEach { item -> ShortTile(item, thumbs[item.key], Modifier.weight(1f), enabled = !busy, onBitmap = { thumbs[item.key] = it }, onClick = { onSelect(item) }, onDelete = onDelete, participantId = participantId, onDeleteShared = onDeleteShared) }
                 repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
             } }
-            item { Text("이 기기에 저장한 영상은 여행이 끝나도 남아요. 다른 기기와 자동으로 동기화하지 않아요.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 18.sp) }
+            item { Text("공용 영상은 같이 탄 사람들과 함께 봐요. 기기 사본은 이 기기에 남으며 공용 삭제와 별개예요.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 18.sp) }
         }
     }
 }
@@ -418,7 +438,7 @@ private fun ShortCreationPage(page: ShortsPage, ui: ShortCreationUi, onLibrary: 
 }
 
 @Composable
-private fun ShortTile(item: FeedShort, cached: Bitmap?, modifier: Modifier, enabled: Boolean, onBitmap: (Bitmap) -> Unit, onClick: () -> Unit, onDelete: (LibraryShort) -> Unit) {
+private fun ShortTile(item: FeedShort, cached: Bitmap?, modifier: Modifier, enabled: Boolean, onBitmap: (Bitmap) -> Unit, onClick: () -> Unit, onDelete: (LibraryShort) -> Unit, participantId: String?, onDeleteShared: (JSONObject) -> Unit) {
     val context = LocalContext.current
     LaunchedEffect(item.key) { if (cached == null && item.stored != null) withContext(Dispatchers.IO) { shortThumbnail(context, item.stored.uri) }?.let(onBitmap) }
     Column(modifier.clickable(enabled = enabled, onClick = onClick), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -428,7 +448,10 @@ private fun ShortTile(item: FeedShort, cached: Bitmap?, modifier: Modifier, enab
             Text(shortDuration(item.durationMs), color = MediaInk, fontSize = 16.sp, modifier = Modifier.align(Alignment.BottomEnd).background(MediaBackground.copy(alpha = .8f)).padding(6.dp))
         }
         Text(item.title, fontSize = 20.sp, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        Text((if (item.stored != null) "기기에 저장 · " else "이번 여행 · ") + SimpleDateFormat("M월 d일", Locale.KOREA).format(Date(item.whenMs)), fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text((if (item.stored != null) "기기 사본 · " else "함께 보관 · ") + SimpleDateFormat("M월 d일", Locale.KOREA).format(Date(item.whenMs)), fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        item.job?.takeIf { sharedShortOrigin(it) == "local-render" && it.optString("createdBy") == participantId }?.let { remote ->
+            TextButton(onClick = { onDeleteShared(remote) }, enabled = enabled, shape = ShortButtonShape, contentPadding = PaddingValues(0.dp)) { Text("공용 삭제", fontSize = 18.sp) }
+        }
         item.stored?.let { local -> TextButton(onClick = { onDelete(local) }, enabled = enabled, shape = ShortButtonShape, contentPadding = PaddingValues(0.dp)) { Text("삭제", fontSize = 18.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) } }
     }
 }

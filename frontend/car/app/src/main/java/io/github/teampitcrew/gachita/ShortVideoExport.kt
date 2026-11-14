@@ -46,9 +46,9 @@ import java.util.concurrent.CancellationException
 import kotlin.math.ceil
 import kotlin.math.sin
 
-private const val EXPORT_WIDTH = 540
-private const val EXPORT_HEIGHT = 960
-private const val EXPORT_FPS = 24
+internal const val EXPORT_WIDTH = 1080
+internal const val EXPORT_HEIGHT = 1920
+internal const val EXPORT_FPS = 30
 private const val EXPORT_SAMPLE_RATE = 16_000
 private const val EXPORT_MAX_SECONDS = 45
 private const val CODEC_WAIT_US = 10_000L
@@ -92,6 +92,8 @@ fun exportShortVideo(
     control: ShortExportControl,
     beforePublish: () -> Unit,
     onProgress: (Float) -> Unit = {},
+    targetFile: File? = null,
+    maxSeconds: Int = EXPORT_MAX_SECONDS,
 ): SavedShortVideo {
     check(Looper.myLooper() != Looper.getMainLooper()) { "영상 저장은 백그라운드에서 실행해야 해요" }
     require(short.scenes.isNotEmpty() && clips.size == short.scenes.size) { "장면과 원음 클립이 맞지 않아요" }
@@ -99,7 +101,7 @@ fun exportShortVideo(
     val app = context.applicationContext
     val videoFormat = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, EXPORT_WIDTH, EXPORT_HEIGHT).apply {
         setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-        setInteger(MediaFormat.KEY_BIT_RATE, 2_000_000)
+        setInteger(MediaFormat.KEY_BIT_RATE, 8_000_000)
         setInteger(MediaFormat.KEY_FRAME_RATE, EXPORT_FPS)
         setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
     }
@@ -110,11 +112,12 @@ fun exportShortVideo(
     }
     val codecs = MediaCodecList(MediaCodecList.REGULAR_CODECS)
     val videoEncoder = codecs.findEncoderForFormat(videoFormat)
-        ?: throw IllegalStateException("이 차량은 540×960 영상 저장을 지원하지 않아요")
+        ?: throw IllegalStateException("이 차량은 1080×1920 영상 저장을 지원하지 않아요")
     val audioEncoder = codecs.findEncoderForFormat(audioFormat)
         ?: throw IllegalStateException("이 차량은 원음의 AAC 저장을 지원하지 않아요")
     onProgress(0f)
-    val timeline = exportTimeline(short, clips, control)
+    require(maxSeconds in 1..60)
+    val timeline = exportTimeline(short, clips, control, maxSeconds)
     val durationUs = timeline.sumOf { it.durationUs }
     val temporary = mutableListOf<File>()
     fun temp(suffix: String) = File.createTempFile("short-export-", suffix, app.cacheDir).also { temporary += it }
@@ -130,6 +133,12 @@ fun exportShortVideo(
         combineTracks(video, audio, result, durationUs, control) { onProgress(0.90f + it * 0.07f) }
         control.check()
         check(result.length() > 0) { "완성된 영상이 비어 있어요" }
+        validateRenderedShort(result, durationUs)
+        if (targetFile != null) {
+            require(result.length() <= SHARED_SHORT_MAX_BYTES) { "영상은 64MB까지 보관할 수 있어요" }
+            control.publishAfter(beforePublish) { result.copyTo(targetFile, overwrite = true) }
+            return SavedShortVideo(Uri.fromFile(targetFile), targetFile.name, durationUs / 1000)
+        }
         val name = "가치타_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.ROOT).format(Date())}_${UUID.randomUUID().toString().take(8)}.mp4"
         val resolver = app.contentResolver
         val values = ContentValues().apply {
@@ -172,8 +181,9 @@ internal data class ExportScene(val scene: Scene, val pcm: ByteArray, val startU
     val durationUs: Long get() = pcm.size.toLong() * 1_000_000 / (EXPORT_SAMPLE_RATE * 2)
 }
 
-internal fun exportTimeline(short: Short, clips: List<File>, control: ShortExportControl): List<ExportScene> {
-    var remaining = EXPORT_SAMPLE_RATE * 2 * EXPORT_MAX_SECONDS
+internal fun exportTimeline(short: Short, clips: List<File>, control: ShortExportControl, maxSeconds: Int = EXPORT_MAX_SECONDS): List<ExportScene> {
+    require(maxSeconds in 1..60)
+    var remaining = EXPORT_SAMPLE_RATE * 2 * maxSeconds
     var start = 0L
     val timeline = mutableListOf<ExportScene>()
     for ((i, scene) in short.scenes.withIndex()) {
@@ -464,7 +474,7 @@ private class ExportEglSurface(private val surface: Surface) : Closeable {
 
 private class ExportScenePainter(context: Context, private val short: Short, private val people: List<Person>) : Closeable {
     val bitmap: Bitmap = Bitmap.createBitmap(EXPORT_WIDTH, EXPORT_HEIGHT, Bitmap.Config.ARGB_8888)
-    private val canvas = Canvas(bitmap)
+    private val canvas = Canvas(bitmap).apply { scale(EXPORT_WIDTH / 540f, EXPORT_HEIGHT / 960f) }
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val text = TextPaint(Paint.ANTI_ALIAS_FLAG)
     private val mint = Color.rgb(111, 211, 166)
@@ -533,7 +543,7 @@ private class ExportScenePainter(context: Context, private val short: Short, pri
     private fun fit(character: ShortCharacter, bounds: RectF) {
         val (image, source) = characters.getOrPut(character) {
             val decoded = BitmapFactory.decodeResource(resources, character.drawable,
-                BitmapFactory.Options().apply { inScaled = false; inSampleSize = 2 })
+                BitmapFactory.Options().apply { inScaled = false; inSampleSize = 1 })
                 ?: error("캐릭터 전신 이미지를 열지 못했어요")
             decoded to visibleCharacterBounds(decoded)
         }
@@ -569,4 +579,31 @@ private class ExportScenePainter(context: Context, private val short: Short, pri
     }
 
     override fun close() { characters.values.forEach { it.first.recycle() }; bitmap.recycle() }
+}
+
+/** Inspect actual container samples and decode a video frame before offering the file. */
+private fun validateRenderedShort(file: File, expectedDurationUs: Long) {
+    val extractor = MediaExtractor()
+    try {
+        extractor.setDataSource(file.path)
+        require(extractor.trackCount == 2) { "영상과 원음 트랙을 확인하지 못했어요" }
+        val formats = (0 until extractor.trackCount).map(extractor::getTrackFormat)
+        val video = formats.single { it.getString(MediaFormat.KEY_MIME)?.startsWith("video/") == true }
+        val audio = formats.single { it.getString(MediaFormat.KEY_MIME)?.startsWith("audio/") == true }
+        require(video.getInteger(MediaFormat.KEY_WIDTH) == EXPORT_WIDTH && video.getInteger(MediaFormat.KEY_HEIGHT) == EXPORT_HEIGHT)
+        require(audio.getInteger(MediaFormat.KEY_SAMPLE_RATE) == EXPORT_SAMPLE_RATE && audio.getInteger(MediaFormat.KEY_CHANNEL_COUNT) == 1)
+        for ((index, format) in formats.withIndex()) {
+            require(kotlin.math.abs(format.getLong(MediaFormat.KEY_DURATION) - expectedDurationUs) <= 1_000_000) { "영상과 원음 길이가 맞지 않아요" }
+            require(MediaCodecList(MediaCodecList.REGULAR_CODECS).findDecoderForFormat(format) != null) { "이 차량에서 영상을 재생할 수 없어요" }
+            extractor.selectTrack(index)
+            require(extractor.readSampleData(ByteBuffer.allocate(2 * 1024 * 1024), 0) > 0) { "재생할 트랙이 비어 있어요" }
+            extractor.unselectTrack(index)
+        }
+    } finally { extractor.release() }
+    android.media.MediaMetadataRetriever().use { reader ->
+        reader.setDataSource(file.path)
+        val frame = reader.getFrameAtTime(0, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+            ?: error("영상 프레임을 재생하지 못했어요")
+        try { require(frame.width == EXPORT_WIDTH && frame.height == EXPORT_HEIGHT) } finally { frame.recycle() }
+    }
 }

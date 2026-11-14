@@ -8,18 +8,18 @@ import android.net.Uri
 import android.provider.MediaStore.Video.Media as Videos
 import android.util.Size
 
-internal data class LibraryShort(val uri: Uri, val title: String, val durationMs: Long, val savedAt: Long)
+internal data class LibraryShort(val uri: Uri, val title: String, val durationMs: Long, val savedAt: Long, val mimeType: String = "video/mp4")
 
 /** 이 앱이 Movies/Gachita에 직접 저장한 영상만 읽습니다. 다른 앱의 사진 권한을 요청하지 않습니다. */
 internal fun storedShorts(context: Context): List<LibraryShort> {
     return context.contentResolver.query(Videos.EXTERNAL_CONTENT_URI,
-        arrayOf(Videos._ID, Videos.TITLE, Videos.DURATION, Videos.DATE_ADDED),
+        arrayOf(Videos._ID, Videos.TITLE, Videos.DURATION, Videos.DATE_ADDED, Videos.MIME_TYPE),
         "${Videos.RELATIVE_PATH}=? AND ${Videos.OWNER_PACKAGE_NAME}=? AND ${Videos.IS_PENDING}=0",
         arrayOf("Movies/Gachita/", context.packageName), "${Videos.DATE_ADDED} DESC")?.use { cursor ->
         buildList {
             while (cursor.moveToNext()) {
                 val title = cursor.getString(1).orEmpty().takeUnless { it.isBlank() || it.startsWith("가치타_") } ?: "함께 남긴 대화"
-                add(LibraryShort(ContentUris.withAppendedId(Videos.EXTERNAL_CONTENT_URI, cursor.getLong(0)), title, cursor.getLong(2), cursor.getLong(3) * 1000))
+                add(LibraryShort(ContentUris.withAppendedId(Videos.EXTERNAL_CONTENT_URI, cursor.getLong(0)), title, cursor.getLong(2), cursor.getLong(3) * 1000, cursor.getString(4) ?: "video/mp4"))
             }
         }
     }.orEmpty()
