@@ -110,6 +110,7 @@ adb shell am start --user 10 -n io.github.teampitcrew.gachita/.MainActivity --es
 - **클립:** 10초 조회 때 여행의 `moments`(사람이 확정한 장면)를 보고, 아직 올리지 않은 장면의 구간(장면의 `from`~`to`, 없으면 `at` 앞 20초 ~ 뒤 10초, 60초까지)을 잘라 16 kHz 모노 WAV로 `POST /api/trips/{code}/recordings?moment=&generation=&from=`(T76, `Authorization` 머리말)에 올립니다. 구간이 끝나고 3초 뒤부터, 모두 동의한 동안만. 400·404·409·413은 다시 하지 않고 401·403·503·끊김은 5분 뒤 다시. 올린 장면은 `clips-<여행>.done`.
 - **지우기:** 보관 기간에 따른 자동 삭제는 없습니다. 동의 세대가 오르면 옛 세대 파일을 지웁니다. '이 차에 둔 원음 지우기'는 주차 중에 보이며, 지난 원음만 지우고 기록은 이어 갑니다(동의 철회와 다른 요청, ADR-0007). 남은 공간이 500 MB 아래면 다른 원음 파일을 오래된 것부터 지우고, 그래도 모자라면 원음만 남기지 않습니다.
 - 차 앱이 켜져 있을 때만 올립니다. 원음 전체는 차 밖으로 보내지 않습니다.
+- **장면 후보(차 안 규칙, T144):** `Scenes.kt`의 `suggestScenes`는 서버 `scenes.js`의 `suggest`와 같은 규칙·같은 상수입니다(30초 창의 발화 수 + 2 × (말한 사람 수 − 1), 4줄 미만 제외, 이미 남긴 장면과 겹치지 않게 5개까지, 구간 15~35초). 두 구현은 `backend/api/scene-vectors.json` 한 파일로 맞춥니다(`ScenesTest.kt`). 받아 적은 말만 보며 소리와 서버 호출은 쓰지 않습니다. 폰은 지금처럼 `GET /scene-suggestions`를 씁니다. 차 화면 연결은 아직 없습니다.
 
 ## 차 안 보관과 지우기(T69)
 
@@ -224,6 +225,7 @@ Gleo와 마이크 주고받기(T41)는 `python3 frontend/car/gleo_e2e.py <APK> <
 | `Gleo.kt` | Gleo와 마이크 주고받기(T41): 호출어 변형 목록과 찾기(단위 테스트 `GleoTest.kt`), 넘기고 오디오 포커스로 돌려받기(`Handoff`) |
 | `assets/schema.json` | Gleo 함수 목록(T40·T41). 이름을 바꾸면 `MainActivity`의 `GLEO_*`와 매니페스트의 intent-filter도 같이 |
 | `Raw.kt` | 원음 파일 쓰기·자르기, 장면 구간, WAV(T63, 단위 테스트 `RawTest.kt`) |
+| `Scenes.kt` | 장면 후보 규칙, 서버 `scenes.js`와 같은 값(T144, 단위 테스트 `ScenesTest.kt`) |
 | `Vault.kt` | 차 안 파일의 암호화(Android Keystore AES-GCM), 명시적 삭제와 디버그 만료 시험(단위 테스트 `VaultTest.kt`) |
 | `Trip.kt` | 여행 응답 해석과 기록 동의 규칙(단위 테스트 `TripTest.kt`) |
 | `Server.kt` | 가치타 API 호출(`docs/api/openapi.yaml`) |
