@@ -1979,7 +1979,10 @@ class MainActivity : ComponentActivity() {
         val lines = remember(t.code, t.generation, transcript, Live.count) { afterLines(this, t, transcript) }
         androidx.compose.runtime.key(t.code, t.generation, start) {
             AfterTrip(t, lines, url, scope?.token, start,
-                canUse = { appVisible && !isDestroyed && s.online && !carStatus.restricted && scope != null && contentScope() == scope && server == url && s.trip?.people?.all { it.consent } == true && s.trip?.status != "driving" },
+                // 계속해도 되는가(바뀌면 멈춤): 같은 여행·세대·서버·참가자 토큰, 모두 동의, 주행 아님(종료는 마무리 단계라 됨)
+                allowed = { !isDestroyed && scope != null && contentScope() == scope && server == url && s.trip?.let { it.code == t.code && it.generation == t.generation && it.people.all { p -> p.consent } && it.status != "driving" } == true },
+                // 지금 할 수 있는가(잠깐 거짓이면 기다림): 앱이 보임, 서버 연결, 주차
+                ready = { appVisible && s.online && !carStatus.restricted },
                 onContents = { afterStart = null }, modifier = modifier)
         }
     }

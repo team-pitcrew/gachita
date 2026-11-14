@@ -70,4 +70,12 @@ class AfterTripTest {
         val got = afterPicks(cands, byKey, names).map { listOf(it.number, it.from, it.to, afterSpan(it.from, it.to, origin), it.title, it.quote, it.speakerId) }
         assertEquals(want, got)
     }
+
+    // 리허설 run1: 렌더 뒤 check() 실패(IllegalStateException)가 '서버에 닿지 않아요'로만 보였다
+    @Test fun afterErrorShowsTheRealReason() {
+        assertEquals("주차 상태를 확인해 주세요", afterError(IllegalStateException("주차 상태를 확인해 주세요")))
+        assertEquals("IllegalArgumentException", afterError(IllegalArgumentException()))
+        assertEquals("서버에 닿지 않아요(SocketTimeoutException)", afterError(java.net.SocketTimeoutException("read timed out")))
+        assertEquals(failureText(ApiError(409, "x")), afterError(ApiError(409, "x")))
+    }
 }

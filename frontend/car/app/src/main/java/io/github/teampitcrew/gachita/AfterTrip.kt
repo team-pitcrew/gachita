@@ -1,6 +1,7 @@
 package io.github.teampitcrew.gachita
 
 import android.content.Context
+import android.util.Log
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -122,6 +123,7 @@ internal fun phaseProgress(p: Phase, render: Float = 0f): Float = when (p) {
 // ---- 만들기(탭을 옮겨도 이 앱이 켜져 있는 동안 계속) ----
 
 internal class AfterItem(val pick: AfterPick) {
+    val saveKey: String = UUID.randomUUID().toString() // short-assets 요청 키(다시 보내도 하나)
     var phase by mutableStateOf(Phase.WAIT)
     var render by mutableStateOf(0f)
     var momentId: String? = null
@@ -135,62 +137,130 @@ internal class AfterRun(val code: String, val generation: Int, val items: List<A
     val finished get() = items.all { it.phase == Phase.DONE || it.phase == Phase.FAILED }
 }
 
+/** 만들기를 멈춘 까닭을 그대로 보인다(로그에도 남김). 서버 거절·통신만 failureText로, 나머지는 예외의 글. */
+internal fun afterError(e: Throwable): String = when (e) {
+    is ApiError -> failureText(e)
+    is java.io.IOException -> "서버에 닿지 않아요(${e.javaClass.simpleName})"
+    else -> e.message?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName
+}
+
+/** 서버 보관함 목록에서 이 장면·세대·원음으로 만든 같은 파일(sha256)이 보관 완료됐는지. 같은 요청 키를 다시 보내 409가 났을 때 성공으로 본다. */
+internal fun storedShort(items: org.json.JSONArray, source: SharedShortSource, sha256: String): org.json.JSONObject? =
+    (0 until items.length()).map { items.getJSONObject(it) }.firstOrNull {
+        it.optString("origin") == "local-render" && it.optString("state") == "completed" && it.optString("momentId") == source.moment &&
+            it.optInt("generation") == source.generation && it.optString("sourceHash") == source.hash && it.optJSONObject("result")?.optString("sha256") == sha256
+    }
+
+private class AfterSourceChanged : IllegalStateException("원음·자막·화자가 바뀌었어요. 다시 만들어 주세요")
+private class AfterStopped(message: String) : IllegalStateException(message)
+
 internal object AfterRuns {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     var run by mutableStateOf<AfterRun?>(null)
 
-    fun start(context: Context, base: String, token: String, run: AfterRun, canUse: () -> Boolean) {
+    /**
+     * allowed: 계속해도 되는가(같은 여행·세대·서버, 모두 동의, 주행 아님, 동의 끄기 대기 없음) — 거짓이면 바로 멈춘다.
+     * ready: 지금 할 수 있는가(앱이 보임, 서버 연결, 주차) — 거짓이면 멈추지 않고 2분까지 기다린다.
+     * 리허설 run1에서 렌더 뒤 한 번의 조회 실패(online=false)로 두 장면이 모두 '서버에 닿지 않아요'로 끝났다.
+     */
+    fun start(context: Context, base: String, token: String, run: AfterRun, allowed: () -> Boolean, ready: () -> Boolean) {
         this.run = run
         val app = context.applicationContext
         run.job = scope.launch {
             for (item in run.items) {
                 if (item.phase == Phase.DONE) continue
-                try { makeOne(app, base, token, run, item, canUse) }
-                catch (e: CancellationException) { throw e }
-                catch (e: Exception) { item.phase = Phase.FAILED; item.error = failureText(e) }
-                if (!canUse()) break
+                try { makeOne(app, base, token, run, item, allowed, ready) }
+                catch (e: Throwable) {
+                    if (e is kotlinx.coroutines.CancellationException && !isActive) throw e // 사람이 멈춤
+                    Log.w("GachitaAfter", "장면 ${item.pick.number} 만들지 못함: ${e.javaClass.simpleName} ${e.message}", e)
+                    item.phase = Phase.FAILED; item.error = afterError(e)
+                }
+                if (!allowed()) break
             }
         }
     }
 
     fun cancel() { run?.job?.cancel() }
 
-    private suspend fun makeOne(context: Context, base: String, token: String, run: AfterRun, item: AfterItem, canUse: () -> Boolean) {
+    private suspend fun makeOne(context: Context, base: String, token: String, run: AfterRun, item: AfterItem, allowed: () -> Boolean, ready: () -> Boolean) {
         val api = Server(base); val shared = SharedShortApi(base)
-        fun check() { check(canUse()) { "주차 상태와 모두의 기록 동의를 확인해 주세요" } }
-        check()
+        val job = currentCoroutineContext()[Job] // 기다림·다시 보냄 중에도 사람이 멈추면 바로 끝나게(gate는 렌더 콜백 안에서도 불려 suspend가 아님)
+        // 계속해도 되는지 보고, 지금 할 수 없으면(앱이 가려짐·조회 한 번 실패·잠깐 D) 2분까지 기다린다
+        fun gate() {
+            var waited = 0
+            while (true) {
+                job?.ensureActive()
+                if (!allowed()) throw AfterStopped("여행이나 기록 동의가 바뀌어 멈췄어요")
+                if (ready()) return
+                if (waited++ >= 120) throw AfterStopped("앱이 가려지거나 서버 연결이 2분 넘게 끊겨 멈췄어요")
+                Thread.sleep(1000)
+            }
+        }
+        // 통신 실패(IOException)·앞단의 잠깐 실패(502–504)는 세 번까지 다시 한다. 그 밖의 서버 거절은 그대로 던진다.
+        fun <T> net(work: () -> T): T {
+            var n = 0
+            while (true) {
+                gate()
+                try { return work() } catch (e: Exception) {
+                    if (e !is java.io.IOException && !(e is ApiError && e.transient) || ++n >= 4) throw e
+                    Log.i("GachitaAfter", "다시 보냄 ${e.javaClass.simpleName} ${e.message}"); Thread.sleep(2000L * n)
+                }
+            }
+        }
+        gate()
         if (item.momentId == null) {
             item.phase = Phase.MOMENT
             val p = item.pick
-            item.momentId = api.moment(run.code, token, p.at, p.from, p.to, clipText(p.title, 60), p.lat, p.lng)
+            item.momentId = api.moment(run.code, token, p.at, p.from, p.to, clipText(p.title, 60), p.lat, p.lng) // 다시 보내면 장면이 둘이 될 수 있어 한 번만
         }
-        // 장면 소리: 이 차가 원음에서 그 구간을 잘라 올리면(MainActivity.clips, 장면 구간이 끝나고 3초 뒤) 숏폼 구성에 보인다.
-        item.phase = Phase.VOICE
-        var source: SharedShortSource? = null
-        while (source == null) {
-            check()
-            val form = parseShort(api.shortform(run.code, token))
-            check(form.generation == run.generation) { "기록 동의가 바뀌어 멈췄어요" }
-            if (form.scenes.any { it.momentId == item.momentId }) source = runCatching { shared.source(run.code, token, item.momentId!!) }.getOrNull()
-            if (source == null) delay(3000)
+        val key = item.saveKey // 다시 보내도 서버 보관이 하나만 남게(같은 요청 키)
+        for (attempt in 1..2) {
+            // 장면 소리: 이 차가 원음에서 그 구간을 잘라 올리면(MainActivity.clips, 장면 구간이 끝나고 3초 뒤) 숏폼 구성에 보인다.
+            item.phase = Phase.VOICE
+            var source: SharedShortSource? = null
+            while (source == null) {
+                val form = parseShort(net { api.shortform(run.code, token) })
+                if (form.generation != run.generation) throw AfterStopped("기록 동의가 바뀌어 멈췄어요")
+                if (form.scenes.any { it.momentId == item.momentId }) source = runCatching { net { shared.source(run.code, token, item.momentId!!) } }.getOrNull()
+                if (source == null) delay(3000)
+            }
+            if (source.generation != run.generation) throw AfterStopped("기록 동의가 바뀌어 멈췄어요")
+            item.seconds = source.seconds; item.phase = Phase.RENDER; item.render = 0f
+            val dir = File(context.cacheDir, "after-${UUID.randomUUID()}")
+            val control = ShortExportControl()
+            try {
+                require(dir.mkdirs() || dir.isDirectory)
+                val clip = File(dir, "source.wav")
+                net { api.downloadShort(shortClipAddress(base, run.code, source.short.scenes.single().clip), token, clip, { !allowed() || control.isCancelled }, {}) }
+                fun verify() { if (!sharedShortSame(source, net { shared.source(run.code, token, source.moment) })) throw AfterSourceChanged() }
+                verify()
+                val file = File(dir, "render.mp4")
+                exportShortVideo(context, source.short, listOf(clip), emptyList(), control, beforePublish = ::verify, onProgress = { item.render = it }, targetFile = file, maxSeconds = 60)
+                verify()
+                item.phase = Phase.SAVE
+                val hash = shortFileHash(file)
+                fun stored() = storedShort(net { shared.list(run.code, token, run.generation) }, source, hash) != null
+                var busy = 0
+                while (true) {
+                    try { net { shared.upload(run.code, token, source, file, key, hash) {} }; break }
+                    catch (e: ApiError) {
+                        // 리허설 run2: 올리기 IOException → 다시 보냄(서버 재시작) → 409. 처음 보낸 것이 보관됐으면 성공.
+                        if (e.status != 409) throw e
+                        if (stored()) { Log.i("GachitaAfter", "장면 ${item.pick.number}: 409지만 같은 영상이 이미 보관됨"); break }
+                        // 같은 요청 키가 아직 '보관 중'(서버가 3분 잡아 둠)이면 목록을 보며 기다렸다 다시 보낸다. 다른 키·다른 영상·원음 바뀜은 실패.
+                        if (!e.message.orEmpty().contains("이미 보관하고") || ++busy > 2) throw e // ponytail: 서버가 409 종류를 글로만 구분
+                        var found = false
+                        for (i in 1..20) { delay(10_000); gate(); if (stored()) { found = true; break } }
+                        if (found) break
+                    }
+                }
+                item.phase = Phase.DONE
+                return
+            } catch (e: AfterSourceChanged) {
+                if (attempt == 2) throw e
+                Log.i("GachitaAfter", "장면 ${item.pick.number}: 원음·자막이 바뀌어 다시 만듦")
+            } finally { control.cancel(); dir.deleteRecursively() }
         }
-        check(source.generation == run.generation)
-        item.seconds = source.seconds; item.phase = Phase.RENDER; item.render = 0f
-        val dir = File(context.cacheDir, "after-${UUID.randomUUID()}")
-        val control = ShortExportControl()
-        try {
-            require(dir.mkdirs() || dir.isDirectory)
-            val clip = File(dir, "source.wav")
-            api.downloadShort(shortClipAddress(base, run.code, source.short.scenes.single().clip), token, clip, { !canUse() || control.isCancelled }, {})
-            fun verify() { check(); check(sharedShortSame(source, shared.source(run.code, token, source.moment))) { "원음·자막·화자가 바뀌었어요. 다시 만들어 주세요" } }
-            verify()
-            val file = File(dir, "render.mp4")
-            exportShortVideo(context, source.short, listOf(clip), emptyList(), control, beforePublish = ::verify, onProgress = { item.render = it }, targetFile = file, maxSeconds = 60)
-            verify()
-            item.phase = Phase.SAVE
-            shared.upload(run.code, token, source, file, UUID.randomUUID().toString(), shortFileHash(file)) {}
-            item.phase = Phase.DONE
-        } finally { control.cancel(); dir.deleteRecursively() }
     }
 }
 
@@ -199,11 +269,11 @@ internal object AfterRuns {
 internal enum class AfterStep { UPLOAD, SELECT, MAKE, DONE }
 
 /**
- * C22–C32. lines는 글 있는 줄(시각 순), people은 여행 참가자. token은 동의한 이 차 참가자의 토큰. canUse: 주차·모두 동의·같은 여행.
+ * C22–C32. lines는 글 있는 줄(시각 순), people은 여행 참가자. token은 동의한 이 차 참가자의 토큰. allowed·ready는 AfterRuns.start 참고.
  * onContents: 콘텐츠 기록(쇼츠 보관함)으로. 시작 화면은 step(대화 기록의 '추천 장면 고르기'는 SELECT).
  */
 @Composable
-internal fun AfterTrip(trip: Trip, lines: List<AfterLine>, base: String, token: String?, start: AfterStep, canUse: () -> Boolean, onContents: () -> Unit, modifier: Modifier = Modifier) {
+internal fun AfterTrip(trip: Trip, lines: List<AfterLine>, base: String, token: String?, start: AfterStep, allowed: () -> Boolean, ready: () -> Boolean, onContents: () -> Unit, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val c = MaterialTheme.colorScheme
     val names = remember(trip.people) { trip.people.associate { it.id to it.name } }
@@ -309,7 +379,7 @@ internal fun AfterTrip(trip: Trip, lines: List<AfterLine>, base: String, token: 
                 AfterStep.UPLOAD -> step = AfterStep.SELECT
                 AfterStep.SELECT -> if (token != null && n > 0) {
                     val run = AfterRun(trip.code, trip.generation, picks.filter { it.from in chosen }.map(::AfterItem))
-                    AfterRuns.start(context, base, token, run, canUse); step = AfterStep.MAKE
+                    AfterRuns.start(context, base, token, run, allowed, ready); step = AfterStep.MAKE
                 }
                 AfterStep.MAKE -> onContents()
                 AfterStep.DONE -> { AfterRuns.run = null; onContents() }
