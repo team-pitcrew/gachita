@@ -592,7 +592,7 @@ function home() {
     h("span", { className: "entry-arrow", "aria-hidden": "true" }, uiIcon("arrow")),
   );
   return [
-    header(h("span", { className: "brand" }, "가치타"), h("span", { className: "meta" }, "함께 타고, 함께 남기고")),
+    appBar({ online: !offline, onHome: () => { location.hash = ""; } }),
     h("section", { className: "home-intro" },
       profile ? h("div", { className: "home-profile" }, editPortrait(), h("div", {}, h("p", { className: "meta" }, "오늘도 함께해요"), h("h1", {}, `${profile.name} 님`))) : h("h1", {}, "같이 탄 오늘,", h("br"), "함께 남겨요."),
       h("p", { className: "sub" }, profile ? "차 안에서 나눈 이야기가 우리만의 기록이 돼요." : "이름과 얼굴을 정하고, 차 화면의 QR을 스캔해 주세요."),

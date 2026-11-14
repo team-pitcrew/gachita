@@ -650,7 +650,6 @@ input[type="file"]::file-selector-button {
 /* 홈은 연결과 보관함, 여행 안에서는 여행·대화·쇼츠로 같은 목적지를 유지한다. */
 .home-view { gap: 28px; padding-bottom: 32px; }
 .home-view .top { margin-bottom: 4px; }
-.home-view .top > .meta { font-size: 12px; }
 .home-intro { display: grid; gap: 20px; }
 .home-intro h1 { margin: 0; font-size: 32px; line-height: 1.3; letter-spacing: -.04em; }
 .home-intro > .sub { font-size: 15px; max-width: 32ch; }
@@ -695,7 +694,7 @@ input[type="file"]::file-selector-button {
 .journey-tabs button.selected { background: var(--accent-soft); color: var(--ink); }
 
 /* 대화 기록(최종 시안 P44). 머리·탭·바닥은 고정하고 본문만 스크롤한다. 대화 입력창은 두지 않는다. */
-.conversations-dialog { width: min(100%, 520px); height: 100dvh; max-height: 100dvh; max-width: 520px; margin: 0 auto; padding: 0; border-radius: 0; background: var(--bg); overflow: hidden; }
+.conversations-dialog { width: min(100%, 480px); height: 100dvh; max-height: 100dvh; max-width: 480px; margin: 0 auto; padding: 0; border-radius: 0; background: var(--bg); overflow: hidden; }
 .conversations-dialog[open] { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; gap: 12px; animation: none; }
 .conversations-dialog:not(.contents-dialog)[open] { gap: 16px; } /* 시안 P44(eZ2xs): 머리 줄–탭–제목 간격 16 */
 .conversations-dialog .app-bar { padding: max(20px, env(safe-area-inset-top)) var(--pad) 0; } /* 시안 P44: 머리 줄 y 20, 탭 64, 제목 124 */
@@ -1102,8 +1101,8 @@ button.ob-other { justify-self: start; min-height: 40px; font-size: 13px; font-w
 .group-ready { font-size: 13px; line-height: 18px; color: var(--accent); }
 .group-seats .seat { border: 0; font: inherit; color: inherit; }
 .group-seats .seat.picked, .group-ghost.picked { outline: 3px solid var(--accent); }
-.group-actions { position: fixed; left: 0; right: 0; bottom: 0; padding: 4px var(--pad) calc(20px + env(safe-area-inset-bottom)); background: linear-gradient(to top, var(--bg) 78%, transparent); }
-.group-actions > * { max-width: calc(480px - var(--pad) * 2); margin: 8px auto 0; }
+/* 바닥 단추 묶음은 .bar와 같은 틀: 폰 열(최대 480) 가운데, 좌우 20, 단추는 열 폭을 채운다. 넓은 화면에서 초록 단추만 왼쪽에 붙던 것(inline 단추에 auto 여백이 안 먹음)을 막는다. */
+.group-actions { position: fixed; left: 0; right: 0; bottom: 0; display: grid; gap: 8px; padding: 12px max(var(--pad), calc(50% - 240px + var(--pad))) calc(20px + env(safe-area-inset-bottom)); background: linear-gradient(to top, var(--bg) 78%, transparent); }
 .group-actions:empty { display: none; }
 .group-share { width: min(350px, calc(100vw - 40px)); box-sizing: border-box; padding: 20px; border: 0; border-radius: 28px; background: var(--surface); color: var(--ink); display: grid; gap: 12px; } /* 시안 2047:2316 350×292 */
 .group-share h2 { margin: 0; font-size: 22px; line-height: 30px; letter-spacing: -0.01em; }
@@ -1239,7 +1238,7 @@ button.content-more { justify-self: start; min-height: 44px; padding: 0; backgro
 .content-empty { margin: 0; font-size: 19px; font-weight: 700; line-height: 28px; color: var(--ink-2); }
 /* 여행 마무리·추천 장면 고르기·생성·완성(최종 시안 P22–P32). 대화 기록과 같은 틀: 머리·탭·바닥은 고정하고 본문만 스크롤한다.
    시안의 완성 카드 바탕(크림·분홍)은 토큰에 없어 민트 연한 바탕과 surface-2를 번갈아 쓴다. */
-.after-dialog { width: min(100%, 520px); height: 100dvh; max-height: 100dvh; max-width: 520px; margin: 0 auto; padding: 0; border-radius: 0; background: var(--bg); overflow: hidden; }
+.after-dialog { width: min(100%, 480px); height: 100dvh; max-height: 100dvh; max-width: 480px; margin: 0 auto; padding: 0; border-radius: 0; background: var(--bg); overflow: hidden; }
 .after-dialog[open] { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; gap: 12px; animation: none; }
 .after-dialog .app-bar { padding: max(20px, env(safe-area-inset-top)) var(--pad) 0; } /* 시안 P22–P32: 머리 줄 y 20, 탭 64, 제목 124 */
 .after-dialog .journey-tabs { margin: 0 var(--pad); }
