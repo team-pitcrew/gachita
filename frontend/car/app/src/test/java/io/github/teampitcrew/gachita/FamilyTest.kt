@@ -33,6 +33,6 @@ class FamilyTest {
     @Test fun `우리 가족 아래 줄은 동의와 목소리 수를 센다`() {
         val g = parseGroup(JSONObject(json))
         assertEquals("녹음 동의 2/3명 / 목소리 등록 2/3명", readiness(g.members))
-        assertEquals("녹음 동의 4명 완료 / 목소리 등록 4명 완료", readiness(DEMO_FAMILY.members))
+        assertEquals("동의와 목소리 등록 완료 / 다음 탑승부터 자동 기록 켜짐", readiness(DEMO_FAMILY.members))
     }
 }
