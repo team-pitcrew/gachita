@@ -38,20 +38,18 @@ object Live {
     var recent by mutableStateOf(emptyList<Utterance>())
     var count by mutableStateOf(0)
     var pending by mutableStateOf(0)
+    /** 최근 0.1초 조각들의 소리 크기(0..1, 새 것이 끝). 조각마다 메인 스레드가 민다. 화면은 이것을 직접 그리지 않는다. */
+    var levels: List<Float> = emptyList()
+    /**
+     * 함께 타는 중의 파형(시안 A D17): 받아 적은 말이 하나 들어올 때 그때까지의 [levels]를 찍어 둔 것. 주행 중 움직이는 표시를 두지 않으려고
+     * 0.1초마다가 아니라 새 말이 들어올 때만 바뀐다(Pleos 운전자 주의 분산 기준).
+     */
+    var wave by mutableStateOf(emptyList<Float>())
     /**
      * 원음(T63): 화면이 모두 동의한 것을 확인한 동의 세대. 수음 스레드는 이 세대로만 원음 파일을 연다(0이면 남기지 않음).
      * 동의 철회 뒤 화면이 알기 전에 읽힌 소리가 새 세대 파일로 넘어가지 않게.
      */
     @Volatile var rawGen = 0
-    /** '원음 지우기'를 누른 여행. 화면이 파일을 지우고(쓰던 것까지), 수음 스레드는 다음 묶음에서 새 파일로 넘어간다. */
-    @Volatile var rollRaw: String? = null
-
-    /**
-     * 출발 전 목소리 등록(T37) 중이면 읽기 스레드가 모노 소리를 여기에 모은다(10초가 차면 스스로 놓음).
-     * quiet 동안 받아 적힌 말은 보관함에 넣지 않고, 소리는 원음에 무음으로 자리만 둔다.
-     */
-    @Volatile var enroll: java.io.ByteArrayOutputStream? = null
-    @Volatile var quiet: LongRange? = null
 
     /** 내비가 마지막으로 알려 준 위치. 기록 중에 화면이 10초마다 묻고, 서비스가 발화에 붙인다. */
     @Volatile var fix: Fix? = null
@@ -71,7 +69,7 @@ object Live {
     /** 여행의 차 안 파일을 지웠을 때(서버에서 여행 삭제 또는 디버그 만료 시험). 그 여행의 보관함을 놓는다. */
     fun forget(trip: String) {
         if (box?.trip != trip) return
-        box = null; recent = emptyList(); count = 0; pending = 0
+        box = null; recent = emptyList(); count = 0; pending = 0; levels = emptyList(); wave = emptyList()
     }
 
     fun show(o: Outbox) { recent = o.recent(2); count = o.size; pending = o.pending }
@@ -136,7 +134,6 @@ class CaptureService : Service() {
         }
         current = this
         box = Live.outbox(this, trip)
-        Live.rollRaw = null
         startStt()
         worker = thread(name = "capture") { record() }
         main.postDelayed(watch, 1000)
@@ -145,7 +142,6 @@ class CaptureService : Service() {
 
     override fun onDestroy() {
         halt()
-        Live.enroll = null; Live.quiet = null // 등록 중에 멈춰도 원음이 무음으로 남지 않게
         main.removeCallbacks(watch)
         stt?.let { s -> runCatching { s.removeListener(listener); s.release() } }
         if (current === this) current = null
@@ -178,9 +174,9 @@ class CaptureService : Service() {
                 val audio = frames * 1000 / RATE
                 if (!completed) asm.partial(now, audio)
                 else asm.final(text, now, audio)?.let { d ->
-                    if (Live.quiet?.let { d.startedAt <= it.last && d.endedAt >= it.first } == true) return@post // 목소리 등록 문장
                     val u = box.add(d, Live.fix, levels.zone(d.audioFromMs + LEAD_MS / 2, d.audioToMs)) // 대조에 보내는 구간과 같게(첫 결과 쪽 0.5초를 뺌)
                     Live.show(box)
+                    Live.wave = Live.levels
                     Log.i(TAG, "발화 ${u.seq} ${u.text.length}자 ${u.endedAt - u.startedAt}ms 구역 ${u.seatZone ?: "모름"}") // 글자는 보관함에만
                     if (u.text.isNotEmpty()) Live.onHeard?.invoke(u) // 동의 철회 사이의 말은 글 없이 남는다
                 }
@@ -224,9 +220,7 @@ class CaptureService : Service() {
                 val c = downmix(buf, n)
                 levels.add(frames / CHUNK_FRAMES, c.left, c.right)
                 val at = System.currentTimeMillis() - n / 2 * 1000L / RATE // 이 조각 첫 표본의 기기 시각(읽기가 막 돌아옴)
-                Live.enroll?.let { b -> b.write(c.mono); if (b.size() >= ENROLL_BYTES) Live.enroll = null } // 10초가 차면 놓는다
-                val q = Live.quiet
-                keep(if (q != null && at in q) ByteArray(c.mono.size) else c.mono, at) // 등록 문장은 원음에 남기지 않는다(무음으로 자리만)
+                keep(c.mono, at)
                 frames += n / 2
                 val now = System.currentTimeMillis()
                 main.post { chunk(c, now) }
@@ -250,12 +244,11 @@ class CaptureService : Service() {
         try {
             val w = raw
             val g = Live.rawGen
-            // 새 파일로 넘어갈 때: 처음, 원음 지우기를 눌렀음, 모두 동의한 세대가 바뀜, 표본을 잃음(기기 시계가 표본 수보다 버퍼 길이 넘게 앞섬),
+            // 새 파일로 넘어갈 때: 처음, 모두 동의한 세대가 바뀜, 표본을 잃음(기기 시계가 표본 수보다 버퍼 길이 넘게 앞섬),
             // 기기 시계가 크게 뒤로 감. 읽기가 밀린 뒤 버퍼의 조각이 몰려올 때(기기 시계가 표본 수보다 뒤처짐)는 표본을 잃지 않았으니 넘어가지 않는다
             val drift = w?.let { at - (it.startedAt + it.frames * 1000 / RATE) } ?: 0
-            val roll = w == null || Live.rollRaw == box.trip || w.trip != box.trip || w.generation != g || drift > resyncMs || drift < -CLOCK_BACK_MS
+            val roll = w == null || w.trip != box.trip || w.generation != g || drift > resyncMs || drift < -CLOCK_BACK_MS
             if (roll) {
-                if (Live.rollRaw == box.trip) Live.rollRaw = null
                 w?.close(); raw = null
                 if (g == 0 || at < rawRetryAt) return
                 if (!room()) { rawRetryAt = at + 60_000; return }
@@ -290,6 +283,7 @@ class CaptureService : Service() {
     private fun chunk(c: Chunk, now: Long) {
         if (stopping) return
         block.chunk(c.allZero, now)
+        Live.levels = (Live.levels + meterLevel(chunkRms(c, c.mono.size)).toFloat()).takeLast(WAVE_BARS) // 목소리 등록 막대(T142)와 같은 눈금. mono 바이트 수 = 2채널 값의 수
         if (sttReady) runCatching { stt?.sendAudio(c.mono) }.onFailure { Log.w(TAG, "sendAudio 실패", it) }
         judge()
     }

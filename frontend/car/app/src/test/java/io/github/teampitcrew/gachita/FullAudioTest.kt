@@ -37,6 +37,8 @@ class FullAudioTest {
     @Test fun labels() {
         assertEquals("전체 음성 업로드 중  82%", audioLabel(AudioState.UPLOADING, .82f))
         assertEquals("전체 음성 업로드 중  99%", audioLabel(AudioState.UPLOADING, 1f))
+        assertEquals("시작 전·멈춤도 시안 글", "전체 음성 업로드 중  0%", audioLabel(AudioState.IDLE, 0f))
+        assertEquals("전체 음성 업로드 중  40%", audioLabel(AudioState.IDLE, .4f))
         assertEquals("전체 음성 업로드 완료", audioLabel(AudioState.READY, 1f))
         assertEquals("전체 음성 보관 기간(2일)이 지났어요", audioLabel(AudioState.EXPIRED, 1f))
     }
