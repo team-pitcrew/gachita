@@ -244,8 +244,8 @@ private val Row44 = CarText.Title.copy(fontSize = 44.sp, lineHeight = 55.sp, fon
 private fun menuText(size: Int, line: Int, weight: FontWeight = FontWeight.Bold) = CarText.Label.copy(fontSize = size.sp, lineHeight = line.sp, fontWeight = weight)
 
 /**
- * Header row (A·C44: mascot, '가치타', '● 연결됨'; C22: '주차 중  P'), and on the ride shell the '내 얼굴' button at the right end ([me], C17 2200:5920,
- * opening the profile menu C17m).
+ * Header row (A·C44: mascot, '가치타', '● 연결됨'; C20·C22–C38: '주차 중  P') and, on every trip screen, the '내 얼굴' button at the right end
+ * ([me], C17 2200:5920, opening the profile menu C17m). Screens without a profile yet (C01–C12, C39–C42) pass no [me], as in the design.
  */
 @Composable
 internal fun TripHeader(shell: Shell, gear: String?, online: Boolean, listening: Boolean, me: (@Composable () -> Unit)? = null) {
