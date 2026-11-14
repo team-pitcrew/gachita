@@ -80,7 +80,7 @@ class FamilyTest {
         assertEquals("“나는 지우야. 바다에 가서 모래성을 만들 거야.”", childLine("지우"))
     }
 
-    @Test fun `아이를 저장한 뒤 좌석 지도로 가는 것은 아이가 둘 이상일 때만(시연 13→16)`() {
+    @Test fun `아이를 저장한 뒤 전체 그룹 목록으로 가는 것은 아이가 둘 이상일 때만(시연 15→16)`() {
         val g = parseGroup(JSONObject(json)) // 아빠(대표) + 서준·하은 아이 둘
         assertEquals(true, seatsAfterChild(g.members))
         // 엄마가 이미 있어도 첫 아이(서준)만이면 가족 추가(C40)로 돌아가 하은을 더한다
