@@ -115,6 +115,7 @@ class MainActivity : ComponentActivity() {
     private val main = Handler(Looper.getMainLooper())
     private lateinit var prefs: SharedPreferences
     private lateinit var car: Car
+    private lateinit var onboarding: Onboarding // 계정·온보딩 C01–C08(T142, Onboarding.kt)
 
     private var state by mutableStateOf(Session())
 
@@ -327,6 +328,8 @@ class MainActivity : ComponentActivity() {
         if (debug) intent.getStringExtra("server")?.let { prefs.edit().putString("server", it).apply() }
         server = prefs.getString("server", null) ?: DEFAULT_SERVER
         device = prefs.getString("device", null) ?: UUID.randomUUID().toString().also { prefs.edit().putString("device", it).apply() }
+        onboarding = Onboarding(this, prefs) { server }
+        if (debug && !intent.getBooleanExtra("onboarding", true)) onboarding.skipForDebug() // --ez onboarding false: 기존 e2e는 처음 화면을 여행 만들기로 본다
         // 기본값은 무기한. --el keepMs를 명시한 디버그 빌드에서만 시간에 따른 정리를 시험한다.
         val now = System.currentTimeMillis()
         retentionMs = if (debug && intent.hasExtra("keepMs")) intent.getLongExtra("keepMs", -1).takeIf { it >= 0 } else null
@@ -349,6 +352,7 @@ class MainActivity : ComponentActivity() {
                 if (it.gear != "P" || it.restricted) brief = null
             }
             if (it.restricted) cancelShortExport("주행 중에는 영상 만들기를 멈춰요")
+            if (it.restricted) onboarding.stopRecording() // 온보딩은 주차 중에만(목소리 녹음도 멈춤)
             if (it.restricted) { managing = false; conversationOpen = false; destination = Destination.RIDE; clearTranscript() }
             if (it.restricted || it.gear != "P") closeBoarding() // 주행 제한·기어 변경은 QR을 즉시 가리고 초대를 폐기한다
             if (it.restricted && shortOf != null) stopShort() // 주행 중에는 숏폼을 틀지 않는다(T11)
@@ -372,6 +376,7 @@ class MainActivity : ComponentActivity() {
                     when {
                         t != null -> TripScreen(t)
                         carStatus.restricted -> SetupLocked()
+                        onboarding.showing -> OnboardingScreen(onboarding, carStatus.gear)
                         destination == Destination.SHORTS && appVisible -> ShortStudio(server, "", 0, null, "",
                             canRead = { false }, canPlay = { appVisible && !isDestroyed && !carStatus.restricted },
                             onClose = { destination = Destination.RIDE },
@@ -415,6 +420,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         closeBoarding()
+        onboarding.close()
         boardingIo.shutdown() // 발급 중 닫힌 요청은 같은 실행기에서 초대를 폐기하고 끝난다
         cancelRecordingStart?.invoke()
         recordingIo.shutdownNow()
@@ -1548,6 +1554,7 @@ class MainActivity : ComponentActivity() {
             AppBar(TITLE, listening = false, *pills(online = null))
             Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 OutlinedButton(onClick = { destination = Destination.SHORTS }, shape = RoundedCornerShape(10.dp)) { Text("저장한 쇼츠", fontSize = 24.sp) }
+                OutlinedButton(onClick = { onboarding.reopen() }, shape = RoundedCornerShape(10.dp)) { Text("계정·목소리 등록", fontSize = 24.sp) }
                 WindowSize()
             }
             Spacer(Modifier.height(8.dp))
