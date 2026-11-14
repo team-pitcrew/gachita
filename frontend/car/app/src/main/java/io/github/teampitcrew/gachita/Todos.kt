@@ -72,7 +72,17 @@ fun briefingLine(place: String?, open: List<Todo>): String =
 
 // T113: 서버 응답만 현재 화면의 정본입니다. 위의 이전 판 파일과 추출 함수는 호환을 위해 남기며 새 목록에 합치지 않습니다.
 data class SharedTodoSource(val device: String, val seq: Long, val at: Long, val text: String, val displayText: String, val participantId: String?)
-data class SharedTodo(val id: String, val place: String, val text: String, val status: String, val version: Int, val sources: List<SharedTodoSource>) {
+/** One thing inside an ask ('삼겹살 600g이랑 귤 한 봉지' → 삼겹살·600g, 귤·1봉지). qty is null when the words gave no amount. */
+data class TodoItem(val name: String, val qty: String?)
+
+/**
+ * category, items, requestedBy come from the v2 rules (A5, `place-rules-v2`): first·buy·remember·bring, the things asked for,
+ * and confirmed requesters. An older server (`place-rules-v1`) leaves them null/empty and the brief shows the ask as one row.
+ */
+data class SharedTodo(
+    val id: String, val place: String, val text: String, val status: String, val version: Int, val sources: List<SharedTodoSource>,
+    val category: String? = null, val items: List<TodoItem> = emptyList(), val requestedBy: List<String> = emptyList(), val title: String? = null,
+) {
     val pending get() = status == "pending"
 }
 data class SharedTodos(val generation: Int, val method: String, val items: List<SharedTodo>)
@@ -83,11 +93,18 @@ fun sharedTodo(o: JSONObject): SharedTodo {
     val status = o.getString("status"); require(status in setOf("pending", "done", "cancelled"))
     val version = o.getInt("version"); require(version >= 0)
     val sources = o.getJSONArray("sources")
+    val items = o.optJSONArray("items")
+    val by = o.optJSONArray("requestedBy")
     return SharedTodo(o.getString("id"), o.getString("place"), o.getString("text"), status, version,
         List(sources.length()) { i -> sources.getJSONObject(i).let { s ->
             SharedTodoSource(s.getString("device"), s.getLong("seq"), s.getLong("at"), s.getString("text"), s.getString("displayText"),
                 if (s.isNull("participantId")) null else s.getString("participantId"))
-        } })
+        } },
+        category = o.optString("category").takeIf { !o.isNull("category") && it.isNotBlank() },
+        items = (0 until (items?.length() ?: 0)).mapNotNull { i -> items!!.getJSONObject(i).let { it.optString("name").trim().takeIf(String::isNotEmpty)?.let { n -> TodoItem(n, it.optString("qty").takeIf { q -> !it.isNull("qty") && q.isNotBlank() }) } } },
+        requestedBy = (0 until (by?.length() ?: 0)).map { by!!.getString(it) }.distinct(),
+        title = o.optString("title").takeIf { !o.isNull("title") && it.isNotBlank() },
+    )
 }
 fun sharedTodos(json: String): SharedTodos = JSONObject(json).let { o ->
     val a = o.getJSONArray("items")
