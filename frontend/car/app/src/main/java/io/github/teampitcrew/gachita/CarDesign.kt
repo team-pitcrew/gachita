@@ -1,5 +1,10 @@
 package io.github.teampitcrew.gachita
 
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.Image
+import android.graphics.Bitmap
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -118,16 +123,20 @@ fun ParkedFrame(
 /** 위 탭 세 칸(시안 '상위 탭'). */
 val TRIP_TABS = listOf("함께 타는 중", "대화 기록", "콘텐츠 기록")
 
-/** 정보 카드(시안 카드: surface 또는 accent-soft, 모서리 32, 여백 26, 간격 24): 캐릭터 92(있으면) · 제목 Headline 32 / 설명 Label 24. */
+/** 정보 카드(시안 카드: surface 또는 accent-soft, 모서리 32, 여백 26, 간격 24): 사진 또는 캐릭터 92(있으면) · 제목 Headline 32(ink) / 설명 Label 24(ink-2). */
 @Composable
-fun InfoCard(title: String, detail: String, modifier: Modifier = Modifier.fillMaxWidth(), soft: Boolean = false, face: Int? = null, onClick: (() -> Unit)? = null) {
+fun InfoCard(
+    title: String, detail: String, modifier: Modifier = Modifier.fillMaxWidth(), soft: Boolean = false, face: Int? = null, photo: Bitmap? = null,
+    onClick: (() -> Unit)? = null,
+) {
     val c = MaterialTheme.colorScheme
     Surface(modifier.clip(CarShape.Card).then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier), CarShape.Card,
         color = if (soft) c.primaryContainer else c.surface) {
         Row(Modifier.padding(26.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(24.dp)) {
-            if (face != null) CharAvatar(face, 92.dp, CarShape.Face)
+            if (photo != null) Image(photo.asImageBitmap(), null, Modifier.size(92.dp).clip(CarShape.Face), contentScale = ContentScale.Crop)
+            else if (face != null) CharAvatar(face, 92.dp, CarShape.Face)
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(title, style = CarText.Headline)
+                Text(title, style = CarText.Headline, color = c.onSurface) // accent-soft 위에서도 ink(시안)
                 if (detail.isNotEmpty()) Text(detail, style = CarText.Label, color = c.onSurfaceVariant)
             }
         }
@@ -153,7 +162,7 @@ fun FamilyCard(faces: List<Int>, count: Int, modifier: Modifier = Modifier.width
 @Composable
 fun CarField(label: String, value: String, change: (String) -> Unit, type: KeyboardType, secret: Boolean = false, placeholder: String = "") {
     val c = MaterialTheme.colorScheme
-    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(24.dp)) { // 시안: 라벨과 칸 사이 24
         Text(label, style = CarText.Label, color = c.onSurfaceVariant)
         BasicTextField(value, change, Modifier.fillMaxWidth().height(84.dp), singleLine = true, textStyle = CarText.Body.copy(color = c.onSurface),
             cursorBrush = SolidColor(c.primary), keyboardOptions = KeyboardOptions(keyboardType = type),
