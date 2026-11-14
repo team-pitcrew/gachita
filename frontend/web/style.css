@@ -995,3 +995,13 @@ input[type="file"]::file-selector-button {
 
 .short-pages .media-button {min-height: 48px;}
 .record-setting-switch:disabled {background: transparent; opacity: .5;}
+
+/* 장소별 할 일과 도착 안내(T120). 카드·알약·줄은 기존 것을 그대로 쓴다. */
+.todos h3 { margin: 16px 0 0; font-size: 15px; font-weight: 600; color: var(--ink-2); }
+.todo-here { margin-top: 12px; padding: 16px; border-radius: var(--r-ctl); background: var(--accent-soft); }
+.todo-here > .what { margin-top: 8px; }
+.todo-source summary { cursor: pointer; padding: 6px 0; }
+.todo-source ul { margin: 4px 0 8px; padding: 0 0 0 12px; border-left: 2px solid var(--line); list-style: none; }
+.todo-source li { padding: 4px 0; overflow-wrap: anywhere; }
+.todo-here ul { margin-top: 8px; }
+.todo-here .pill, .todo-here button:not(.plain) { background: var(--surface); }
