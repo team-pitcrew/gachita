@@ -78,6 +78,8 @@ LINES = {
 FAR_LODGE = (37.7519, 128.8761)  # 강릉 경포 쪽(멀어서 '곧 도착'이 뜨지 않음). 22단계 '여행 계속'에서 다음 장소를 숙소로 둘 때
 HERE = (37.41272, 127.09468)  # 에뮬레이터 GPS(11/15 리허설 세션이 dumpsys location으로 읽음). 실행할 때 다시 읽는다
 NEAR_M = float(os.environ.get("DEMO_NEAR_M", "200"))  # 시연 장소를 내비 위치에서 얼마나 떨어뜨릴지. 도착 판정(T113)은 250 m 안이어야 함
+# 도착 전 카드를 띄울 남은 시간(초, 디버그 인자 --ei approachSeconds). 앱 기본은 300. GPS가 움직이지 않아 남은 시간이 줄지 않으니 넉넉히
+APPROACH_S = os.environ.get("DEMO_APPROACH_S", "600")
 
 # 흐름 → (티켓, 차 PR의 머리 브랜치 무늬). 상태는 실행할 때 gh로 읽는다(병합/열림/없음).
 FLOWS = {"F1": ("#390 T142", r"T142-car"), "F2": ("#372 T133", r"T133-car"), "F3": ("#365 T130", r"T130-car-final"),
@@ -393,14 +395,39 @@ def prepare():
     except SystemExit as e: note("say.off", why=str(e))
 
 
+ENROLL_MAX_S = 14  # 차의 목소리 등록은 15초에 닫힌다. 그보다 긴 소리는 gRPC 넣기 큐에 남아 다음 넣기를 막고, 기록이 켜지면 받아 적힌다(리허설 run2)
+injecting = threading.Lock()  # 넣기는 한 번에 하나. 앞의 것이 끝나기 전에 다음을 보내지 않는다
+
+
+def injectable(name):
+    """넣을 파일 이름. 등록용(enroll-*)은 앞 14초만 잘라 <name>-14s.wav로 따로 둔다(미리 둔 실제 녹음도 원본은 그대로 둠)."""
+    if not name.startswith("enroll-"): return name
+    with wave.open(str(OUT / "inputs" / f"{name}.wav")) as w:
+        params, frames = w.getparams(), w.readframes(min(w.getnframes(), w.getframerate() * ENROLL_MAX_S))
+    with wave.open(str(OUT / "inputs" / f"{name}-14s.wav"), "wb") as w: w.setparams(params); w.writeframes(frames)
+    return f"{name}-14s"
+
+
 def say(name):
-    """미리 만든 대사를 가상 마이크에 넣는다. 우리 녹음이 열려 있을 때만(닫힌 채 넣으면 에뮬레이터가 멈춘 적이 있음, cap.Injector.play도 확인)."""
+    """미리 만든 대사를 가상 마이크에 넣는다. 우리 녹음이 열려 있을 때만(닫힌 채 넣으면 에뮬레이터가 멈춘 적이 있음, cap.Injector.play도 확인).
+    앞의 넣기가 아직이면 60초까지 기다리고, 그래도 안 끝나면 넣지 않는다. 넣기가 completed가 아니면(FAILED_PRECONDITION 등) 크게 알린다."""
     if inj is None: note("say.skip", name=name, why="소리 넣기 꺼짐"); return False
-    if not any("silenced:false" in l for l in cap.mic_holders()):
-        note("say.skip", name=name, why="가치타가 녹음 중이 아님"); return False
-    try: clips.append({"part": part, "clip": name, "at_ms": inj.play(name)})
-    except SystemExit as e: note("say.skip", name=name, why=str(e)); return False
-    return True
+    if not injecting.acquire(timeout=60):
+        note("say.skip", name=name, why="앞의 넣기가 60초 넘게 끝나지 않음"); check(f"대사 {name} 넣기", False, why="앞의 넣기가 큐에 남음"); return False
+    try:
+        if not any("silenced:false" in l for l in cap.mic_holders()):
+            note("say.skip", name=name, why="가치타가 녹음 중이 아님"); return False
+        clip = injectable(name)
+        try: at = inj.play(clip)
+        except SystemExit as e: note("say.skip", name=name, why=str(e)); return False
+        done = next((x for x in reversed(e2e.log) if x["step"] == "inject.done" and x.get("name") == clip), {})
+        if done.get("result") != "completed":
+            print(f"\n!!! 대사 '{name}'을 넣지 못했습니다: {done.get('result')} — 앞의 소리가 큐에 남았거나 녹음이 닫혔습니다\n", file=sys.stderr, flush=True)
+            check(f"대사 {name} 넣기", False, result=done.get("result")); return False
+        clips.append({"part": part, "clip": clip, "at_ms": at})
+        return True
+    finally:
+        injecting.release()
 
 
 def grpc_is_ours():
@@ -575,8 +602,10 @@ def drive_steps(code):
     tap("기록 재개"); step(19, ["중지한 지점부터 이어서 기록해요"], 8)
     say("mart")
     here = navi_here()
-    mart, lodge = near(here, NEAR_M * 0.8, NEAR_M * 0.6), near(here, -NEAR_M * 0.6, NEAR_M * 0.8)
-    launch("--es", "route", f"{lodge[0]},{lodge[1]},강릉 숙소", "--es", "stops", f"{mart[0]},{mart[1]},하나로마트"); split(); tap("함께 타는 중", timeout=3)
+    # 길로 가까운 쪽: 11/15 emulator-5586 내비에서 GPS의 서쪽 200 m는 '1분 · 140m', 남쪽 200 m는 '1분 · 260m', 북·동쪽은 5–6분(1.5–1.7 km 돌아감)
+    mart, lodge = near(here, 0, -NEAR_M), near(here, -NEAR_M, 0)
+    launch("--es", "route", f"{lodge[0]},{lodge[1]},강릉 숙소", "--es", "stops", f"{mart[0]},{mart[1]},하나로마트", "--ei", "approachSeconds", APPROACH_S)
+    split(); tap("함께 타는 중", timeout=3)
     step(20, ["하나로마트 도착까지"], 25, f"시연 경로: 경유 하나로마트 {mart}, 목적지 강릉 숙소 {lodge}(내비 위치 {here}에서 약 {NEAR_M:.0f} m)")
     park(); step(21, ["먼저 할 일과 살 것을 모았어요", "장보고 여행 계속"], 25)
     if results[21]["result"] == "없음" and seen("도착했어요"): results[21] = {**results[21], "result": "다른 화면", "note": "develop의 T123 도착 카드(v1) — " + flow_state("F4")}
@@ -584,7 +613,7 @@ def drive_steps(code):
     launch("--es", "route", f"{FAR_LODGE[0]},{FAR_LODGE[1]},강릉 숙소"); split(); tap("함께 타는 중", timeout=3)
     drive(); say("lodge")
     step(22, ["내일도 같이 타면 안 돼", "아래 버튼으로 언제든 멈출 수 있어요"], 20, "대사 5줄(하은·엄마·아빠)")
-    launch("--es", "route", f"{lodge[0]},{lodge[1]},강릉 숙소"); split(); tap("함께 타는 중", timeout=3)
+    launch("--es", "route", f"{lodge[0]},{lodge[1]},강릉 숙소", "--ei", "approachSeconds", APPROACH_S); split(); tap("함께 타는 중", timeout=3)
     step(23, ["강릉 숙소 도착까지"], 25)
     park(); step(24, ["여행 마치고 기록 보기", "내리기 전, 이 세 가지만 기억하세요"], 25)
     if not tap("여행 마치고 기록 보기", timeout=4):

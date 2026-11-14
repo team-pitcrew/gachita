@@ -114,9 +114,9 @@ internal data class Approach(val trip: String, val place: String, val minutes: I
 internal const val APPROACH_SECONDS = 300
 
 /** Approaching when the navigation reports 0 < remaining time <= 5 minutes for a named place. 0 means the navigation has no estimate. */
-internal fun approach(trip: String, name: String?, remainSeconds: Int?, final: Boolean = false): Approach? {
+internal fun approach(trip: String, name: String?, remainSeconds: Int?, final: Boolean = false, limit: Int = APPROACH_SECONDS): Approach? {
     val place = name?.trim().orEmpty()
-    if (place.isEmpty() || remainSeconds == null || remainSeconds !in 1..APPROACH_SECONDS) return null
+    if (place.isEmpty() || remainSeconds == null || remainSeconds !in 1..limit) return null
     return Approach(trip, place, maxOf(1, (remainSeconds + 59) / 60), remainSeconds, final)
 }
 
