@@ -81,6 +81,9 @@ class Server(base: String, private val open: (URL) -> HttpURLConnection = { it.o
             .let { it.getInt("generation") to sharedTodo(it.getJSONObject("item")) }
     }
 
+    /** 차가 P에서 D로 나가면 여행을 주행으로 바꾼다. 서버는 모두 동의했을 때만 기록 표시(recording)를 켠다. */
+    fun departed(code: String, token: String): Got = got(call("PATCH", "/api/trips/$code", JSONObject().put("status", "driving"), token)!!)
+
     /** 실제 차량 P 관측으로 호출하며, 서버가 확인한 주차 상태 뒤에 도착 판정을 요청합니다. */
     fun parkedForArrival(code: String, token: String): Got = got(call("PATCH", "/api/trips/$code", JSONObject().put("status", "parked"), token)!!)
     /** 여행을 마친다(최종 목적지 브리핑의 '여행 마치고 기록 보기'). 서버의 여행 상태만 바꾸고 기록·동의는 그대로 둔다. */
