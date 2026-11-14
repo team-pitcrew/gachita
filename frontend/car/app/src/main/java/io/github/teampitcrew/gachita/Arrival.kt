@@ -1,0 +1,203 @@
+package io.github.teampitcrew.gachita
+
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+
+/*
+ * Arrival brief of the final design v2 (flow F4, T141; Figma GISs0yf3c1KCjXwuFmF4ij): C20 waypoint arrival 2005:3369
+ * ('{place} 도착', '먼저 할 일' + '잊지 말고 살 것 N개' with emoji, name, '{who} 요청', amount) and the final destination
+ * finalBrief 2043:1890 ('먼저 할 일 / 잊지 말기 / 챙길 것'). Rows are the server's action items (place-rules-v2): category, items,
+ * requestedBy, title. Nothing is made up here; names come only from confirmed speakers. Grouping is covered by ArrivalBriefTest.
+ * The T113 flow stays: only server todos, server-approved arrival items, refresh and arrival check as small links.
+ */
+
+/** Emoji by words in the name (the design's 'Briefing / emoji' set), else by category. */
+private val EMOJI = listOf(
+    Regex("화장실") to "🚻",
+    Regex("냉장|얼음|냉동") to "🧊", // '고기는 바로 냉장 보관' is about the fridge (finalBrief)
+    Regex("고기|삼겹살|소고기|돼지|목살|한우|갈비|닭") to "🥩",
+    Regex("귤|과일|사과|딸기|포도|바나나|수박|복숭아") to "🍊",
+    Regex("젤리|간식|과자|사탕|초콜릿|아이스크림") to "🍬",
+    Regex("음료|탄산수|^물$|생수|커피|주스|우유|맥주|콜라|사이다") to "🥤",
+    Regex("가방|짐|캐리어|트렁크") to "🧳",
+    Regex("장보기|장 보") to "🛒",
+)
+private val BY_KIND = mapOf("buy" to "🛒", "first" to "🚻", "remember" to "🧊", "bring" to "🧳")
+
+internal fun emojiOf(name: String, category: String?): String =
+    EMOJI.firstOrNull { (re, _) -> re.containsMatchIn(name) }?.second ?: BY_KIND[category] ?: "🛒"
+
+/** '하은이 요청', '엄마 요청' (adds 이 after a final consonant). Several: '엄마·서준이 요청'. No confirmed speaker: empty. */
+internal fun whoAsked(item: SharedTodo, people: List<Person>): String {
+    val names = item.requestedBy.mapNotNull { id -> people.find { it.id == id }?.name }
+    if (names.isEmpty()) return ""
+    val last = names.last()
+    return (names.dropLast(1) + (if (hasBatchim(last)) "${last}이" else last)).joinToString("·") + " 요청"
+}
+
+/** One row of the brief: emoji, name, '{who} 요청', amount (empty when none). */
+internal data class BriefRow(val emoji: String, val name: String, val who: String, val qty: String)
+
+internal data class BriefRows(val first: List<BriefRow>, val buy: List<BriefRow>, val remember: List<BriefRow>, val bring: List<BriefRow>) {
+    val isEmpty get() = first.isEmpty() && buy.isEmpty() && remember.isEmpty() && bring.isEmpty()
+}
+
+private fun kindOf(item: SharedTodo) = item.category?.takeIf { it in setOf("first", "buy", "remember", "bring") } ?: "remember"
+
+/** Open asks grouped by category. A thing to buy is one row per good (with its amount); an older server's ask is one 'remember' row. */
+internal fun briefRows(items: List<SharedTodo>, people: List<Person>): BriefRows {
+    val g = mapOf("first" to mutableListOf<BriefRow>(), "buy" to mutableListOf(), "remember" to mutableListOf(), "bring" to mutableListOf())
+    items.filter { it.pending }.forEach { item ->
+        val kind = kindOf(item)
+        val who = whoAsked(item, people)
+        val title = item.title ?: shortAsk(item)
+        if (kind == "buy" && item.items.isNotEmpty()) item.items.forEach { g.getValue("buy") += BriefRow(emojiOf(it.name, "buy"), it.name, who, it.qty.orEmpty()) }
+        else g.getValue(kind) += BriefRow(emojiOf("$title ${item.items.firstOrNull()?.name.orEmpty()}", kind), title, who, "")
+    }
+    return BriefRows(g.getValue("first"), g.getValue("buy"), g.getValue("remember"), g.getValue("bring"))
+}
+
+/** The ask without its place phrase: '마트에서 우유 사자' → '우유 사자'. Falls back to the whole text. */
+internal fun shortAsk(item: SharedTodo): String {
+    val head = Regex(Regex.escape(item.place) + "에서(?:는|도)?\\s*").findAll(item.text).lastOrNull() ?: return item.text
+    return item.text.substring(head.range.last + 1).trim().ifEmpty { item.text }
+}
+
+/** The main button: waypoint '장보고 여행 계속', final destination '여행 마치고 기록 보기'. */
+internal fun arrivalButton(final: Boolean) = if (final) "여행 마치고 기록 보기" else "장보고 여행 계속"
+
+/**
+ * C20 / finalBrief. [onMain] runs the main button ('장보고 여행 계속' closes the brief, '여행 마치고 기록 보기' ends the trip and opens the
+ * conversation record). [note] is the T113 sync or arrival line, shown small under the cards with refresh and arrival check.
+ */
+@Composable
+internal fun ArrivalBrief(
+    place: String, final: Boolean, items: List<SharedTodo>, people: List<Person>, note: String,
+    onMain: () -> Unit, onRefresh: () -> Unit, onArrive: (() -> Unit)?, modifier: Modifier = Modifier,
+) {
+    val c = MaterialTheme.colorScheme
+    val rows = briefRows(items, people)
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("$place 도착", fontSize = 40.sp, lineHeight = 50.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(if (final) "내리기 전, 이 세 가지만 기억하세요" else "먼저 할 일과 살 것을 모았어요", color = c.onSurfaceVariant, fontSize = 24.sp, lineHeight = 32.sp)
+        }
+        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+            val wide = maxWidth >= 1000.dp
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                if (rows.isEmpty) Text("여기서 챙길 부탁은 없어요", color = c.onSurfaceVariant, fontSize = 28.sp)
+                if (rows.first.isNotEmpty()) BriefCard("먼저 할 일", rows.first, accent = true)
+                if (final) {
+                    if (rows.remember.isNotEmpty()) BriefCard("잊지 말기", rows.remember)
+                    if (rows.bring.isNotEmpty()) BriefCard("챙길 것", rows.bring)
+                    if (rows.buy.isNotEmpty()) BuyCard(rows.buy, wide)
+                } else {
+                    if (rows.buy.isNotEmpty()) BuyCard(rows.buy, wide)
+                    if (rows.remember.isNotEmpty()) BriefCard("잊지 말기", rows.remember)
+                    if (rows.bring.isNotEmpty()) BriefCard("챙길 것", rows.bring)
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(note, Modifier.weight(1f), color = c.onSurfaceVariant, fontSize = 20.sp, lineHeight = 28.sp)
+                    TextButton(onRefresh, Modifier.heightIn(min = 56.dp)) { Text("새로고침", fontSize = 20.sp) }
+                    if (onArrive != null) TextButton(onArrive, Modifier.heightIn(min = 56.dp)) { Text("도착 확인", fontSize = 20.sp) }
+                }
+            }
+        }
+        BigButton(DriveButton(arrivalButton(final), Press.GO, true), onMain, Modifier.fillMaxWidth().height(96.dp))
+    }
+}
+
+/** 'Briefing / action item / Car' (2056:2240): emoji, name over '{who} 요청', amount on the right. */
+@Composable
+private fun BriefLine(r: BriefRow, modifier: Modifier = Modifier) {
+    val c = MaterialTheme.colorScheme
+    Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+        Text(r.emoji, Modifier.width(48.dp), fontSize = 36.sp, lineHeight = 44.sp, textAlign = TextAlign.Center)
+        Column(Modifier.weight(1f)) {
+            Text(r.name, fontSize = 32.sp, lineHeight = 42.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            if (r.who.isNotEmpty()) Text(r.who, color = c.onSurfaceVariant, fontSize = 24.sp, lineHeight = 32.sp, maxLines = 1)
+        }
+        if (r.qty.isNotEmpty()) Text(r.qty, fontSize = 32.sp, lineHeight = 42.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+    }
+}
+
+/** '먼저 할 일'(accent) / '잊지 말기' / '챙길 것' card: label, then one line per ask. */
+@Composable
+private fun BriefCard(label: String, rows: List<BriefRow>, accent: Boolean = false) {
+    val c = MaterialTheme.colorScheme
+    Surface(Modifier.fillMaxWidth(), RoundedCornerShape(32.dp), color = if (accent) c.primaryContainer else c.surface) {
+        Column(Modifier.padding(horizontal = 24.dp, vertical = 20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(label, color = if (accent) c.primary else c.onSurfaceVariant, fontSize = 24.sp, lineHeight = 32.sp)
+            rows.forEach { BriefLine(it) }
+        }
+    }
+}
+
+/** '🛒 잊지 말고 살 것 N개' card. Two columns on the wide parked screen (C20 1682), one in the narrow window. */
+@Composable
+private fun BuyCard(rows: List<BriefRow>, wide: Boolean) {
+    val c = MaterialTheme.colorScheme
+    Surface(Modifier.fillMaxWidth(), RoundedCornerShape(32.dp), color = c.surface) {
+        Column(Modifier.padding(horizontal = 24.dp, vertical = 20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("🛒", fontSize = 32.sp, lineHeight = 40.sp)
+                Text("잊지 말고 살 것", Modifier.weight(1f), fontSize = 32.sp, lineHeight = 42.sp, fontWeight = FontWeight.Bold)
+                Text("${rows.size}개", color = c.onSurfaceVariant, fontSize = 24.sp)
+            }
+            if (wide) rows.chunked(2).forEach { pair ->
+                Row(horizontalArrangement = Arrangement.spacedBy(40.dp)) {
+                    pair.forEach { BriefLine(it, Modifier.weight(1f)) }
+                    if (pair.size == 1) Column(Modifier.weight(1f)) {}
+                }
+            } else rows.forEach { BriefLine(it) }
+        }
+    }
+}
+
+/**
+ * mock: F4 화면 확인용 시연 데이터(시안 '강릉 가족 여행'). 디버그 빌드에서 `--es f4 near|nearPaused|mart|finalNear|finalPaused|final`로만 켠다
+ * (MainActivity.f4Mock). 실제 화면은 서버 할 일(GET /todos·POST /arrival-briefing)과 내비 남은 시간을 쓴다.
+ */
+internal object F4Mock {
+    val people = listOf(Person("dad", "아빠", Seat.ROW_1_LEFT.name, true), Person("mom", "엄마", Seat.ROW_1_RIGHT.name, true),
+        Person("seojun", "서준", Seat.ROW_2_LEFT.name, true), Person("haeun", "하은", Seat.ROW_2_RIGHT.name, true))
+    private fun todo(id: String, place: String, category: String, title: String, items: List<TodoItem>, by: String) =
+        SharedTodo(id, place, title, "pending", 0, emptyList(), category, items, listOf(by), title)
+    val mart = listOf(
+        todo("m1", "하나로마트", "first", "화장실 먼저 다녀오기", listOf(TodoItem("화장실", null)), "haeun"),
+        todo("m2", "마트", "buy", "삼겹살 600g이랑 귤 한 봉지 사 가기", listOf(TodoItem("삼겹살", "600g"), TodoItem("귤", "1봉지")), "mom"),
+        todo("m3", "마트", "buy", "젤리 한 봉지 사기", listOf(TodoItem("젤리", "1봉지")), "seojun"),
+        todo("m4", "마트", "buy", "탄산수 2병 사기", listOf(TodoItem("탄산수", "2병")), "dad"),
+    )
+    // C19 줄('하은 화장실 / 고기와 과일 / 간식과 음료')을 그대로 보이려고 도착 전에는 시안의 말을 쓴다
+    val martNear = listOf(mart[0],
+        todo("n2", "마트", "buy", "고기랑 과일 사 가기", listOf(TodoItem("고기", null), TodoItem("과일", null)), "mom"),
+        todo("n3", "마트", "buy", "간식하고 음료 사기", listOf(TodoItem("간식", null), TodoItem("음료", null)), "seojun"))
+    val lodge = listOf(
+        todo("l1", "숙소", "first", "화장실 먼저 다녀오기", listOf(TodoItem("화장실", null)), "haeun"),
+        todo("l2", "숙소", "remember", "고기는 바로 냉장 보관", listOf(TodoItem("냉장 보관", null)), "mom"),
+        todo("l3", "숙소", "bring", "체크인하고 가방 내리기", listOf(TodoItem("체크인", null), TodoItem("가방", null)), "dad"),
+    )
+}

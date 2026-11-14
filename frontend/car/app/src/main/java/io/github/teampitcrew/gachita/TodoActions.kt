@@ -166,7 +166,9 @@ fun withCarTodos(own: List<TodoAction>, server: List<SharedTodo>): List<SharedTo
     val heard = server.flatMapTo(HashSet()) { t -> t.sources.map { it.seq to it.at } }
     val mine = own.mapNotNull { a ->
         byId[a.id] ?: if (a.sources.any { (it.seq to it.at) in heard }) null
-        else SharedTodo(a.id, a.place, a.text, "pending", 0, a.sources.map { SharedTodoSource(it.device, it.seq, it.at, it.text, it.text, it.participantId) })
+        else SharedTodo(a.id, a.place, a.text, "pending", 0, a.sources.map { SharedTodoSource(it.device, it.seq, it.at, it.text, it.text, it.participantId) },
+            // 도착 브리핑의 행동 항목(F4, T141): 서버가 아직 받지 못한 것도 차가 낸 분류·물건·요청한 사람·제목으로 보인다
+            a.category, a.items.map { TodoItem(it.name, it.qty) }, a.requestedBy, a.title)
     }
     val shown = mine.mapTo(HashSet()) { it.id }
     return mine + server.filter { it.id !in shown }

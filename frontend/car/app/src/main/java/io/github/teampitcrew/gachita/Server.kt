@@ -69,6 +69,18 @@ class Server(base: String, private val open: (URL) -> HttpURLConnection = { it.o
 
     /** 실제 차량 P 관측으로 호출하며, 서버가 확인한 주차 상태 뒤에 도착 판정을 요청합니다. */
     fun parkedForArrival(code: String, token: String): Got = got(call("PATCH", "/api/trips/$code", JSONObject().put("status", "parked"), token)!!)
+    /** 여행을 마친다(최종 목적지 브리핑의 '여행 마치고 기록 보기'). 서버의 여행 상태만 바꾸고 기록·동의는 그대로 둔다. */
+    fun endTrip(code: String, token: String): Got = got(call("PATCH", "/api/trips/$code", JSONObject().put("status", "ended"), token)!!)
+
+    /** 내비에서 읽은 장소를 여행에 남긴다(T131 `POST /places`). kind: approaching·arrived·destination. */
+    fun place(code: String, token: String, name: String, kind: String, lat: Double? = null, lng: Double? = null, etaSeconds: Int? = null) {
+        val body = JSONObject().put("name", name).put("kind", kind).apply {
+            if (lat != null && lng != null) put("lat", lat).put("lng", lng)
+            etaSeconds?.let { put("etaSeconds", it) }
+        }
+        call("POST", "/api/trips/$code/places", body, token)
+    }
+
     fun arrivalBriefing(code: String, token: String, generation: Int, observation: VehicleArrival): SharedArrival =
         sharedArrival(call("POST", "/api/trips/$code/arrival-briefing", observation.body(generation, parked = true), token)!!)
 
