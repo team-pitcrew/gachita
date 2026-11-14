@@ -28,6 +28,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -44,8 +45,14 @@ import androidx.compose.ui.unit.sp
 
 internal const val WAVE_BARS = 60 // 6 s of 0.1 s chunks
 
-/** Recorded time as '00:12:48'. */
-internal fun recordClock(ms: Long): String = (ms / 1000).let { s -> "%02d:%02d:%02d".format(s / 3600, s / 60 % 60, s % 60) }
+/** Recorded time like the C17 timer prototype '19:11' (minutes:seconds); from one hour on '1:02:03'. */
+internal fun recordClock(ms: Long): String = (ms / 1000).let { s -> if (s < 3600) "%02d:%02d".format(s / 60, s % 60) else "%d:%02d:%02d".format(s / 3600, s / 60 % 60, s % 60) }
+
+// Car text steps (docs/design.md §4, Figma Car/…). This screen uses only these; the option A frames' 72·44 map to Status 56·Title 40.
+private val Status56 = TextStyle(fontSize = 56.sp, lineHeight = 64.sp, fontWeight = FontWeight.Bold, letterSpacing = (-1.12).sp)
+private val Title40 = TextStyle(fontSize = 40.sp, lineHeight = 50.sp, fontWeight = FontWeight.Bold, letterSpacing = (-0.8).sp)
+private val Headline32 = TextStyle(fontSize = 32.sp, lineHeight = 42.sp, fontWeight = FontWeight.Bold, letterSpacing = (-0.32).sp)
+private val Body28 = TextStyle(fontSize = 28.sp, lineHeight = 40.sp, fontWeight = FontWeight.Medium)
 
 /**
  * Small status words (a pending note, e.g. an error, takes their place). D20 shows them left of the timer ('녹음' when null, '마이크 꺼짐' when paused); D17–D19 show only the
@@ -95,23 +102,24 @@ internal fun RecordView(
     last: LastLine?, near: Pair<Approach, List<BriefLine>>?, onWithdraw: (() -> Unit)?, onControl: () -> Unit, modifier: Modifier = Modifier,
 ) {
     val c = MaterialTheme.colorScheme
-    val dot = if (paused || word != null) c.onSurfaceVariant else c.error
+    val live = !paused && word == null // 실제로 받아 적는 중
+    val dot = if (live) c.error else c.onSurfaceVariant
     Column(modifier, verticalArrangement = Arrangement.spacedBy(24.dp)) {
         Column(Modifier.weight(1f).fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(24.dp)) {
             if (near == null) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                         Canvas(Modifier.size(12.dp)) { drawCircle(dot) }
-                        Text(time, fontSize = 72.sp, lineHeight = 90.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-1.44).sp, maxLines = 1)
+                        Text(time, color = if (live) c.error else c.onSurface, style = Status56, maxLines = 1) // 기록 타이머는 기록 중에만 rec(C17 19:11)
                     }
-                    Wave(wave, live = !paused && word == null, Modifier.widthIn(max = 720.dp).fillMaxWidth().height(140.dp))
-                    (note.ifBlank { null } ?: word?.takeUnless { paused })?.let { Text(it, color = c.onSurfaceVariant, fontSize = 28.sp, lineHeight = 35.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                    Wave(wave, live, Modifier.widthIn(max = 720.dp).fillMaxWidth().height(140.dp))
+                    (note.ifBlank { null } ?: word?.takeUnless { paused })?.let { Text(it, color = c.onSurfaceVariant, style = Body28, maxLines = 1, overflow = TextOverflow.Ellipsis) }
                 }
             } else {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Canvas(Modifier.size(12.dp)) { drawCircle(dot) }
-                    Text(note.ifBlank { word ?: "녹음" }, Modifier.weight(1f), color = c.onSurfaceVariant, fontSize = 28.sp, lineHeight = 35.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(time, color = c.onSurfaceVariant, fontSize = 28.sp, lineHeight = 35.sp, maxLines = 1)
+                    Text(note.ifBlank { word ?: "녹음" }, Modifier.weight(1f), color = c.onSurfaceVariant, style = Body28, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(time, color = c.onSurfaceVariant, style = Body28, maxLines = 1)
                 }
                 Brief(near.first, near.second)
             }
@@ -143,13 +151,13 @@ private fun Brief(a: Approach, lines: List<BriefLine>) {
     val c = MaterialTheme.colorScheme
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(20.dp)) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(a.place, fontSize = 56.sp, lineHeight = 70.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-1.12).sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text("약 ${a.minutes}분 후 도착", color = c.primary, fontSize = 32.sp, lineHeight = 40.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+            Text(a.place, style = Status56, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("약 ${a.minutes}분 후 도착", color = c.primary, style = Headline32, maxLines = 1)
         }
         lines.forEach { l ->
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.dp)) {
                 Box(Modifier.size(56.dp), contentAlignment = Alignment.Center) { BriefMark(l.icon, c.onSurface, 44.dp) }
-                Text(l.text, fontSize = 44.sp, lineHeight = 55.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.88).sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(l.text, style = Title40, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
     }
@@ -161,7 +169,7 @@ private fun SeatGrid(people: List<Person>, rows: List<List<Seat>>, speaking: Str
     val c = MaterialTheme.colorScheme
     Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-            Text("차량 앞쪽 ↑", color = c.onSurfaceVariant, fontSize = 28.sp, lineHeight = 35.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+            Text("차량 앞쪽 ↑", color = c.onSurfaceVariant, style = Body28, maxLines = 1)
             // 주행 중에도 철회는 바로(T11). 시안에는 없지만 지우지 않는다. 한 번 누르면 수음을 멈추고 이 여행의 원음과 대화를 지운다
             onWithdraw?.let { Box(Modifier.align(Alignment.CenterEnd)) { CardAction("동의 철회 · 기록 삭제", c.error, it) } }
         }
@@ -176,7 +184,7 @@ private fun SeatGrid(people: List<Person>, rows: List<List<Seat>>, speaking: Str
                             if (p != null) Avatar(seatCharacter(p), 84.dp) else Box(Modifier.alpha(0.6f)) { EmptySeat(84.dp) }
                         }
                         Text(p?.name ?: "빈자리", color = when { p == null -> c.onSurfaceVariant; talking -> c.primary; else -> c.onSurface },
-                            fontSize = 32.sp, lineHeight = 40.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            style = Headline32, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
             }
@@ -189,9 +197,9 @@ private fun SeatGrid(people: List<Person>, rows: List<List<Seat>>, speaking: Str
 private fun LastHeard(last: LastLine?, paused: Boolean) {
     val c = MaterialTheme.colorScheme
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text(if (paused) "마지막 대화" else last?.who.orEmpty(), color = c.onSurfaceVariant, fontSize = 28.sp, lineHeight = 35.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+        Text(if (paused) "마지막 대화" else last?.who.orEmpty(), color = c.onSurfaceVariant, style = Body28, maxLines = 1)
         Text(last?.text ?: "아직 받아 적은 말이 없어요", color = if (paused || last == null) c.onSurfaceVariant else c.onSurface,
-            fontSize = 40.sp, lineHeight = 50.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.4).sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            style = Title40, maxLines = 2, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -206,8 +214,7 @@ internal fun RecordControl(paused: Boolean, onClick: () -> Unit) {
                 if (paused) drawPath(Path().apply { moveTo(10.667f * k, 6.667f * k); lineTo(25.333f * k, 16f * k); lineTo(10.667f * k, 25.333f * k); close() }, c.background)
                 else listOf(9.333f, 18.667f).forEach { x -> drawRect(c.background, Offset(x * k, 6.667f * k), Size(4f * k, 18.667f * k)) }
             }
-            Text(if (paused) "계속 기록" else "일시정지", Modifier.width(200.dp), color = c.background, fontSize = 40.sp, lineHeight = 50.sp,
-                fontWeight = FontWeight.SemiBold, letterSpacing = (-0.4).sp, textAlign = TextAlign.Center, maxLines = 1)
+            Text(if (paused) "계속 기록" else "일시정지", Modifier.width(200.dp), color = c.background, style = Title40, textAlign = TextAlign.Center, maxLines = 1)
         }
     }
 }

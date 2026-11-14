@@ -7,9 +7,10 @@ import org.junit.Test
 
 class RecordTest {
     @Test fun clockShowsHoursMinutesSeconds() {
-        assertEquals("00:00:00", recordClock(999))
-        assertEquals("00:12:48", recordClock(768_000))
-        assertEquals("01:02:03", recordClock(3_723_000))
+        assertEquals("00:00", recordClock(999))
+        assertEquals("19:11", recordClock(1_151_000)) // C17 timer prototype
+        assertEquals("59:59", recordClock(3_599_000))
+        assertEquals("1:02:03", recordClock(3_723_000))
     }
 
     @Test fun recordWordIsNullOnlyWhileTakingDown() {
