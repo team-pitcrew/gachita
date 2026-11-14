@@ -6,12 +6,14 @@ import { characterImage } from '/short-film.js';
 import { createCaptions } from '/captions.js';
 import { RATE, LIMIT, wav, decodeInput, microphone } from './audio-input.js';
 import { windows, processCapture, saveCapture, loadCapture, deleteCapture, beginCapture, saveRawCapture, createCaptureFence, combineSamples } from './capture-session.js';
+import { editingText, serialRefresh } from './view-state.js';
+import { joinedTrip, sameJoinedTrip, verifyJoinedTrip } from './continue-trip.js';
 
 const $ = (id) => document.getElementById(id), KEY = 'gachita-demo';
 const button = (label, onclick, className = '', disabled = false) => h('button', { type: 'button', onclick, className, disabled }, label);
 const field = (label, input) => h('label', { className: 'field' }, h('span', {}, label), input);
 let car; try { car = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch { car = null; }
-let trip, tab = 'capture', busy = false, online = false, error = '', rows = [], todos = [], requestSignature = '', reading = false;
+let trip, tab = 'capture', busy = false, online = false, error = '', rows = [], todos = [], requestSignature = '';
 let job, input, inputName = '', recording, recordingAt, frames = [], frameCount = 0, paused = false, processing, progress = '', draftLoaded = '';
 let audioURL, sourceAudio, waveform, clock, recordButton, statusNode, feedback, fileRange = { from: 0, to: 30 };
 let inputAt, routeObservedAt, lifecycle = 0, actionEpoch = 0, pendingCapture, finishing, unsavedAudio = false;
@@ -26,6 +28,12 @@ const captureScope = () => ({ owner: owner(), code: car?.code, generation: trip?
 const validScope = (scope) => owner() === scope.owner && car?.token === scope.token && trip?.generation === scope.generation && allConsent() && !!who();
 const fixedRequest = (scope) => (method, suffix, data, signal) => api(method, `/trips/${scope.code}${suffix}`, data, scope.token, signal ? AbortSignal.any([signal, AbortSignal.timeout(20000)]) : AbortSignal.timeout(20000));
 const captureFence = createCaptureFence(validScope);
+const refresh = serialRefresh(readTrip);
+const picker = $('capture-file');
+picker.onchange = () => {
+  const file = picker.files?.[0];
+  if (file) act(() => importFile(file)).finally(() => { picker.value = ''; });
+};
 async function changeRecording(scope, data, signal) {
   const updated = await fixedRequest(scope)('PATCH', '', data, signal);
   if (car?.code === scope.code && car?.token === scope.token && (!trip || updated.version >= trip.version)) trip = updated;
@@ -42,9 +50,12 @@ async function act(work) {
   const action = ++actionEpoch;
   busy = true; error = ''; render();
   try { await work(); } catch (e) { if (action === actionEpoch) { error = e.message; toast(e.message); } }
-  finally { if (action === actionEpoch) { busy = false; if (car) await refresh(true); else render(); } }
+  finally { if (action === actionEpoch) { busy = false; render(); if (car) await refresh(true); } }
 }
-function revokeAudio() { sourceAudio?.pause(); if (audioURL) URL.revokeObjectURL(audioURL); audioURL = null; }
+function revokeAudio() {
+  if (sourceAudio) { sourceAudio.pause(); sourceAudio.removeAttribute('src'); sourceAudio.load(); sourceAudio = null; }
+  if (audioURL) URL.revokeObjectURL(audioURL); audioURL = null;
+}
 function stopDevice() { captureFence.cancel(); recording?.stop(); recording = null; pendingCapture = null; paused = false; }
 async function invalidateDraft(message) {
   const previous = job?.owner || captureFence.current?.scope.owner || owner(), previousId = job?.captureId;
@@ -89,9 +100,8 @@ async function cancelStarting() {
   render();
 }
 
-async function refresh(force = false) {
-  if (!car || reading) return;
-  reading = true;
+async function readTrip(force = false) {
+  if (!car) return;
   try {
     const requested = car;
     let next = await api('GET', `/trips/${requested.code}`, null, requested.token, AbortSignal.timeout(20000));
@@ -124,7 +134,7 @@ async function refresh(force = false) {
       if (car !== requested || scope.generation !== trip?.generation) return;
       if (transcript.generation === trip.generation) {
         const sig = JSON.stringify(transcript);
-        if (sig !== requestSignature) { rows = transcript.utterances || []; todos = transcript.todos || []; requestSignature = sig; if (!busy && !processing && !recording && !document.activeElement?.matches('input,textarea,select')) renderBody(); }
+        if (sig !== requestSignature) { rows = transcript.utterances || []; todos = transcript.todos || []; requestSignature = sig; if (!busy && !processing && !recording) renderBody(); }
       }
     } else { rows = []; todos = []; }
     if (changed || force) render(); else updateStatus();
@@ -133,7 +143,7 @@ async function refresh(force = false) {
     // 새 동의 상태를 확인할 수 없으면 마이크를 멈춥니다. 이미 받은 원음은 명시적으로 지우거나 재시도할 수 있습니다.
     if (recording && !paused) await pauseRecording(false).catch((failure) => { error += ` · ${failure.message}`; });
     updateStatus(); if (force || !trip) render();
-  } finally { reading = false; }
+  }
 }
 
 function viewer(view) {
@@ -148,14 +158,29 @@ function viewer(view) {
 $('viewer-close').onclick = () => $('viewer').close();
 $('viewer').addEventListener('close', () => { $('viewer-frame').src = 'about:blank'; });
 
+function joinedChoice(candidate = joinedTrip(localStorage)) {
+  return h('section', { id: 'joined-trip-choice', className: 'joined-trip-choice', hidden: !candidate },
+    candidate && h('p', {}, '휴대폰 화면에서 참여한 여행이 있어요. 같은 대화와 쇼츠를 여기서 이어 보세요.'),
+    candidate && button(busy ? '참여 연결 확인 중' : '참여한 여행 이어가기', () => act(() => continueJoined(candidate)), 'primary', busy));
+}
+async function continueJoined(candidate) {
+  const expectedCar = car, expectedTrip = trip, epoch = lifecycle, profile = localStorage.getItem('gachita:profile');
+  const valid = () => car === expectedCar && trip === expectedTrip && lifecycle === epoch && localStorage.getItem('gachita:profile') === profile;
+  const result = await verifyJoinedTrip(candidate, { request: api, current: () => joinedTrip(localStorage), valid, signal: AbortSignal.timeout(20000) });
+  if (!valid() || !sameJoinedTrip(candidate, joinedTrip(localStorage))) throw new Error('참여한 여행이 바뀌었어요. 다시 선택해 주세요.');
+  // Commit only the demo context. The phone profile, participant keys and consent stay with the phone UI.
+  localStorage.setItem(KEY, JSON.stringify(result.car));
+  lifecycle++; car = result.car; trip = result.trip; tab = 'capture'; rows = []; todos = []; requestSignature = ''; draftLoaded = '';
+}
 function welcome() {
+  const candidate = joinedTrip(localStorage);
   const title = h('input', { required: true, maxLength: 80, value: '함께하는 여행', autocomplete: 'off' });
   const name = h('input', { required: true, maxLength: 20, placeholder: '운전자의 이름', autocomplete: 'given-name' });
   return h('form', { className: 'welcome', onsubmit: (e) => { e.preventDefault(); act(async () => {
     const created = await api('POST', '/trips', { title: title.value.trim() });
     const driver = await api('POST', `/trips/${created.code}/participants`, { name: name.value.trim(), seat: 'ROW_1_LEFT', consent: false });
     car = { code: created.code, id: driver.id, token: driver.token }; saveCar();
-  }); } }, h('img', { className: 'welcome-mark', src: '/icons/gachita-192.png', alt: '가치타 캐릭터' }), h('h2', {}, '함께 탄 이야기,', h('br'), '목소리 그대로.'), h('p', {}, '차량에서 시작한 여행을 웹에서도 이어 갑니다. 참석 QR로 일행을 초대하고, 모두의 동의를 받은 뒤 대화를 남겨 보세요.'), field('여행 이름', title), field('내 이름', name), h('button', { type: 'submit', className: 'primary', disabled: busy }, busy ? '여행 만드는 중' : '여행 시작하기'), error && h('p', { role: 'alert', className: 'error-text' }, error));
+  }); } }, h('img', { className: 'welcome-mark', src: '/icons/gachita-192.png', alt: '가치타 캐릭터' }), h('h2', {}, '함께 탄 이야기,', h('br'), '목소리 그대로.'), h('p', {}, '차량에서 시작한 여행을 웹에서도 이어 갑니다. 참석 QR로 일행을 초대하고, 모두의 동의를 받은 뒤 대화를 남겨 보세요.'), joinedChoice(candidate), h('details', { className: 'welcome-new', open: !candidate }, h('summary', {}, '새 여행 만들기'), field('여행 이름', title), field('내 이름', name), h('button', { type: 'submit', className: 'primary', disabled: busy }, busy ? '여행 만드는 중' : '여행 시작하기')), error && h('p', { role: 'alert', className: 'error-text' }, error));
 }
 function render() {
   updateStatus();
@@ -178,7 +203,7 @@ function updateStatus() {
 function renderBody() {
   if (!trip) return;
   // 파일 선택과 입력 중인 좌표는 정기 조회로 바꾸지 않습니다.
-  if (document.activeElement?.matches('input,textarea,select') && document.activeElement.closest('#workspace-body')) return;
+  if (editingText(document.activeElement, $('workspace-body'))) return;
   $('workspace-body').replaceChildren(tab === 'route' ? routes() : captureView());
   updateStatus();
 }
@@ -188,7 +213,6 @@ function captureView() {
   statusNode = h('span', { className: 'capture-status', role: 'status' }); feedback = h('p', { className: 'capture-feedback', role: 'status' });
   recordButton = mediaButton('record', '마이크 녹음 시작', () => act(toggleRecording), 'record-control'); recordButton.disabled = busy || !!processing || !!finishing || !online || !allConsent();
   const finish = mediaButton('stop', pendingCapture ? '마이크 시작 취소' : '녹음 마치기', () => pendingCapture ? cancelStarting().catch((e) => { error = e.message; render(); }) : act(finishRecording)); finish.disabled = !pendingCapture && ((!recording && !(job?.rawOnly && input)) || busy);
-  const picker = h('input', { type: 'file', accept: 'audio/*,video/*', hidden: true, onchange: (e) => act(() => importFile(e.target.files?.[0])) });
   const actions = h('div', { className: 'capture-actions' });
   if (input && !recording) {
     const from = h('input', { type: 'number', min: 0, max: Math.max(0, input.length / RATE - .5), step: .1, value: fileRange.from, disabled: !!processing || !!job && !job.rawOnly, 'aria-label': '선택 구간 시작 초', oninput: (e) => fileRange.from = Number(e.target.value) });
@@ -199,11 +223,14 @@ function captureView() {
   }
   const preview = h('div', { className: 'source-preview' });
   if (input && !recording) {
-    if (!audioURL) audioURL = URL.createObjectURL(wav(input));
-    sourceAudio = h('audio', { src: audioURL, controls: true, preload: 'metadata', 'aria-label': '입력 원음 듣기' }); sourceAudio.ontimeupdate = updateStatus; preview.append(sourceAudio);
+    if (!audioURL) {
+      audioURL = URL.createObjectURL(wav(input));
+      sourceAudio = h('audio', { src: audioURL, controls: true, preload: 'metadata', 'aria-label': '입력 원음 듣기' }); sourceAudio.ontimeupdate = updateStatus;
+    }
+    preview.append(sourceAudio);
   }
   const consentHint = !allConsent() && h('p', { className: 'capture-footnote' }, '모두 기록에 동의하면 녹음을 시작할 수 있어요. ', button('동의와 동승자 확인', people));
-  const panel = h('section', { className: 'capture-panel' }, h('div', { className: 'capture-head' }, h('div', {}, h('h2', {}, '우리의 대화'), h('p', { className: 'capture-source' }, inputName || '마이크 또는 가지고 있는 영상·음성')), statusNode), clock, waveform, h('div', { className: 'capture-transport' }, recordButton, finish), preview, h('div', { className: 'capture-upload' }, h('p', {}, '녹음한 원음은 이 브라우저에 임시 보관합니다. 받아 적을 때 음성을 서버로 보내고, 장면으로 남긴 구간만 함께 저장해요.'), button('영상·음성 선택', () => picker.click(), '', busy || !!recording || !!processing || !online || !allConsent()), picker), actions, feedback);
+  const panel = h('section', { className: 'capture-panel' }, h('div', { className: 'capture-head' }, h('div', {}, h('h2', {}, '우리의 대화'), h('p', { className: 'capture-source' }, inputName || '마이크 또는 가지고 있는 영상·음성')), statusNode), clock, waveform, h('div', { className: 'capture-transport' }, recordButton, finish), preview, h('div', { className: 'capture-upload' }, h('p', {}, '녹음한 원음은 이 브라우저에 임시 보관합니다. 받아 적을 때 음성을 서버로 보내고, 장면으로 남긴 구간만 함께 저장해요.'), button('영상·음성 선택', () => picker.click(), '', busy || !!recording || !!processing || !online || !allConsent())), actions, feedback);
   return h('div', {}, panel, consentHint, h('div', { className: 'section-heading' }, h('h2', {}, `함께 나눈 이야기 ${rows.length}`), h('div', { className: 'actions' }, button('전체 대화', () => viewer('conversation')), button('자막 보정', () => captions.open(), '', !rows.length))),
     h('div', { className: 'live-lines' }, rows.slice(-8).map((line) => {
       const person = trip.participants.find((p) => p.id === line.participantId);
@@ -320,7 +347,7 @@ async function transcribe() {
       if (!Number.isFinite(from) || !Number.isFinite(to) || from < 0 || to > input.length || to - from < RATE / 2 || to - from > RATE * 45) throw new Error('0.5초에서 45초 사이의 원음 구간을 골라 주세요.');
       const samples = input.slice(from, to), now = Date.now();
       job = { captureId: job.captureId, revision: job.revision, owner: scope.owner, code: scope.code, generation: scope.generation, name: inputName, samples, at: inputAt ? inputAt + from / RATE * 1000 : now - samples.length / RATE * 1000, device: `web-${crypto.randomUUID().replaceAll('-', '')}`, seq: 0, parts: windows(samples.length) };
-      input = samples; revokeAudio();
+      input = samples; revokeAudio(); renderBody();
     }
     const current = job;
     await saveCapture(current, () => valid(current));
@@ -333,7 +360,7 @@ async function transcribe() {
         : '전사와 화자 대조를 마쳤어요. 자막과 말한 사람을 확인한 뒤 장면으로 남겨 주세요.';
     }
   } catch (e) { if (epoch === lifecycle) progress = '이미 임시 보관된 원음은 유지했어요. 다시 처리하면 저장이 확인된 구간부터 이어집니다.'; throw e; }
-  finally { if (processing === controller) processing = null; }
+  finally { if (processing === controller) { processing = null; renderBody(); } }
 }
 async function keepMoment() {
   if (!job?.complete || !validJob(job)) throw new Error('전사 결과와 기록 동의를 먼저 확인해 주세요.');
@@ -424,6 +451,7 @@ addEventListener('pagehide', () => {
 });
 addEventListener('pageshow', (event) => { if (event.persisted) { lifecycle++; stopDevice(); processing = null; job = input = null; frames = []; frameCount = 0; draftLoaded = ''; refresh(true); } });
 addEventListener('storage', (event) => {
+  if (!trip && event.key?.startsWith('gachita:')) { $('joined-trip-choice')?.replaceWith(joinedChoice()); return; }
   if (event.key !== KEY || event.newValue === JSON.stringify(car)) return;
   invalidateDraft().catch((e) => { error = e.message; }).finally(() => { try { car = JSON.parse(event.newValue || 'null'); } catch { car = null; } trip = null; rows = []; draftLoaded = ''; render(); refresh(true); });
 });
