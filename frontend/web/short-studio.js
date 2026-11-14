@@ -28,7 +28,7 @@ export function createShortStudio({ getTrip, getParticipant, getToken, getOwner,
     if (old) URL.revokeObjectURL(old.url);
     const url = URL.createObjectURL(item.poster); s.posterUrls.set(item.id, { blob: item.poster, url }); return url;
   };
-  const clearVideo = (s) => { s.load++; s.video?.pause(); s.video?.removeAttribute("src"); s.video?.load(); if (s.url) URL.revokeObjectURL(s.url); s.url = null; s.file = null; s.video = null; };
+  const clearVideo = (s) => { s.load++; s.loading = false; s.video?.pause(); s.video?.removeAttribute("src"); s.video?.load(); if (s.url) URL.revokeObjectURL(s.url); s.url = null; s.file = null; s.video = null; };
   function close() { const s = session; if (!s) return; session = null; clearInterval(s.timer); s.model?.close(); clearVideo(s); s.posterUrls.forEach((p) => URL.revokeObjectURL(p.url)); s.dialog.close(); s.dialog.remove(); s.focus?.focus(); }
   const sync = () => {
     if (!session) return;
@@ -64,7 +64,7 @@ export function createShortStudio({ getTrip, getParticipant, getToken, getOwner,
   }
   async function select(s, item) {
     if (s.busy) return;
-    clearVideo(s); s.selected = item; s.view = "feed"; s.error = ""; s.loading = true; paint(s);
+    clearVideo(s); s.selected = item; s.view = "feed"; s.error = ""; s.pollError = ""; s.loading = true; paint(s);
     const load = s.load;
     try {
       let file = item.file;
@@ -209,10 +209,20 @@ export function createShortStudio({ getTrip, getParticipant, getToken, getOwner,
     if (s.view === "make" && s.momentId && s.model && !s.model.pending) await run(s, () => s.model.preview(s.template, s.audio, s.momentId));
     if (session !== s) return;
     s.timer = setInterval(async () => {
-      sync(); if (session !== s || !s.model || s.busy || s.polling || document.hidden) return;
-      s.polling = true; const before = JSON.stringify(s.model.items);
-      try { await s.model.refresh(); if (s.selected?.remote) await verify(s, s.selected); if (session === s && before !== JSON.stringify(s.model.items)) paint(s); }
-      catch (e) { if (session === s) { if (s.selected?.remote) clearVideo(s); s.error = e.message; paint(s); } }
+      sync(); if (session !== s || !s.model || s.busy || s.loading || s.polling || document.hidden) return;
+      s.polling = true; const model = s.model, load = s.load, before = JSON.stringify(model.items);
+      // 선택 전에 시작된 갱신도 새 파일 수신을 취소하지 않습니다. 수신 뒤 verify가 다시 검사합니다.
+      const current = () => session === s && s.model === model && s.load === load && !s.loading;
+      try {
+        await model.refresh(); if (!current()) return;
+        if (s.selected?.remote) await verify(s, s.selected);
+        if (!current()) return;
+        const recovered = !!s.pollError;
+        if (s.error === s.pollError) s.error = "";
+        s.pollError = "";
+        if (recovered || before !== JSON.stringify(model.items)) paint(s);
+      }
+      catch (e) { if (current()) { if (s.selected?.remote) clearVideo(s); s.pollError = s.error = e.message; paint(s); } }
       finally { s.polling = false; }
     }, 5000);
   }
