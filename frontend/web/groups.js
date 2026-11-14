@@ -12,6 +12,14 @@ const CODE = /^(FAMILY|TRIP)-[0-9]{4}$/;
 const button = (label, onclick, className = "", disabled = false) => h("button", { type: "button", className, onclick, disabled }, label);
 const face = (person) => h("span", { className: "group-face", "aria-hidden": "true" }, characterImage(characterKey(person?.character)));
 
+// 그룹 얼굴 2×2('Group / 2x2 / … / Phone'): 앞 네 사람, 남는 칸은 초대 중·미등록 점선. 프로필 드롭다운(profile-menu.js)도 쓴다.
+export function groupFaces(g) {
+  const slots = g.members.slice(0, 4).map(face);
+  if (slots.length < 4 && g.invite) slots.push(h("span", { className: "group-slot inviting", "aria-hidden": "true" }));
+  while (slots.length < 4) slots.push(h("span", { className: "group-slot", "aria-hidden": "true" }));
+  return h("span", { className: "group-faces" }, slots);
+}
+
 // 초대 링크(같은 출처의 /?group=코드)에서 코드를 읽는다. 다른 출처·다른 경로는 읽지 않는다.
 export function groupCode(url, origin) {
   try {
@@ -263,7 +271,7 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
       h("div", { className: "group-card soft group-link" }, h("strong", {}, `${g.name} 초대 링크`), h("small", {}, `열면 앱에서 ${s.invite.code} 그룹으로 연결`)),
       button("초대 링크 공유", share, "primary group-short"),
       h("div", { className: "group-pair" }, button("링크 복사", () => copy(link()), "group-ghost group-short"), h("a", { className: "group-ghost group-short group-open", href: s.invite.url }, "링크 열기")),
-    ], [button(adding ? "참여 확인" : "그룹으로 돌아가기", () => act(async () => { await load(); go(s.inviteFrom); }), "primary", s.busy)], guest, adding && faces(g)); // 탭은 동승 초대(P16 guestInvite)만, P10·P16I는 없음
+    ], [button(adding ? "참여 확인" : "그룹으로 돌아가기", () => act(async () => { await load(); go(s.inviteFrom); }), "primary", s.busy)], guest, adding && groupFaces(g)); // 탭은 동승 초대(P16 guestInvite)만, P10·P16I는 없음
   }
 
   function childView() {
@@ -400,13 +408,8 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
   }), "primary", s.busy);
 
   // 그룹 얼굴('Group / 2x2 profile / Phone' 2094:4300): 둘 이상이면 2x2(앞 네 사람, 남는 칸은 초대 중·미등록 점선), 혼자면 큰 캐릭터.
-  const avatar = (g) => (g.members.length < 2 ? h("span", { className: "group-face big", "aria-hidden": "true" }, characterImage(characterKey(g.members[0]?.character))) : faces(g));
-  function faces(g) {
-    const slots = g.members.slice(0, 4).map(face);
-    if (slots.length < 4 && g.invite) slots.push(h("span", { className: "group-slot inviting", "aria-hidden": "true" }));
-    while (slots.length < 4) slots.push(h("span", { className: "group-slot", "aria-hidden": "true" }));
-    return h("span", { className: "group-faces" }, slots);
-  }
+  const avatar = (g) => (g.members.length < 2 ? h("span", { className: "group-face big", "aria-hidden": "true" }, characterImage(characterKey(g.members[0]?.character))) : groupFaces(g));
+
   const detail = (id) => { s.groupId = id; go("detail"); };
 
   // 내 동승 그룹(P16L): 가족이 먼저. 카드를 누르면 그 그룹(P16A, 혼자인 동승 그룹은 P16G).
@@ -568,6 +571,16 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
         await load();
         const members = family()?.members ?? [];
         s.view = members.length > 1 && members.every((m) => m.seat) ? "groups" : "member";
+      });
+    },
+    // 프로필 드롭다운(C17m)에서 바로 여는 곳: 전체 그룹(P16L) 또는 지금 그룹(가족이 먼저)의 좌석 배정(P16B).
+    async openAt(view) {
+      if (!getToken()) return onProfile();
+      begin("groups");
+      await act(async () => {
+        await load();
+        const g = family() ?? s.groups[0];
+        if (view === "assign" && g) Object.assign(s, { groupId: g.id, seats: g.members, note: null, view: "assign" });
       });
     },
     // 초대 링크(/?group=코드)로 들어온 폰: 코드를 이 탭에 남기고 주소에서 지운다. 프로필을 읽으면(없으면 만든 뒤) resume이 연다.
