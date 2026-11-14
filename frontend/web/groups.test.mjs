@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { groupCode, memberHeading, readiness, seatTo, swapSeats } from "./groups.js";
+import { groupCode, lostSeats, memberHeading, readiness, seatPick, seatTo, swapSeats } from "./groups.js";
 
 const O = "https://gachita.mangowhois.ai";
 
@@ -40,4 +40,35 @@ test("자리 없는 사람을 빈자리에 앉히고, 남의 자리에 앉히면
   assert.deepEqual(seatTo(m, "kid", "ROW_2_LEFT").map((x) => x.seat), ["ROW_1_LEFT", "ROW_2_LEFT", "ROW_1_RIGHT"]);
   assert.deepEqual(seatTo(m, "kid", "ROW_1_RIGHT").map((x) => x.seat), ["ROW_1_LEFT", "ROW_1_RIGHT", null]);
   assert.deepEqual(seatTo(m, "dad", "ROW_2_RIGHT").map((x) => x.seat), ["ROW_2_RIGHT", null, "ROW_1_RIGHT"]);
+});
+
+test("앉은 사람을 고른 뒤 자리 없는 사람을 누르면 고른 사람만 바뀌고, 누구도 자리를 잃지 않는다(#413 재점검)", () => {
+  const members = [
+    { profileId: "mom", name: "엄마", seat: "ROW_1_LEFT" },
+    { profileId: "son", name: "서준", seat: null },
+    { profileId: "girl", name: "하은", seat: "ROW_2_RIGHT" },
+  ];
+  // 엄마(앉음)를 고른 뒤 '자리 없음' 줄의 서준을 누름 → 맞바꾸지 않고 서준을 고름
+  const a = seatPick(members, "mom", { member: "son" });
+  assert.deepEqual(a, { picked: "son" });
+  // 서준(자리 없음) → 엄마의 자리: 앉은 사람이 있어 막음, 엄마는 그대로
+  const b = seatPick(members, "son", { member: "mom", seat: "ROW_1_LEFT" });
+  assert.equal(b.members, undefined);
+  assert.equal(b.picked, "son");
+  assert.match(b.note, /빈자리를 눌러/);
+  // 서준 → 빈자리: 앉힘
+  const c = seatPick(members, "son", { seat: "ROW_2_LEFT" });
+  assert.deepEqual(c.members.map((m) => m.seat), ["ROW_1_LEFT", "ROW_2_LEFT", "ROW_2_RIGHT"]);
+  // 앉은 사람끼리는 맞바꿈
+  assert.deepEqual(seatPick(members, "mom", { member: "girl", seat: "ROW_2_RIGHT" }).members.map((m) => m.seat), ["ROW_2_RIGHT", null, "ROW_1_LEFT"]);
+  // 고른 사람이 없을 때 빈자리를 누르면 안내만, 같은 사람을 다시 누르면 해제
+  assert.equal(seatPick(members, null, { seat: "ROW_2_LEFT" }).note, "먼저 앉힐 사람을 눌러 주세요.");
+  assert.deepEqual(seatPick(members, "son", { member: "son" }), { picked: null });
+  // 어떤 순서로 눌러도 앉아 있던 사람이 자리를 잃지 않는다
+  for (const first of ["mom", "son", "girl"]) for (const target of [{ member: "son" }, { seat: "ROW_1_LEFT", member: "mom" }, { seat: "ROW_2_RIGHT", member: "girl" }, { seat: "ROW_2_LEFT" }]) {
+    const r = seatPick(members, first, target);
+    if (r.members) assert.deepEqual(lostSeats(members, r.members), [], `${first} → ${JSON.stringify(target)}`);
+  }
+  // 막는 장치: 저장한 그룹에서 앉아 있던 사람이 자리 없음이 되면 알아낸다
+  assert.deepEqual(lostSeats(members, swapSeats(members, "mom", "son")).map((m) => m.name), ["엄마"]);
 });
