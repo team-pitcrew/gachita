@@ -94,11 +94,18 @@ export function createOnboarding({ getProfile, getToken, setToken, loadProfile, 
   const wave = (meter) => voiceBars(meter, { className: "ob-wave", slots: BARS.length, ready: BARS, min: 11, max: 62, upcoming: BARS });
   const clock = (s) => `00:${String(Math.min(99, Math.floor(s))).padStart(2, "0")}`;
 
-  // P01
+  // P01(최신 시안 2005:4799): '주행 중 / 주행 후' 두 줄과 콘텐츠 기록 보관함 카드 한 장(Archive / galleryPhone, 보여 주기용 그림).
+  const moment = (when, line) => h("div", {}, h("span", {}, when), h("strong", {}, line));
   const welcome = () => [top(),
     title("함께 탄 순간을 오래", "운전할 때는 부탁을, 여행 후에는 추억을."),
-    card("우리 가족의 목소리로 남기는 여행", "얼굴 대신 캐릭터, 우리 목소리 그대로", { soft: true, face: characterImage("glasses") }),
-    card("차와 폰에서 이어지는 한 계정", "가입부터 콘텐츠 보기까지 두 기기에서"),
+    h("div", { className: "ob-welcome" },
+      h("div", { className: "ob-moments" }, moment("주행 중", "부탁은 놓치지 않도록"), moment("주행 후", "즐거운 이야기는 오래도록")),
+      h("div", { className: "ob-archive", "aria-hidden": "true" },
+        h("small", {}, "11.14  강릉 가족 여행"),
+        h("strong", {}, "아빠, 아까부터", h("br"), "바다 보이는데?"),
+        h("div", { className: "ob-archive-cast" }, h("img", { src: "/brand/welcome-dad.png", alt: "" }), h("img", { src: "/brand/welcome-seojun.png", alt: "" })),
+        h("p", {}, "서준의 한마디에 모두 웃음"),
+        h("div", { className: "ob-archive-foot" }, h("span", {}, "가치타"), h("span", {}, "▶ 0:32")))),
     bottom(primary("가치타 시작하기", () => { step = "signup"; onBegin(); render(); }))];
 
   // P02. '이미 계정이 있나요?'를 누르면 같은 칸으로 로그인한다. 이 폰에 기기 프로필이 있으면 그 프로필에 계정을 붙인다(구글 연결 그대로).
