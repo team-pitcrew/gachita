@@ -36,8 +36,9 @@ jobs:
       URL: ${{ inputs.url }}
       ASR: ${{ inputs.asr }}
       CONFIRM: ${{ inputs.confirm }}
-      REPORT: ${{ runner.temp }}/journey-${{ github.run_id }}-${{ github.run_attempt }}.json
     steps:
+      - name: 보고서 경로 준비
+        run: echo "REPORT=$RUNNER_TEMP/journey-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.json" >> "$GITHUB_ENV"
       - name: 시험 데이터 생성 확인
         run: test "$CONFIRM" = true || { echo "::error::confirm을 켜야 시험 데이터를 생성합니다"; exit 1; }
       - uses: actions/checkout@v7
