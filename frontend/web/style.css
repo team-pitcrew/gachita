@@ -1120,6 +1120,8 @@ button.ob-other { justify-self: start; min-height: 40px; font-size: 13px; font-w
 .group-assign .seat > :first-child { order: -2; }
 .group-assign .seat small { order: -1; } /* 시안: 캐릭터 · 자리 · 이름 */
 .group-content .group-hint { text-align: center; }
+.group-content .ob-title.group-aside { display: grid; grid-template-columns: 1fr auto; column-gap: 16px; align-items: center; } /* 시안 P10: 제목 옆 2x2 배지 */
+.group-content .ob-title.group-aside > .group-faces { grid-column: 2; grid-row: 1 / span 2; }
 .group-share-row > *, .group-share > .group-ghost { min-height: 48px; padding: 0; border-radius: var(--r-phone-ctl); background: var(--surface-2); color: var(--ink); font: inherit; font-size: 19px; line-height: 28px; font-weight: 700; letter-spacing: -0.01em; border: 0; display: grid; place-items: center; text-decoration: none; }
 /* v2 도착 브리핑(P19·P20·finalBrief, T141): 분류별 행동 항목. 'Briefing / action item / Phone'(2056:2246) */
 .near-line { font-size: 17px; line-height: 26px; }
