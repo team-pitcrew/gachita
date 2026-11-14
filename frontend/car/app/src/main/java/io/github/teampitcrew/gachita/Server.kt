@@ -28,6 +28,20 @@ class Server(base: String, private val open: (URL) -> HttpURLConnection = { it.o
 
     fun createTrip(title: String): Got = got(call("POST", "/api/trips", JSONObject().put("title", title))!!)
 
+    // ---- 가족·동승 그룹(흐름 F2, docs/api/groups.md). 이 차에 로그인한 프로필 토큰으로 ----
+    fun profileName(token: String): String = JSONObject(call("GET", "/api/profiles/me", null, token)!!).getString("name")
+    fun groups(token: String): List<CarGroup> = JSONObject(call("GET", "/api/groups", null, token)!!).getJSONArray("items").let { a -> (0 until a.length()).map { parseGroup(a.getJSONObject(it)) } }
+    fun createGroup(token: String, name: String, kind: String): CarGroup = parseGroup(JSONObject(call("POST", "/api/groups", JSONObject().put("name", name).put("kind", kind), token)!!))
+    fun groupInvite(token: String, groupId: String): GroupInvite = JSONObject(call("POST", "/api/groups/$groupId/invites", JSONObject(), token)!!).let { GroupInvite(it.getString("code"), it.getString("url")) }
+    fun addChild(token: String, groupId: String, name: String, character: String, guardianConsent: Boolean): CarGroup =
+        parseGroup(JSONObject(call("POST", "/api/groups/$groupId/children", JSONObject().put("name", name).put("character", character).put("guardianConsent", guardianConsent), token)!!))
+    fun saveSeats(token: String, groupId: String, seats: Map<String, String?>): CarGroup =
+        parseGroup(JSONObject(call("PUT", "/api/groups/$groupId/seats", JSONObject().put("seats", JSONObject().also { o -> seats.forEach { (k, v) -> o.put(k, v ?: JSONObject.NULL) } }), token)!!))
+    /** 그룹으로 여행 만들기: 여행 코드와 이 차가 맡을 참가자 토큰(부른 사람과 그가 보호자인 아이 몫, 이때 한 번만 옴). */
+    fun groupTrip(token: String, groupId: String, title: String): Pair<String, Map<String, String>> =
+        JSONObject(call("POST", "/api/trips", JSONObject().put("groupId", groupId).put("title", title), token)!!)
+            .let { o -> o.getString("code") to o.getJSONObject("tokens").let { t -> t.keys().asSequence().associateWith { k -> t.getString(k) } } }
+
     /** 손님으로 참가. 이름과 자리를 보내고 동의는 꺼짐으로 시작한다. 참가자 id와 참가자 토큰(이때 한 번만 옴). */
     fun join(code: String, m: Member): Pair<String, String> =
         JSONObject(call("POST", "/api/trips/$code/participants", JSONObject().put("seat", m.seat.name).put("name", m.name).put("consent", false))!!)
@@ -155,6 +169,10 @@ class Server(base: String, private val open: (URL) -> HttpURLConnection = { it.o
     fun recording(code: String, token: String, moment: String, generation: Int, from: Long, wav: ByteArray) {
         call("POST", "/api/trips/$code/recordings?moment=" + java.net.URLEncoder.encode(moment, "UTF-8") + "&generation=$generation&from=$from", wav, token)
     }
+
+    /** 사람이 고른 장면 남기기(POST /moments, 흐름 F5). 이 차 참가자의 토큰으로. 남긴 장면 id. */
+    fun moment(code: String, token: String, at: Long, from: Long, to: Long, label: String, lat: Double?, lng: Double?): String =
+        JSONObject(call("POST", "/api/trips/$code/moments", JSONObject().put("at", at).put("from", from).put("to", to).put("label", label).apply { if (lat != null && lng != null) put("lat", lat).put("lng", lng) }, token)!!).getString("id")
 
     /** 출발 전 목소리 등록(ADR-0023): 그 참가자 본인의 토큰으로, 녹음 동의가 켜져 있을 때만. 차 안에서 계산한 값만 보낸다(소리는 보내지 않음). */
     fun voice(code: String, id: String, token: String, vector: DoubleArray, seconds: Double) {

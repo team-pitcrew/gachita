@@ -176,4 +176,20 @@ class VoiceTest {
         assertFalse(file.exists()); assertEquals(0, late.size)
         assertTrue(tmp.root.listFiles().orEmpty().none { it.name.startsWith("voiceprints-") })
     }
+
+    @Test fun `조회를 기다리는 사이 폰에서 철회하면 옛 세대의 응답을 저장하지 않는다`() {
+        val low = vector(cases[0])
+        val file = File(tmp.root, "voiceprints-ABC123.json")
+        val vp = VoicePrints(tmp.root, "ABC123", TEST_SEAL)
+        vp.see(1)
+        // 세대 1의 응답을 기다리는 동안 여행 조회가 철회(세대 2)를 확인한다. 그 뒤에 도착한 세대 1 응답에는 철회한 사람의 값이 들어 있다
+        assertFalse(vp.refresh(1_000, 1) { vp.see(2); prints(1, "dad" to low) })
+        assertEquals(0, vp.size); assertFalse(file.exists()); assertNull(vp.match(low, listOf("dad")).who)
+        // 값이 있던 사본도 같다: 철회로 지운 뒤 옛 응답이 되살리지 못한다
+        assertTrue(vp.put(prints(2, "mom" to low))); vp.fetchedAt = 0
+        assertFalse(vp.refresh(2_000, 2) { vp.see(3); prints(2, "mom" to low) })
+        assertEquals(0, vp.size); assertFalse(file.exists())
+        // 새 세대의 응답은 받는다
+        assertTrue(vp.refresh(3_000, 3) { prints(3, "dad" to low) }); assertEquals("dad", vp.match(low, listOf("dad")).who)
+    }
 }
