@@ -237,128 +237,183 @@ internal fun ShortStudio(base: String, code: String, generation: Int, token: Str
     val dark = page == ShortsPage.FEED
     val ink = if (dark) MediaInk else MaterialTheme.colorScheme.onSurface
     Column(modifier.background(if (dark) MediaBackground else MaterialTheme.colorScheme.background)) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-            if (page in listOf(ShortsPage.FEED, ShortsPage.LIBRARY)) {
-                if (code.isBlank()) TextButton(onClick = { if (!busy) onClose() }, enabled = !busy, shape = ShortButtonShape) { Text("뒤로", color = ink, fontSize = 20.sp) }
-                TextButton(onClick = { if (!busy) { page = ShortsPage.FEED; note = "" } }, enabled = !busy, shape = ShortButtonShape) { Text("쇼츠", color = ink.copy(alpha = if (page == ShortsPage.FEED) 1f else .55f), fontSize = 25.sp, fontWeight = FontWeight.Bold) }
-                TextButton(onClick = { if (!busy) { page = ShortsPage.LIBRARY; video.pause(); playing = false; note = ""; perform { refreshLibrary(); refreshJobs() } } }, enabled = !busy, shape = ShortButtonShape) { Text("보관함", color = ink.copy(alpha = if (page == ShortsPage.LIBRARY) 1f else .55f), fontSize = 25.sp, fontWeight = FontWeight.Bold) }
-                Spacer(Modifier.weight(1f))
-                OutlinedButton(onClick = ::openCreate, shape = ShortButtonShape, enabled = !busy) { Text("+ 만들기", color = ink, fontSize = 20.sp) }
-            } else {
-                TextButton(onClick = { if (!busy) page = if (page == ShortsPage.CONFIRM) ShortsPage.CREATE else ShortsPage.FEED }, enabled = !busy, shape = ShortButtonShape) { Text("뒤로", fontSize = 22.sp) }
-                Text(when (page) { ShortsPage.CREATE -> "새 쇼츠"; ShortsPage.CONFIRM -> "제작 확인"; else -> "제작 중" }, fontSize = 26.sp, fontWeight = FontWeight.Bold)
-            }
-        }
+        ShortStudioHeader(page, busy, code.isBlank(), ink, onClose,
+            onFeed = { if (!busy) { page = ShortsPage.FEED; note = "" } },
+            onLibrary = { if (!busy) { page = ShortsPage.LIBRARY; video.pause(); playing = false; note = ""; perform { refreshLibrary(); refreshJobs() } } },
+            onCreate = ::openCreate,
+            onBack = { if (!busy) page = if (page == ShortsPage.CONFIRM) ShortsPage.CREATE else ShortsPage.FEED })
         if (note.isNotBlank()) Text(note, color = ink, fontSize = 18.sp, modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
         when (page) {
-            ShortsPage.FEED -> Box(Modifier.weight(1f).fillMaxWidth()) {
-                if (selected == null) Column(Modifier.align(Alignment.Center).padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    Text(if (loading) "쇼츠를 불러오고 있어요" else "첫 쇼츠를 남겨보세요", fontSize = 30.sp, color = MediaInk, fontWeight = FontWeight.Bold)
-                    if (!loading) { Text("함께 나눈 대화를 짧은 영상으로", color = MediaSecondary, fontSize = 22.sp); Button(onClick = ::openCreate, enabled = !busy, shape = ShortButtonShape) { Text("새 쇼츠 만들기", fontSize = 22.sp) } }
-                } else {
-                    var drag by remember { mutableStateOf(0f) }
-                    BoxWithConstraints(Modifier.fillMaxSize().padding(bottom = 78.dp)) {
-                        val width = minOf(maxWidth, maxHeight * 9 / 16)
-                        Box(Modifier.width(width).fillMaxHeight().align(Alignment.Center)) {
-                            currentUri?.let { uri -> AndroidView(factory = { video }, update = { if (video.tag != uri.toString()) { video.tag = uri.toString(); video.setVideoURI(uri) } }, modifier = Modifier.fillMaxSize()) }
-                            Box(Modifier.fillMaxSize().semantics { contentDescription = "${selected.title}, ${shortDuration(selected.durationMs)}. 위아래로 넘기는 쇼츠" }
-                                .clickable(enabled = currentUri != null) { if (video.isPlaying) { video.pause(); playing = false } else { video.start(); playing = true } }
-                                .pointerInput(feed.map { it.key }, selected.key) { detectVerticalDragGestures(onDragStart = { drag = 0f }, onVerticalDrag = { change, amount -> change.consume(); drag += amount }, onDragEnd = { if (drag < -70) move(1) else if (drag > 70) move(-1) }) })
-                            if (currentUri == null) Text("영상 불러오는 중", color = MediaInk, modifier = Modifier.align(Alignment.Center))
-                        }
-                    }
-                    Column(Modifier.align(Alignment.CenterEnd).padding(end = 10.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        MediaAction(if (playing) "일시정지" else "재생", if (playing) "pause" else "play", currentUri != null) { if (playing) video.pause() else video.start(); playing = !playing }
-                        MediaAction(if (savedUri != null) "저장됨" else "저장", "save", currentUri != null && !busy && savedUri == null) { perform { saveCurrent(); note = "이 기기 보관함에 저장했어요" } }
-                        MediaAction("공유", "share", currentUri != null && !busy) { perform {
-                            val jobId = currentJob?.getString("id")
-                            val uri = saveCurrent()
-                            if (jobId != null) io { api.completedShortJob(code, requireNotNull(token), jobId) }
-                            checkLocal(); share(uri)
-                        } }
-                        MediaAction(if (muted) "소리 켬" else "음소거", "sound", currentUri != null) { muted = !muted; val volume = if (muted) 0f else 1f; runCatching { player?.setVolume(volume, volume) } }
-                    }
-                    Column(Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(start = 20.dp, end = 20.dp, bottom = 10.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                        Text(selected.title, fontSize = 24.sp, color = MediaInk, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            Text("${shortDuration(position)} / ${shortDuration(selected.durationMs)}", color = MediaSecondary, fontSize = 18.sp)
-                            Spacer(Modifier.weight(1f))
-                            TextButton(onClick = { move(-1) }, enabled = !busy && feed.indexOf(selected) > 0, shape = ShortButtonShape) { Text("이전", color = MediaSecondary, fontSize = 20.sp) }
-                            TextButton(onClick = { move(1) }, enabled = !busy && feed.indexOf(selected) < feed.lastIndex, shape = ShortButtonShape) { Text("다음", color = MediaSecondary, fontSize = 20.sp) }
-                        }
-                    }
+            ShortsPage.FEED -> ShortFeedPage(feed, selected, loading, busy, video, currentUri, playing, savedUri != null, muted, position,
+                onCreate = ::openCreate,
+                onToggle = { if (video.isPlaying) { video.pause(); playing = false } else { video.start(); playing = true } },
+                onSave = { perform { saveCurrent(); note = "이 기기 보관함에 저장했어요" } },
+                onShare = { perform {
+                    val jobId = currentJob?.getString("id")
+                    val uri = saveCurrent()
+                    if (jobId != null) io { api.completedShortJob(code, requireNotNull(token), jobId) }
+                    checkLocal(); share(uri)
+                } },
+                onMute = { muted = !muted; val volume = if (muted) 0f else 1f; runCatching { player?.setVolume(volume, volume) } },
+                onMove = ::move, modifier = Modifier.weight(1f).fillMaxWidth())
+            ShortsPage.LIBRARY -> ShortLibraryPage(feed, jobs, thumbs, busy, query,
+                onQuery = { query = it },
+                onCancel = { job -> perform { io { api.cancelShortJob(code, requireNotNull(token), job.getString("id")) }; refreshJobs() } },
+                onSelect = { item -> if (!busy) { clearVideo(); selectedKey = item.key; page = ShortsPage.FEED; note = "" } },
+                onDelete = { if (!busy) deleting = it }, modifier = Modifier.weight(1f).fillMaxWidth())
+            ShortsPage.CREATE, ShortsPage.CONFIRM, ShortsPage.PROGRESS -> ShortCreationPage(page,
+                ShortCreationUi(catalog, plan, pending != null, template, audio, expanded, options, busy, remoteAccess()),
+                onLibrary = { if (!busy) page = ShortsPage.LIBRARY },
+                onSubmit = { perform {
+                    checkRemote()
+                    val confirmedPlan = plan
+                    val request = pending ?: confirmedPlan?.let { generationRequest(it, UUID.randomUUID().toString(), true) }
+                        ?: error("장면 구성을 다시 확인해 주세요")
+                    if (pending == null) rememberPending(request)
+                    try {
+                        val job = io { api.createShortJob(code, requireNotNull(token), request) }
+                        confirmedPlan?.optString("title")?.let { prefs.edit().putString("title:${job.getString("id")}", it).apply() }
+                        rememberPending(null); plan = null; jobs = listOf(job) + jobs.filter { it.getString("id") != job.getString("id") }; page = ShortsPage.PROGRESS
+                    } catch (e: ApiError) { if (e.status in 400..499) { rememberPending(null); plan = null; page = ShortsPage.CREATE }; throw e }
+                } },
+                onTemplate = { template = it; perform { previewPlan() } },
+                onExpand = { expanded = !expanded }, onOptions = { options = !options },
+                onAudio = { audio = it; perform { previewPlan() } },
+                onReview = { page = ShortsPage.CONFIRM },
+                onLocal = { enteringLocal.set(true); CaptureService.hold(false); onLocal() },
+                onRecommend = { perform { previewPlan() } }, modifier = Modifier.weight(1f).fillMaxWidth())
+        }
+    }
+}
+
+@Composable
+private fun ShortStudioHeader(page: ShortsPage, busy: Boolean, showClose: Boolean, ink: Color,
+    onClose: () -> Unit, onFeed: () -> Unit, onLibrary: () -> Unit, onCreate: () -> Unit, onBack: () -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (page in listOf(ShortsPage.FEED, ShortsPage.LIBRARY)) {
+            if (showClose) TextButton(onClick = { if (!busy) onClose() }, enabled = !busy, shape = ShortButtonShape) { Text("뒤로", color = ink, fontSize = 20.sp) }
+            TextButton(onClick = onFeed, enabled = !busy, shape = ShortButtonShape) { Text("쇼츠", color = ink.copy(alpha = if (page == ShortsPage.FEED) 1f else .55f), fontSize = 25.sp, fontWeight = FontWeight.Bold) }
+            TextButton(onClick = onLibrary, enabled = !busy, shape = ShortButtonShape) { Text("보관함", color = ink.copy(alpha = if (page == ShortsPage.LIBRARY) 1f else .55f), fontSize = 25.sp, fontWeight = FontWeight.Bold) }
+            Spacer(Modifier.weight(1f))
+            OutlinedButton(onClick = onCreate, shape = ShortButtonShape, enabled = !busy) { Text("+ 만들기", color = ink, fontSize = 20.sp) }
+        } else {
+            TextButton(onClick = onBack, enabled = !busy, shape = ShortButtonShape) { Text("뒤로", fontSize = 22.sp) }
+            Text(when (page) { ShortsPage.CREATE -> "새 쇼츠"; ShortsPage.CONFIRM -> "제작 확인"; else -> "제작 중" }, fontSize = 26.sp, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+@Composable
+private fun ShortFeedPage(feed: List<FeedShort>, selected: FeedShort?, loading: Boolean, busy: Boolean,
+    video: VideoView, currentUri: Uri?, playing: Boolean, saved: Boolean, muted: Boolean, position: Long,
+    onCreate: () -> Unit, onToggle: () -> Unit, onSave: () -> Unit, onShare: () -> Unit,
+    onMute: () -> Unit, onMove: (Int) -> Unit, modifier: Modifier) {
+    val move by rememberUpdatedState(onMove)
+    Box(modifier) {
+        if (selected == null) Column(Modifier.align(Alignment.Center).padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            Text(if (loading) "쇼츠를 불러오고 있어요" else "첫 쇼츠를 남겨보세요", fontSize = 30.sp, color = MediaInk, fontWeight = FontWeight.Bold)
+            if (!loading) { Text("함께 나눈 대화를 짧은 영상으로", color = MediaSecondary, fontSize = 22.sp); Button(onClick = onCreate, enabled = !busy, shape = ShortButtonShape) { Text("새 쇼츠 만들기", fontSize = 22.sp) } }
+        } else {
+            var drag by remember { mutableStateOf(0f) }
+            BoxWithConstraints(Modifier.fillMaxSize().padding(bottom = 78.dp)) {
+                val width = minOf(maxWidth, maxHeight * 9 / 16)
+                Box(Modifier.width(width).fillMaxHeight().align(Alignment.Center)) {
+                    currentUri?.let { uri -> AndroidView(factory = { video }, update = { if (video.tag != uri.toString()) { video.tag = uri.toString(); video.setVideoURI(uri) } }, modifier = Modifier.fillMaxSize()) }
+                    Box(Modifier.fillMaxSize().semantics { contentDescription = "${selected.title}, ${shortDuration(selected.durationMs)}. 위아래로 넘기는 쇼츠" }
+                        .clickable(enabled = currentUri != null, onClick = onToggle)
+                        .pointerInput(feed.map { it.key }, selected.key) { detectVerticalDragGestures(onDragStart = { drag = 0f }, onVerticalDrag = { change, amount -> change.consume(); drag += amount }, onDragEnd = { if (drag < -70) move(1) else if (drag > 70) move(-1) }) })
+                    if (currentUri == null) Text("영상 불러오는 중", color = MediaInk, modifier = Modifier.align(Alignment.Center))
                 }
             }
-            ShortsPage.LIBRARY -> {
-                val filtered = feed.filter { it.title.contains(query, ignoreCase = true) }
-                Column(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 18.dp)) {
-                    OutlinedTextField(value = query, onValueChange = { query = it }, placeholder = { Text("쇼츠 제목 검색") }, singleLine = true, shape = ShortButtonShape, modifier = Modifier.fillMaxWidth())
-                    LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(16.dp), contentPadding = PaddingValues(vertical = 16.dp)) {
-                        val unfinished = jobs.filter { it.optString("state") != "completed" }
-                        if (unfinished.isNotEmpty()) item {
-                            Text("이번 여행 · 제작 상태", fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                            unfinished.forEach { job -> Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Text(generationLabel(job), fontSize = 18.sp, modifier = Modifier.weight(1f))
-                                if (generationActive(job)) TextButton(onClick = { perform { io { api.cancelShortJob(code, requireNotNull(token), job.getString("id")) }; refreshJobs() } }, enabled = !busy, shape = ShortButtonShape) { Text("취소", fontSize = 20.sp) }
-                            } }
-                        }
-                        if (filtered.isEmpty()) item { Text(if (query.isBlank()) "아직 보관한 쇼츠가 없어요" else "검색 결과가 없어요", fontSize = 24.sp, modifier = Modifier.padding(vertical = 32.dp)) }
-                        items(filtered.chunked(3)) { row -> Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-                            row.forEach { item -> ShortTile(item, thumbs[item.key], Modifier.weight(1f), enabled = !busy, onBitmap = { thumbs[item.key] = it }, onClick = { if (!busy) { clearVideo(); selectedKey = item.key; page = ShortsPage.FEED; note = "" } }, onDelete = { if (!busy) deleting = it }) }
-                            repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
-                        } }
-                        item { Text("이 기기에 저장한 영상은 여행이 끝나도 남아요. 다른 기기와 자동으로 동기화하지 않아요.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 18.sp) }
-                    }
-                }
+            Column(Modifier.align(Alignment.CenterEnd).padding(end = 10.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                MediaAction(if (playing) "일시정지" else "재생", if (playing) "pause" else "play", currentUri != null, onClick = onToggle)
+                MediaAction(if (saved) "저장됨" else "저장", "save", currentUri != null && !busy && !saved, onClick = onSave)
+                MediaAction("공유", "share", currentUri != null && !busy, onClick = onShare)
+                MediaAction(if (muted) "소리 켬" else "음소거", "sound", currentUri != null, onClick = onMute)
             }
-            ShortsPage.CREATE, ShortsPage.CONFIRM, ShortsPage.PROGRESS -> Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-                if (page == ShortsPage.PROGRESS) {
-                    Text("우리의 대화를 영상으로 만들고 있어요", fontSize = 30.sp, fontWeight = FontWeight.Bold)
-                    Text("화면을 닫아도 제작은 이어져요.", fontSize = 22.sp)
-                    Button(onClick = { if (!busy) page = ShortsPage.LIBRARY }, enabled = !busy, shape = ShortButtonShape) { Text("보관함으로", fontSize = 22.sp) }
-                } else if (page == ShortsPage.CONFIRM) {
-                    Text(plan?.optString("title") ?: "이전 제작 요청", fontSize = 30.sp, fontWeight = FontWeight.Bold)
-                    Text("Higgsfield에 보내는 자료", fontSize = 22.sp, fontWeight = FontWeight.Medium)
-                    val externalData = plan?.optJSONArray("externalData")
-                    Text(if (externalData != null) (0 until externalData.length()).joinToString(" · ") { externalData.getString(it) } else "선택 캐릭터 이미지 · 발화 시각과 반응 지시${if (audio) " · 장면별 원음" else ""}", fontSize = 22.sp)
-                    Text("최종 영상에는 원래 목소리와 자막이 들어가요.", fontSize = 20.sp)
-                    Text("직접 저장한 영상은 기록 동의를 꺼도 기기에 남아요.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 20.sp)
-                    Button(enabled = !busy && remoteAccess() && catalog?.optBoolean("enabled") == true && (plan != null || pending != null), shape = ShortButtonShape, modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp), onClick = { perform {
-                        checkRemote()
-                        val confirmedPlan = plan
-                        val request = pending ?: confirmedPlan?.let { generationRequest(it, UUID.randomUUID().toString(), true) }
-                            ?: error("장면 구성을 다시 확인해 주세요")
-                        if (pending == null) rememberPending(request)
-                        try {
-                            val job = io { api.createShortJob(code, requireNotNull(token), request) }
-                            confirmedPlan?.optString("title")?.let { prefs.edit().putString("title:${job.getString("id")}", it).apply() }
-                            rememberPending(null); plan = null; jobs = listOf(job) + jobs.filter { it.getString("id") != job.getString("id") }; page = ShortsPage.PROGRESS
-                        } catch (e: ApiError) { if (e.status in 400..499) { rememberPending(null); plan = null; page = ShortsPage.CREATE }; throw e }
-                    } }) { Text(if (pending == null) "동의하고 만들기" else "동의하고 접수 확인", fontSize = 24.sp) }
-                } else {
-                    Text("어떤 이야기로 남길까요?", fontSize = 28.sp, fontWeight = FontWeight.Bold)
-                    catalog?.getJSONArray("templates")?.let { ts -> Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) { array(ts).forEach { t ->
-                        val chosen = template == t.getString("id")
-                        OutlinedButton(onClick = { template = t.getString("id"); perform { previewPlan() } }, enabled = !busy && pending == null, shape = ShortButtonShape, colors = ButtonDefaults.outlinedButtonColors(containerColor = if (chosen) MaterialTheme.colorScheme.onSurface else Color.Transparent, contentColor = if (chosen) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.onSurface), modifier = Modifier.weight(1f)) { Text(t.getString("name"), fontSize = 22.sp) }
-                    } } }
-                    plan?.let { p ->
-                        Text(p.getString("title"), fontSize = 27.sp, fontWeight = FontWeight.Bold)
-                        Text("${p.getDouble("seconds").toInt()}초 · ${p.getJSONArray("shots").length()}개 장면 · 세로 영상", fontSize = 20.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text(p.getJSONArray("cues").optJSONObject(0)?.optString("text") ?: "우리의 대화", fontSize = 25.sp)
-                        TextButton(onClick = { expanded = !expanded }, shape = ShortButtonShape) { Text(if (expanded) "자막 접기" else "전체 자막", fontSize = 20.sp) }
-                        if (expanded) { array(p.getJSONArray("cues")).forEach { Text("${it.getDouble("start")}초 · ${it.getString("text")}", fontSize = 20.sp) }; val warnings = p.getJSONArray("warnings"); for (i in 0 until warnings.length()) Text(warnings.getString(i), fontSize = 18.sp) }
-                    }
-                    TextButton(onClick = { options = !options }, shape = ShortButtonShape) { Text(if (options) "추가 설정 닫기" else "추가 설정", fontSize = 20.sp) }
-                    if (options) Row(verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("원음도 외부 제작에 사용", fontSize = 22.sp); Text("끄더라도 최종 영상에는 원음이 들어가요", fontSize = 18.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }; Switch(checked = audio, enabled = !busy && pending == null, onCheckedChange = { audio = it; perform { previewPlan() } }) }
-                    if (!remoteAccess()) Text("새 영상을 만들려면 모두의 기록 동의와 서버 연결이 필요해요.", fontSize = 20.sp)
-                    else if (catalog?.optBoolean("enabled") != true) Text("AI 영상 제작은 준비 중이에요. 지금은 기본 영상으로 남길 수 있어요.", fontSize = 20.sp)
-                    Button(onClick = { page = ShortsPage.CONFIRM }, enabled = !busy && remoteAccess() && catalog?.optBoolean("enabled") == true && (plan != null || pending != null), shape = ShortButtonShape, modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp)) { Text(if (pending == null) "이 구성으로 만들기" else "이전 요청 접수 확인", fontSize = 24.sp) }
-                    TextButton(onClick = { enteringLocal.set(true); CaptureService.hold(false); onLocal() }, enabled = !busy && remoteAccess(), shape = ShortButtonShape) { Text("기본 영상으로 만들기", fontSize = 22.sp) }
-                    TextButton(onClick = { perform { previewPlan() } }, enabled = !busy && pending == null && remoteAccess(), shape = ShortButtonShape) { Text("다른 장면 추천", fontSize = 20.sp) }
+            Column(Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(start = 20.dp, end = 20.dp, bottom = 10.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                Text(selected.title, fontSize = 24.sp, color = MediaInk, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text("${shortDuration(position)} / ${shortDuration(selected.durationMs)}", color = MediaSecondary, fontSize = 18.sp)
+                    Spacer(Modifier.weight(1f))
+                    TextButton(onClick = { move(-1) }, enabled = !busy && feed.indexOf(selected) > 0, shape = ShortButtonShape) { Text("이전", color = MediaSecondary, fontSize = 20.sp) }
+                    TextButton(onClick = { move(1) }, enabled = !busy && feed.indexOf(selected) < feed.lastIndex, shape = ShortButtonShape) { Text("다음", color = MediaSecondary, fontSize = 20.sp) }
                 }
-                if (busy) LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.onSurface)
             }
         }
+    }
+}
+
+@Composable
+private fun ShortLibraryPage(feed: List<FeedShort>, jobs: List<JSONObject>, thumbs: MutableMap<String, Bitmap>,
+    busy: Boolean, query: String, onQuery: (String) -> Unit, onCancel: (JSONObject) -> Unit,
+    onSelect: (FeedShort) -> Unit, onDelete: (LibraryShort) -> Unit, modifier: Modifier) {
+    val filtered = feed.filter { it.title.contains(query, ignoreCase = true) }
+    Column(modifier.padding(horizontal = 18.dp)) {
+        OutlinedTextField(value = query, onValueChange = onQuery, placeholder = { Text("쇼츠 제목 검색") }, singleLine = true, shape = ShortButtonShape, modifier = Modifier.fillMaxWidth())
+        LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(16.dp), contentPadding = PaddingValues(vertical = 16.dp)) {
+            val unfinished = jobs.filter { it.optString("state") != "completed" }
+            if (unfinished.isNotEmpty()) item {
+                Text("이번 여행 · 제작 상태", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                unfinished.forEach { job -> Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(generationLabel(job), fontSize = 18.sp, modifier = Modifier.weight(1f))
+                    if (generationActive(job)) TextButton(onClick = { onCancel(job) }, enabled = !busy, shape = ShortButtonShape) { Text("취소", fontSize = 20.sp) }
+                } }
+            }
+            if (filtered.isEmpty()) item { Text(if (query.isBlank()) "아직 보관한 쇼츠가 없어요" else "검색 결과가 없어요", fontSize = 24.sp, modifier = Modifier.padding(vertical = 32.dp)) }
+            items(filtered.chunked(3)) { row -> Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                row.forEach { item -> ShortTile(item, thumbs[item.key], Modifier.weight(1f), enabled = !busy, onBitmap = { thumbs[item.key] = it }, onClick = { onSelect(item) }, onDelete = onDelete) }
+                repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
+            } }
+            item { Text("이 기기에 저장한 영상은 여행이 끝나도 남아요. 다른 기기와 자동으로 동기화하지 않아요.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 18.sp) }
+        }
+    }
+}
+
+private data class ShortCreationUi(val catalog: JSONObject?, val plan: JSONObject?, val hasPending: Boolean,
+    val template: String, val audio: Boolean, val expanded: Boolean, val options: Boolean, val busy: Boolean, val remote: Boolean)
+
+private fun jsonObjects(array: JSONArray) = (0 until array.length()).map(array::getJSONObject)
+
+@Composable
+private fun ShortCreationPage(page: ShortsPage, ui: ShortCreationUi, onLibrary: () -> Unit, onSubmit: () -> Unit,
+    onTemplate: (String) -> Unit, onExpand: () -> Unit, onOptions: () -> Unit, onAudio: (Boolean) -> Unit,
+    onReview: () -> Unit, onLocal: () -> Unit, onRecommend: () -> Unit, modifier: Modifier) {
+    Column(modifier.verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+        if (page == ShortsPage.PROGRESS) {
+            Text("우리의 대화를 영상으로 만들고 있어요", fontSize = 30.sp, fontWeight = FontWeight.Bold)
+            Text("화면을 닫아도 제작은 이어져요.", fontSize = 22.sp)
+            Button(onClick = onLibrary, enabled = !ui.busy, shape = ShortButtonShape) { Text("보관함으로", fontSize = 22.sp) }
+        } else if (page == ShortsPage.CONFIRM) {
+            Text(ui.plan?.optString("title") ?: "이전 제작 요청", fontSize = 30.sp, fontWeight = FontWeight.Bold)
+            Text("Higgsfield에 보내는 자료", fontSize = 22.sp, fontWeight = FontWeight.Medium)
+            val externalData = ui.plan?.optJSONArray("externalData")
+            Text(if (externalData != null) (0 until externalData.length()).joinToString(" · ") { externalData.getString(it) } else "선택 캐릭터 이미지 · 발화 시각과 반응 지시${if (ui.audio) " · 장면별 원음" else ""}", fontSize = 22.sp)
+            Text("최종 영상에는 원래 목소리와 자막이 들어가요.", fontSize = 20.sp)
+            Text("직접 저장한 영상은 기록 동의를 꺼도 기기에 남아요.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 20.sp)
+            Button(enabled = !ui.busy && ui.remote && ui.catalog?.optBoolean("enabled") == true && (ui.plan != null || ui.hasPending), shape = ShortButtonShape, modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp), onClick = onSubmit) { Text(if (!ui.hasPending) "동의하고 만들기" else "동의하고 접수 확인", fontSize = 24.sp) }
+        } else {
+            Text("어떤 이야기로 남길까요?", fontSize = 28.sp, fontWeight = FontWeight.Bold)
+            ui.catalog?.getJSONArray("templates")?.let { ts -> Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) { jsonObjects(ts).forEach { t ->
+                val chosen = ui.template == t.getString("id")
+                OutlinedButton(onClick = { onTemplate(t.getString("id")) }, enabled = !ui.busy && !ui.hasPending, shape = ShortButtonShape, colors = ButtonDefaults.outlinedButtonColors(containerColor = if (chosen) MaterialTheme.colorScheme.onSurface else Color.Transparent, contentColor = if (chosen) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.onSurface), modifier = Modifier.weight(1f)) { Text(t.getString("name"), fontSize = 22.sp) }
+            } } }
+            ui.plan?.let { p ->
+                Text(p.getString("title"), fontSize = 27.sp, fontWeight = FontWeight.Bold)
+                Text("${p.getDouble("seconds").toInt()}초 · ${p.getJSONArray("shots").length()}개 장면 · 세로 영상", fontSize = 20.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(p.getJSONArray("cues").optJSONObject(0)?.optString("text") ?: "우리의 대화", fontSize = 25.sp)
+                TextButton(onClick = onExpand, shape = ShortButtonShape) { Text(if (ui.expanded) "자막 접기" else "전체 자막", fontSize = 20.sp) }
+                if (ui.expanded) { jsonObjects(p.getJSONArray("cues")).forEach { Text("${it.getDouble("start")}초 · ${it.getString("text")}", fontSize = 20.sp) }; val warnings = p.getJSONArray("warnings"); for (i in 0 until warnings.length()) Text(warnings.getString(i), fontSize = 18.sp) }
+            }
+            TextButton(onClick = onOptions, shape = ShortButtonShape) { Text(if (ui.options) "추가 설정 닫기" else "추가 설정", fontSize = 20.sp) }
+            if (ui.options) Row(verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("원음도 외부 제작에 사용", fontSize = 22.sp); Text("끄더라도 최종 영상에는 원음이 들어가요", fontSize = 18.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }; Switch(checked = ui.audio, enabled = !ui.busy && !ui.hasPending, onCheckedChange = onAudio) }
+            if (!ui.remote) Text("새 영상을 만들려면 모두의 기록 동의와 서버 연결이 필요해요.", fontSize = 20.sp)
+            else if (ui.catalog?.optBoolean("enabled") != true) Text("AI 영상 제작은 준비 중이에요. 지금은 기본 영상으로 남길 수 있어요.", fontSize = 20.sp)
+            Button(onClick = onReview, enabled = !ui.busy && ui.remote && ui.catalog?.optBoolean("enabled") == true && (ui.plan != null || ui.hasPending), shape = ShortButtonShape, modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp)) { Text(if (!ui.hasPending) "이 구성으로 만들기" else "이전 요청 접수 확인", fontSize = 24.sp) }
+            TextButton(onClick = onLocal, enabled = !ui.busy && ui.remote, shape = ShortButtonShape) { Text("기본 영상으로 만들기", fontSize = 22.sp) }
+            TextButton(onClick = onRecommend, enabled = !ui.busy && !ui.hasPending && ui.remote, shape = ShortButtonShape) { Text("다른 장면 추천", fontSize = 20.sp) }
+        }
+        if (ui.busy) LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.onSurface)
     }
 }
 
