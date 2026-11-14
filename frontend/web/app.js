@@ -9,6 +9,7 @@ import { createShares, shareIconButton } from "/shares.js";
 import { createCaptions } from "/captions.js";
 import { createRecords } from "/records.js";
 import { createConversations } from "/conversations.js";
+import { createTodos } from "/todos.js";
 import { CHARACTER_OPTIONS, characterKey, characterImage, createShortFilm, exportShortFilm, recordingFormat } from "/short-film.js";
 import { createShortStudio } from "/short-studio.js";
 import { createScenePicker } from "/short-scenes.js";
@@ -122,6 +123,13 @@ const conversations = createConversations({
   onCaptions: () => captions.open(),
   onShorts: () => launchShort(),
   onScenes: () => scenes.open(),
+});
+const todos = createTodos({
+  getTrip: () => trip,
+  getParticipant: () => trip?.participants.find((p) => p.id === myId()),
+  getToken: myToken,
+  request: (method, path, body) => asMe(trip.participants.find((p) => p.id === myId()), (c, token) => api(method, `/trips/${c}${path}`, body, token)),
+  onChange: () => { if (typing()) stale = true; else render(); },
 });
 const launchLocalShort = (momentId) => {
   const me = trip?.participants.find((p) => p.id === myId());
@@ -609,6 +617,7 @@ function tripView(me) {
       h("p", { className: "meta" }, "실제 녹음 상태는 차 화면에서 확인해 주세요."),
       controls.length > 0 && h("div", { className: "row" }, controls),
     ),
+    todos.card(),
     h(
       "section",
       { className: "card" },
@@ -934,6 +943,7 @@ function render() {
   captions.sync();
   records.sync();
   conversations.sync();
+  todos.sync();
   stale = false;
   const me = trip?.participants.find((p) => p.id === myId());
   if (me) store("trip", trip.code); // 처음 화면의 '지난 여행 열기'
