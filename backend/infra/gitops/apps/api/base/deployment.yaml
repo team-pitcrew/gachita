@@ -28,7 +28,12 @@ spec:
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
         seccompProfile: { type: RuntimeDefault }
+      volumes:
+        - name: short-tmp
+          emptyDir: { sizeLimit: 1Gi }
       containers:
         - name: api
           image: ghcr.io/team-pitcrew/gachita-api # 태그는 overlays에서 정한다
@@ -49,10 +54,17 @@ spec:
             # 주소의 호스트는 network.yaml의 나가는 길과 같아야 한다. 요청 간격(ASR_GAP_MS, 기본 파드마다 1.1초)은 파드 둘이
             # 상대 서버 한도(IP당 초당 2건) 아래에 들게 정한 값이라 replicas를 바꾸면 같이 맞춘다(롤아웃 중 셋일 때는 429 물러섬이 받음)
             - { name: ASR_URL, value: "https://llm.kikum.xyz/asr/v1" }
-          # 구글 OAuth(GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET)와 ASR 토큰(ASR_TOKEN). 값이 없으면 Secret이 없고, 서버는 그대로 뜬다
+            # 키 연결과 유료 생성 활성화를 분리합니다. 크레딧·실제 생성 검증 전에는 새 작업을 받지 않습니다(T86).
+            - { name: SHORTS_ENABLED, value: "false" }
+            - { name: SHORTS_DAILY_SECONDS, value: "120" }
+            - { name: HF_OUTPUT_HOSTS, value: "cdn.higgsfield.ai,cdn.higgsfield.work,images.higgs.ai,d28lhcrx5qdowv.cloudfront.net" }
+          # 구글 OAuth·ASR·힉스필드 자격은 선택 Secret입니다. 값이 없어도 기본 API는 뜹니다.
           envFrom:
             - secretRef: { name: google-oauth, optional: true }
             - secretRef: { name: asr, optional: true }
+            - secretRef: { name: higgsfield, optional: true }
+          volumeMounts:
+            - { name: short-tmp, mountPath: /tmp }
           # 준비: 두 DB에 닿아야 요청을 받는다. 살아 있음: 프로세스만 본다(DB가 잠깐 멈췄다고 API를 다시 띄우지 않음)
           readinessProbe:
             httpGet: { path: /healthz, port: http }
@@ -62,8 +74,8 @@ spec:
             initialDelaySeconds: 10
             periodSeconds: 20
           resources:
-            requests: { cpu: 50m, memory: 96Mi }
-            limits: { memory: 256Mi }
+            requests: { cpu: 100m, memory: 192Mi, ephemeral-storage: 512Mi }
+            limits: { memory: 1Gi, ephemeral-storage: 2Gi }
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
