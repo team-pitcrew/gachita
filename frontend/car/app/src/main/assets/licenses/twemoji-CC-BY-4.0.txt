@@ -1,0 +1,5 @@
+Twemoji 14.0.2 graphics (arrival brief icons: res/drawable/ic_brief_*.xml)
+Copyright 2020 Twitter, Inc and other contributors
+Graphics licensed under CC-BY 4.0: https://creativecommons.org/licenses/by/4.0/
+Source: https://github.com/twitter/twemoji
+Converted from the SVG assets used by the Gachita Figma design (Briefing / emoji components) to Android vector drawables; shapes and colours unchanged.

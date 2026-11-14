@@ -1,5 +1,14 @@
 package io.github.teampitcrew.gachita
 
+import io.github.teampitcrew.gachita.BriefIcon.CART
+import io.github.teampitcrew.gachita.BriefIcon.COLD
+import io.github.teampitcrew.gachita.BriefIcon.DRINK
+import io.github.teampitcrew.gachita.BriefIcon.FRUIT
+import io.github.teampitcrew.gachita.BriefIcon.LUGGAGE
+import io.github.teampitcrew.gachita.BriefIcon.MEAT
+import io.github.teampitcrew.gachita.BriefIcon.RESTROOM
+import io.github.teampitcrew.gachita.BriefIcon.SNACK
+import io.github.teampitcrew.gachita.BriefIcon.TRASH
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -19,11 +28,11 @@ class ArrivalBriefTest {
         assertEquals(rows, rows.withDetails(emptyMap()))
     }
 
-    @Test fun emojiByNameThenCategory() {
-        assertEquals(listOf("🥩", "🍊", "🍬", "🥤", "🥤", "🚻", "🧊", "🧳"),
-            listOf("삼겹살", "귤", "젤리", "탄산수", "물", "화장실 먼저 다녀오기", "고기는 바로 냉장 보관", "가방").map { emojiOf(it, null) })
-        assertEquals("🛒", emojiOf("물티슈", "buy"))
-        assertEquals(listOf("🚻", "🛒", "🧊", "🧳"), listOf("first", "buy", "remember", "bring").map { emojiOf("체크인", it) })
+    @Test fun iconByNameThenCategory() {
+        assertEquals(listOf(MEAT, FRUIT, SNACK, DRINK, DRINK, RESTROOM, COLD, LUGGAGE, TRASH),
+            listOf("삼겹살", "귤", "젤리", "탄산수", "물", "화장실 먼저 다녀오기", "고기는 바로 냉장 보관", "가방", "쓰레기 정리하기").map { iconOf(it, null) })
+        assertEquals(CART, iconOf("물티슈", "buy"))
+        assertEquals(listOf(RESTROOM, CART, COLD, LUGGAGE), listOf("first", "buy", "remember", "bring").map { iconOf("체크인", it) })
     }
 
     @Test fun whoAskedUsesConfirmedSpeakersOnly() {
@@ -36,18 +45,20 @@ class ArrivalBriefTest {
 
     @Test fun waypointGroupsFirstAndOneRowPerGood() {
         val rows = briefRows(F4Mock.mart, people).let { r -> BriefRows(r.first.noId(), r.buy.noId(), r.remember.noId(), r.bring.noId()) }
-        assertEquals(listOf(BriefRow("🚻", "화장실 먼저 다녀오기", "하은이 요청", "")), rows.first)
-        assertEquals(listOf(BriefRow("🥩", "삼겹살", "엄마 요청", "600g"), BriefRow("🍊", "귤", "엄마 요청", "1봉지"),
-            BriefRow("🍬", "젤리", "서준이 요청", "1봉지"), BriefRow("🥤", "탄산수", "아빠 요청", "2병")), rows.buy)
-        assertEquals("장보고 여행 계속", arrivalButton(false))
+        assertEquals(listOf(BriefRow(RESTROOM, "화장실 먼저 다녀오기", "하은이 요청", "")), rows.first)
+        assertEquals(listOf(BriefRow(MEAT, "삼겹살", "엄마 요청", "600g"), BriefRow(FRUIT, "귤", "엄마 요청", "1봉지"),
+            BriefRow(SNACK, "젤리", "서준이 요청", "1봉지"), BriefRow(DRINK, "탄산수", "아빠 요청", "2병")), rows.buy)
+        assertEquals("계속", arrivalButton(false)) // C20·D19 단추
+        assertEquals("먼저 할 일과 살 것을 모았어요", arrivalSub(false))
     }
 
     @Test fun finalDestinationHasFirstRememberBring() {
         val rows = briefRows(F4Mock.lodge, people).let { r -> BriefRows(r.first.noId(), r.buy.noId(), r.remember.noId(), r.bring.noId()) }
         assertEquals(listOf("화장실 먼저 다녀오기"), rows.first.map { it.name })
-        assertEquals(listOf(BriefRow("🧊", "고기는 바로 냉장 보관", "엄마 요청", "")), rows.remember)
-        assertEquals(listOf(BriefRow("🧳", "체크인하고 가방 내리기", "아빠 요청", "")), rows.bring)
+        assertEquals(listOf(BriefRow(COLD, "고기는 바로 냉장 보관", "엄마 요청", "")), rows.remember)
+        assertEquals(listOf(BriefRow(LUGGAGE, "체크인하고 가방 내리기", "아빠 요청", "")), rows.bring)
         assertEquals("여행 마치고 기록 보기", arrivalButton(true))
+        assertEquals("내리기 전, 할 일과 챙길 것", arrivalSub(true)) // finalBrief 2043:1890
     }
 
     @Test fun olderServerAskIsOneRememberRow() {
