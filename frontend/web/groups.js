@@ -12,12 +12,14 @@ const CODE = /^(FAMILY|TRIP)-[0-9]{4}$/;
 const button = (label, onclick, className = "", disabled = false) => h("button", { type: "button", className, onclick, disabled }, label);
 const face = (person) => h("span", { className: "group-face", "aria-hidden": "true" }, characterImage(characterKey(person?.character)));
 
-// 그룹 얼굴 2×2('Group / 2x2 / … / Phone'): 앞 네 사람, 남는 칸은 초대 중·미등록 점선. 프로필 드롭다운(profile-menu.js)도 쓴다.
-export function groupFaces(g) {
+// 그룹 얼굴 2×2('Group / 2x2 / … / Phone'): 앞 네 사람, 남는 칸은 초대 중·미등록 칸. 프로필 드롭다운(profile-menu.js)도 쓴다.
+// labels면 빈 칸에 '초대 중'·'미등록' 글자(시안 P10 'Group / 2x2 / inviting / Phone').
+export function groupFaces(g, labels = false) {
   const slots = g.members.slice(0, 4).map(face);
-  if (slots.length < 4 && g.invite) slots.push(h("span", { className: "group-slot inviting", "aria-hidden": "true" }));
-  while (slots.length < 4) slots.push(h("span", { className: "group-slot", "aria-hidden": "true" }));
-  return h("span", { className: "group-faces" }, slots);
+  const slot = (inviting) => h("span", { className: `group-slot${inviting ? " inviting" : ""}`, "aria-hidden": "true" }, labels && (inviting ? "초대 중" : "미등록"));
+  if (slots.length < 4 && g.invite) slots.push(slot(true));
+  while (slots.length < 4) slots.push(slot(false));
+  return h("span", { className: `group-faces${labels ? " labeled" : ""}` }, slots);
 }
 
 // 초대 링크(같은 출처의 /?group=코드)에서 코드를 읽는다. 다른 출처·다른 경로는 읽지 않는다.
@@ -115,7 +117,7 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
   }
   function begin(view) {
     close();
-    s = { view, groups: [], groupId: null, invite: null, busy: false, draft: { name: "", character: "cap", consent: true }, seats: null, swapped: null, meter: null, voiceState: "", voiceNote: "" };
+    s = { view, groups: [], groupId: null, invite: null, busy: false, draft: { name: "", character: "cap" }, seats: null, swapped: null, meter: null, voiceState: "", voiceNote: "" };
     s.dialog = h("dialog", { className: "groups-dialog", "aria-label": "가족과 동승 그룹", oncancel: (e) => { e.preventDefault(); back(); } });
     document.body.append(s.dialog);
     s.dialog.showModal();
@@ -153,13 +155,9 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
   }
 
   // 화면 틀: 머리(앱과 같은 머리 줄: 마스코트 · 가치타 · 연결됨), 탭(P13 이후), 제목 묶음, 본문, 아래 단추.
-  // 가치타를 누르면 대화 상자를 닫는다(앱 처음 화면). 시안에 없는 '‹'는 아래 단계(아이·좌석·동승·초대)에서만 둔다 —
-  // iOS에는 대화 상자를 닫는 뒤로 가기 몸짓이 없어 윗 단계로 돌아갈 길이 필요하다.
-  const top = () => {
-    const bar = appBar({ online: navigator.onLine, onHome: close });
-    if (PARENT[s.view] || s.view === "invite") bar.prepend(h("button", { type: "button", className: "plain group-back", "aria-label": "이전 화면으로", onclick: back }, "‹"));
-    return bar;
-  };
+  // 가치타를 누르면 대화 상자를 닫는다(앱 처음 화면). 시안에 없는 '‹'는 두지 않는다(11/15 오너 '시안이 기준') —
+  // 돌아가는 길은 시안의 단추(그룹으로·좌석 배정으로·전체 그룹 …)와 가치타, 기기의 뒤로 가기(Esc → back())다.
+  const top = () => appBar({ online: navigator.onLine, onHome: close });
   const tabs = () => h("nav", { className: "journey-tabs", "aria-label": "여행 메뉴" }, h("button", { type: "button", className: "selected", "aria-current": "page" }, "함께 타는 중"), button("대화 기록", close), button("콘텐츠 기록", close));
   const page = (title, sub, body, actions, withTabs = false, aside = null) => [
     top(),
@@ -261,22 +259,24 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
     const guest = g.kind === "guest";
     const adding = s.inviteFrom === "member"; // 시안 P10: 가족 추가 중의 초대는 등록 수와 2x2 배지
     return page(guest ? "동승자 초대하기" : "가족 초대하기", adding ? `${g.members.length}명 등록 / 1명 초대 중` : "코드와 링크를 만들었어요. 편하게 공유하세요.", [
-      h("div", { className: "group-card center" },
-        h("small", {}, "초대 코드"),
-        h("strong", { className: "group-code" }, s.invite.code),
-        button("코드 복사", () => copy(s.invite.code), "group-ghost group-short"),
-        qr(link()),
-        h("p", {}, "QR로도 바로 참여할 수 있어요")),
-      h("small", { className: "group-label" }, "초대 링크"),
-      h("div", { className: "group-card soft group-link" }, h("strong", {}, `${g.name} 초대 링크`), h("small", {}, `열면 앱에서 ${s.invite.code} 그룹으로 연결`)),
-      button("초대 링크 공유", share, "primary group-short"),
-      h("div", { className: "group-pair" }, button("링크 복사", () => copy(link()), "group-ghost group-short"), h("a", { className: "group-ghost group-short group-open", href: s.invite.url }, "링크 열기")),
-    ], [button(adding ? "참여 확인" : "그룹으로 돌아가기", () => act(async () => { await load(); go(s.inviteFrom); }), "primary", s.busy)], guest, adding && groupFaces(g)); // 탭은 동승 초대(P16 guestInvite)만, P10·P16I는 없음
+      h("div", { className: `group-invite${adding ? " adding" : ""}` },
+        h("div", { className: "group-card center" },
+          h("small", {}, "초대 코드"),
+          h("strong", { className: "group-code" }, s.invite.code),
+          button("코드 복사", () => copy(s.invite.code), "group-ghost group-short"),
+          qr(link()),
+          h("p", {}, "QR로도 바로 참여할 수 있어요")),
+        h("div", { className: "group-join" },
+          h("small", { className: "group-label" }, "초대 링크"),
+          h("div", { className: "group-card soft group-link" }, h("strong", {}, `${g.name} 초대 링크`), h("small", {}, `열면 앱에서 ${s.invite.code} 그룹으로 연결`)),
+          button("초대 링크 공유", share, "primary group-short"),
+          h("div", { className: "group-pair" }, button("링크 복사", () => copy(link()), "group-ghost group-short"), h("a", { className: "group-ghost group-short group-open", href: s.invite.url }, "링크 열기")))),
+    ], [button(adding ? "참여 확인" : "그룹으로 돌아가기", () => act(async () => { await load(); go(s.inviteFrom); }), "primary", s.busy)], guest, adding && groupFaces(g, true)); // 탭은 동승 초대(P16 guestInvite)만, P10·P16I는 없음
   }
 
   function childView() {
     const d = s.draft;
-    const ready = () => !s.busy && Boolean(d.name.trim()) && d.consent; // 서버도 보호자 동의 없이는 아이를 만들지 않는다
+    const ready = () => !s.busy && Boolean(d.name.trim());
     const label = CHARACTER_OPTIONS.find(([k]) => k === d.character)?.[1].split(" · ")[0] ?? "";
     const tag = h("strong", {}, `${label} ${d.name || ""}`.trim()); // 시안 P11 '캡모자 서준': 이름을 적는 대로 바꾼다
     const name = h("input", { className: "group-input", value: d.name, placeholder: "아이 이름", maxLength: 20, "aria-label": "아이 이름", oninput: (e) => { d.name = e.target.value; tag.textContent = `${label} ${d.name}`.trim(); submit.disabled = !ready(); } });
@@ -287,11 +287,11 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
     };
     const submit = button("동의하고 목소리 등록", () => act(async () => {
       const g = await ensureFamily();
-      const made = await call("POST", `/groups/${g.id}/children`, { name: d.name.trim(), character: d.character, guardianConsent: d.consent });
+      const made = await call("POST", `/groups/${g.id}/children`, { name: d.name.trim(), character: d.character, guardianConsent: true }); // '동의하고 목소리 등록'을 누른 것이 보호자 동의(서버도 동의 없이는 만들지 않음)
       s.groups = s.groups.map((x) => (x.id === made.id ? made : x));
       s.child = made.members.filter((m) => m.role === "child").at(-1);
       s.childGroup = g.id;
-      s.draft = { name: "", character: "cap", consent: true };
+      s.draft = { name: "", character: "cap" };
       go("childVoice");
       record();
     }), "primary", !ready());
@@ -300,7 +300,7 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
       name,
       h("button", { type: "button", className: "group-card row group-character", onclick: pick, "aria-label": "캐릭터 바꾸기" }, face(d), tag),
       h("div", { className: "group-card" }, h("strong", {}, "아이 목소리 15초 등록"), h("small", {}, "아이에게 짧은 문장을 읽어 달라고 해주세요.")),
-      h("label", { className: "group-check" }, h("input", { type: "checkbox", checked: d.consent, onchange: (e) => { d.consent = e.target.checked; submit.disabled = !ready(); } }), "보호자로서 아이의 녹음과 콘텐츠 처리에 동의해요."),
+      h("p", { className: "ob-note" }, "보호자로서 아이의 녹음과 콘텐츠 처리에 동의해요."),
     ], [submit]);
   }
 
@@ -363,8 +363,9 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
     const saved = s.voiceState === "saved";
     const retry = s.voiceState === "failed" || s.voiceState === "blocked";
     return page(`${kid?.name ?? "아이"}의 목소리 등록`, `“나는 ${kid?.name ?? "아이"}${batchim(kid?.name ?? "아이") ? "이야" : "야"}. 바다에 가서 모래성을 만들 거야.”`, [
-      h("div", { className: "group-card" }, h("small", {}, `아이 목소리  ${sec} / ${VOICE_SECONDS}초`),
-        voiceBars(s.meter, { className: "ob-wave", slots: WAVE_BARS.length, ready: WAVE_BARS, min: 11, max: 62, upcoming: WAVE_BARS }), h("small", { className: "group-clock" }, `00:${String(sec).padStart(2, "0")}`)),
+      h("div", { className: "ob-meter" }, h("span", {}, `아이 목소리  ${sec} / ${VOICE_SECONDS}초`),
+        voiceBars(s.meter, { className: "ob-wave", slots: WAVE_BARS.length, ready: WAVE_BARS, min: 11, max: 62, upcoming: WAVE_BARS }),
+        h("p", {}, h("span", {}, `00:${String(sec).padStart(2, "0")}`), h("span", {}, `00:${VOICE_SECONDS}`))),
       s.voiceNote && h("p", { className: "meta", role: "status" }, s.voiceNote),
       saved && h("div", { className: "group-card soft row" }, face(kid), h("div", {}, h("strong", {}, `${kid?.name ?? "아이"}의 프로필 준비 완료`), h("small", {}, childDone()))),
     ], [saved ? button("가족 그룹에 저장", () => act(afterChild), "primary", s.busy)
