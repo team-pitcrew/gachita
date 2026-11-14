@@ -36,21 +36,34 @@ class FamilyTest {
         assertEquals("녹음 동의 4명 완료 / 목소리 등록 4명 완료", readiness(DEMO_FAMILY.members))
     }
 
-    @Test fun `자리 없는 구성원을 빈자리에 앉히고 앉은 사람과는 맞바꾼다(차에서 만든 아이·초대 성인·동승 그룹)`() {
-        val g = parseGroup(JSONObject(json)) // 하은은 자리 없음
-        val sit = seatMove(g.members, SeatPick("girl", null), SeatPick(null, "ROW_2_RIGHT"))!!
-        assertEquals(listOf("ROW_1_LEFT", "ROW_2_LEFT", "ROW_2_RIGHT"), sit.first.map { it.seat })
-        assertEquals("하은을 뒤 오른쪽에 앉혔어요.", sit.second)
-        // 빈자리를 먼저 눌러도 같다
-        assertEquals(sit.first, seatMove(g.members, SeatPick(null, "ROW_2_RIGHT"), SeatPick("girl", null))!!.first)
-        // 자리 없는 사람 → 앉은 사람: 맞바꿔 앉았던 사람이 자리 없음으로
-        val swap = seatMove(g.members, SeatPick("girl", null), SeatPick("son", "ROW_2_LEFT"))!!
-        assertEquals(listOf("ROW_1_LEFT", null, "ROW_2_LEFT"), swap.first.map { it.seat })
-        assertEquals("하은과 서준의 자리 위치를 바꿨어요.", swap.second)
-        // 앉은 사람 → 다른 빈자리: 옮김
-        assertEquals(listOf("ROW_1_RIGHT", "ROW_2_LEFT", null), seatMove(g.members, SeatPick("dad", "ROW_1_LEFT"), SeatPick(null, "ROW_1_RIGHT"))!!.first.map { it.seat })
-        assertNull(seatMove(g.members, SeatPick(null, "ROW_1_RIGHT"), SeatPick(null, "ROW_2_RIGHT")))
-        assertNull(seatMove(g.members, SeatPick("son", "ROW_2_LEFT"), SeatPick("son", "ROW_2_LEFT")))
+    @Test fun `자리 없는 사람은 빈자리에 앉히고, 앉은 사람끼리만 맞바꾼다`() {
+        val g = parseGroup(JSONObject(json)) // 아빠 운전석, 서준 뒤 왼쪽, 하은 자리 없음
+        val sit = seatPick(g.members, SeatPick("girl", null), SeatPick(null, "ROW_2_RIGHT"))
+        assertEquals(listOf("ROW_1_LEFT", "ROW_2_LEFT", "ROW_2_RIGHT"), sit.members!!.map { it.seat })
+        assertEquals("하은을 뒤 오른쪽에 앉혔어요.", sit.note)
+        val swap = seatPick(g.members, SeatPick("dad", "ROW_1_LEFT"), SeatPick("son", "ROW_2_LEFT"))
+        assertEquals(listOf("ROW_2_LEFT", "ROW_1_LEFT", null), swap.members!!.map { it.seat })
+        assertEquals("아빠와 서준의 자리 위치를 바꿨어요.", swap.note)
+        assertEquals("먼저 앉힐 사람을 눌러 주세요.", seatPick(g.members, null, SeatPick(null, "ROW_2_RIGHT")).note)
+        assertNull(seatPick(g.members, SeatPick("son", "ROW_2_LEFT"), SeatPick("son", "ROW_2_LEFT")).pick)
+    }
+
+    @Test fun `앉은 사람을 고른 뒤 자리 없는 사람을 누르면 고르기만 바뀌고 아무도 자리를 잃지 않는다(폰 #413 재점검)`() {
+        val g = parseGroup(JSONObject(json))
+        // 아빠(앉음)를 고른 뒤 '자리 없음'의 하은 → 맞바꾸지 않고 하은을 고름
+        val r = seatPick(g.members, SeatPick("dad", "ROW_1_LEFT"), SeatPick("girl", null))
+        assertNull(r.members)
+        assertEquals(SeatPick("girl", null), r.pick)
+        // 하은(자리 없음) → 아빠 자리: 막음, 아빠는 그대로
+        val blocked = seatPick(g.members, SeatPick("girl", null), SeatPick("dad", "ROW_1_LEFT"))
+        assertNull(blocked.members)
+        assertEquals("앉은 사람이 있는 자리예요. 빈자리를 눌러 주세요.", blocked.note)
+        // 어떤 순서로 눌러도 앉아 있던 사람이 자리를 잃지 않는다
+        val picks = listOf(SeatPick("dad", "ROW_1_LEFT"), SeatPick("son", "ROW_2_LEFT"), SeatPick("girl", null))
+        val targets = picks + SeatPick(null, "ROW_1_RIGHT")
+        for (p in picks) for (t in targets) seatPick(g.members, p, t).members?.let { assertEquals("$p → $t", emptyList<GroupMember>(), lostSeats(g.members, it)) }
+        // 막는 장치: 옛 맞바꾸기(앉은 사람 ↔ 자리 없는 사람)의 결과를 잡아낸다
+        assertEquals(listOf("아빠"), lostSeats(g.members, swapSeats(g.members, "dad", "girl")).map { it.name })
     }
 
     @Test fun `저장할 자리는 저장한 그룹과 다른 것만, 같으면 없다`() {

@@ -97,21 +97,37 @@ fun placeSeat(members: List<GroupMember>, profileId: String, seat: String?): Lis
 /** 좌석 지도에서 누른 것: 사람(member, 그 사람의 자리 seat — 자리 없으면 null) 또는 빈자리(member 없음, seat). */
 data class SeatPick(val member: String?, val seat: String?)
 
+/** 좌석 바꾸기에서 누른 결과: 바뀐 자리(없으면 그대로), 다음에 고른 것, 부제. */
+data class SeatResult(val members: List<GroupMember>?, val pick: SeatPick?, val note: String?)
+
 /**
- * 고른 두 가지로 자리를 바꾼다. 사람→빈자리(또는 빈자리→사람)는 그 자리에 앉히고, 사람↔사람은 맞바꾼다.
- * 빈자리 둘이거나 같은 사람이면 바꿀 것이 없다(null). 둘째 값은 화면 부제.
+ * 좌석 바꾸기에서 누른 것(target: 자리 칸이면 seat이 있고 앉은 사람이면 member도, '자리 없음' 줄이면 member만).
+ * 자리는 자리 칸을 눌러야만 정한다 — 사람(자리 없음 줄)을 누르면 고른 사람만 바뀐다. 사람 → 빈자리는 앉히고,
+ * 앉은 사람 → 앉은 사람은 맞바꾼다. 자리 없는 사람은 앉은 사람의 자리에 넣지 않는다: 앉아 있던 사람이 자리를 잃으면
+ * '이 가족과 출발'이 그 사람 없이 여행을 만든다(폰 #413 재점검). 폰 groups.js의 seatPick과 같은 규칙.
  */
-fun seatMove(members: List<GroupMember>, first: SeatPick, second: SeatPick): Pair<List<GroupMember>, String>? {
+fun seatPick(members: List<GroupMember>, pick: SeatPick?, target: SeatPick): SeatResult {
     fun name(id: String) = members.firstOrNull { it.profileId == id }?.name.orEmpty()
-    if (first.member != null && second.member != null) {
-        if (first.member == second.member) return null
-        val a = name(first.member)
-        return swapSeats(members, first.member, second.member) to "$a${if (batchim(a)) "과" else "와"} ${name(second.member)}의 자리 위치를 바꿨어요."
+    fun seatOf(id: String) = members.firstOrNull { it.profileId == id }?.seat
+    if (target.seat == null) return SeatResult(null, if (pick?.member == target.member) null else target, null) // 자리 없음 줄: 고르기만
+    val who = pick?.member ?: return if (target.member != null) SeatResult(null, target, null) else SeatResult(null, null, "먼저 앉힐 사람을 눌러 주세요.")
+    if (target.member == who) return SeatResult(null, null, null)
+    val other = target.member
+    if (other == null) { // 빈자리에 앉힘
+        val n = name(who)
+        return SeatResult(placeSeat(members, who, target.seat), null, "$n${if (batchim(n)) "을" else "를"} ${Seat.valueOf(target.seat).label.replace("뒷자리", "뒤")}에 앉혔어요.")
     }
-    val who = first.member ?: second.member ?: return null
-    val seat = (if (first.member != null) second.seat else first.seat) ?: return null
-    val n = name(who)
-    return placeSeat(members, who, seat) to "$n${if (batchim(n)) "을" else "를"} ${Seat.valueOf(seat).label.replace("뒷자리", "뒤")}에 앉혔어요."
+    if (seatOf(who) != null) { // 앉은 사람끼리 맞바꿈
+        val a = name(who)
+        return SeatResult(swapSeats(members, who, other), null, "$a${if (batchim(a)) "과" else "와"} ${name(other)}의 자리 위치를 바꿨어요.")
+    }
+    return SeatResult(null, pick, "앉은 사람이 있는 자리예요. 빈자리를 눌러 주세요.") // 자리 없는 사람은 빈자리에만
+}
+
+/** 저장한 그룹에서 앉아 있다가 자리 없음이 되는 사람(저장을 막는다). */
+fun lostSeats(saved: List<GroupMember>, edited: List<GroupMember>): List<GroupMember> {
+    val before = saved.associate { it.profileId to it.seat }
+    return edited.filter { before[it.profileId] != null && it.seat == null }
 }
 
 /** 저장한 그룹과 다른 자리만(PUT /groups/{id}/seats 본문). */
@@ -288,18 +304,17 @@ fun FamilyFlow(server: String, token: String?, onClose: () -> Unit, onStart: (St
                             val list = if (view == FamilyView.SEAT) seats else g?.members.orEmpty()
                             val guest = g?.kind == "guest"
                             Heading(if (view == FamilyView.SEAT) (if (guest) "동승 좌석 바꾸기" else "가족 좌석 바꾸기") else if (guest) g!!.name else "우리 가족",
-                                if (view == FamilyView.SEAT) seatNote ?: when { pick == null -> "바꿀 사람과 자리를 차례로 눌러 주세요."; pick?.member != null -> "앉힐 자리나 바꿀 사람을 눌러 주세요."; else -> "이 자리에 앉힐 사람을 눌러 주세요." }
+                                if (view == FamilyView.SEAT) lostSeats(g?.members.orEmpty(), seats).takeIf { it.isNotEmpty() }?.let { lost -> "${lost.joinToString { it.name }}의 자리가 없어져요. 빈자리에 다시 앉혀 주세요." }
+                                    ?: seatNote ?: if (pick == null) "사람을 누른 뒤 빈자리나 다른 사람을 눌러 주세요." else "빈자리나 바꿀 사람을 눌러 주세요."
                                 else if (saved) "새 좌석을 저장했어요."
                                 else if (list.none { it.seat != null }) "좌석을 눌러 자리를 정해 주세요."
                                 else "${list.size}명 / ${if (guest) "동승 그룹" else "기본 그룹"} / 좌석을 눌러 변경")
                             // 사람과 빈자리, 자리 없는 구성원(차에서 만든 아이·초대로 들어온 성인·동승 그룹) 모두 누른다.
                             SeatGrid(list, if (view == FamilyView.SEAT) pick else null) { target ->
-                                if (view == FamilyView.GROUP) { seats = list; pick = target; seatNote = null; saved = false; view = FamilyView.SEAT; return@SeatGrid }
-                                val first = pick
-                                if (first == null) { pick = target; return@SeatGrid }
-                                val moved = seatMove(seats, first, target)
-                                if (moved == null) { pick = if (first == target) null else target; return@SeatGrid } // 같은 것을 다시 누르면 해제, 빈자리 둘이면 새로 고름
-                                seats = moved.first; seatNote = moved.second; pick = null
+                                if (view == FamilyView.GROUP) { seats = list; pick = target.takeIf { it.member != null }; seatNote = null; saved = false; view = FamilyView.SEAT; return@SeatGrid }
+                                val r = seatPick(seats, pick, target)
+                                r.members?.let { seats = it }
+                                pick = r.pick; seatNote = r.note
                             }
                             if (view == FamilyView.GROUP) Text(readiness(list), color = c.primary)
                         }
@@ -339,7 +354,7 @@ fun FamilyFlow(server: String, token: String?, onClose: () -> Unit, onStart: (St
                         // 서버는 자리가 정해진 구성원만 여행에 넣고 아무도 없으면 409다 — 앉힌 사람이 있을 때만 켠다.
                         Primary(if (g?.kind == "guest") "이 그룹과 출발" else "이 가족과 출발", !busy && token != null && g != null && g.members.any { it.seat != null }, Modifier.weight(1.4f)) { g?.let { onStart(it.id) } }
                     }
-                    FamilyView.SEAT -> Primary("이 배치로 저장", !busy && token != null && g != null && seatChanges(g.members, seats).isNotEmpty(), Modifier.weight(1f)) {
+                    FamilyView.SEAT -> Primary("이 배치로 저장", !busy && token != null && g != null && seatChanges(g.members, seats).isNotEmpty() && lostSeats(g.members, seats).isEmpty(), Modifier.weight(1f)) {
                         act {
                             val changes = seatChanges(g!!.members, seats)
                             put(io { api.saveSeats(token!!, g.id, changes) }); saved = true; pick = null; view = FamilyView.GROUP
