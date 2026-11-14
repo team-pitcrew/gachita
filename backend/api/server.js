@@ -187,7 +187,8 @@ async function issueToken(profileId, device = "", token = randomBytes(32).toStri
 // 여행 문서의 참가자를 API가 돌려주는 모양으로 바꾼다. 참가자 토큰 해시는 절대 나가지 않는다.
 // prefs는 좌석·공조 선호를 걷어내기(T68) 전에 만든 여행 문서에만 있다(응답에서는 제외함).
 const asParticipant = ({ tokenHash, olderTokenHashes, prefs, ...p }) => p;
-const tripView = (trip) => ({ ...trip, participants: trip.participants.map(asParticipant) });
+// arrival(도착한 장소 이름, T119)은 토큰 없이 읽는 여행 문서에 싣지 않는다. 동의한 참가자가 GET /todos로만 읽는다.
+const tripView = ({ arrival, ...trip }) => ({ ...trip, participants: trip.participants.map(asParticipant) });
 
 // 참가자 토큰(ADR-0007·docs/api/voice.md). 여행·참가에 묶이고 문서에는 해시만 남는다.
 // 프로필 토큰과 별개다 — 발화 올리기·기록본·동의 켜기의 인증에 쓴다.
@@ -204,6 +205,7 @@ const participantOf = (req, trip) => {
 // 동의 철회 뒤에 늦게 올라온 옛 세대 발화는 받은 것으로만 치고 저장하지 않는다(POST /utterances).
 async function bumpGeneration(trip, client) {
   trip.generation = (trip.generation ?? 1) + 1;
+  delete trip.arrival;
   await client.query("DELETE FROM utterances WHERE trip_code = $1 AND generation < $2", [trip.code, trip.generation]);
   await revokeShortAssets(client, trip.code, trip.generation);
   await client.query("DELETE FROM todo_states WHERE trip_code = $1 AND generation < $2", [trip.code, trip.generation]);
@@ -1020,6 +1022,7 @@ async function handle(trip, { req, m, sub, id, leaf, b, query, profile }, client
     if (m !== "PATCH") fail(405, "GET, PATCH만 됨");
     if (b.status !== undefined) {
       trip.status = oneOf(b.status, TRIP_STATUS, "status");
+      if (!["parked", "ended"].includes(trip.status)) delete trip.arrival; // 다시 출발하면 지난 도착은 끝난다(T119)
       // 동의가 모이면 주행과 함께 기록을 시작하고, 주차·종료에서 그 구간을 마감한다.
       trip.recording = trip.status === "driving" && everyoneConsents(trip);
     }
@@ -1280,7 +1283,7 @@ async function handle(trip, { req, m, sub, id, leaf, b, query, profile }, client
     const all = await readLines();
     const generation = trip.generation ?? 1;
     const items = await todos(all);
-    if (sub === "todos" && m === "GET" && !id) return [200, { generation, method: TODO_METHOD, items }];
+    if (sub === "todos" && m === "GET" && !id) return [200, { generation, method: TODO_METHOD, items, arrival: trip.arrival ?? null }];
     if (sub === "todos" && m === "PATCH" && id) {
       if (int(b.generation, 1, 2_147_483_647, "generation") !== generation) fail(409, "동의 세대가 바뀜 — 할 일을 다시 읽어 주세요");
       const expected = int(b.expectedVersion, 0, 2_147_483_646, "expectedVersion");
@@ -1303,7 +1306,13 @@ async function handle(trip, { req, m, sub, id, leaf, b, query, profile }, client
       const input = { place, position: point(b.position, "position"), parked: bool(b.parked, "parked"),
         observedAt: int(b.observedAt, 0, Date.now() + 5_000, "observedAt"), source: oneOf(b.source, ["vehicle", "browser"], "source") };
       input.parked = input.parked && ["parked", "ended"].includes(trip.status);
-      return [200, { generation, ...arrivalBriefing(input, items) }];
+      const result = { generation, ...arrivalBriefing(input, items) };
+      // 폰은 내비의 장소를 모른다. 도착으로 판정한 장소 이름·시각·출처만 남겨 GET /todos가 알려 준다(T119). 좌표는 남기지 않는다.
+      if (result.eligible && trip.arrival?.place !== place.name) {
+        trip.arrival = { place: place.name, at: input.observedAt, source: input.source };
+        return changed(200, result);
+      }
+      return [200, result];
     }
     fail(405, "GET /todos, PATCH /todos/:id, POST /arrival-briefing만 됨");
   }
