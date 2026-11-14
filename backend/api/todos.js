@@ -86,13 +86,14 @@ function titleOf(rest) {
   if (last === "가" && words.includes("화장실")) words[words.length - 1] = "다녀오기"; // 디자인의 '화장실 먼저 다녀오기'
   else if (STEM[last]) words[words.length - 1] = STEM[last];
   else if (last.length >= 3 && last.endsWith("해")) words[words.length - 1] = last.slice(0, -1); // '보관해' → '보관'
+  else if (last.length === 1) words[words.length - 1] = `${last}기`; // 한 글자 동사 줄기: '쉬' → '쉬기'
   return words.join(" ");
 }
 // 물건이 따로 없는 할 일(먼저·잊지 말 것)은 동사를 뺀 말 하나를 항목으로: '화장실 먼저 가야 돼' → '화장실'.
 function subjectOf(rest) {
   const words = wordsOf(rest);
   const last = words.at(-1);
-  if (last !== undefined && STEM[last]) words.pop();
+  if (last !== undefined && (STEM[last] || last.length === 1)) words.pop();
   else if (last?.length >= 3 && last.endsWith("해")) words[words.length - 1] = last.slice(0, -1);
   const name = clean(words);
   return name ? [{ name, qty: null }] : [];
