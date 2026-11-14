@@ -1,4 +1,4 @@
-// 가족·동승 그룹(흐름 F2, T133): P09–P16, P39–P43, 폰 QR 참여(phoneJoin·phoneJoined·phoneGuestJoin·phoneGuestJoined),
+// 가족·동승 그룹(흐름 F2, T133): P09–P16, P16A·B·C·G·I·L(그룹 상세·좌석 배정·구성원 선택·혼자인 동승 그룹·초대·전체 그룹), P39–P43, 폰 QR 참여(phoneJoin·phoneJoined·phoneGuestJoin·phoneGuestJoined),
 // 초대 링크 공유·복사. 서버 계약은 docs/api/groups.md. 화면은 앱 위에 겹치는 전체 화면 대화 상자다(주소의 #는 바꾸지 않음).
 // 사용자가 쓴 글은 textContent로만 넣는다(innerHTML 금지).
 import { api, h, SEAT, SEATS, toast } from "./shared.js";
@@ -52,6 +52,18 @@ export function swapSeats(members, a, b) {
   const seatA = members.find((m) => m.profileId === a)?.seat ?? null;
   const seatB = members.find((m) => m.profileId === b)?.seat ?? null;
   return members.map((m) => (m.profileId === a ? { ...m, seat: seatB } : m.profileId === b ? { ...m, seat: seatA } : m));
+}
+
+// 그룹 한 줄(P16A·P16L '4명  |  기본 그룹'). 혼자인 동승 그룹에 살아 있는 초대가 있으면 '초대 대기'.
+export function groupLine(g) {
+  const kind = g.kind === "family" ? "기본 그룹" : g.members.length === 1 && g.invite ? "초대 대기" : "동승 그룹";
+  return `${g.members.length}명  |  ${kind}`;
+}
+// 구성원과 저장된 좌석(P16A): 자리 순서대로 [자리, 이름]. 자리 없는 사람은 마지막 한 줄 — 서버는 자리 있는 사람만 여행에 넣는다.
+export function seatRows(members) {
+  const rows = SEATS.flatMap(([id, label]) => members.filter((m) => m.seat === id).map((m) => [label, m.name]));
+  const free = members.filter((m) => !m.seat).map((m) => m.name);
+  return free.length ? [...rows, ["자리 없음", free.join(", ")]] : rows;
 }
 
 // 우리 가족(P13)의 아래 줄: 모두 동의하고 목소리를 등록했으면 다음 탑승부터 자동 기록.
@@ -123,8 +135,8 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
     paint();
     s.dialog.scrollTop = 0;
   };
-  const PARENT = { child: "member", childVoice: "member", seat: "group", guest: "group" };
-  const back = () => (s.view === "invite" ? go(current()?.kind === "guest" ? "group" : "member") : PARENT[s.view] ? go(PARENT[s.view]) : close());
+  const PARENT = { child: "member", childVoice: "member", seat: "group", guest: "groups", groups: "group", detail: "groups", assign: "detail", picker: "assign" };
+  const back = () => (s.view === "invite" ? go(s.inviteFrom) : PARENT[s.view] ? go(PARENT[s.view]) : close());
   async function ensureFamily() {
     if (family()) return family();
     const made = await call("POST", "/groups", { name: "우리 가족", kind: "family" });
@@ -176,6 +188,7 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
     const g = groupId ? s.groups.find((x) => x.id === groupId) : await ensureFamily();
     s.groupId = g.id;
     s.invite = await call("POST", `/groups/${g.id}/invites`);
+    s.inviteFrom = s.view === "member" ? "member" : "detail"; // 가족 추가(P10)는 가족 추가로, 그룹 화면·새 동승 그룹(P16I)은 그룹으로
     go("invite");
   }
   const link = () => new URL(s.invite.url, location.origin).href;
@@ -249,7 +262,7 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
       h("div", { className: "group-card soft group-link" }, h("strong", {}, `${g.name} 초대 링크`), h("small", {}, `열면 앱에서 ${s.invite.code} 그룹으로 연결`)),
       button("초대 링크 공유", share, "primary group-short"),
       h("div", { className: "group-pair" }, button("링크 복사", () => copy(link()), "group-ghost group-short"), h("a", { className: "group-ghost group-short group-open", href: s.invite.url }, "링크 열기")),
-    ], [button(guest ? "참여 확인하고 그룹으로" : "참여 확인", () => act(async () => { await load(); go(guest ? "group" : "member"); }), "primary", s.busy)], guest); // 시안 P16(동승)은 탭이 있고 P10(가족)은 없다
+    ], [button(s.inviteFrom === "detail" ? "그룹으로 돌아가기" : "참여 확인", () => act(async () => { await load(); go(s.inviteFrom); }), "primary", s.busy)]); // 시안 P10·P16I 모두 탭 없음
   }
 
   function childView() {
@@ -340,15 +353,15 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
   }
 
   // 우리 가족(P13·P43)과 좌석 바꾸기(P14): 위가 차 앞쪽, 앞줄 둘·뒷줄 둘(뒤 가운데는 앉았을 때만).
-  function seatGrid(members, onpick, picked) {
+  function seatGrid(members, onpick, picked, center = false, className = "") {
     const at = Object.fromEntries(members.filter((m) => m.seat).map((m) => [m.seat, m]));
     const seat = ([id, label]) => {
       const m = at[id];
       return h("button", { type: "button", className: `seat${m ? "" : " empty"}${id === "ROW_1_LEFT" ? " me" : ""}${m && m.profileId === picked ? " picked" : ""}`, onclick: () => onpick?.(m, id), disabled: !onpick },
         m ? face(m) : h("span", { className: "seat-blank", "aria-hidden": "true" }), h("strong", {}, m ? m.name : "빈자리"), h("small", {}, label));
     };
-    const rear = SEATS.slice(2).filter(([id]) => id !== "ROW_2_CENTER" || at[id]);
-    return h("section", { className: "seat-map group-seats", "aria-label": "가족 좌석" },
+    const rear = SEATS.slice(2).filter(([id]) => id !== "ROW_2_CENTER" || at[id] || center); // 자리 없는 사람이 있으면 빈 가운데도 고를 수 있게
+    return h("section", { className: `seat-map group-seats ${className}`, "aria-label": "가족 좌석" },
       h("p", { className: "seat-front" }, "차량 앞쪽 ↑"),
       h("div", { className: "seat-row" }, SEATS.slice(0, 2).map(seat)),
       h("div", { className: `seat-row${rear.length > 2 ? " three" : ""}` }, rear.map(seat)));
@@ -362,14 +375,88 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
       free.length > 0 && h("p", { className: "meta" }, `자리 없음: ${free.map((m) => m.name).join(", ")}`),
       h("p", { className: "group-ready" }, readiness(g.members)),
     ], [
-      button("새 동승 그룹", () => { s.draft.guestName = ""; go("guest"); }, "group-ghost"),
-      button(g.kind === "guest" ? "이 그룹과 출발" : "이 가족과 출발", () => act(async () => {
-        const trip = await call("POST", "/trips", { groupId: g.id, title: g.name });
-        const me = trip.participants.find((p) => p.profileId === getProfile()?.id);
-        close();
-        onTrip(trip.code, me?.id, me && trip.tokens[me.id]);
-      }), "primary", s.busy),
+      button("전체 그룹", () => go("groups"), "group-ghost"),
+      ride(g, g.kind === "guest" ? "이 그룹과 출발" : "이 가족과 출발"),
     ], true);
+  }
+  // 그룹으로 여행 만들기: 자리 있는 구성원만 탄다(docs/api/groups.md).
+  const ride = (g, label) => button(label, () => act(async () => {
+    const trip = await call("POST", "/trips", { groupId: g.id, title: g.name });
+    const me = trip.participants.find((p) => p.profileId === getProfile()?.id);
+    close();
+    onTrip(trip.code, me?.id, me && trip.tokens[me.id]);
+  }), "primary", s.busy);
+
+  // 그룹 얼굴('Group / 2x2 profile / Phone' 2094:4300): 둘 이상이면 2x2(앞 네 사람, 남는 칸은 초대 중·미등록 점선), 혼자면 큰 캐릭터.
+  function avatar(g) {
+    if (g.members.length < 2) return h("span", { className: "group-face big", "aria-hidden": "true" }, characterImage(characterKey(g.members[0]?.character)));
+    const slots = g.members.slice(0, 4).map(face);
+    if (slots.length < 4 && g.invite) slots.push(h("span", { className: "group-slot inviting", "aria-hidden": "true" }));
+    while (slots.length < 4) slots.push(h("span", { className: "group-slot", "aria-hidden": "true" }));
+    return h("span", { className: "group-faces" }, slots);
+  }
+  const detail = (id) => { s.groupId = id; s.saved = false; go("detail"); };
+
+  // 내 동승 그룹(P16L): 가족이 먼저. 카드를 누르면 그 그룹(P16A, 혼자인 동승 그룹은 P16G).
+  function groupsView() {
+    const list = [...s.groups].sort((a, b) => (a.kind === "family" ? 0 : 1) - (b.kind === "family" ? 0 : 1));
+    const fam = family();
+    return page("내 동승 그룹", "함께 탈 그룹을 선택해 주세요.", [
+      ...list.map((g) => h("button", { type: "button", className: `group-card row group-pick${g.members.length < 2 ? " solo" : ""}`, onclick: () => detail(g.id) }, avatar(g),
+        h("div", {}, h("strong", {}, g.name), h("small", { className: "group-line" }, groupLine(g)), g.members.length > 1 && h("small", { className: "group-names" }, g.members.map((m) => m.name).join(", "))))),
+      button("+ 새 그룹 만들기", () => { s.draft.guestName = ""; go("guest"); }, "group-ghost"),
+    ], [fam ? button(`${fam.name} 보기`, () => detail(fam.id), "primary") : button("우리 가족 만들기", () => go("member"), "primary")], true);
+  }
+
+  // 그룹 상세(P16A). 혼자인 동승 그룹은 초대부터(P16G).
+  function detailView() {
+    const g = current();
+    if (!g) return groupsView();
+    if (g.kind === "guest" && g.members.length === 1) {
+      const owner = g.members[0];
+      return page(g.name, "초대 코드, QR 또는 링크로 함께할 사람을 초대해 주세요.", [
+        h("div", { className: "group-card row group-solo" }, avatar(g), h("div", {}, h("strong", {}, g.name), h("p", { className: "group-line" }, `${owner.name}  |  ${SEAT[owner.seat] ?? "자리 없음"}`))),
+        button("동승자 초대하기", () => act(() => invite(g.id)), "primary", s.busy),
+      ], [button("전체 그룹 보기", () => go("groups"), "group-ghost")], true);
+    }
+    return page(g.name, s.saved ? "새 좌석을 저장했어요." : `오늘 함께 탈 ${g.kind === "family" ? "가족" : "사람"}과 좌석을 확인해 주세요.`, [
+      h("div", { className: "group-card row group-head" }, avatar(g), h("div", {}, h("strong", {}, g.name), h("small", { className: "group-line" }, groupLine(g)))),
+      h("div", { className: "group-card group-rows", "aria-label": "구성원과 저장된 좌석" }, ...seatRows(g.members).map(([seat, name]) => h("p", {}, h("span", {}, seat), h("span", {}, name)))),
+      h("div", { className: "group-pair" }, button("좌석 배정", () => { s.seats = g.members; s.note = null; go("assign"); }, "group-ghost"), button("구성원 초대", () => act(() => invite(g.id)), "group-ghost", s.busy)),
+    ], [button("전체 그룹", () => go("groups"), "group-ghost"), ride(g, "이 그룹과 출발")], true);
+  }
+
+  // 좌석 배정(P16B): 좌석을 누르면 누가 앉을지 고른다(P16C). 저장 전까지는 이 화면 안의 배치만 바뀐다.
+  function assignView() {
+    const g = current();
+    const before = (m) => g.members.find((x) => x.profileId === m.profileId)?.seat ?? null;
+    const changed = s.seats.filter((m) => (m.seat ?? null) !== before(m));
+    return page("좌석 배정", "좌석을 누르고 앉을 사람을 선택해 주세요.", [
+      seatGrid(s.seats, (m, seat) => { s.seatTarget = seat; s.note = null; go("picker"); }, null, s.seats.some((m) => !m.seat), "group-assign"),
+      h("p", { className: "meta group-hint" }, "이미 앉은 사람을 선택하면 두 사람의 자리가 바뀌어요."),
+    ], [button("그룹으로", () => go("detail"), "group-ghost"), button("이 배치로 저장", () => act(async () => {
+      const saved = await call("PUT", `/groups/${g.id}/seats`, { seats: Object.fromEntries(changed.map((m) => [m.profileId, m.seat ?? null])) });
+      s.groups = s.groups.map((x) => (x.id === saved.id ? saved : x));
+      s.saved = true;
+      go("detail");
+    }), "primary", s.busy || !changed.length)], true);
+  }
+  // 누가 앉나요?(P16C): 좌석 지도와 같은 규칙(seatPick) — 빈자리면 앉히고, 앉은 사람끼리는 맞바꾸고,
+  // 자리 없는 사람은 앉은 사람의 자리에 넣지 않는다(앉아 있던 사람이 자리를 잃으면 그 사람 없이 출발하게 됨).
+  function pickerView() {
+    const g = current();
+    const seat = s.seatTarget;
+    const there = s.seats.find((m) => m.seat === seat)?.profileId;
+    const pick = (m) => {
+      const r = seatPick(s.seats, m.profileId, { seat, member: there });
+      if (r.note) { s.note = r.note; return paint(); }
+      if (r.members) s.seats = r.members;
+      go("assign");
+    };
+    return page("누가 앉나요?", s.note ?? `선택한 좌석에 앉을 ${g.kind === "family" ? "가족" : "사람"}을 골라 주세요.`, [
+      h("div", { className: "group-card group-target" }, h("small", {}, "선택한 좌석"), h("strong", {}, SEAT[seat])),
+      ...s.seats.map((m) => h("button", { type: "button", className: `group-card row group-member${m.profileId === there ? " picked" : ""}`, onclick: () => pick(m) }, face(m), h("strong", {}, m.name))),
+    ], [button("좌석 배정으로", () => go("assign"), "group-ghost")], true);
   }
   function seatView() {
     const g = current();
@@ -408,7 +495,9 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
     const me = getProfile();
     const input = h("input", { className: "group-input", value: s.draft.guestName ?? "", placeholder: "주말 바다 친구들", maxLength: 20, "aria-label": "그룹 이름", oninput: (e) => { s.draft.guestName = e.target.value; } });
     const make = async () => {
-      const made = await call("POST", "/groups", { name: (s.draft.guestName ?? "").trim() || "동승 그룹", kind: "guest" });
+      const created = await call("POST", "/groups", { name: (s.draft.guestName ?? "").trim() || "동승 그룹", kind: "guest" });
+      // 시안 P15·P16G '민준 | 운전석': 동승 그룹은 자리 없이 시작하므로 만든 사람을 운전석에 앉힌다(차의 C15와 같음).
+      const made = await call("PUT", `/groups/${created.id}/seats`, { seats: { [me.id]: "ROW_1_LEFT" } });
       s.groups.push(made);
       s.groupId = made.id;
       return made;
@@ -419,7 +508,7 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
       h("div", { className: "group-card soft row" }, face(me), h("div", {}, h("strong", {}, "내 계정"), h("small", {}, `${me?.name ?? ""} / 운전석`))),
       button("계정 초대 링크 만들기", () => act(async () => invite((await make()).id)), "group-ghost", s.busy),
       h("p", { className: "meta" }, "새 동승자는 본인이 동의한 뒤 그룹에 참여해요."),
-    ], [button("그룹 저장", () => act(async () => { await make(); s.saved = false; go("group"); }), "primary", s.busy)], true);
+    ], [button("그룹 저장", () => act(async () => { await make(); s.saved = false; go("detail"); }), "primary", s.busy)], true);
   }
 
   // 폰 QR·링크 참여(phoneJoin·phoneGuestJoin → phoneJoined·phoneGuestJoined). 토큰 없는 미리보기는 그룹·대표 이름만.
@@ -453,7 +542,7 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
 
   function paint() {
     if (!s) return;
-    const view = { member: memberView, invite: inviteView, child: childView, childVoice: childVoiceView, group: groupView, seat: seatView, guest: guestView, join: joinView, joined: joinedView }[s.view]();
+    const view = { member: memberView, invite: inviteView, child: childView, childVoice: childVoiceView, group: groupView, seat: seatView, guest: guestView, groups: groupsView, detail: detailView, assign: assignView, picker: pickerView, join: joinView, joined: joinedView }[s.view]();
     const kept = [...s.dialog.querySelectorAll(":scope > .group-share, :scope > .group-toast")]; // 공유 시트와 알림은 다시 그려도 남긴다
     s.dialog.replaceChildren(h("div", { className: "group-content" }, view.flat().filter(Boolean)), ...kept);
   }
