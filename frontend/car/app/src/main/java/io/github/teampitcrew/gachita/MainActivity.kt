@@ -183,6 +183,7 @@ class MainActivity : ComponentActivity() {
     private var offer by mutableStateOf<Offer?>(null) // 지금 보이는 경유지 제안(T9)
     private var debug = false
     private var pendingRoute: List<String>? = null // 내비에 붙으면 보낼 목적지(디버그 인자)
+    private var pendingStops: List<Place> = emptyList() // 그 목적지 앞에 들를 곳(디버그 인자 --es stops, 시연 T150)
     private var offers = 0L // 제안 번호. 늦게 온 콜백이 다른 제안을 건드리지 않게
     private var todoState by mutableStateOf(SharedTodoState())
     private var todosRequestedAt = 0L
@@ -392,6 +393,7 @@ class MainActivity : ComponentActivity() {
 
     /** 시연·E2E: --es route "위도,경도,이름"으로 내비에 목적지를 넣는다(디버그 빌드). 실제로는 운전자가 내비에서 정한다. */
     private fun routeFrom(i: Intent?) {
+        if (debug && i?.hasExtra("route") == true) pendingStops = demoStops(i.getStringExtra("stops")) // 경로마다 새로(없으면 빈 목록)
         if (debug) pendingRoute = i?.getStringExtra("route")?.split(",")?.takeIf { it.size == 3 } ?: pendingRoute
         routeIfReady()
     }
@@ -399,7 +401,7 @@ class MainActivity : ComponentActivity() {
     private fun routeIfReady() {
         val (la, ln, name) = pendingRoute?.takeIf { carStatus.navi } ?: return
         pendingRoute = null
-        car.route(Place(la.toDouble(), ln.toDouble(), name), emptyList())
+        car.route(Place(la.toDouble(), ln.toDouble(), name), pendingStops).also { pendingStops = emptyList() }
     }
 
     override fun onStart() { super.onStart(); appVisible = true; main.removeCallbacks(tick); main.post(tick) }
