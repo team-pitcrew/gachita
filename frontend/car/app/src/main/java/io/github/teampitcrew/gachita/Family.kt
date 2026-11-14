@@ -62,6 +62,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.EncodeHintType
@@ -553,7 +554,7 @@ fun FamilyFlow(server: String, token: String?, onClose: () -> Unit, onStart: (St
                 else TitleBlock(g?.name ?: "우리 가족", "${list.size}명 / ${if (guest) "동승 그룹" else "기본 그룹"} / 좌석을 눌러 변경")
                 Body {
                     // 좌석을 누르면 좌석 바꾸기(C14)에서 그 사람을 고른 채로 연다. C14에서는 고른 사람 → 빈자리면 앉히고, 앉은 사람끼리는 맞바꾼다.
-                    SeatGrid(list, if (view == FamilyView.SEAT) pick else null) { target ->
+                    SeatGrid(list) { target ->
                         if (view == FamilyView.GROUP) { seats = list; pick = target.takeIf { it.member != null }; view = FamilyView.SEAT; return@SeatGrid }
                         val r = seatPick(seats, pick, target)
                         r.members?.let { seats = it }
@@ -698,7 +699,7 @@ private fun GroupCard(g: CarGroup, names: Boolean, onClick: (() -> Unit)? = null
         Row(Modifier.padding(28.dp), horizontalArrangement = Arrangement.spacedBy(24.dp), verticalAlignment = Alignment.CenterVertically) {
             GroupAvatar(g)
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(if (many) 10.dp else 8.dp)) {
-                Text(g.name, style = if (many) CarText.Title else CarText.Headline)
+                Text(g.name, style = if (many) CarText.Title.copy(letterSpacing = (-0.02).em) else CarText.Headline) // C16 2094:4816: 40 Bold −0.8px
                 Text(groupLine(g), style = CarText.Label, color = c.onSurfaceVariant)
                 if (names && many) Text(g.members.joinToString(", ") { it.name }, style = CarText.Label, color = c.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
@@ -724,14 +725,13 @@ private fun SeatLines(members: List<GroupMember>) {
 
 /**
  * 차량 좌석 배치(C13·C14·C43): surface·테두리 2 line·모서리 32·여백 28·간격 20, 칸은 운전석 accent-soft·나머지 surface-2, 여백 24·간격 12,
- * 캐릭터 118 · 이름 Headline · 자리 Label. 고른 칸은 accent 테두리. 자리 없는 구성원은 좌석 배정(C16B·C)에서 앉힌다.
+ * 캐릭터 118 · 이름 Headline ink · 자리 Label ink-2. 실시간 원본(11/15 C14 2005:3138·C43 2007:849)대로 고른 칸에도 테두리가 없고 이름은 ink다.
+ * 자리 없는 구성원은 좌석 배정(C16B·C)에서 앉힌다.
  */
 @Composable
-private fun SeatGrid(members: List<GroupMember>, pick: SeatPick?, onPick: (SeatPick) -> Unit) {
+private fun SeatGrid(members: List<GroupMember>, onPick: (SeatPick) -> Unit) {
     val c = MaterialTheme.colorScheme
     val at = members.filter { it.seat != null }.associateBy { it.seat }
-    fun chosen(member: String?, seat: String?) = pick != null && (if (member != null) pick.member == member else pick.member == null && pick.seat == seat)
-    fun ring(on: Boolean) = if (on) BorderStroke(3.dp, c.primary) else null
     Surface(Modifier.fillMaxWidth(), CarShape.Card, color = c.surface, border = BorderStroke(2.dp, c.outlineVariant)) {
         Column(Modifier.padding(28.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
             Text("차량 앞쪽 ↑", style = CarText.Label, color = c.onSurfaceVariant)
@@ -741,10 +741,10 @@ private fun SeatGrid(members: List<GroupMember>, pick: SeatPick?, onPick: (SeatP
                         val m = at[seat.name]
                         // 빈자리도 누른다: 자리 없는 사람을 앉히거나 앉은 사람을 옮긴다.
                         Surface(Modifier.weight(1f).clip(CarShape.Card).clickable { onPick(SeatPick(m?.profileId, seat.name)) }, CarShape.Card,
-                            color = if (seat == Seat.ROW_1_LEFT) c.primaryContainer else c.surfaceVariant, border = ring(chosen(m?.profileId, seat.name))) {
+                            color = if (seat == Seat.ROW_1_LEFT) c.primaryContainer else c.surfaceVariant) {
                             Column(Modifier.padding(24.dp).fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
                                 if (m != null) Face(m.character, 118.dp) else EmptySeat(118.dp)
-                                Text(m?.name ?: "빈자리", style = CarText.Headline, textAlign = TextAlign.Center)
+                                Text(m?.name ?: "빈자리", style = CarText.Headline, color = c.onSurface, textAlign = TextAlign.Center)
                                 Text(seatLabel(seat.name).orEmpty(), style = CarText.Label, color = c.onSurfaceVariant, textAlign = TextAlign.Center)
                             }
                         }
