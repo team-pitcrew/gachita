@@ -251,6 +251,9 @@ private fun detailOf(g: CarGroup?) = if (g != null && soloGuest(g)) FamilyView.G
 private fun tabless(view: FamilyView, guest: Boolean) =
     view == FamilyView.MEMBER || view == FamilyView.CHILD || view == FamilyView.CHILD_VOICE || view == FamilyView.INVITE || (!guest && view == FamilyView.GROUP_INVITE)
 
+/** 가족을 만드는 화면(C09–C12·C39–C42): 아직 그룹이 없어 머리 줄에 '내 얼굴'이 없다. */
+private fun making(view: FamilyView) = view == FamilyView.MEMBER || view == FamilyView.CHILD || view == FamilyView.CHILD_VOICE || view == FamilyView.INVITE
+
 /** 아이 목소리 파형(C12·C42 '파형'): 막대 64개, 폭 칸 나눔·간격 7, 높이 126 안. */
 private const val CHILD_WAVE_BARS = 64
 
@@ -287,9 +290,13 @@ private fun Face(key: String, size: Dp) = CharAvatar(charRes(key), size, CarShap
 /**
  * 가족 흐름 전체. server는 API 주소, token은 이 차에 로그인한 프로필 토큰(없으면 시연 가족, mock).
  * onStart(groupId)는 '이 가족과 출발' — 부르는 쪽(MainActivity)이 POST /api/trips {groupId}로 여행을 만든다.
+ * face는 머리 줄 오른쪽 위 '내 얼굴'(그룹 화면 C14–C16·C16*·C43, 프로필 메뉴 2200:5852). 갤러리·로그아웃은 부르는 쪽이 한다.
  */
 @Composable
-fun FamilyFlow(server: String, token: String?, onClose: () -> Unit, onStart: (String) -> Unit) {
+fun FamilyFlow(
+    server: String, token: String?, onClose: () -> Unit, onStart: (String) -> Unit,
+    face: Int? = null, name: String = "", onGallery: () -> Unit = {}, onLogout: () -> Unit = {},
+) {
     val c = MaterialTheme.colorScheme
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -312,6 +319,7 @@ fun FamilyFlow(server: String, token: String?, onClose: () -> Unit, onStart: (St
     var guestName by remember { mutableStateOf("") }
     var myName by remember { mutableStateOf("민준") } // mock: 토큰이 없을 때의 시연 이름
     var pickSeat by remember { mutableStateOf(Seat.ROW_1_LEFT.name) } // 좌석 배정(C16B)에서 누른 자리 → 구성원 선택(C16C)
+    var menu by remember { mutableStateOf(false) } // '내 얼굴' 프로필 메뉴(2200:5852)
 
     val api = remember(server) { Server(server) }
     fun family() = groups.firstOrNull { it.kind == "family" }
@@ -363,6 +371,7 @@ fun FamilyFlow(server: String, token: String?, onClose: () -> Unit, onStart: (St
     LaunchedEffect(view) { if (view == FamilyView.GROUPS && token != null) runCatching { load() }.onFailure { note = failureText(it) } }
     BackHandler {
         if (sharing) { sharing = false; return@BackHandler }
+        if (menu) { menu = false; return@BackHandler }
         view = when (view) {
             FamilyView.INVITE, FamilyView.CHILD, FamilyView.CHILD_VOICE -> FamilyView.MEMBER
             FamilyView.SEAT -> FamilyView.GROUP
@@ -424,7 +433,20 @@ fun FamilyFlow(server: String, token: String?, onClose: () -> Unit, onStart: (St
     ParkedFrame(
         // 위 탭: 주차 중 '함께 타는 중'은 전체 그룹 목록(C16 groups), 나머지는 여행 화면의 그 탭으로.
         tab = if (tabless(view, guest)) null else 0, onTab = { if (it == 0) view = FamilyView.GROUPS else onClose() },
-        overlay = { CarToast(note) },
+        // 오른쪽 위 '내 얼굴': 그룹 화면에만(가족을 만드는 C09–C12·C39–C42에는 시안에도 없다).
+        me = face?.takeIf { !making(view) }?.let { f -> { MeButton(f) { menu = true } } },
+        overlay = {
+            CarToast(note)
+            val now = g ?: fam
+            if (menu && face != null) ProfileMenu(
+                name.ifBlank { myName }, face, now?.name ?: "우리 가족",
+                now?.members.orEmpty().map { Person(it.profileId, it.name, it.seat.orEmpty(), it.consent, true, it.character) },
+                driving = false, top = Shell.PARKED.padV + Shell.PARKED.head + 8.dp, end = Shell.PARKED.padH, onClose = { menu = false },
+                onGroup = { menu = false; view = FamilyView.GROUPS }, // 동승 그룹 변경 → C16 groups
+                onSeats = { menu = false; groupId = now?.id; seats = now?.members.orEmpty(); view = FamilyView.ASSIGN }, // 좌석 배정 → C16B
+                onGallery = { menu = false; onGallery() }, onLogout = { menu = false; onLogout() },
+            )
+        },
         bottom = {
             when (view) {
                 FamilyView.MEMBER -> {
