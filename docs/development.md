@@ -139,13 +139,13 @@ PR 양식의 다섯 칸은 Google SRE의 변경 관리에서 가져왔습니다(
 
 - `backend/infra/`가 바뀐 PR에서는 [`infra-e2e`](../.github/workflows/infra-e2e.yml)가 따로 돕니다. 필수 검사가 아니고, `backend-infra`가 보지 않는 폴더의 조립·스키마, Terraform `account/`·`persist/` 정합성, Ansible 구문과 로컬 K3s의 물결 E2E([`e2e-local.sh`](../backend/infra/cluster/e2e-local.sh))를 봅니다(T55).
 - **모든 잡은 자체 러너에서 돕니다(T65, 11/13부터).** GitHub 호스트 러너가 결제 문제로 잡을 시작하지 않아, 지환님의 Mac에 Lima Linux VM 다섯(`gachita-runner-1..5`)을 두고 VM마다 러너 하나(라벨 `gachita`)를 붙였습니다. VM은 Mac 폴더를 보지 않고 포트를 내보내지 않으며, Mac(`host.lima.internal`)으로는 DNS 말고 새 연결을 열지 못합니다(adb·개발 서버에 닿지 않게). 잡을 시작할 때마다 앞 잡이 남긴 컨테이너와 레지스트리 로그인을 지웁니다. 다시 만들기와 지우기는 [`.github/runner/up.sh`](../.github/runner/up.sh)입니다.
-  - **신뢰 범위.** 러너는 상주하고, 잡은 러너와 같은 사용자(비밀번호 없는 sudo)로 돕니다. PR의 코드가 VM에 무언가를 남기면, 뒤에 같은 VM에서 도는 develop 잡(펴기·운영·terraform 적용이 받는 OIDC 역할)과 러너 자격(`~/actions-runner/.credentials`)에 닿을 수 있습니다. 호스트 러너에는 없던 길이고, 비공개 저장소의 공동 작업자(관리자 다섯)만 PR을 올린다는 전제로 씁니다. 결제가 풀리면 호스트 러너로 돌아가거나 러너를 잡 하나마다 새로 등록(`--ephemeral`)하는 쪽으로 바꿉니다.
+  - **신뢰 범위.** 러너는 상주하고, 잡은 러너와 같은 사용자(비밀번호 없는 sudo)로 돕니다. PR의 코드가 VM에 무언가를 남기면, 뒤에 같은 VM에서 도는 develop 잡(펴기·운영·terraform 적용이 받는 OIDC 역할)과 러너 자격(`~/actions-runner/.credentials`)에 닿을 수 있습니다. 호스트 러너에는 없던 길이고, 처음에는 비공개 저장소의 공동 작업자만 PR을 올린다는 전제로 도입했습니다. 11/14 공개 전환 뒤에는 외부 기여자의 포크 PR 실행에 매번 승인이 필요하도록 `all_external_contributors`를 설정했습니다. 외부 PR의 코드와 워크플로를 검토하기 전에는 실행을 승인하지 않습니다. 결제가 풀리면 호스트 러너로 돌아가거나 러너를 잡 하나마다 새로 등록(`--ephemeral`)하는 쪽으로 바꿉니다.
   - **Mac을 다시 켜면** VM이 저절로 켜지지 않습니다. `limactl start gachita-runner-1` … `-5`(러너는 VM 안의 서비스라 같이 뜹니다). Mac이 잠들면 잡이 대기합니다(최대 24시간).
   - 호스트 러너로 돌아가려면 `runs-on`을 `ubuntu-latest`로 바꿉니다.
 - 일곱 개 뒤에 `publish` 잡이 있습니다. 필수 검사가 아니고 PR에서는 건너뜀으로 보입니다. `develop`에 병합된 뒤, 이미지에 들어가는 파일이 바뀌었고 같은 실행의 일곱 개가 모두 통과했으면 ARM64 이미지를 GHCR에 올립니다(아래 '백엔드를 내보내는 법').
 - 문서(`.md`)와 협업 설정(양식, 티켓 자동화, 훅)만 바뀌면 `scope`와 `policy`만 실제로 돕니다. 화면 문서(`frontend/spec/`)는 `frontend-spec`이 봅니다.
 - 검사 자체를 정하는 파일(`ci.yml`, `scope.py`, `spec_check.py`, `parts.json`, `Makefile`)이 바뀌면 전부 돕니다.
-- 무료 조직의 비공개 저장소라 GitHub가 이 검사를 강제하지 못합니다. PR 화면에서 일곱 개가 모두 초록색인 것을 보고 병합합니다.
+- 11/14 공개 전환 시점에는 브랜치 보호와 ruleset이 설정되어 있지 않습니다. PR 화면에서 일곱 개가 모두 초록색인 것을 보고 병합합니다.
 - 실패한 검사를 약하게 고쳐 통과시키지 않습니다.
 
 ## 병합 조건
