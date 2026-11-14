@@ -223,7 +223,7 @@ export function createOnboarding({ getProfile, getToken, setToken, loadProfile, 
       h("div", { className: "ob-script" }, late
         ? [h("strong", {}, "“함께 타는 순간을 오래 기억하고 싶어.”"), h("span", {}, "평소 말하는 목소리로 이어 읽어 주세요.")]
         : [h("strong", {}, `“안녕, 나는 ${callName(me()?.name || draft.name || "나")}.`), h("span", {}, "우리 가족과 함께 여행하는 시간이 좋아. 오늘은 바다를 보러 가고, 맛있는 것도 먹을 거야.”")]),
-      h("div", { className: "ob-meter" }, h("span", { role: "status" }, h("b", {}, done ? "녹음 끝" : "녹음 중"), ` ${Math.floor(Math.min(s, VOICE_SECONDS))} / ${VOICE_SECONDS}초`), wave(rec),
+      h("div", { className: "ob-meter" }, h("span", { role: "status" }, `${done ? "녹음 끝" : "녹음 중"}  ${Math.floor(Math.min(s, VOICE_SECONDS))} / ${VOICE_SECONDS}초`), wave(rec),
         h("p", {}, h("span", {}, clock(s)), h("span", {}, clock(VOICE_SECONDS)))),
       bottom(secondary("다시 녹음", startRecording), primary(busy ? "등록 중" : "녹음 완료", submitVoice, s < MIN_SECONDS))];
   };
