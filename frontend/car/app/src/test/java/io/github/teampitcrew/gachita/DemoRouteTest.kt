@@ -25,4 +25,10 @@ class DemoRouteTest {
         assertNotNull(approach("T", "하나로마트", 360, limit = 600)) // --ei approachSeconds 600
         assertNull(approach("T", "하나로마트", 0, limit = 600)) // 0 still means no estimate
     }
+
+    @Test fun driveMockShowsTheDesignLinesAndSpeaker() {
+        assertEquals(listOf("서준 / 뒷좌석", "엄마 / 조수석"), F4Mock.heard("drive").map { it.meta })
+        assertEquals("우리 내일도 같이 타면 안 돼?", F4Mock.heard("driveContinue").first().text)
+        assertEquals("seojun", F4Mock.talking("drive")); assertEquals("haeun", F4Mock.talking("driveContinue")); assertNull(F4Mock.talking("drivePaused"))
+    }
 }

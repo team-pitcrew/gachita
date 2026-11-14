@@ -33,7 +33,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -162,18 +161,22 @@ internal fun nearLine(asks: List<SharedTodo>, people: List<Person>): String = as
 
 // ---- UI ----
 
-/** What the header shows on the right: the narrow window always has the connection chip (C17·C17p·C21·C44); '주차 중  P' is the wide parked layout (C13·C20). */
-internal fun headerParkLabel(wide: Boolean, parked: Boolean): Boolean = wide && parked
+/**
+ * Which frame the trip screen uses. The design has two, chosen by what is on screen, not by the window width: the ride and conversation
+ * tabs (C17·C21·C44·D33, ended) use [Shell.RIDE] with the '● 연결됨' chip; the parked screens (arrival brief C20·D19·finalBrief, the
+ * content tab C22–C38) use [Shell.PARKED] with '주차 중  P'.
+ */
+internal fun tripShell(parked: Boolean, showsBrief: Boolean, contentTab: Boolean): Shell = if (parked && (showsBrief || contentTab)) Shell.PARKED else Shell.RIDE
 
 /**
- * Header row (C17: mascot, '가치타', '● 연결됨'; C13·C20: '주차 중  P'). In the narrow window every state uses the chip like the design;
- * the window-size button (T112, [extra]) sits next to '주차 중  P' in the wide window and moves to 여행 관리 in the narrow one.
+ * Header row (C17: mascot, '가치타', '● 연결됨'; C13·C20: '주차 중  P'). The window-size button (T112, [extra]) sits next to '주차 중  P'
+ * on parked screens; on the ride and conversation tabs it is in 여행 관리.
  */
 @Composable
-internal fun TripHeader(parked: Boolean, gear: String?, online: Boolean, listening: Boolean, extra: @Composable () -> Unit = {}) {
+internal fun TripHeader(shell: Shell, gear: String?, online: Boolean, listening: Boolean, extra: @Composable () -> Unit = {}) {
     val c = MaterialTheme.colorScheme
-    val park = headerParkLabel(LocalConfiguration.current.screenWidthDp >= 1000, parked)
-    Row(Modifier.fillMaxWidth().height(64.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+    val park = shell == Shell.PARKED
+    Row(Modifier.fillMaxWidth().height(shell.head), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(shell.headGap)) {
         Mascot(listening, 48.dp)
         Text("가치타", fontSize = 32.sp, lineHeight = 42.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.weight(1f))
@@ -186,13 +189,13 @@ internal fun TripHeader(parked: Boolean, gear: String?, online: Boolean, listeni
 @Composable
 internal fun TripTabs(labels: List<String>, selected: Int, enabled: (Int) -> Boolean, onSelect: (Int) -> Unit) {
     val c = MaterialTheme.colorScheme
-    Row(Modifier.fillMaxWidth().height(80.dp).clip(RoundedCornerShape(20.dp)).background(c.surfaceVariant).padding(4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    Row(Modifier.fillMaxWidth().height(76.dp).clip(RoundedCornerShape(20.dp)).background(c.surfaceVariant).padding(4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         labels.forEachIndexed { i, label ->
             val on = i == selected
             Surface(onClick = { onSelect(i) }, enabled = enabled(i), modifier = Modifier.weight(1f).fillMaxHeight(), shape = RoundedCornerShape(16.dp),
                 color = if (on) c.primaryContainer else Color.Transparent) {
                 Box(contentAlignment = Alignment.Center) {
-                    Text(label, color = if (on) c.onSurface else c.onSurfaceVariant, fontSize = 28.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                    Text(label, color = if (on) c.onSurface else c.onSurfaceVariant, fontSize = 24.sp, fontWeight = FontWeight.Medium, maxLines = 1)
                 }
             }
         }

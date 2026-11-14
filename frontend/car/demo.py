@@ -15,8 +15,11 @@
   하도록 초대 링크를 알리고 기다린다(기본 api: 폰 웹앱이 보내는 것과 같은 요청을 스크립트가 보냄).
 
 지키는 것:
-- 화면을 꾸미지 않는다. 단계의 화면 글이 안 보이면 그 단계를 '없음'으로 적고(그 흐름의 PR 번호·상태와 함께) 다음으로 간다.
-  다음 단계에 필요한 것(여행·구성원)은 실제 API나 develop에 있는 옛 경로로 만들고 '대체'로 적는다. 목업(--es f4 등)은 쓰지 않는다.
+- 기본은 시드 시나리오(오너 지시 11/15 "시연 동안은 화자 분리나 전체 시나리오를 목업 데이터로"): 서버에 실제 API로 받아 적은 말(말한 사람·
+  speakerMethod device-voice)·장소·도착 브리핑·장면·영상을 넣고, 차 화면 17–24는 차의 디버그 목업(--es f4 drive…final)으로 띄운다.
+  시드·목업으로 띄운 단계는 steps.md에 '시드'로 적는다. 실제 소리 넣기와 내비 판정은 DEMO_VOICE=1일 때만.
+- 단계의 화면 글이 안 보이면 그 단계를 '없음'으로 적고(그 흐름의 PR 번호·상태와 함께) 다음으로 간다.
+- 하지 않는 것: 동의 없는 녹음, 토큰 없이 개인정보 보내기, 원음 전체 업로드(장면 소리는 합성 음성 조각만 올림).
 - 시드는 실제 API만(DB에 직접 쓰지 않음). 같은 폴더로 다시 돌리면 같은 계정·그룹을 다시 쓴다(OUT/demo-state.json, 저장소에 넣지 않음).
 - 대사는 macOS say(Yuna) 합성 음성이다(cap.say, 사람마다 음높이만 다름). 목소리 등록도 같은 합성 음성이라 차 안 화자 식별이 맞는다.
   실제 녹음을 쓰려면 OUT/inputs/에 talk·mart·lodge·enroll-아빠·enroll-엄마·enroll-서준·enroll-하은.wav(16 kHz 2채널, 왼쪽 = 앞줄)를
@@ -76,6 +79,9 @@ LINES = {
               ("아빠", "숙소에서 체크인하고 가방 내려야 돼"), ("하은", "숙소 가면 화장실 먼저 가야 돼")],
 }
 FAR_LODGE = (37.7519, 128.8761)  # 강릉 경포 쪽(멀어서 '곧 도착'이 뜨지 않음). 22단계 '여행 계속'에서 다음 장소를 숙소로 둘 때
+VOICE = os.environ.get("DEMO_VOICE") == "1"  # 실제 소리 넣기·내비 판정(기본 끔). 끄면 서버 시드 + 차 디버그 목업(오너 지시 11/15)
+SEED = not VOICE
+FONT = "/System/Library/Fonts/AppleSDGothicNeo.ttc"
 HERE = (37.41272, 127.09468)  # 에뮬레이터 GPS(11/15 리허설 세션이 dumpsys location으로 읽음). 실행할 때 다시 읽는다
 NEAR_M = float(os.environ.get("DEMO_NEAR_M", "200"))  # 시연 장소를 내비 위치에서 얼마나 떨어뜨릴지. 도착 판정(T113)은 250 m 안이어야 함
 # 도착 전 카드를 띄울 남은 시간(초, 디버그 인자 --ei approachSeconds). 앱 기본은 300. GPS가 움직이지 않아 남은 시간이 줄지 않으니 넉넉히
@@ -450,14 +456,14 @@ def only(n):
     return int(lo) <= n <= int(hi or lo)
 
 
-def step(n, needles, timeout=15, note_=""):
-    """단계 n의 화면 글(needles 중 하나)이 보이면 캡처하고 '보임'. 없으면 '없음'과 그 흐름의 PR 상태. 돌려주는 값은 보였는지."""
+def step(n, needles, timeout=15, note_="", seeded=False):
+    """단계 n의 화면 글(needles 중 하나)이 보이면 캡처하고 '보임'(시드·목업으로 띄운 화면이면 '시드'). 없으면 '없음'과 그 흐름의 PR 상태."""
     meta = next(s for s in STEPS if s[0] == n)
     got = wait(needles, timeout)
     shot = f"{n:02d}-{meta[1].replace(' / ', '-').replace(' ', '')}.png" if isinstance(n, int) else f"{n}-{meta[1].replace(' / ', '-').replace(' ', '')}.png"
     if got:
         e2e.shot(shot.removesuffix(".png"))
-        results[n] = {"result": "보임", "matched": got, "note": note_, "shot": shot}
+        results[n] = {"result": "시드" if seeded else "보임", "matched": got, "note": note_, "shot": shot}
     else:
         results[n] = {"result": "없음", "note": note_ or f"화면 글 {needles[0]!r}이 {timeout}초 안에 안 보임 — {flow_state(meta[4])}", "shot": None}
     check(f"{n} {meta[1]}", got, matched=got)
@@ -589,8 +595,133 @@ def consent_on_car():
     return True
 
 
+# ---- 시드 시나리오(오너 지시 11/15: 시연 동안은 화자 분리와 전체 시나리오를 목업 데이터로) ----------------------------------
+# 서버에는 실제 API로 받아 적은 말(참가자 id + speakerMethod device-voice = 화자 분리 결과)·장소·도착 브리핑·장면·영상을 넣고,
+# 차 화면 17–24는 차의 디버그 목업(--es f4 drive|drivePaused|driveResumed|near|mart|driveContinue|finalNear|final)으로 시안 그대로 띄운다.
+# 소리 넣기와 내비 판정은 DEMO_VOICE=1일 때만(위 drive_steps). 동의 없는 녹음·토큰 없는 개인정보·원음 전체 업로드는 하지 않는다.
+SEED_LINES = {  # 단계별 서버 기록본(시안 17·26·27의 말 + 도착 브리핑 항목이 나오는 말). (누구, 말, 위도, 경도)
+    "A": [("서준", "아빠, 바다는 왜 짜?"), ("서준", "아빠, 아까부터 바다 보이는데?"), ("아빠", "아빠는 내비 보고 있었지."), ("하은", "그럼 바다는 우리가 봐 줄게!"),
+          ("엄마", "마트에서 고기랑 과일도 사 가자.")],
+    "B": [("서준", "마트에서 젤리 한 봉지 사자"), ("서준", "한 봉지인데 큰 봉지면 되지!"), ("엄마", "마트에서 삼겹살 600g이랑 귤 한 봉지 사 가자"),
+          ("아빠", "마트에서 탄산수 2병 사자"), ("하은", "하나로마트 가면 화장실 먼저 가야 돼")],
+    "C": [("하은", "우리 내일도 같이 타면 안 돼?"), ("엄마", "숙소에 가서 맛있게 먹자"), ("엄마", "숙소에서 고기는 바로 냉장 보관해야 돼"),
+          ("아빠", "숙소에서 체크인하고 가방 내려야 돼"), ("하은", "숙소 가면 화장실 먼저 가야 돼")],
+}
+SEED_AT = {"A": (37.6981, 128.7633), "B": (37.7482, 128.8559), "C": (37.7598, 128.8917)}  # 동해고속도로 → 하나로마트 가는 길 → 숙소 가는 길(지도 선)
+SEED_PLACES = {"출발": (37.41272, 127.09468), "하나로마트": (37.7519, 128.8761), "강릉 숙소": (37.7645, 128.8996)}
+SEED_SCENES = [("아빠보다 빠른 서준의 정답", "A", 1, 32), ("내일도 같이 타면 안 돼?", "C", 0, 29)]  # 제목, 묶음, 첫 줄 번호, 길이(초, 시안 30)
+
+
+def trip_people(code):
+    """여행 참가자 {부르는 이름: 참가자}. 그룹 여행은 프로필 이름(민준·엄마·서준·하은), 옛 여행은 아빠·엄마·서준·하은."""
+    ps = api("GET", f"/trips/{code}")["participants"]
+    by = {p["name"]: p for p in ps}
+    return {who: by.get(PEOPLE[who][3]) or by.get(who) for who in PEOPLE}
+
+
+def seed_status(code, status):
+    api("PATCH", f"/trips/{code}", {"status": status}, st["trip"].get("mom"))
+
+
+def seed_lines(code, phase):
+    """그 묶음의 말을 여행 기록본에 올린다(엄마 폰의 참가자 토큰, 기기 이름 demo-seed). 말마다 말한 사람(participantId)과 좌석 구역을 붙인다."""
+    tok, ppl = st["trip"]["mom"], trip_people(code)
+    gen = api("GET", f"/trips/{code}").get("generation", 1)
+    now, la, ln = int(time.time() * 1000), *SEED_AT[phase]
+    seq = st["trip"].get("seq", 0)
+    items, ats = [], []
+    for i, (who, text) in enumerate(SEED_LINES[phase]):
+        p, at = ppl[who], now + i * 6000
+        items.append({"seq": seq + i + 1, "at": at, "endAt": at + 2500, "text": text, "generation": gen, "lat": la + i * 0.0004, "lng": ln + i * 0.0006,
+                      **({"participantId": p["id"], "speakerMethod": "device-voice", "speakerConfidence": 0.93, "seatArea": p["seat"]} if p else {})})
+        ats.append(at)
+    api("POST", f"/trips/{code}/utterances", {"device": "demo-seed", "generation": gen, "items": items}, tok)
+    st["trip"].update(seq=seq + len(items), **{f"at{phase}": ats}); save()
+    note("seed.lines", phase=phase, lines=len(items))
+
+
+def seed_place(code, kind, name, eta=None):
+    la, ln = SEED_PLACES[name]
+    api("POST", f"/trips/{code}/places", {"kind": kind, "name": name, "lat": la, "lng": ln, "at": int(time.time() * 1000), **({"etaSeconds": eta} if eta else {})}, st["trip"]["mom"])
+
+
+def seed_arrive(code, name):
+    """도착(장소 기록) → 주차 → 도착 브리핑(폰 P20·finalBrief가 읽는 서버 상태). 위치는 그 장소 좌표(시연)."""
+    la, ln = SEED_PLACES[name]
+    seed_place(code, "arrived", name)
+    seed_status(code, "parked")
+    gen = api("GET", f"/trips/{code}").get("generation", 1)
+    b = api("POST", f"/trips/{code}/arrival-briefing", {"generation": gen, "place": {"name": name, "lat": la, "lng": ln}, "position": {"lat": la, "lng": ln},
+                                                         "parked": True, "observedAt": int(time.time() * 1000), "source": "browser"}, st["trip"]["mom"])
+    note("seed.briefing", place=name, eligible=b.get("eligible"), items=len(b.get("items", [])))
+
+
+def seed_contents(code):
+    """콘텐츠 기록(31–35)용 장면 두 개: 장면(POST /moments) → 장면 소리(합성 음성 WAV, POST /recordings) → 서버 원본 스냅샷 →
+    9:16 영상(ffmpeg, 제목 글자 + 그 소리) → 기본 영상 보관(POST /short-assets). 여행이 주차·끝난 뒤에만 된다."""
+    import numpy as np
+    tok = st["trip"]["mom"]; made = []
+    have = {c.get("momentId") for c in api("GET", f"/trips/{code}/contents", token=tok).get("contents", [])}
+    for title, phase, first, seconds in SEED_SCENES:
+        ats = st["trip"].get(f"at{phase}")
+        if not ats: continue
+        frm = ats[first] - 1000
+        m = api("POST", f"/trips/{code}/moments", {"at": ats[first], "from": frm, "to": frm + seconds * 1000, "label": title,
+                                                   "lat": SEED_AT[phase][0], "lng": SEED_AT[phase][1]}, tok)
+        if m["id"] in have: continue
+        x = np.zeros(cap.R * seconds, "<i2")  # 장면 구간의 말을 그 시각 자리에 합성해 놓는다
+        for (who, text), at in zip(SEED_LINES[phase], ats):
+            o = int((at - frm) / 1000 * cap.R)
+            if 0 <= o < len(x): v = cap.say(text, PEOPLE[who][0])[: len(x) - o]; x[o:o + len(v)] = v
+        wav = OUT / "inputs" / f"scene-{m['id']}.wav"
+        with wave.open(str(wav), "wb") as w: w.setnchannels(1); w.setsampwidth(2); w.setframerate(cap.R); w.writeframes(x.tobytes())
+        gen = api("GET", f"/trips/{code}").get("generation", 1)
+        api("POST", f"/trips/{code}/recordings?moment={m['id']}&generation={gen}&from={frm}", raw=wav.read_bytes(), token=tok, ctype="audio/wav")
+        src = api("GET", f"/trips/{code}/short-assets/source?moment={m['id']}", token=tok)
+        mp4 = OUT / "inputs" / f"scene-{m['id']}.mp4"
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", f"color=c=0x1c1a17:s=720x1280:d={src['seconds']}", "-i", str(wav),
+                        "-vf", f"drawtext=fontfile={FONT}:text='{title}':fontsize=48:fontcolor=0xf4f1ec:x=(w-tw)/2:y=h*0.42",
+                        "-t", str(src["seconds"]), "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "24", "-c:a", "aac", "-ar", "44100", "-ac", "1", str(mp4)], check=True)
+        api("POST", f"/trips/{code}/short-assets?moment={m['id']}&generation={src['generation']}&sourceHash={src['sourceHash']}&key=demo-{m['id']}-{os.urandom(4).hex()}",
+            raw=mp4.read_bytes(), token=tok, ctype="video/mp4")
+        made.append(title)
+    note("seed.contents", made=made)
+    return made
+
+
+def f4(state, *extra):
+    """차의 디버그 목업 화면(--es f4 …, F4·T150). 앱을 다시 열면 가치타가 왼쪽 넓은 창으로 가므로 다시 나눈다."""
+    launch("--es", "f4", state, *extra); split()
+
+
+def drive_steps_seed(code):
+    """17–24(시드): 서버 상태는 실제 API로, 차 화면은 디버그 목업으로. 단계마다 '시드'."""
+    if not st.get("trip", {}).get("mom"):
+        for n in range(17, 25): mark(n, "없음", "시드에 쓸 참가자 토큰이 없음(가족 그룹 여행이 아님)")
+        return
+    rec_part(2)
+    if not split(): note("split.fail")
+    drive(); seed_status(code, "driving"); seed_place(code, "start", "출발"); seed_place(code, "destination", "강릉 숙소"); seed_lines(code, "A")
+    f4("drive"); step(17, ["방금 받아 적은 말 42건", "아래 버튼으로 언제든 멈출 수 있어요"], note_="차 목업 drive + 서버 기록본 5줄(화자 분리)", seeded=True)
+    f4("drivePaused"); step(18, ["같은 버튼을 누르면 다시 기록해요"], note_="차 목업 drivePaused", seeded=True)
+    f4("driveResumed"); step(19, ["중지한 지점부터 이어서 기록해요"], note_="차 목업 driveResumed", seeded=True)
+    seed_lines(code, "B"); seed_place(code, "approaching", "하나로마트", eta=180)
+    f4("near"); step(20, ["하나로마트 도착까지"], note_="차 목업 near + 서버 approaching", seeded=True)
+    park(); seed_arrive(code, "하나로마트")
+    f4("mart"); step(21, ["먼저 할 일과 살 것을 모았어요", "장보고 여행 계속"], note_="차 목업 mart + 서버 도착 브리핑", seeded=True)
+    tap("장보고 여행 계속", timeout=4)
+    drive(); seed_status(code, "driving"); seed_lines(code, "C")
+    f4("driveContinue"); step(22, ["내일도 같이 타면 안 돼", "아래 버튼으로 언제든 멈출 수 있어요"], note_="차 목업 driveContinue + 서버 기록본 5줄", seeded=True)
+    seed_place(code, "approaching", "강릉 숙소", eta=60)
+    f4("finalNear"); step(23, ["강릉 숙소 도착까지"], note_="차 목업 finalNear + 서버 approaching", seeded=True)
+    park(); seed_arrive(code, "강릉 숙소")
+    f4("final"); step(24, ["여행 마치고 기록 보기", "내리기 전, 이 세 가지만 기억하세요"], note_="차 목업 final + 서버 도착 브리핑", seeded=True)
+    tap("여행 마치고 기록 보기", timeout=4)  # 목업은 화면만 넘기므로 여행은 폰의 '여행 끝내기'와 같은 요청으로 마친다
+    seed_status(code, "ended")
+
+
 def drive_steps(code):
-    """17–24 순정 내비 옆 좁은 창(F3·F4). 대사·기어·도착."""
+    """17–24 순정 내비 옆 좁은 창(F3·F4). 대사·기어·도착(DEMO_VOICE=1, 실제 소리 넣기와 내비 판정)."""
     global part
     rec_part(2)
     if not split(): note("split.fail")
@@ -644,25 +775,30 @@ def after_steps(code):
     tap("콘텐츠 기록", timeout=4)  # 주차·끝난 여행의 콘텐츠 기록 탭이 여행 마무리(C22)로 열린다(F5)
     step(25, ["오늘의 주행을 기록했어요", "전체 음성 업로드"], 12, "업로드 진행은 목업(원음 전체는 올리지 않음, PLAN 속도 우선 ③)")
     tap("대화 기록", timeout=4)
-    step(26, ["의 부탁", "아까부터 바다 보이는데"], 15, "기록본의 시각·장소 머리, '{이름}의 부탁' 카드")
+    step(26, ["의 부탁", "아까부터 바다 보이는데"], 15, "기록본의 시각·장소 머리, '{이름}의 부탁' 카드" + (" — 서버 시드 기록본(화자 분리)" if SEED else ""), seeded=SEED)
     tap("추천 장면 고르기", timeout=4)
     made = False
-    if step(27, ["남기고 싶은 순간을 골라요", "장면을 선택해 주세요"]):
+    if step(27, ["남기고 싶은 순간을 골라요", "장면을 선택해 주세요"], note_="추천 장면은 차가 시드 기록본에서 고름" if SEED else "", seeded=SEED):
         picks = [n for n in ui() if re.match(r"^[13]\.\s", n[0])]
         for n in (picks[:1] + picks[-1:]) if len(picks) > 1 else picks:
             x1, y1, x2, y2 = n[4]; adb("shell", "input", "tap", str((x1 + x2) // 2), str((y1 + y2) // 2)); time.sleep(1)
-        step(28, ["선택한 2개 생성", "선택한 "]); tap("선택한 2개 생성", "선택한 ", exact=False)
+        step(28, ["선택한 2개 생성", "선택한 "], seeded=SEED); tap("선택한 2개 생성", "선택한 ", exact=False)
         step(29, ["콘텐츠를 만들어요", "콘텐츠 생성 중"])
         step(30, ["순간이 완성됐어요"], 120); made = tap("콘텐츠 기록 보기")
     else:
         for n in (28, 29, 30): mark(n, "없음", "27 장면 고르기 화면이 없어 건너뜀 — " + flow_state("F5"))
+    if not VOICE and st.get("trip", {}).get("mom"):  # 시드: 콘텐츠 기록 31–35의 장면·영상을 서버에 넣는다
+        try: seeded = seed_contents(code)
+        except (RuntimeError, subprocess.CalledProcessError) as e: seeded = []; note("seed.contents.fail", error=str(e)[:300])
+        if seeded and made: tap("콘텐츠 기록", timeout=4); tap("갤러리", timeout=4)  # 새로 넣은 영상을 다시 읽게
     if not made: tap("콘텐츠 기록", timeout=4)  # 30 뒤에는 이미 콘텐츠 기록이 열려 있다(탭을 다시 누르면 여행 마무리로 감)
-    if step(31, ["우리 가족 / 차량과 폰에서 이어보기", "갤러리"], 12):
-        tap("타임라인"); step(32, ["날짜를 따라 다시 보는 우리 가족", "지도에서 보기"])
-        tap("지도에서 보기"); step(33, ["어디에서 나눈 이야기였을까요?", "장면 확대하기"])
+    sd = "서버 시드 장면·영상(seed_contents)" if SEED else ""
+    if step(31, ["우리 가족 / 차량과 폰에서 이어보기", "갤러리"], 12, sd, seeded=SEED):
+        tap("타임라인"); step(32, ["날짜를 따라 다시 보는 우리 가족", "지도에서 보기"], note_=sd, seeded=SEED)
+        tap("지도에서 보기"); step(33, ["어디에서 나눈 이야기였을까요?", "장면 확대하기"], note_=sd, seeded=SEED)
         tap("장면 확대하기"); tap("이 장면 보기", timeout=5)
-        step(34, ["영상 내보내기"]); tap("영상 내보내기")
-        step(35, ["공유할 준비가 됐어요"]); tap("콘텐츠 기록으로", timeout=4)
+        step(34, ["영상 내보내기"], note_=sd, seeded=SEED); tap("영상 내보내기")
+        step(35, ["공유할 준비가 됐어요"], note_=sd, seeded=SEED); tap("콘텐츠 기록으로", timeout=4)
     else:
         for n in (32, 33, 34, 35): mark(n, "없음", "31 갤러리 화면이 없어 건너뜀 — " + flow_state("F6"))
 
@@ -718,7 +854,7 @@ def main(apk):
     if os.environ.get("DEMO_CLEAN") == "1":  # 01부터 보려면 앱 데이터(지난 여행·로그인)를 지운다. 기본은 지우지 않는다(오너 지시)
         adb("shell", "am", "force-stop", "--user", "10", PKG); adb("shell", "pm", "clear", "--user", "10", PKG)
     for perm in ("RECORD_AUDIO", "POST_NOTIFICATIONS"): adb("shell", "pm", "grant", "--user", "10", PKG, f"android.permission.{perm}")
-    prepare()
+    if VOICE: prepare()
     try:
         rec_part(1); launch(restart=True)  # 서버 주소(--es server)도 onCreate에서 읽는다
         if only(1): onboarding()
@@ -726,7 +862,7 @@ def main(apk):
         if only(8): from_family = family_steps()
         else: seed(); open_family(); from_family = tap("이 가족과 출발", timeout=10)
         code = start_trip(from_family)
-        if only(17): drive_steps(code)
+        if only(17): (drive_steps if VOICE else drive_steps_seed)(code)
         if only(25): after_steps(code)
     finally:  # 중간에 멈춰도 주차·정지, 앱은 이 서버를 가리킨 채로
         subprocess.run(ADB + ["emu", "screenrecord", "stop"], capture_output=True); speed(0); gear("Park")
