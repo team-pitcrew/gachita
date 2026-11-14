@@ -1,5 +1,6 @@
 package io.github.teampitcrew.gachita
 
+import org.json.JSONObject
 import kotlin.math.cos
 import kotlin.math.hypot
 
@@ -7,7 +8,7 @@ import kotlin.math.hypot
 
 /**
  * 강릉 가는 길(영동고속도로 강릉방향) 휴게소. 좌표는 카카오 장소 검색(2026-11-13), 서울 → 강릉 순서.
- * ponytail: 시연 경로 하나의 고정 목록. 경로 위 휴게소를 찾는 내비 API가 생기면 그 답으로 바꾼다(지금 NaviHelper에는 장소 검색이 없음).
+ * 서버의 경로 위 휴게소 추천(T97)을 받지 못할 때(서버 꺼짐·오프라인·위치 모름)만 쓴다. 시연은 오프라인에서도 돌아야 한다.
  */
 val REST_STOPS = listOf(
     Place(37.2455536, 127.2423181, "용인휴게소 강릉방향"),
@@ -39,6 +40,23 @@ fun nextStop(lat: Double?, lng: Double?, stops: List<Place> = REST_STOPS, end: P
     val here = meters(lat, lng, end.lat, end.lng)
     return stops.filter { meters(it.lat, it.lng, end.lat, end.lng) < here }.minByOrNull { meters(lat, lng, it.lat, it.lng) }
 }
+
+/** 서버 추천(POST /api/rest-stops, T97)의 답을 휴게소 목록으로. 좋은 순. */
+fun restStopsOf(json: String): List<Place> = JSONObject(json).getJSONArray("items").let { a ->
+    List(a.length()) { i -> a.getJSONObject(i).let { Place(it.getDouble("lat"), it.getDouble("lng"), it.getString("name")) } }
+}
+
+/** 제안 후보: 서버가 답했으면 그 답(빈 목록이면 앞에 들를 곳이 없음), 서버를 쓸 수 없으면(실패·꺼짐·오프라인) 고정 목록. */
+fun stopsFrom(server: Result<List<Place>>, lat: Double?, lng: Double?): List<Place> = server.getOrElse { listOfNotNull(nextStop(lat, lng)) }
+
+/**
+ * 내비가 잰 길 위 거리(road, requestTrip)로 본 '지금 길에서 들르는 곳'인가. 서버 추천은 직선 어림이라 나란한 고속도로나
+ * 건너편 휴게소를 고를 수 있는데, 그런 곳은 분기점을 돌거나 되돌아와야 해 길 위 거리가 직선보다 훨씬 길다.
+ * 목적지까지 남은 길(remain)보다 멀어도 아니다. 길 위 거리를 모르면 막지 않는다.
+ * ponytail: 1.5배 + 2 km는 어림. 실차 기록이 쌓이면 맞춘다.
+ */
+fun onRoad(straight: Double, road: Int?, remain: Int?): Boolean =
+    road == null || ((remain == null || road <= remain) && road <= straight * 1.5 + 2_000)
 
 private fun squash(text: String) = text.replace(Regex("[^가-힣A-Za-z0-9]"), "")
 

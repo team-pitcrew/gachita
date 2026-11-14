@@ -103,6 +103,7 @@ private const val OFFER_MS = 30_000L // 제안에 답이 없으면 보관으로 
 
 class MainActivity : ComponentActivity() {
     private val io = Executors.newSingleThreadExecutor()
+    private val stopsIo = Executors.newSingleThreadExecutor() // 휴게소 추천 전용: 늦은 DNS가 공용 io를 막지 않게(Astra #317 3차)
     private val recordingIo = Executors.newSingleThreadExecutor()
     private var cancelRecordingStart: (() -> Unit)? = null
     private val clipIo = Executors.newSingleThreadExecutor() // 장면 클립 올리기(T63). 동의 끄기 요청이 클립 묶음 뒤에 서지 않게 따로
@@ -410,7 +411,7 @@ class MainActivity : ComponentActivity() {
         main.removeCallbacksAndMessages(null) // 조회, 제안 시간 초과, 결과 카드 닫기
         if (Live.onHeard == ::heard) Live.onHeard = null
         if (!isChangingConfigurations) { handoff.stop(); CaptureService.stop(this) } // 동의를 확인할 화면이 없어지면 수음도 멈춘다
-        car.stop(); io.shutdown(); clipIo.shutdownNow(); shortPreviewIo.shutdownNow(); shortPreviewCloseIo.shutdown(); shortExportIo.shutdownNow(); shortExportCheckIo.shutdownNow(); super.onDestroy()
+        car.stop(); io.shutdown(); stopsIo.shutdownNow(); clipIo.shutdownNow(); shortPreviewIo.shutdownNow(); shortPreviewCloseIo.shutdown(); shortExportIo.shutdownNow(); shortExportCheckIo.shutdownNow(); super.onDestroy()
     }
 
     /** 통신은 한 줄로 차례대로 돌리고 결과만 메인 스레드로 돌려받는다. */
@@ -660,7 +661,7 @@ class MainActivity : ComponentActivity() {
     /** 기록 중이면 내비에 지금 위치를 물어 둔다. 발화에 붙인다(FIX_MS). 휴게소를 찾는 중이면 그 물음을 끊지 않게 묻지 않는다. */
     private fun locate() {
         if (!s.recording || offer?.stage == Offer.Stage.FINDING || arrivalLoading) return
-        car.here { la, ln -> if (la != null && ln != null) Live.fix = Fix(la, ln, System.currentTimeMillis()) }
+        car.here { la, ln, _ -> if (la != null && ln != null) Live.fix = Fix(la, ln, System.currentTimeMillis()) }
     }
 
     /** 터치와 음성 모두 같은 최신 동의·주차 검사로 시작하며, 늦은 응답은 수음을 켜지 않는다. */
@@ -808,19 +809,48 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** 아직 지나치지 않은 가장 가까운 휴게소와 그곳까지의 거리·시간을 내비에 묻고 제안한다. 화면은 넘어가지 않는다. 답이 없으면 30초 뒤 보관. */
+    /**
+     * 지금 경로에서 들를 휴게소를 고르고 그곳까지의 거리·시간을 내비에 묻고 제안한다. 화면은 넘어가지 않는다. 답이 없으면 30초 뒤 보관.
+     * 후보는 서버 추천(T97: 내비의 지금 위치·진행 방향·목적지·남은 길로 고름). 서버가 꺼졌거나 닿지 않거나 위치를 모르면 고정 목록(nextStop).
+     * 서버가 빈 목록으로 답하면 앞에 들를 곳이 없는 것이다(고정 목록으로 가면 다른 길의 휴게소를 제안하게 됨).
+     */
     private fun propose(o: Offer, u: Utterance) {
-        car.here { lat, lng ->
-            val stop = nextStop(lat, lng)
-            if (stop == null) { Log.i(TAG, "남은 휴게소 없음 · 부탁은 보관"); if (offer?.id == o.id) offer = null; return@here }
-            car.distanceTo(stop) { m, sec ->
-                val cur = offer?.takeIf { it.id == o.id } ?: return@distanceTo
-                offer = cur.copy(stop = stop, meters = m, seconds = sec, stage = Offer.Stage.ASKING)
-                Log.i(TAG, "제안 ${stop.name} 부탁 ${cur.requests.size}건 · 최종 결과에서 ${System.currentTimeMillis() - u.endedAt}ms · 위치 ${lat != null}")
-                car.speak("${stop.spoken}에 들를까요?")
-                mark(cur.trip, cur.requests, "proposed")
-                main.postDelayed({ offer?.takeIf { it.id == o.id && it.stage == Offer.Stage.ASKING }?.let { later(it, timedOut = true) } }, OFFER_MS)
+        car.here { lat, lng, heading ->
+            car.destination { to, remain ->
+                val url = server
+                val known = lat != null && lng != null && !(lat == 0.0 && lng == 0.0)
+                // 2초 안에 답이 없으면 통신이 끝나지 않았어도 고정 목록으로 간다. 늦게 온 답은 within이 버린다.
+                within(stopsIo, 2_000, { if (known) Server(url).restStops(lat!!, lng!!, heading, to, remain) else throw IllegalStateException("위치 모름") }) { r -> main.post post@{
+                    if (isDestroyed) return@post
+                    r.exceptionOrNull()?.let { Log.w(TAG, "휴게소 추천을 받지 못함 · 고정 목록으로", it) }
+                    val stops = stopsFrom(r, lat, lng)
+                    Log.i(TAG, "휴게소 후보 ${stops.size}곳 · ${if (r.isSuccess) "추천 서버" else "고정 목록"} · 목적지 ${to != null} · 남은 길 ${remain != null}")
+                    if (stops.isEmpty()) { Log.i(TAG, "남은 휴게소 없음 · 부탁은 보관"); if (offer?.id == o.id) offer = null; return@post }
+                    ask(o, u, stops, lat, lng, remain)
+                } }
             }
+        }
+    }
+
+    /**
+     * 후보를 차례로 내비에 물어(requestTrip, 화면 그대로 0.1~0.2초) 길 위 거리가 지금 길에서 들르는 곳으로 보이는 첫 곳을 제안한다(onRoad).
+     * 모두 아니면 첫 후보를 제안한다. 위치를 모르면 거르지 않는다.
+     */
+    private fun ask(o: Offer, u: Utterance, stops: List<Place>, lat: Double?, lng: Double?, remain: Int?, i: Int = 0, first: Triple<Place, Int?, Int?>? = null) {
+        val stop = stops[i]
+        car.distanceTo(stop) { m, sec ->
+            val cur = offer?.takeIf { it.id == o.id } ?: return@distanceTo
+            val straight = if (lat != null && lng != null) meters(lat, lng, stop.lat, stop.lng) else null
+            val here = Triple(stop, m, sec)
+            val fits = straight == null || onRoad(straight, m, remain)
+            if (!fits) Log.i(TAG, "${stop.name}: 길 위 ${m}m, 직선 ${straight?.toInt()}m · 지금 길에서 들르는 곳이 아님")
+            if (!fits && i + 1 < stops.size) return@distanceTo ask(o, u, stops, lat, lng, remain, i + 1, first ?: here)
+            val (pick, pm, ps) = if (fits) here else first ?: here
+            offer = cur.copy(stop = pick, meters = pm, seconds = ps, stage = Offer.Stage.ASKING)
+            Log.i(TAG, "제안 ${pick.name} 부탁 ${cur.requests.size}건 · 최종 결과에서 ${System.currentTimeMillis() - u.endedAt}ms · 위치 ${lat != null}")
+            car.speak("${pick.spoken}에 들를까요?")
+            mark(cur.trip, cur.requests, "proposed")
+            main.postDelayed({ offer?.takeIf { it.id == o.id && it.stage == Offer.Stage.ASKING }?.let { later(it, timedOut = true) } }, OFFER_MS)
         }
     }
 
@@ -953,7 +983,7 @@ class MainActivity : ComponentActivity() {
         car.nextArrivalPlace place@{ place ->
             if (!current()) return@place
             if (place == null) { failed("내비의 다음 장소 좌표를 확인하지 못했어요. 도착 안내를 보류했어요"); return@place }
-            car.here position@{ lat, lng ->
+            car.here position@{ lat, lng, _ ->
                 if (!current()) return@position
                 if (!vehiclePoint(lat, lng)) { failed("현재 위치를 확인하지 못했어요. 도착 안내를 보류했어요"); return@position }
                 val observed = VehicleArrival(place, lat!!, lng!!, System.currentTimeMillis())
