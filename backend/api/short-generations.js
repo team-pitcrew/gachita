@@ -118,6 +118,8 @@ export function shortGenerations(ctx, overrides = {}) {
     }
     if (id && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id)) fail(404, "없는 생성 작업");
     if (leaf && leaf !== "file") fail(404, "없는 생성 경로");
+    const methods = !id ? ["GET", "POST"] : leaf ? ["GET"] : ["GET", "DELETE"];
+    if (!methods.includes(req.method)) fail(405, "지원하지 않는 요청 방식이에요");
     let response = await ctx.withTrip(
       code,
       req.method !== "GET",
