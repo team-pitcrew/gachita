@@ -21,6 +21,7 @@ import { cues, momentSpan, suggest } from "./scenes.js";
 import { embed, matchThreshold, similarity, wavMono } from "./providers/voice.js";
 import { rideLinks, redeemRideLink } from "./ride-links.js";
 import { shortGenerations, shortTemplateCatalog } from "./short-generations.js";
+import { shortAssets, revokeShortAssets } from "./short-assets.js";
 
 const WEB = fileURLToPath(new URL("../../frontend/web/", import.meta.url));
 const TRIPS_SQL = fileURLToPath(new URL("trips.sql", import.meta.url));
@@ -78,6 +79,7 @@ export function classify(e) {
 
 // 로그의 경로 틀: 정한 낱말이 아닌 마디(여행 코드, id, 초대 코드)는 :p로 가린다. 웹 파일은 /(web) 하나로.
 const ROUTE_WORDS = new Set(["api", "config", "trips", "participants", "requests", "moments", "utterances", "transcript", "captions", "voice-match", "recordings", "scene-suggestions", "shortform", "short-templates", "short-plans", "short-generations", "file", "profiles", "me", "links", "google", "feed", "tokens", "photo", "voice", "groups", "members", "invites", "j"]);
+for (const word of ["short-assets", "source"]) ROUTE_WORDS.add(word);
 const routeOf = (pathname) =>
   pathname === "/healthz" ? pathname : pathname.startsWith("/api/") ? `/${pathname.split("/").filter(Boolean).map((s) => (ROUTE_WORDS.has(s) ? s : ":p")).join("/")}` : "/(web)";
 // ALB가 붙이는 추적 id(X-Amzn-Trace-Id)를 그대로 쓴다. 없거나 모양이 이상하면 새로.
@@ -114,6 +116,7 @@ export async function migrate() {
   await tripsDb().query(await readFile(new URL("trips-7-result-shares.sql", import.meta.url), "utf8"));
   await tripsDb().query(await readFile(new URL("trips-8-short-generations.sql", import.meta.url), "utf8"));
   await tripsDb().query(await readFile(new URL("trips-9-retention.sql", import.meta.url), "utf8"));
+  await tripsDb().query(await readFile(new URL("trips-12-short-assets.sql", import.meta.url), "utf8"));
   await profilesDb().query(await readFile(PROFILES_SQL, "utf8"));
   await profilesDb().query(await readFile(LINKS_SQL, "utf8"));
   await profilesDb().query(await readFile(ALBUM_SQL, "utf8"));
@@ -177,6 +180,7 @@ const participantOf = (req, trip) => {
 async function bumpGeneration(trip, client) {
   trip.generation = (trip.generation ?? 1) + 1;
   await client.query("DELETE FROM utterances WHERE trip_code = $1 AND generation < $2", [trip.code, trip.generation]);
+  await revokeShortAssets(client, trip.code, trip.generation);
   // 그 여행의 클립도 모두 지운다(T76). 같은 트랜잭션에서 지울 키를 적고 버킷은 커밋 뒤에 비운다(sweepClips) —
   // 잠금을 쥔 채 S3를 기다리지 않고, 되돌려지면 적은 것도 되돌려진다. 늦게 올라오는 옛 세대 클립은 세대 확인이 막는다.
   // 사람이 지운 표시(deleted_at)는 남긴다 — 철회 뒤 다시 동의해도 지운 장면의 클립을 다시 받지 않게(여행이 닫힐 때 함께 지움).
@@ -861,6 +865,7 @@ async function trips(req, [code, sub, id, leaf, ...rest], b, query) {
     }
   }
   if ((sub === "short-plans" || sub === "short-generations") && !rest.length) return shortService.request(req, code, sub, id, leaf, b);
+  if (sub === "short-assets" && !rest.length) return shortAssetService.request(req, code, id, leaf, query);
   if (rest.length || (leaf !== undefined && !(sub === "participants" && leaf === "voice") && sub !== "utterances" && sub !== "captions")) fail(404, "없는 경로");
   if (sub === "captions") {
     if (!id || !leaf || rest.length) fail(404, "자막 경로에 기기와 순번이 필요함");
@@ -904,6 +909,7 @@ async function trips(req, [code, sub, id, leaf, ...rest], b, query) {
 // 직접 삭제·동의 철회로 적어 둔 원음만 정리합니다. 여행의 나이로 데이터를 지우지 않습니다.
 export async function sweep() {
   await sweepClips();
+  await shortAssetService.sweep();
 }
 
 async function handle(trip, { req, m, sub, id, leaf, b, query, profile }, client) {
@@ -1233,6 +1239,7 @@ async function composition(trip, client, all) {
 
 export const shortServiceContext = { withTrip, participantOf, composition };
 const shortService = shortGenerations(shortServiceContext);
+const shortAssetService = shortAssets(shortServiceContext);
 
 // 확장자 없는 주소는 화면이다: 그 폴더의 index.html(/demo), 없으면 웹앱 첫 화면 — Google 로그인 콜백처럼 웹앱이 주소를 읽는다.
 // 웹 파일은 쓸 때마다 다시 확인하게 한다(no-cache + ETag). 지시가 없으면 Cloudflare가 4시간 캐시해
@@ -1304,7 +1311,7 @@ export const server = createServer(async (req, res) => {
       // 발화 묶음은 본문이 커서 그 경로만 따로 한도를 둔다(docs/api/voice.md).
       const big = seg[1] === "trips" && seg[3] === "utterances";
       // 목소리 등록(…/voice)·발화 대조는 이진 본문(WAV)이다 — JSON으로 먼저 읽지 않는다.
-      const binary = req.method === "POST" && (seg.at(-1) === "voice" || (seg[1] === "trips" && (seg[3] === "voice-match" || seg[3] === "recordings")));
+      const binary = req.method === "POST" && (seg.at(-1) === "voice" || (seg[1] === "trips" && (seg[3] === "voice-match" || seg[3] === "recordings" || (seg[3] === "short-assets" && !seg[4]))));
       const body = !binary && (req.method === "POST" || req.method === "PATCH") ? await readBody(req, big ? 1_000_000 : MAX_BODY) : {};
       if (seg[1] === "ride-links") return send(...(await rideLinks(req, seg.slice(2), { profileOf })));
       if (seg[1] === "trips" && seg[2] && seg[3] === "ride-links" && !seg[4])
@@ -1348,5 +1355,6 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   process.on("unhandledRejection", crash("unhandled_rejection"));
   server.listen(port, () => log("info", "listening", { port }));
   shortService.start();
+  shortAssetService.start();
   setInterval(sweep, 10 * 60_000).unref(); // 여행을 아무도 만들지 않아도 묵은 여행과 클립을 치운다
 }

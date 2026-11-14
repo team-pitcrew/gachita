@@ -197,6 +197,141 @@ paths:
         '404': { $ref: '#/components/responses/Error' }
         '409': { $ref: '#/components/responses/Error' }
         '410': { $ref: '#/components/responses/Error' }
+  /api/trips/{code}/short-assets/source:
+    parameters: [{ $ref: '#/components/parameters/code' }]
+    get:
+      tags: [장면]
+      summary: 기본 영상 렌더링용 서버 원본과 해시
+      security: [{ participantToken: [] }]
+      parameters:
+        - { name: moment, in: query, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: 현재 동의 세대의 원음 장면·전사·화자·캐릭터를 묶은 스냅샷. 전체 계약은 short-assets.md입니다.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ShortAssetSource' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /api/trips/{code}/short-assets:
+    parameters: [{ $ref: '#/components/parameters/code' }]
+    get:
+      tags: [장면]
+      summary: 웹과 차량이 공유하는 기본 영상·공급자 생성 보관함
+      security: [{ participantToken: [] }]
+      responses:
+        '200':
+          description: 현재 동의 세대의 모든 항목을 최신 순으로 반환합니다. 기본 영상은 여행당 최대 100개입니다.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [generation, items]
+                properties:
+                  generation: { type: integer }
+                  items:
+                    type: array
+                    items:
+                      oneOf:
+                        - { $ref: '#/components/schemas/ShortAsset' }
+                        - allOf:
+                            - { $ref: '#/components/schemas/ShortGeneration' }
+                            - type: object
+                              required: [origin]
+                              properties:
+                                origin: { type: string, const: provider }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+    post:
+      tags: [장면]
+      summary: 클라이언트에서 렌더링한 실제 MP4·WebM 파일을 비공개 서버 저장소에 보관
+      description: 주차·종료 상태와 전원 동의가 필요합니다. 실제 파일을 검사하며 같은 키·원본·파일 재전송은 기존 결과를 반환합니다. 자막이나 화자가 바뀌면 409입니다. 48시간 기한은 없습니다.
+      security: [{ participantToken: [] }]
+      parameters:
+        - { name: moment, in: query, required: true, schema: { type: string } }
+        - { name: generation, in: query, required: true, schema: { type: integer, minimum: 1 } }
+        - { name: sourceHash, in: query, required: true, schema: { type: string, pattern: '^[0-9a-f]{64}$' } }
+        - { name: key, in: query, required: true, schema: { type: string, pattern: '^[A-Za-z0-9_-]{8,100}$' } }
+      requestBody:
+        required: true
+        content:
+          video/mp4:
+            schema: { type: string, format: binary }
+          video/webm:
+            schema: { type: string, format: binary }
+      responses:
+        '201':
+          description: 파일과 서버 메타데이터 저장 완료
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ShortAsset' }
+        '200':
+          description: 같은 요청 키와 파일로 이미 저장한 항목
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ShortAsset' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '410': { $ref: '#/components/responses/Error' }
+        '413': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+        '504': { $ref: '#/components/responses/Error' }
+  /api/trips/{code}/short-assets/{id}:
+    parameters: [{ $ref: '#/components/parameters/code' }, { $ref: '#/components/parameters/id' }]
+    get:
+      tags: [장면]
+      summary: 기본 영상 서버 보관 상태
+      security: [{ participantToken: [] }]
+      responses:
+        '200':
+          description: 상태와 실제 파일 측정치
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ShortAsset' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '410': { $ref: '#/components/responses/Error' }
+    delete:
+      tags: [장면]
+      summary: 보관자가 기본 영상을 삭제
+      description: 접근은 즉시 차단하고 S3 객체를 비동기로 삭제합니다. 동의 철회 뒤에도 보관자는 삭제할 수 있습니다.
+      security: [{ participantToken: [] }]
+      responses:
+        '204': { description: 접근 차단과 삭제 큐 등록 완료 }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+  /api/trips/{code}/short-assets/{id}/file:
+    parameters: [{ $ref: '#/components/parameters/code' }, { $ref: '#/components/parameters/id' }]
+    get:
+      tags: [장면]
+      summary: 같은 여행 참가자가 실제 보관 파일 다운로드
+      description: 공개 URL 없이 참가자 Bearer로 읽습니다. 저장소 응답을 받은 뒤에도 동의·원본·삭제 여부와 파일 해시를 다시 확인합니다.
+      security: [{ participantToken: [] }]
+      responses:
+        '200':
+          description: 업로드 당시의 MP4 또는 WebM 바이트
+          content:
+            video/mp4:
+              schema: { type: string, format: binary }
+            video/webm:
+              schema: { type: string, format: binary }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '410': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
   /api/ride-links:
     post:
       tags: [참가자]
@@ -1356,6 +1491,52 @@ components:
         selectionReason: { type: string }
         warnings: { type: array, items: { type: string } }
         planHash: { type: string }
+    ShortAssetSource:
+      type: object
+      required: [momentId, generation, sourceHash, seconds, source]
+      properties:
+        momentId: { type: string }
+        generation: { type: integer }
+        sourceHash: { type: string, pattern: '^[0-9a-f]{64}$' }
+        seconds: { type: number, minimum: 0.5, maximum: 60 }
+        source:
+          type: object
+          required: [title, generation, cast, scenes]
+          properties:
+            title: { type: string }
+            generation: { type: integer }
+            cast: { type: array, items: { type: object } }
+            scenes: { type: array, minItems: 1, maxItems: 1, items: { type: object } }
+    ShortAsset:
+      type: object
+      required: [id, origin, state, momentId, generation, sourceHash, createdAt, createdBy]
+      properties:
+        id: { type: string, format: uuid }
+        origin: { type: string, const: local-render }
+        state: { type: string, enum: [uploading, completed, failed, source_changed] }
+        momentId: { type: string }
+        generation: { type: integer }
+        sourceHash: { type: string }
+        createdAt: { type: string, format: date-time }
+        createdBy: { type: string }
+        result:
+          type: object
+          required: [url, sha256, mimeType, bytes, seconds, width, height, fps, videoCodec, audioCodec, audioSampleRate, audioChannels, videoFrames, audioFrames]
+          properties:
+            url: { type: string }
+            sha256: { type: string }
+            mimeType: { type: string, enum: [video/mp4, video/webm] }
+            bytes: { type: integer }
+            seconds: { type: number }
+            width: { type: integer }
+            height: { type: integer }
+            fps: { type: number }
+            videoCodec: { type: string }
+            audioCodec: { type: string }
+            audioSampleRate: { type: integer }
+            audioChannels: { type: integer }
+            videoFrames: { type: integer }
+            audioFrames: { type: integer }
     ShortGeneration:
       type: object
       required: [id, state, momentId, generation, progress, createdAt, expiresAt]

@@ -10,6 +10,7 @@
 !backend/api/profile-lifecycle.js
 !backend/api/result-shares.js
 !backend/api/short-generations.js
+!backend/api/short-assets.js
 !backend/api/short-templates.js
 !backend/api/short-render.js
 !backend/api/providers
