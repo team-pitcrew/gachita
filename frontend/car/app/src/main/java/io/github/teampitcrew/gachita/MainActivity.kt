@@ -226,6 +226,7 @@ class MainActivity : ComponentActivity() {
     /** 보이고 있는 도착 브리핑. place가 null이면 모든 장소(Gleo로 부름). 주차해 주행 제한이 풀렸을 때만 그린다. */
     private data class Brief(val place: String?, val arrivalItems: List<SharedTodo>? = null, val final: Boolean = false)
     private var brief by mutableStateOf<Brief?>(null)
+    private var nextPlaceName: String? = null // 내비의 다음 도착지 이름(거리와 상관없이 마지막으로 읽은 것). 그곳에 묶인 부탁은 휴게소를 제안하지 않는다
     private var near by mutableStateOf<Approach?>(null) // 도착 전 브리핑(C19·finalNear). 주행 중 조회마다 내비 남은 시간으로 바꾸고 주차하면 지운다
     private var f4Mock by mutableStateOf<String?>(null) // mock: 디버그 빌드의 --es f4 …(F4 화면 확인용 시연 데이터, Arrival.kt F4Mock)
     private var appVisible by mutableStateOf(false) // onStart ~ onStop
@@ -802,6 +803,7 @@ class MainActivity : ComponentActivity() {
         if (code == null || !carStatus.restricted || !s.agreed || offer?.stage == Offer.Stage.FINDING || arrivalLoading) { if (!carStatus.restricted) near = null; return }
         car.nextPlaceEta { name, sec, final ->
             if (s.trip?.code != code || !carStatus.restricted) return@nextPlaceEta
+            nextPlaceName = name?.takeIf { it.isNotBlank() }
             val a = approach(code, name, sec, final)
             near = a
             // 폰(P19)도 보도록 '곧 도착'을 장소 기록에 남긴다(T149 PlaceLog: 같은 장소·같은 분에 한 번, 끊기면 두었다 나중에, 모두 동의한 동안만)
@@ -924,7 +926,7 @@ class MainActivity : ComponentActivity() {
             if (a == Answer.NO) later(o) else if (canAccept(u)) accept(o) else Log.i(TAG, "뒷줄의 수락은 받지 않음")
             return
         }
-        if (isRestRequest(u.text)) return hold(t, u)
+        if (isRestRequest(u.text, nextPlaceName ?: near?.place)) return hold(t, u) // '하나로마트 가면 화장실…'은 도착 할 일(F4), 휴게소 제안 아님
         // 장소별 할 일은 서버 전사에서 읽습니다. 기존 경유지 재질문 분기만 건너뛰고 로컬 목록에는 더하지 않습니다(T113).
         if (todoOf(u.text) != null) return
         if (o != null && o.asked < 2 && canAccept(u)) { // 한 번만 다시 묻는다. 답 낱말을 넣지 않는다(스피커 소리가 마이크로 되돌아와 답이 되지 않게)
