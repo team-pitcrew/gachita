@@ -12,6 +12,8 @@ const fail = (status, error) => {
 const KINDS = ["family", "guest"];
 const PREFIX = { family: "FAMILY", guest: "TRIP" };
 const CODE = /^(FAMILY|TRIP)-[0-9]{4}$/;
+// 초대의 앱 주소(같은 출처의 상대 주소). QR은 이 주소를 담고, 코드 입력·QR·링크는 모두 같은 POST /group-invites/{code}로 들어간다.
+const inviteOf = (code, expiresAt) => ({ code, expiresAt, url: `/?group=${code}` });
 const GROUP_ID = /^[A-Za-z0-9-]{1,64}$/; // 새 그룹은 UUID, 옛 그룹은 8자
 const MAX_MEMBERS = 10; // 그룹 하나에(아이 포함). 자리는 다섯이고 나머지는 자리 없이 둔다
 const MAX_GROUPS = 20; // 한 사람이 속한 그룹
@@ -95,7 +97,7 @@ async function views(db, groups) {
         })
         .sort((a, b) => RANK[a.role] - RANK[b.role] || a.joinedAt - b.joinedAt || a.profileId.localeCompare(b.profileId))
         .map(({ joinedAt, ...m }) => m),
-      invite: invite ? { code: invite.code, expiresAt: invite.expires_at.getTime() } : null,
+      invite: invite ? inviteOf(invite.code, invite.expires_at.getTime()) : null,
     };
   });
 }
@@ -166,7 +168,7 @@ export async function groups(req, seg, b, { profileOf, text, bool, oneOf, obj, s
           "INSERT INTO invites (code, group_id, max_uses, expires_at) VALUES ($1, $2, 0, now() + interval '24 hours') ON CONFLICT (code) DO NOTHING RETURNING expires_at",
           [code, g.id]
         );
-        if (rows[0]) return [201, { code, expiresAt: rows[0].expires_at.getTime() }];
+        if (rows[0]) return [201, inviteOf(code, rows[0].expires_at.getTime())];
       }
       fail(503, "초대 코드를 만들지 못했어요. 잠시 뒤 다시 해 주세요");
     });

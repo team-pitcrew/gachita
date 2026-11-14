@@ -94,9 +94,12 @@ test("초대 코드: 모양·24시간·그룹당 하나, 미리보기, 성인으
   const made = await call("POST", `/groups/${fam.id}/invites`, undefined, dad.token);
   assert.equal(made.status, 201);
   assert.match(made.data.code, /^FAMILY-[0-9]{4}$/);
+  assert.equal(made.data.url, `/?group=${made.data.code}`, "QR·링크는 같은 출처의 앱 주소");
   assert.ok(Math.abs(made.data.expiresAt - (Date.now() + 24 * 3600_000)) < 60_000);
   const crew = await family(dad, "동승", "guest");
-  assert.match(await invite(crew, dad), /^TRIP-[0-9]{4}$/);
+  const trip = await invite(crew, dad);
+  assert.match(trip, /^TRIP-[0-9]{4}$/);
+  assert.equal((await call("GET", `/group-invites/${trip}`)).data.kind, "guest");
 
   const preview = await call("GET", `/group-invites/${made.data.code}`);
   assert.deepEqual(preview.data, { groupName: "우리 가족", kind: "family", ownerName: "아빠", expiresAt: made.data.expiresAt });
@@ -106,7 +109,7 @@ test("초대 코드: 모양·24시간·그룹당 하나, 미리보기, 성인으
   const joined = await joinGroup(made.data.code, mom);
   assert.equal(joined.status, 200);
   assert.deepEqual(memberOf(joined.data, mom.id), { profileId: mom.id, name: "엄마", character: "bunny", hasPhoto: false, hasVoice: false, consent: true, role: "adult", seat: null, pending: false });
-  assert.equal(joined.data.invite.code, made.data.code, "구성원은 지금 초대 코드를 본다");
+  assert.deepEqual(joined.data.invite, made.data, "구성원은 지금 초대 코드·주소를 본다");
   const again = await joinGroup(made.data.code, mom);
   assert.equal(again.status, 200);
   assert.equal(again.data.members.length, 2, "같은 사람이 다시 들어와도 한 번");
