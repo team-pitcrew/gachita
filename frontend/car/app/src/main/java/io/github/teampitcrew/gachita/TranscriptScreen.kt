@@ -15,7 +15,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -89,12 +88,12 @@ internal fun liveChip(capturing: Boolean) = "현재 주행 / 대화 기록 ${if 
  * C44 body. [status] is the loading/consent/error line under the list. [canPick] gates '추천 장면 고르기'
  * (until F5 it opens the existing scene creation of the 콘텐츠 기록 tab). '말한 사람 고치기' opens trip tools (T37 fixes).
  * [live] non-null = driving (liveTranscript·pausedTranscript): read only, the chip shows [live], the newest line is kept in view,
- * and the only control is '함께 타는 중으로' ([onBack]). Fixing speakers, refreshing by hand and picking scenes stay parked-only.
+ * and the only control is '함께 타는 중으로' ([onBack]). Fixing speakers and picking scenes stay parked-only; the list reloads whenever the tab opens.
  */
 @Composable
 internal fun TranscriptScreen(
     trip: Trip, lines: List<TranscriptLine>, asks: Set<Pair<String, Int>>, places: List<TripPlace>, loading: Boolean, status: String, canPick: Boolean,
-    onRefresh: () -> Unit, onFixSpeakers: () -> Unit, onPick: () -> Unit, modifier: Modifier = Modifier, live: String? = null, onBack: () -> Unit = {},
+    onFixSpeakers: () -> Unit, onPick: () -> Unit, modifier: Modifier = Modifier, live: String? = null, onBack: () -> Unit = {},
 ) {
     val c = MaterialTheme.colorScheme
     val scroll = rememberScrollState()
@@ -106,10 +105,8 @@ internal fun TranscriptScreen(
                 Text("대화 기록", fontSize = 40.sp, lineHeight = 50.sp, fontWeight = FontWeight.Bold)
                 Text(trip.title.ifBlank { "함께하는 여행" }, color = c.onSurfaceVariant, fontSize = 28.sp, lineHeight = 40.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            if (live == null) {
-                TextButton(onFixSpeakers, Modifier.heightIn(min = 56.dp)) { Text("말한 사람 고치기", fontSize = 24.sp) }
-                OutlinedButton(onRefresh, Modifier.heightIn(min = 56.dp), enabled = !loading, shape = RoundedCornerShape(24.dp)) { Text("새로고침", fontSize = 24.sp) }
-            }
+            // 시안 C44에는 단추가 없다. 잘못 붙은 화자를 고치는 길(T37)만 남기고, 다시 불러오기는 탭을 열 때마다 한다
+            if (live == null) TextButton(onFixSpeakers, Modifier.heightIn(min = 56.dp)) { Text("말한 사람 고치기", fontSize = 24.sp) }
         }
         Surface(Modifier.fillMaxWidth(), RoundedCornerShape(28.dp), color = c.primaryContainer) { // 넘겨도 칩은 남는다
             Text(live ?: tripRange(trip.createdAt, lines), Modifier.padding(20.dp), color = c.onSurface, fontSize = 24.sp, lineHeight = 32.sp)
