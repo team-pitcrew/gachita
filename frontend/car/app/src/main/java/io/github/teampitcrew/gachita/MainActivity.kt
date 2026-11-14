@@ -1842,6 +1842,22 @@ class MainActivity : ComponentActivity() {
         val talking = Live.recent.lastOrNull()?.takeIf { s.recording && !muted } // 방금 받아 적은 말의 좌석 구역(T37)과 말한 사람
         val ended = t.status == "ended" // 폰의 '여행 끝내기'나 최종 목적지에서 마친 여행(시안 2026:2410). 녹음은 하지 않는다(Session.withTrip)
         val mockPaused = mock?.endsWith("Paused") == true
+        // mock: 시연 목업도 시간이 흐르고(일시정지면 멈춤, prefs에 남기지 않음) 파형은 이 차 마이크의 실제 소리를 따른다.
+        // 수음 서비스가 마이크를 쥐고 있으면(Live.mic ON) 그쪽이 Live.levels를 민다 — 마이크를 둘이 다투지 않게 그때는 열지 않는다.
+        var mockMs by remember(mock) { mutableLongStateOf(if (mock != null) mockClock() else 0L) }
+        LaunchedEffect(mock, mockPaused) {
+            if (mock == null || mockPaused) return@LaunchedEffect
+            val base = mockMs; val since = android.os.SystemClock.elapsedRealtime()
+            while (true) { // 1초에 한 번 글자만 바꾼다(실제 녹음 시간과 같은 방식)
+                kotlinx.coroutines.delay(1000 - (android.os.SystemClock.elapsedRealtime() - since) % 1000)
+                mockMs = base + android.os.SystemClock.elapsedRealtime() - since
+            }
+        }
+        DisposableEffect(mock, mockPaused, Live.mic) {
+            val meter = if (mock != null && !mockPaused && Live.mic != Mic.ON)
+                MicLevels { v -> main.post { Live.levels = (Live.levels + v).takeLast(WAVE_BARS) } }.also { it.start() } else null
+            onDispose { meter?.stop() }
+        }
         val st = if (mock != null) driveStatus(true, mockPaused, false, Handoff.State.OFF, Mic.ON, "", false, false, false, emptyList(), resumed = mock == "driveResumed")
             else driveStatus(s.recording, muted, shortAt >= 0, handoff.state, Live.mic, Live.why, s.offPending, s.waiting, s.gear == "P",
             t.people.filterNot { it.consent }.map { it.name }, ended = ended, resumed = justResumed)
@@ -1860,8 +1876,8 @@ class MainActivity : ComponentActivity() {
             LaunchedEffect(t.code, Live.recent.isEmpty()) { if (mock == null && Live.recent.isEmpty() && transcript.isEmpty()) loadTranscript() }
             RecordView(
                 status = st, paused = paused, note = if (mock != null) "" else s.note,
-                time = recordClock(if (mock != null) mockClock() else recordedMs),
-                wave = if (mock != null) DESIGN_WAVE else Live.wave,
+                time = recordClock(if (mock != null) mockMs else recordedMs),
+                wave = { Live.levels },
                 people = t.people, seats = gridSeats(seatRows(carStatus.seats), t.people), occupied = carStatus.occupied,
                 speaking = if (mock != null) F4Mock.talking(mock) else talking?.let { u -> sp?.get(u.seq)?.who }, consentNote = consentNote,
                 last = if (mock != null) mockLast() else last,
