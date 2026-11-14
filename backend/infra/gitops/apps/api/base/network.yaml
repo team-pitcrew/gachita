@@ -1,5 +1,5 @@
 # gachita 네임스페이스의 허용 목록. 나머지는 기본 차단(components/data-plane).
-# 들어오는 길: ALB만(공개 서브넷 대역 10.10.0.0/23, Terraform network.tf). 나가는 길: Postgres, 구글 OAuth, 클립 버킷(S3·STS), ASR.
+# 들어오는 길: ALB만(공개 서브넷 대역 10.10.0.0/23, Terraform network.tf). 나가는 길: Postgres, 구글 OAuth, 클립 버킷(S3·STS), ASR, 힉스필드.
 # 노드가 하나라 NodePort로 들어온 요청은 출발지(ALB 주소)가 그대로 파드에 닿는다(Cilium, 대상 파드가 같은 노드).
 # ponytail: 워커를 붙이면 다른 노드를 거친 요청의 출발지가 노드 주소로 바뀐다. 그때 remote-node를 더한다.
 apiVersion: networking.k8s.io/v1
@@ -56,5 +56,11 @@ spec:
         - matchName: gachita-dev-clips-721622471953.s3.ap-northeast-2.amazonaws.com
         - matchName: sts.ap-northeast-2.amazonaws.com
         - matchName: llm.kikum.xyz
+        # T85 생성 API와 결과 파일. HF_OUTPUT_HOSTS와 정확히 같은 CDN 목록을 유지합니다.
+        - matchName: api.higgsfield.ai
+        - matchName: cdn.higgsfield.ai
+        - matchName: cdn.higgsfield.work
+        - matchName: images.higgs.ai
+        - matchName: d28lhcrx5qdowv.cloudfront.net
       toPorts:
         - ports: [{ port: "443", protocol: TCP }]
