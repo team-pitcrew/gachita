@@ -1072,3 +1072,21 @@ button.ob-other { justify-self: start; min-height: 40px; font-size: 13px; font-w
 .group-share { padding: 24px 20px; display: grid; gap: 12px; }
 .group-share-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
 .group-share-row > * { min-height: 48px; border-radius: var(--r-ctl); background: var(--surface-2); color: var(--ink); font: inherit; font-weight: 700; border: 0; display: grid; place-items: center; text-decoration: none; }
+/* v2 도착 브리핑(P19·P20·finalBrief, T141): 분류별 행동 항목. 'Briefing / action item / Phone'(2056:2246) */
+.near-line { font-size: 17px; line-height: 26px; }
+.brief-card { gap: 12px; padding: 16px 16px 18px; }
+.brief-first { background: var(--accent-soft); }
+.brief-label { font-size: 15px; line-height: 22px; font-weight: 500; color: var(--ink-2); }
+.brief-first .brief-label { color: var(--accent); }
+.brief-head { display: flex; align-items: center; gap: 8px; }
+.brief-head strong { flex: 1; font-size: 19px; line-height: 28px; }
+.brief-count { font-size: 15px; line-height: 22px; font-weight: 700; }
+.brief-rows { display: grid; gap: 14px; }
+.brief-rows li { padding: 0; border: 0; }
+.brief-row { display: grid; grid-template-columns: 34px 1fr auto; align-items: center; gap: 10px; }
+.brief-emoji { font-size: 28px; line-height: 34px; text-align: center; }
+.brief-emoji.small { font-size: 24px; line-height: 28px; }
+.brief-copy { display: grid; min-width: 0; }
+.brief-copy strong { font-size: 19px; line-height: 26px; overflow-wrap: anywhere; }
+.brief-copy small { font-size: 13px; line-height: 18px; color: var(--ink-2); }
+.brief-qty { font-size: 19px; line-height: 26px; font-weight: 700; white-space: nowrap; }

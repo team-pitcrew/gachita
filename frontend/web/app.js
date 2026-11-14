@@ -17,6 +17,8 @@ import { createBoarding } from "/boarding.js";
 import { createOnboarding } from "/onboarding.js";
 import { createGroups } from "/groups.js";
 import { appBar, arrivalCards, askState, createPlaces, driveState, journeyTabs, nearCard, recordingLine, rideHeading, seatMap, statusMoves } from "/ride.js";
+import { appBar, askState, CONTINUE_ASK, createPlaces, driveState, END_ASK, journeyTabs, recordingLine, rideHeading, seatMap, statusMoves } from "/ride.js";
+import { arrivalBrief, arrivalMove, nearBrief } from "/brief.js";
 
 // 여행 상태 이름. 상태별 제목·부제·운전석 단추는 ride.js가 고른다.
 const TRIP = { boarding: "탑승 중", driving: "주행 중", parked: "주차 완료", ended: "여행 종료" };
@@ -648,7 +650,12 @@ function tripView(me) {
   let main = null;
   if (state.kind === "near") main = button("확인", () => { ride.near = { key: scope, id: state.id }; render(); }, "primary");
   else if (trip.status === "driving") main = recordButton("primary big");
-  else if (moves.length) main = move(moves.shift(), "primary");
+  else if (state.kind === "arrived" && driver) {
+    // v2 도착 브리핑(T141): 경유지 '장보고 여행 계속', 최종 목적지 '여행 마치고 기록 보기'(끝낸 뒤 대화 기록으로). 나머지 상태는 아래 카드에 남긴다.
+    const [label, status] = arrivalMove(state);
+    main = button(label, () => confirm(status === "ended" ? END_ASK : CONTINUE_ASK) && patch("", { status })().then(() => status === "ended" && trip?.status === "ended" && conversations.open()), "primary");
+    moves.splice(moves.findIndex((m) => m[1] === status), 1);
+  } else if (moves.length) main = move(moves.shift(), "primary");
   const ask = trip.status !== "ended" && button("부탁 남기기", () => (sheet.showModal(), sheet.querySelector("#sheet-text").focus()), main ? "secondary" : "primary");
 
   // 운전자가 제안하고 수락한다. 반영 확인은 차량 앱이 내비 결과를 받은 뒤 누르는 자리다.
@@ -675,8 +682,8 @@ function tripView(me) {
   const band = (withToggle) => h("section", { className: `ride-status${recordOn ? " on" : ""}`, role: "status" },
     h("div", { className: "between" }, h("strong", {}, recordText), withToggle && recordButton("plain")),
     h("p", { className: "meta" }, "실제 녹음 상태는 차 화면에서 확인해 주세요."));
-  const now = state.kind === "near" ? [nearCard(state, asks), band(true)]
-    : state.kind === "arrived" ? arrivalCards(state, asks, trip.participants, personAvatar)
+  const now = state.kind === "near" ? [nearBrief(state, asks, trip.participants), band(true)]
+    : state.kind === "arrived" ? arrivalBrief(state, asks, trip.participants)
     : [seatMap(trip, me, personAvatar), band(false)];
 
   return [
@@ -684,7 +691,8 @@ function tripView(me) {
     journeyTabs("ride", { talk: () => conversations.open(), contents: launchShort }),
     h("div", { className: "ride-title" }, h("h1", {}, heading.title), heading.sub && h("p", { className: "sub" }, heading.sub)),
     ...now,
-    todos.card(),
+    // 곧 도착·도착에서는 위의 행동 항목이 같은 할 일을 보이므로 할 일 카드를 겹쳐 두지 않는다(v2 시안 P19·P20, T141)
+    !["near", "arrived"].includes(state.kind) && todos.card(),
     h(
       "section",
       { className: "card" },
