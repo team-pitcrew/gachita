@@ -485,7 +485,7 @@ class MainActivity : ComponentActivity() {
                 if (s.trip?.code != t.code) return@onSuccess // 그사이 삭제된 여행이나 새 여행: 늦게 온 응답으로 되살리지 않는다
                 val wasWithdrawing = s.offPending
                 s = (if (got == null) s.copy(online = true) else s.withTrip(keep(got))).polled()
-                if (wasWithdrawing && !s.offPending) s = s.copy(note = "동의를 철회했어요. 다시 녹음하려면 각자의 동의와 녹음 시작이 필요해요")
+                if (wasWithdrawing && !s.offPending) s = s.copy(note = "동의를 철회했어요. 다시 녹음하려면 각자의 동의가 필요해요")
                 consentSeenAt = System.currentTimeMillis()
                 upload(t, resync, prune) // 받은 여행의 동의 세대를 보관함에 반영한(철회면 글을 지운) 뒤에만 올린다
                 speakers(t) // 올릴 새 발화가 없어도 밀린 대조와 고침을 잇는다
@@ -809,7 +809,7 @@ class MainActivity : ComponentActivity() {
             s = s.copy(busy = true, note = "동의를 저장하고 있어요")
             bg({ Server(url).agree(trip.code, id, token) }) { result -> // 켜기는 한 번만, 뒤의 조회만 다시 묻는다(T122)
                 if (s.trip?.code != trip.code || server != url) return@bg
-                result.onSuccess { s = s.copy(busy = false, note = "본인의 동의를 저장했어요. 녹음은 홈에서 시작해 주세요").withTrip(keep(it)) }
+                result.onSuccess { s = s.copy(busy = false, note = "본인의 동의를 저장했어요. 모두 동의하면 출발할 때 자동으로 기록해요").withTrip(keep(it)) }
                     .onFailure { s = s.agreeFailed(it) }
             }
         }
