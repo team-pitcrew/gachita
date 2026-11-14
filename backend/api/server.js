@@ -14,7 +14,7 @@ import { profilesDb, tripsDb } from "./db.js";
 import { withActiveProfile, withDeletingProfiles } from "./profile-lifecycle.js";
 import { createShare, sharedResults } from "./result-shares.js";
 import { errFields, log } from "./log.js";
-import { asrReady, contextOf, retranscribe, toWav } from "./providers/asr.js";
+import { asrReady, contextOf, retranscribe, toWav, transcribe } from "./providers/asr.js";
 import { clipStore } from "./providers/clips.js";
 import { googleIdentity, googlePublicConfig } from "./providers/google.js";
 import { cues, momentSpan, suggest } from "./scenes.js";
@@ -23,6 +23,7 @@ import { rideLinks, redeemRideLink } from "./ride-links.js";
 import { boardingInvites, tripBoardingInvites } from "./boarding-invites.js";
 import { shortGenerations, shortTemplateCatalog } from "./short-generations.js";
 import { shortAssets, revokeShortAssets } from "./short-assets.js";
+import { arrivalBriefing, deriveTodos, TODO_METHOD } from "./todos.js";
 
 const WEB = fileURLToPath(new URL("../../frontend/web/", import.meta.url));
 const TRIPS_SQL = fileURLToPath(new URL("trips.sql", import.meta.url));
@@ -70,7 +71,7 @@ const fail = (status, error) => {
 };
 
 // 오류 종류(T71): 응답의 type과 로그의 err.type. 상태에서 정하는 닫힌 목록이라 클라이언트는 문장이 아니라 종류로 가른다.
-const ERROR_TYPE = { 400: "invalid", 401: "unauthenticated", 403: "forbidden", 404: "not_found", 405: "method_not_allowed", 409: "conflict", 410: "gone", 413: "too_large", 429: "rate_limited", 502: "unavailable", 503: "unavailable", 504: "unavailable" };
+const ERROR_TYPE = { 400: "invalid", 401: "unauthenticated", 403: "forbidden", 404: "not_found", 405: "method_not_allowed", 409: "conflict", 410: "gone", 413: "too_large", 422: "invalid", 429: "rate_limited", 502: "unavailable", 503: "unavailable", 504: "unavailable" };
 // DB에 닿지 않거나(연결 끊김·거절, 연결 수 초과) 질의 시간 제한(57014, T26)에 걸린 것: 다시 해도 되는 503.
 // Postgres 오류 번호 08xxx 연결, 53xxx 자원 부족, 57014 질의 취소, 57P0x 서버 종료·시작 중.
 const DB_DOWN = /^(08|53|57014|57P0)/;
@@ -83,7 +84,8 @@ export function classify(e) {
 }
 
 // 로그의 경로 틀: 정한 낱말이 아닌 마디(여행 코드, id, 초대 코드)는 :p로 가린다. 웹 파일은 /(web) 하나로.
-const ROUTE_WORDS = new Set(["api", "config", "trips", "participants", "requests", "moments", "utterances", "transcript", "captions", "voice-match", "recordings", "scene-suggestions", "shortform", "short-templates", "short-plans", "short-generations", "file", "profiles", "me", "links", "google", "feed", "tokens", "photo", "voice", "groups", "members", "invites", "j"]);
+const ROUTE_WORDS = new Set(["api", "config", "trips", "participants", "requests", "moments", "utterances", "transcript", "transcriptions", "captions", "voice-match", "recordings", "scene-suggestions", "shortform", "short-templates", "short-plans", "short-generations", "file", "profiles", "me", "links", "google", "feed", "tokens", "photo", "voice", "groups", "members", "invites", "j"]);
+for (const word of ["todos", "arrival-briefing"]) ROUTE_WORDS.add(word);
 for (const word of ["short-assets", "source"]) ROUTE_WORDS.add(word);
 ROUTE_WORDS.add("boarding-invites");
 const routeOf = (pathname) =>
@@ -122,6 +124,7 @@ export async function migrate() {
   await tripsDb().query(await readFile(new URL("trips-7-result-shares.sql", import.meta.url), "utf8"));
   await tripsDb().query(await readFile(new URL("trips-8-short-generations.sql", import.meta.url), "utf8"));
   await tripsDb().query(await readFile(new URL("trips-9-retention.sql", import.meta.url), "utf8"));
+  await tripsDb().query(await readFile(new URL("trips-10-todos.sql", import.meta.url), "utf8"));
   await tripsDb().query(await readFile(new URL("trips-11-boarding-invites.sql", import.meta.url), "utf8"));
   await tripsDb().query(await readFile(new URL("trips-12-short-assets.sql", import.meta.url), "utf8"));
   await profilesDb().query(await readFile(PROFILES_SQL, "utf8"));
@@ -188,6 +191,7 @@ async function bumpGeneration(trip, client) {
   trip.generation = (trip.generation ?? 1) + 1;
   await client.query("DELETE FROM utterances WHERE trip_code = $1 AND generation < $2", [trip.code, trip.generation]);
   await revokeShortAssets(client, trip.code, trip.generation);
+  await client.query("DELETE FROM todo_states WHERE trip_code = $1 AND generation < $2", [trip.code, trip.generation]);
   // 그 여행의 클립도 모두 지운다(T76). 같은 트랜잭션에서 지울 키를 적고 버킷은 커밋 뒤에 비운다(sweepClips) —
   // 잠금을 쥔 채 S3를 기다리지 않고, 되돌려지면 적은 것도 되돌려진다. 늦게 올라오는 옛 세대 클립은 세대 확인이 막는다.
   // 사람이 지운 표시(deleted_at)는 남긴다 — 철회 뒤 다시 동의해도 지운 장면의 클립을 다시 받지 않게(여행이 닫힐 때 함께 지움).
@@ -501,6 +505,49 @@ async function participantVoice(code, id, req) {
     );
   });
   return enrolled(print);
+}
+
+// 웹의 첫 전사(T96). 서버는 소리와 글을 저장하지 않는다. 받은 글의 저장·화자 대조는 기존 API로 한다.
+async function transcriptions(code, req, query, signal) {
+  if (req.method !== "POST") fail(405, "POST만 됨");
+  const generation = int(Number(query.get("generation")), 1, 2_147_483_647, "generation");
+  const check = () => withTrip(code, false, (trip) => {
+    participantOf(req, trip);
+    if (!everyoneConsents(trip)) fail(403, "모두 녹음에 동의한 뒤 전사할 수 있음");
+    if (generation !== (trip.generation ?? 1)) fail(409, "동의 세대가 바뀜. 음성을 다시 녹음해 주세요");
+  });
+  await check(); // 본문을 읽기 전에 인증한다.
+  if (!asrReady()) fail(503, "음성 전사 서버가 준비되지 않았어요");
+  if (req.headers["content-type"]?.split(";")[0].trim().toLowerCase() !== "audio/wav") fail(400, "Content-Type은 audio/wav");
+  const wav = await readRaw(req, 400_000);
+  const { samples, channels } = wavMono(wav);
+  // 잘린 data를 허용하는 기존 대조 파서보다 엄격하게 확인한다. 유실된 음성을 정상 전사로 보이지 않게 한다.
+  if (wav.readUInt32LE(4) !== wav.length - 8) fail(400, "WAV 길이가 맞지 않음");
+  const chunks = new Set();
+  for (let pos = 12; pos < wav.length;) {
+    if (pos + 8 > wav.length) fail(400, "잘린 WAV 머리말");
+    const id = wav.toString("latin1", pos, pos + 4);
+    const size = wav.readUInt32LE(pos + 4);
+    const end = pos + 8 + size + size % 2;
+    if (end > wav.length) fail(400, "잘린 WAV 본문");
+    if (id === "fmt " || id === "data") {
+      if (chunks.has(id)) fail(400, "중복 WAV 구간");
+      chunks.add(id);
+      if (id === "data" && size % 2) fail(400, "잘린 WAV 표본");
+      if (id === "fmt " && (wav.readUInt32LE(pos + 16) !== 32000 || wav.readUInt16LE(pos + 20) !== 2)) fail(400, "16 kHz 모노 PCM16 WAV만 됨");
+    }
+    pos = end;
+  }
+  const seconds = samples.length / 16000;
+  if (channels !== 1 || seconds < 0.5 || seconds > 10) fail(400, "발화 음성은 16 kHz 모노 PCM16 WAV 0.5~10초");
+  if (!samples.some((sample) => sample !== 0)) fail(422, "받아 적을 음성이 없어요");
+  const result = await transcribe(wav, check, signal); // 대기 뒤, 공급자로 보내기 직전에 다시 확인한다.
+  await check(); // 철회·재동의·참가자 삭제 뒤에 도착한 결과는 돌려주지 않는다.
+  if (result.text) return [200, { text: result.text, seconds, generation }];
+  if (result.reason === "empty") fail(422, "받아 적을 음성이 없어요");
+  if (result.reason === "rate_limited") fail(429, "음성 전사 요청이 많아요. 잠시 뒤 다시 해 주세요");
+  if (result.reason === "timeout") fail(504, "음성 전사 응답 시간이 지났어요");
+  fail(503, "음성을 받아 적지 못했어요. 원음을 보관하고 다시 시도해 주세요");
 }
 
 // 발화 대조(ADR-0008·0019): 발화 음성과 좌석 구역(앞줄·뒷줄)을 받아 그 줄 참가자의 등록 목소리와 비교해
@@ -847,7 +894,7 @@ async function withTrip(code, write, fn, lockedClient) {
   }
 }
 
-async function trips(req, [code, sub, id, leaf, ...rest], b, query) {
+async function trips(req, [code, sub, id, leaf, ...rest], b, query, signal) {
   const m = req.method;
   if (!code) {
     if (m !== "POST") fail(405, "POST만 됨");
@@ -902,6 +949,7 @@ async function trips(req, [code, sub, id, leaf, ...rest], b, query) {
     });
   }
   if (sub === "voice-match" && !id) return voiceMatch(code, req, query);
+  if (sub === "transcriptions" && !id) return transcriptions(code, req, query, signal);
   if (sub === "recordings") return recordings(code, id, req, query);
   if (sub === "participants" && m === "POST" && !id && b.profileId !== undefined) fail(410, RETIRED_GROUP);
   if (leaf === "voice") return participantVoice(code, id, req);
@@ -1180,18 +1228,58 @@ async function handle(trip, { req, m, sub, id, leaf, b, query, profile }, client
     }
   }
 
+  const readLines = async () => {
+    if (!participantOf(req, trip).consent) fail(403, "녹음에 동의한 참가자만 볼 수 있음");
+    const { rows } = await client.query("SELECT device, seq, at, text, asr_text, edited_text, edit_version, edited_by, edited_at, seat_area, participant_id, profile_id, confidence, lat, lng FROM utterances WHERE trip_code = $1 AND generation = $2 AND text <> '' ORDER BY at, device, seq", [trip.code, trip.generation ?? 1]);
+    return rows.map(asUtterance);
+  };
+  const todos = async (all) => {
+    const { rows } = await client.query("SELECT id, status, version FROM todo_states WHERE trip_code=$1 AND generation=$2", [trip.code, trip.generation ?? 1]);
+    return deriveTodos(all, rows);
+  };
+
+  if (sub === "todos" || sub === "arrival-briefing") {
+    if (!(sub === "todos" && ((m === "GET" && !id) || (m === "PATCH" && id))) && !(sub === "arrival-briefing" && m === "POST" && !id)) fail(405, "GET /todos, PATCH /todos/:id, POST /arrival-briefing만 됨");
+    const all = await readLines();
+    const generation = trip.generation ?? 1;
+    const items = await todos(all);
+    if (sub === "todos" && m === "GET" && !id) return [200, { generation, method: TODO_METHOD, items }];
+    if (sub === "todos" && m === "PATCH" && id) {
+      if (int(b.generation, 1, 2_147_483_647, "generation") !== generation) fail(409, "동의 세대가 바뀜 — 할 일을 다시 읽어 주세요");
+      const expected = int(b.expectedVersion, 0, 2_147_483_646, "expectedVersion");
+      const status = oneOf(b.status, ["pending", "done", "cancelled"], "status");
+      const todo = items.find((item) => item.id === id) ?? fail(404, "없는 할 일 — 원문이 바뀌거나 지워졌을 수 있음");
+      if (todo.version !== expected) fail(409, "다른 사람이 먼저 고침 — 할 일을 다시 읽어 주세요");
+      await client.query(
+        `INSERT INTO todo_states(trip_code,generation,id,status,version) VALUES($1,$2,$3,$4,$5)
+         ON CONFLICT(trip_code,generation,id) DO UPDATE SET status=EXCLUDED.status, version=EXCLUDED.version, updated_at=now()`,
+        [trip.code, generation, id, status, expected + 1]);
+      return changed(200, { generation, item: { ...todo, status, version: expected + 1 } });
+    }
+    if (sub === "arrival-briefing" && m === "POST" && !id) {
+      if (int(b.generation, 1, 2_147_483_647, "generation") !== generation) fail(409, "동의 세대가 바뀜 — 할 일을 다시 읽어 주세요");
+      const point = (value, name) => {
+        const p = obj(value, name);
+        return { lat: num(p.lat, -90, 90, `${name}.lat`), lng: num(p.lng, -180, 180, `${name}.lng`) };
+      };
+      const place = { ...point(b.place, "place"), name: text(b.place.name, 100, "place.name") };
+      const input = { place, position: point(b.position, "position"), parked: bool(b.parked, "parked"),
+        observedAt: int(b.observedAt, 0, Date.now() + 5_000, "observedAt"), source: oneOf(b.source, ["vehicle", "browser"], "source") };
+      input.parked = input.parked && ["parked", "ended"].includes(trip.status);
+      return [200, { generation, ...arrivalBriefing(input, items) }];
+    }
+    fail(405, "GET /todos, PATCH /todos/:id, POST /arrival-briefing만 됨");
+  }
+
   // 기록본에서 읽는 것(기록본, 장면 후보, 숏폼)은 모두 녹음에 동의한 참가자만 — 받아 적은 글이 들어간다.
   const lines = async () => {
     if (m !== "GET") fail(405, "GET만 됨");
-    if (!participantOf(req, trip).consent) fail(403, "녹음에 동의한 참가자만 볼 수 있음");
-    const { rows } = await client.query("SELECT device, seq, at, text, asr_text, edited_text, edit_version, edited_by, edited_at, seat_area, participant_id, profile_id, confidence, lat, lng FROM utterances WHERE trip_code = $1 AND text <> '' ORDER BY at", [trip.code]);
-    return rows.map(asUtterance);
+    return readLines();
   };
 
   if (sub === "transcript") {
-    // 기록본: 발화를 시간순으로, 부탁과 도착 할 일과 함께(T39).
-    // 도착 할 일 뽑기(LLM)는 아직 구현 전이다. 기록본 모양을 미리 맞춰 둔다(ADR-0007).
-    return [200, { generation: trip.generation ?? 1, utterances: await lines(), requests: trip.requests, todos: [] }];
+    const all = await lines();
+    return [200, { generation: trip.generation ?? 1, utterances: all, requests: trip.requests, todos: await todos(all) }];
   }
 
   if (sub === "scene-suggestions") {
@@ -1274,8 +1362,10 @@ export const server = createServer(async (req, res) => {
   let failure = null;
   let route = "/(bad-url)"; // 주소를 읽지 못한 요청. 아래 try에서 한 번만 읽는다(로그에서 다시 읽다 던지면 프로세스가 죽는다)
   // 'close'는 응답을 다 보냈을 때도, 클라이언트가 먼저 끊었을 때도 한 번 온다. 끊긴 것은 499(nginx의 관례)와 aborted로.
+  const cancelled = new AbortController();
   res.on("close", () => {
     const aborted = !res.writableFinished;
+    if (aborted) cancelled.abort();
     const status = aborted ? 499 : res.statusCode;
     if (!route.startsWith("/api/") && status < 400) return;
     log(status >= 500 && !aborted ? "error" : "info", "request", {
@@ -1319,7 +1409,7 @@ export const server = createServer(async (req, res) => {
       // 발화 묶음은 본문이 커서 그 경로만 따로 한도를 둔다(docs/api/voice.md).
       const big = seg[1] === "trips" && seg[3] === "utterances";
       // 목소리 등록(…/voice)·발화 대조는 이진 본문(WAV)이다 — JSON으로 먼저 읽지 않는다.
-      const binary = req.method === "POST" && (seg.at(-1) === "voice" || (seg[1] === "trips" && (seg[3] === "voice-match" || seg[3] === "recordings" || (seg[3] === "short-assets" && !seg[4]))));
+      const binary = req.method === "POST" && (seg.at(-1) === "voice" || (seg[1] === "trips" && (["voice-match", "recordings", "transcriptions"].includes(seg[3]) || (seg[3] === "short-assets" && !seg[4]))));
       const body = !binary && (req.method === "POST" || req.method === "PATCH") ? await readBody(req, big ? 1_000_000 : MAX_BODY) : {};
       if (seg[1] === "ride-links") return send(...(await rideLinks(req, seg.slice(2), { profileOf })));
       if (seg[1] === "boarding-invites") return send(...(await boardingInvites(req, seg.slice(2), body, { profileOf, withTrip, seats: SEATS })));
@@ -1331,7 +1421,7 @@ export const server = createServer(async (req, res) => {
         return send(...r);
       }
       if (seg[1] === "trips") {
-        const r = await trips(req, seg.slice(2), body, url.searchParams);
+        const r = await trips(req, seg.slice(2), body, url.searchParams, cancelled.signal);
         if (Buffer.isBuffer(r[1])) return void sendRaw(r[0], r[1], r[2]); // 클립 소리 같은 이진 응답
         return send(...r);
       }
