@@ -29,8 +29,11 @@ val FAMILY = listOf(
     Member("서준", Seat.ROW_2_LEFT), Member("하은", Seat.ROW_2_RIGHT),
 )
 
-/** profile은 프로필로 참가한 사람(그 프로필의 목소리 등록값이 대조 후보가 됨, #65). */
-data class Person(val id: String, val name: String, val seat: String, val consent: Boolean, val profile: Boolean = false)
+/**
+ * profile은 프로필로 참가한 사람(그 프로필의 목소리 등록값이 대조 후보가 됨, #65). character는 그 프로필의 캐릭터 값('glasses' 등):
+ * 여행 문서에는 없어 차가 콘텐츠 기록(GET /trips/{code}/contents의 members)에서 이어 붙인다. 손님·모름은 빈 글(자리 순서 캐릭터).
+ */
+data class Person(val id: String, val name: String, val seat: String, val consent: Boolean, val profile: Boolean = false, val character: String = "")
 
 /**
  * generation은 동의 세대(동의 철회로 올라감), createdAt은 만든 시각(epoch ms).

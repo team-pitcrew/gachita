@@ -101,11 +101,11 @@ fun GachitaTheme(content: @Composable () -> Unit) =
     }
 
 /**
- * 여행 화면의 두 껍데기(최종 시안). RIDE: 함께 타는 중·대화 기록(C17·C44, 여백 좌우 32·위아래 28, 머리 줄 64·간격 12, 칸 간격 16).
+ * 여행 화면의 두 껍데기(시안). RIDE: 함께 타는 중·대화 기록(녹음 화면 A안 2107:5597·C44 2019:1966, 여백 32, 머리 줄 64·간격 12, 칸 간격 24).
  * PARKED: 도착 브리핑·콘텐츠 기록(C20·D19·C22–C38, 여백 40, 머리 줄 80·간격 18, 칸 간격 24).
  */
 enum class Shell(val padH: Dp, val padV: Dp, val head: Dp, val headGap: Dp, val gap: Dp) {
-    RIDE(32.dp, 28.dp, 64.dp, 12.dp, 16.dp),
+    RIDE(32.dp, 32.dp, 64.dp, 12.dp, 24.dp),
     PARKED(40.dp, 40.dp, 80.dp, 18.dp, 24.dp),
 }
 
@@ -136,6 +136,13 @@ fun Character(index: Int, size: Dp, ring: Boolean = false) {
  */
 @Composable
 fun Avatar(index: Int, size: Dp, shape: Shape = CircleShape, ring: Boolean = false) = CharAvatar(SEAT_CHARS.getOrElse(index) { SEAT_CHARS[0] }, size, shape, ring)
+
+/** 참가자의 얼굴 그림: 그룹 여행이면 그 프로필의 캐릭터(Person.character), 손님이면 자리 순서(SEAT_CHARS). */
+fun faceRes(p: Person): Int = if (p.character.isNotBlank()) charDrawable(p.character)
+    else SEAT_CHARS.getOrElse(Seat.entries.indexOfFirst { it.name == p.seat }.coerceAtLeast(0)) { SEAT_CHARS[0] }
+
+@Composable
+fun Avatar(p: Person, size: Dp, shape: Shape = CircleShape, ring: Boolean = false) = CharAvatar(faceRes(p), size, shape, ring)
 
 /** Avatar와 같은 잘라 채우기를 캐릭터 그림(res/drawable-nodpi/char_*)으로. 온보딩·가족의 프로필 캐릭터(시안 'Character / 원본', 모서리 48). */
 @Composable
@@ -181,9 +188,9 @@ fun AppBar(title: String, listening: Boolean, vararg pills: Pair<String, Boolean
 @Composable
 fun Pill(text: String, ok: Boolean = true) {
     val c = MaterialTheme.colorScheme
-    val (bg, fg) = if (ok) c.primaryContainer to c.onPrimaryContainer else c.errorContainer to c.error
+    val (bg, fg) = if (ok) c.tertiaryContainer to c.tertiary else c.errorContainer to c.error // 시안 ok-soft·ok
     Row(Modifier.clip(CircleShape).background(bg).padding(horizontal = 20.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         Canvas(Modifier.size(14.dp)) { drawCircle(fg) } // 시안 pill(2014:940): 점 14, 위아래 8
-        Text(text, color = fg, maxLines = 1)
+        Text(text, color = fg, style = CarText.Label, maxLines = 1) // 시안 pill 글 24 Medium/32
     }
 }

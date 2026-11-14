@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 시안 프로필 메뉴 '사람 아이콘' 2219:5872(20, #ADC2B8). Figma 에셋 6fd79.svg를 옮김 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="20dp" android:height="20dp" android:viewportWidth="20" android:viewportHeight="20">
+    <path android:fillColor="#ADC2B8" android:pathData="M10,8.75C11.8502,8.75 13.35,7.25015 13.35,5.4C13.35,3.54985 11.8502,2.05 10,2.05C8.14985,2.05 6.65,3.54985 6.65,5.4C6.65,7.25015 8.14985,8.75 10,8.75Z" />
+    <path android:fillColor="#ADC2B8" android:pathData="M2.4,18V16.4C2.4,13.1 5.8,11 10,11C14.2,11 17.6,13.1 17.6,16.4V18H2.4Z" />
+</vector>
