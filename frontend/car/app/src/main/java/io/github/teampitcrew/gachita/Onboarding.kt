@@ -39,9 +39,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -125,6 +125,8 @@ class Onboarding(private val context: Context, private val prefs: SharedPreferen
 
     fun go(next: OnboardStep) { note = ""; step = next }
 
+    fun clearNote() { note = "" }
+
     private fun adopt(p: AccountProfile) {
         profile = p
         name = p.name
@@ -156,10 +158,10 @@ class Onboarding(private val context: Context, private val prefs: SharedPreferen
             val r = runCatching { AccountApi(url).enter(e, pw) }
             main.post {
                 busy = false
-                r.onSuccess { (got, existed) ->
+                r.onSuccess { (got, _) ->
                     val (p, t) = got
                     saveToken(t); password = ""; adopt(p)
-                    nextAfterAccount(p, existed)?.let(::go) ?: finish()
+                    go(OnboardStep.CONSENT) // 시안 C02 → C03. 로그인한 계정도 같은 길(동의·프로필·목소리)을 지난다
                 }.onFailure { note = accountError(it) }
             }
         }
@@ -214,7 +216,7 @@ class Onboarding(private val context: Context, private val prefs: SharedPreferen
             main.post {
                 if (failed != null) { note = failed; step = OnboardStep.VOICE; recorder = null; return@post }
                 pcm = bytes; heard = bytes.size / 2.0 / RATE; recorder = null
-                if (submitWhenStopped) { submitWhenStopped = false; submitVoice() }
+                submitWhenStopped = false; submitVoice() // 15초를 다 채웠거나 '녹음 완료'로 멈춤 → 올리고 C08(시안 C07 자동 → C08)
             }
         }
         recorder = rec
@@ -263,8 +265,11 @@ fun OnboardingScreen(o: Onboarding, gear: String?, driving: Boolean = false, onF
     val step = if (driving) OnboardStep.WELCOME else o.step ?: OnboardStep.WELCOME
     val p = o.profile
     val shownName = p?.name?.takeIf { it.isNotBlank() } ?: o.name
+    // 원본에 없는 오류 글(입력·서버·사진·마이크)은 본문에 따로 두지 않고 2047:2276 알림으로 잠깐 보인다(CarToast)
+    LaunchedEffect(o.note) { if (o.note.isNotEmpty()) { delay(toastMs(o.note)); o.clearNote() } }
     ParkedFrame(
         gear = gear ?: "P",
+        overlay = { CarToast(o.note) },
         bottom = {
             when (step) {
                 OnboardStep.WELCOME -> CarButton("가치타 시작하기", enabled = !driving) { o.go(OnboardStep.SIGNUP) }
@@ -300,7 +305,6 @@ fun OnboardingScreen(o: Onboarding, gear: String?, driving: Boolean = false, onF
                 Column(Modifier.width(680.dp), verticalArrangement = Arrangement.spacedBy(40.dp)) {
                     Moment("주행 중", "부탁은 놓치지 않도록", "도착할 때 필요한 내용을 모아드려요.")
                     Moment("주행 후", "즐거운 이야기는 오래도록", "목소리와 캐릭터로 남기는 우리 가족의 순간.")
-                    if (o.note.isNotEmpty()) Text(o.note, color = c.error, style = CarText.Label)
                 }
                 ArchivePreview()
             }
@@ -324,13 +328,11 @@ fun OnboardingScreen(o: Onboarding, gear: String?, driving: Boolean = false, onF
                     OnboardStep.PROFILE -> {
                         CarField("이름 또는 별명", o.name, { o.name = it.take(20) }, KeyboardType.Text, placeholder = "민준")
                         Text("내 캐릭터", style = CarText.Label, color = c.onSurfaceVariant)
-                        // 시안 '캐릭터 선택': surface, 모서리 32, 여백 24, 캐릭터 넷(안경·힐링·캡모자·기본) 140(모서리 48) 간격 30.
-                        // 시안에는 고른 상태 그림이 없어, 눌러 고른 뒤에만 말하는 사람 고리와 같은 테두리를 보인다(처음 화면은 시안 그대로).
-                        var tapped by remember { mutableStateOf(false) }
+                        // 시안 '캐릭터 선택': surface, 모서리 32, 여백 24, 캐릭터 넷(안경·힐링·캡모자·기본) 140(모서리 48) 간격 30. 고른 상태 그림은 시안에 없다.
                         Surface(Modifier.fillMaxWidth(), CarShape.Card, color = c.surface) {
                             Row(Modifier.padding(24.dp), horizontalArrangement = Arrangement.spacedBy(30.dp)) {
                                 CHARS.take(4).forEach { (key, res) ->
-                                    Box(Modifier.clip(CarShape.Face).clickable { o.character = key; tapped = true }) { CharAvatar(res, 140.dp, CarShape.Face, ring = tapped && key == o.character) }
+                                    Box(Modifier.clip(CarShape.Face).clickable { o.character = key }) { CharAvatar(res, 140.dp, CarShape.Face) }
                                 }
                             }
                         }
@@ -349,8 +351,7 @@ fun OnboardingScreen(o: Onboarding, gear: String?, driving: Boolean = false, onF
                     }
                     OnboardStep.VOICE, OnboardStep.RECORDING -> {
                         val rec = step == OnboardStep.RECORDING
-                        val late = rec && o.heard >= 7 // 앞 문장을 다 읽을 즈음 시안 C07의 이어 읽을 문장으로 바꾼다
-                        if (late) InfoCard("“함께 타는 순간을 오래 기억하고 싶어.”", "평소 말하는 목소리로 이어 읽어 주세요.", soft = true)
+                        if (rec) InfoCard("“함께 타는 순간을 오래 기억하고 싶어.”", "평소 말하는 목소리로 이어 읽어 주세요.", soft = true)
                         else InfoCard("“안녕, 나는 ${callName(shownName.ifBlank { "나" })}.", "우리 가족과 함께 여행하는 시간이 좋아. 오늘은 바다를 보러 가고, 맛있는 것도 먹을 거야.”", soft = true)
                         VoiceTimeline(rec, o.heard, o.levels)
                         if (!rec) Text("등록한 목소리로 차량에서 발화자를 구분해요.", style = CarText.Label, color = c.onSurfaceVariant)
@@ -360,7 +361,6 @@ fun OnboardingScreen(o: Onboarding, gear: String?, driving: Boolean = false, onF
                         InfoCard("다음은 우리 가족", "아이의 프로필도 ${shownName}님이 만들어 줄 수 있어요.")
                     }
                 }
-                if (o.note.isNotEmpty()) Text(o.note, color = c.error, style = CarText.Label)
             }
         }
     }

@@ -193,21 +193,6 @@ fun InfoCard(
     }
 }
 
-/** 오른쪽 '함께 타는 가족' 카드(시안 590 × 칸 높이, 여백 32, 간격 24): 제목 Title 40 · 설명 Body 28 · 캐릭터 110(간격 18) · 'N명' · 설명. */
-@Composable
-fun FamilyCard(faces: List<Int>, count: Int, modifier: Modifier = Modifier.width(590.dp)) {
-    val c = MaterialTheme.colorScheme
-    Surface(modifier, CarShape.Card, color = c.surface) {
-        Column(Modifier.padding(32.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
-            Text("차가 바뀌어도\n우리는 그대로", style = CarText.Title)
-            Text("한 번 만든 가족 프로필로\n차량과 폰에서 이어가세요.", style = CarText.Body, color = c.onSurfaceVariant)
-            Row(horizontalArrangement = Arrangement.spacedBy(18.dp)) { faces.take(4).forEach { CharAvatar(it, 110.dp, CarShape.Face) } }
-            Text("우리 가족  ${count}명", style = CarText.Headline)
-            Text("프로필과 목소리, 가족 그룹을\n같은 계정으로 함께 사용", style = CarText.Label, color = c.onSurfaceVariant)
-        }
-    }
-}
-
 /** 입력란(시안: 라벨 Label 24 ink-2, 칸 surface-2 · 모서리 32 · 여백 22 · Body 28, 높이 84). */
 @Composable
 fun CarField(label: String, value: String, change: (String) -> Unit, type: KeyboardType, secret: Boolean = false, placeholder: String = "") {
@@ -226,14 +211,20 @@ fun CarField(label: String, value: String, change: (String) -> Unit, type: Keybo
     }
 }
 
-/** 알림(시안 '복사했어요' 2047:2276: accent-soft, 모서리 24, 800 폭, 여백 28/24, Title 40). 틀의 overlay에 둔다. */
+/**
+ * 알림(시안 '복사했어요' 2047:2276: 화면 가운데 겹침, accent-soft, 모서리 24, 800 폭, 여백 28/24, Title 40, 1.5초 뒤 닫힘). 틀의 overlay에 둔다.
+ * 원본에 없는 오류·안내 글(서버·마이크·좌석)도 따로 화면을 두지 않고 이 알림으로만 보인다 — 읽을 틈을 두려고 그런 글은 3초.
+ */
 @Composable
 fun BoxScope.CarToast(text: String) {
     if (text.isEmpty()) return
-    Surface(Modifier.align(Alignment.BottomCenter).padding(bottom = 160.dp), CarShape.Ctl, color = MaterialTheme.colorScheme.primaryContainer) {
+    Surface(Modifier.align(Alignment.Center), CarShape.Ctl, color = MaterialTheme.colorScheme.primaryContainer) {
         Text(text, Modifier.padding(horizontal = 28.dp, vertical = 24.dp).width(744.dp), style = CarText.Title, color = MaterialTheme.colorScheme.onSurface)
     }
 }
+
+/** 알림이 떠 있는 시간: 시안의 '복사했어요'는 1.5초, 원본에 없는 오류·안내 글은 3초. */
+fun toastMs(text: String) = if (text == "복사했어요") 1500L else 3000L
 
 /** 시트(시안 공유 시트 2047:2279: surface, 800 폭, 모서리 28, 여백 32, 간격 20). */
 @Composable

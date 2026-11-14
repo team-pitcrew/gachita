@@ -25,13 +25,6 @@ class OnboardingTest {
         assertEquals(OnboardStep.PROFILE, firstOnboardStep(base.copy(consent = true, hasVoice = true), true))
     }
 
-    @Test fun `계정 뒤 - 동의가 없으면 동의, 로그인했고 목소리까지 있으면 끝`() {
-        assertEquals(OnboardStep.CONSENT, nextAfterAccount(base.copy(hasVoice = true), login = true))
-        assertNull(nextAfterAccount(base.copy(consent = true, hasVoice = true), login = true))
-        assertEquals(OnboardStep.PROFILE, nextAfterAccount(base.copy(consent = true), login = true))
-        assertEquals(OnboardStep.PROFILE, nextAfterAccount(base.copy(consent = true, hasVoice = true), login = false))
-    }
-
     @Test fun `읽을 문장의 조사와 임시 이름, 입력 검사`() {
         assertEquals("민준이야", callName("민준"))
         assertEquals("서아야", callName("서아"))
@@ -79,7 +72,6 @@ class OnboardingTest {
         assertEquals(listOf("/api/accounts", "/api/sessions"), paths)
         assertTrue(existed)
         assertEquals("p1", got.first.id)
-        assertNull(nextAfterAccount(got.first, existed)) // 동의·목소리까지 있는 계정은 온보딩을 마친다
     }
 
     @Test fun `C02 가입하고 계속 - 가입한 이메일인데 비밀번호가 틀리면 401 문장, 다른 오류는 로그인하지 않음`() {
