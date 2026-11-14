@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { arrivalAsks, askKeys, askLabel, dateRange, driveState, nextTarget, placeAt, recordingLine, rideHeading, ro, statusMoves, transcriptSections } from "./ride.js";
+import { arrivalAsks, arrivalCards, askKeys, askLabel, askState, dateRange, driveState, nextTarget, nearCard, placeAt, placesOf, recordingLine, rideHeading, ro, statusMoves, transcriptSections } from "./ride.js";
 
 // 시각은 이 컴퓨터의 시간대로 만든다(표시도 같은 시간대라 어디서 돌려도 같다).
 const at = (h, m, day = 14) => new Date(2026, 10, day, h, m).getTime();
@@ -60,9 +60,10 @@ test("제목과 부제는 시안 문구를 따르되 모르는 값은 빼고 조
   assert.equal(rideHeading({ kind: "near", place: "하나로마트", eta: 170 }).sub, "도착 약 3분 전 / 일행이 말한 부탁");
   assert.equal(rideHeading({ kind: "near", place: "하나로마트", eta: null }).sub, "일행이 말한 부탁");
   const items = [todo("고기", "마트", "mom", 30)];
-  assert.equal(rideHeading({ kind: "continue", place: "하나로마트", target: "강릉 숙소" }, { todos: items }).sub, "하나로마트의 부탁 1건 남음 / 강릉 숙소로 이동");
-  assert.equal(rideHeading({ kind: "continue", place: "하나로마트", target: "강릉 숙소" }, { todos: [] }).sub, "하나로마트의 부탁은 완료 / 강릉 숙소로 이동");
-  assert.equal(rideHeading({ kind: "continue", place: "하나로마트", target: "" }, { todos: null }).sub, "하나로마트에서 다시 출발", "할 일을 볼 수 없으면 완료했다고 말하지 않는다");
+  const fresh = (list) => askState({ ready: true, items: list, error: "" });
+  assert.equal(rideHeading({ kind: "continue", place: "하나로마트", target: "강릉 숙소" }, { asks: fresh(items) }).sub, "하나로마트의 부탁 1건 남음 / 강릉 숙소로 이동");
+  assert.equal(rideHeading({ kind: "continue", place: "하나로마트", target: "강릉 숙소" }, { asks: fresh([]) }).sub, "하나로마트의 부탁은 완료 / 강릉 숙소로 이동");
+  assert.equal(rideHeading({ kind: "continue", place: "하나로마트", target: "" }, { asks: askState(null) }).sub, "하나로마트에서 다시 출발", "할 일을 볼 수 없으면 완료했다고 말하지 않는다");
 });
 
 test("도착한 곳의 부탁을 확인된 화자별로 묶고 모르는 화자는 맨 뒤 한 묶음", () => {
@@ -124,4 +125,82 @@ test("기록 상태 띠와 운전석 단추는 여행 상태를 따른다", () =
   assert.deepEqual(statusMoves({ status: "parked" }, { kind: "arrived" }).map(([, s]) => s), ["driving", "ended"], "도착하면 여행 계속이 먼저");
   assert.deepEqual(statusMoves({ status: "parked" }, { kind: "parked" }).map(([, s]) => s), ["ended", "driving"]);
   assert.deepEqual(statusMoves({ status: "ended" }, { kind: "ended" }), []);
+});
+
+test("마지막 할 일 읽기가 실패하면 받아 둔 목록으로 완료·남은 수를 단정하지 않는다(P21)", () => {
+  const continuing = { kind: "continue", place: "하나로마트", target: "강릉 숙소" };
+  // 마트에서 빈 목록을 받은 뒤, 다시 달리는 중 다음 읽기가 503: 목록은 남아 있지만 error가 붙는다(todos.js)
+  const stale = askState({ ready: true, items: [], error: "할 일을 불러오지 못했어요.", at: at(10, 20) });
+  assert.equal(stale.kind, "stale");
+  assert.equal(rideHeading(continuing, { asks: stale }).sub, "하나로마트에서 다시 출발 / 강릉 숙소로 이동", "실패 중에는 '부탁은 완료'라고 말하지 않는다");
+  assert.equal(rideHeading(continuing, { asks: askState({ ready: true, items: [todo("물", "마트", "mom", 1)], error: "연결이 끊겼어요." }) }).sub, "하나로마트에서 다시 출발 / 강릉 숙소로 이동", "남은 수도 말하지 않는다");
+  assert.deepEqual(askState({ ready: false, items: [], error: "연결이 끊겼어요." }), { kind: "failed", items: [] });
+  assert.deepEqual(askState({ ready: false, items: [], error: "" }), { kind: "loading", items: [] });
+  assert.equal(rideHeading(continuing, { asks: askState({ ready: false, items: [], error: "" }) }).sub, "하나로마트에서 다시 출발 / 강릉 숙소로 이동", "불러오는 중에도 단정하지 않는다");
+  assert.equal(askState({ ready: true, items: [], error: "" }).kind, "fresh", "다시 읽기에 성공하면 그때 완료를 말한다");
+});
+
+// 카드가 실제로 그리는 글. h()가 쓰는 만큼만 흉내 낸 DOM(todos.test.mjs와 같은 방식).
+const fakeDom = () => {
+  const el = (tag) => ({ tag, kids: [], append(...k) { this.kids.push(...k); }, setAttribute() {} });
+  globalThis.document = { createElement: el };
+  const walk = (n, out = []) => { if (n == null || n === false) return out; if (Array.isArray(n)) n.forEach((k) => walk(k, out)); else if (typeof n !== "object") out.push(String(n)); else n.kids?.forEach((k) => walk(k, out)); return out; };
+  return (node) => walk(node).join("\n");
+};
+
+test("곧 도착·도착 카드도 실패한 목록이면 수를 말하지 않고 받은 시각을 밝힌다", () => {
+  const text = fakeDom();
+  const items = [todo("고기", "마트", "mom", 30), todo("간식", "마트", "kid", 35)];
+  const near = { kind: "near", place: "하나로마트" };
+  assert.match(text(nearCard(near, askState({ ready: true, items, error: "" }))), /내리기 전에 기억할 2가지/);
+  const stale = text(nearCard(near, askState({ ready: true, items, error: "연결이 끊겼어요.", at: at(10, 20) })));
+  assert.doesNotMatch(stale, /2가지/);
+  assert.match(stale, /10:20에 받은 부탁이에요/);
+  assert.match(text(nearCard(near, askState({ ready: true, items: [], error: "연결이 끊겼어요." }))), /받은 목록에는 이곳 부탁이 없어요/, "실패 중 빈 목록을 '없어요'로 단정하지 않는다");
+  assert.match(text(nearCard(near, askState({ ready: false, items: [], error: "" }))), /불러오고 있어요/, "불러오는 중을 '없어요'로 말하지 않는다");
+  const avatar = () => "얼굴";
+  const arrived = { kind: "arrived", place: "하나로마트" };
+  assert.match(text(arrivalCards(arrived, askState({ ready: true, items, error: "" }), people, avatar)), /필요한 내용만 모았어요/);
+  const failing = text(arrivalCards(arrived, askState({ ready: true, items, error: "연결이 끊겼어요.", at: at(10, 20) }), people, avatar));
+  assert.match(failing, /엄마/); assert.match(failing, /10:20에 받은 부탁이에요/);
+  assert.match(text(arrivalCards(arrived, askState({ ready: true, items: [], error: "연결이 끊겼어요." }), people, avatar)), /받은 목록에는 이곳 부탁이 없어요/);
+  assert.match(text(arrivalCards(arrived, askState(null), people, avatar)), /동의하고 이 폰에서 연결한 사람만/);
+  delete globalThis.document;
+});
+
+test("여럿이 같은 부탁을 말했으면 확인된 화자마다 그 사람 카드에 넣는다(P20)", () => {
+  // 서버 deriveTodos는 엄마와 하은이 같은 문장을 말하면 원발화를 한 항목으로 합친다
+  const milk = { id: "우유", place: "마트", text: "마트에서 우유 사자", status: "pending", version: 0, sources: [
+    { device: "car", seq: 1, at: at(9, 40), participantId: "mom" },
+    { device: "car", seq: 2, at: at(9, 41), participantId: "kid" },
+    { device: "car", seq: 3, at: at(9, 42), participantId: "mom" },
+    { device: "car", seq: 4, at: at(9, 43) },
+  ] };
+  const groups = arrivalAsks([milk, todo("간식", "마트", "kid", 50)], "하나로마트", people);
+  assert.deepEqual(groups.map((g) => [g.name, g.items.map((t) => t.id), g.said.map((t) => new Date(t).getMinutes())]), [
+    ["엄마", ["우유"], [40]],
+    ["하은", ["우유", "간식"], [41, 50]],
+  ], "엄마 카드와 하은 카드에 모두, 한 사람 안에서는 한 번만, 시각은 그 사람이 말한 때");
+  assert.equal(groups.some((g) => g.person === null), false, "확인된 화자가 있으면 모르는 화자 묶음을 따로 만들지 않는다");
+  assert.deepEqual(arrivalAsks([{ ...milk, sources: [{ device: "car", seq: 1, at: at(9, 40), participantId: "gone" }] }], "마트", people).map((g) => g.name), ["말한 사람 미확인"]);
+});
+
+test("장소 기록은 배열 순서가 아니라 at이 가장 큰 것을 지금 상태로 본다(#370)", () => {
+  // 늦게 도착한 옛 'approaching'이 배열 맨 뒤에 붙은 경우
+  const late = [
+    { name: "우리 집", kind: "start", at: at(9, 20) },
+    { name: "강릉 숙소", kind: "destination", at: at(9, 20) },
+    { name: "하나로마트", kind: "approaching", at: at(10, 2), etaSeconds: 170 },
+    { name: "하나로마트", kind: "arrived", at: at(10, 5) },
+    { name: "하나로마트", kind: "approaching", at: at(10, 1), etaSeconds: 240 },
+  ];
+  assert.deepEqual(placesOf({ places: late }).map((p) => p.at), [at(9, 20), at(9, 20), at(10, 1), at(10, 2), at(10, 5)]);
+  assert.equal(driveState({ status: "driving", recording: true, places: late }).kind, "continue", "P21: 뒤에 붙은 옛 approaching으로 곧 도착(P19)을 다시 띄우지 않는다");
+  assert.equal(driveState({ status: "parked", places: late }).place, "하나로마트", "P20: 가장 늦은 arrived");
+  const nearLate = [{ name: "하나로마트", kind: "approaching", at: at(10, 2), etaSeconds: 170 }, { name: "우리 집", kind: "start", at: at(9, 20) }];
+  assert.equal(driveState({ status: "driving", recording: true, places: nearLate }).kind, "near", "P19: 옛 출발 기록이 뒤에 붙어도 곧 도착");
+  assert.equal(driveState({ status: "parked", places: [{ name: "하나로마트", kind: "arrived", at: at(10, 5) }, { name: "하나로마트", kind: "approaching", at: at(10, 2) }] }).kind, "arrived");
+  const line = (seq, h, m) => ({ device: "car", seq, at: at(h, m), shown: `말 ${seq}` });
+  assert.deepEqual(transcriptSections([line(1, 9, 30), line(2, 10, 3), line(3, 10, 30)], { places: late }).map((s) => s.place), ["우리 집", "하나로마트 근처", "하나로마트"], "대화 머리도 시각 순으로");
+  assert.equal(placeAt(placesOf({ places: late }), at(10, 3)), "하나로마트 근처");
 });

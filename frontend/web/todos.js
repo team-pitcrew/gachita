@@ -161,7 +161,7 @@ export function createTodos({ getTrip, getParticipant, getToken, request, onChan
   const snapshot = () => {
     const me = getParticipant();
     if (!state || todoAccess(me, getToken()) || state.denied) return null;
-    return { ready: state.ready, items: state.items, arrival: state.arrival, error: state.error };
+    return { ready: state.ready, items: state.items, arrival: state.arrival, error: state.error, at: state.at ?? null };
   };
   return { card, sync, snapshot };
 }

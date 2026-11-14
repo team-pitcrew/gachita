@@ -17,8 +17,10 @@ export function ro(word) {
   return `${word}${tail === 0 || tail === 8 ? "로" : "으로"}`;
 }
 
-// 서버의 장소 기록. 쌓인 순서(차가 보낸 순서)를 그대로 두고, 이름이 없는 것만 뺀다.
-export const placesOf = (trip) => (Array.isArray(trip?.places) ? trip.places : []).filter((p) => p && typeof p.name === "string" && p.name.trim());
+// 서버의 장소 기록을 시각(at) 순으로. 늦게 도착한 옛 기록이 배열 뒤에 붙을 수 있어 배열 순서를 믿지 않는다(#370 계약:
+// 지금 상태는 at이 가장 큰 기록). 같은 시각이면 배열 순서를 지키고, 시각이 없는 기록은 가장 오래된 것으로 둔다. 이름 없는 것은 뺀다.
+const atOf = (p) => (Number.isFinite(p.at) ? p.at : -Infinity);
+export const placesOf = (trip) => (Array.isArray(trip?.places) ? trip.places : []).filter((p) => p && typeof p.name === "string" && p.name.trim()).sort((a, b) => atOf(a) - atOf(b));
 
 // 다음에 갈 곳: 아직 도착하지 않은 첫 경유지, 없으면 마지막 목적지(도착했으면 없음).
 export function nextTarget(places) {
@@ -45,6 +47,20 @@ export function driveState(trip, { arrival = null, seenArrival = "", nearSeen = 
   return arrived ? { kind: "continue", place: arrived, target } : { kind: "drive", target };
 }
 
+// 부탁 목록을 어디까지 믿을지(todos.snapshot()의 값). 마지막 읽기가 실패했으면 받은 목록을 보이되 'stale'이라
+// 완료·남은 수를 단정하지 않는다. kind: denied(동의 전·권한 없음) | loading | failed(받은 적 없음) | stale | fresh
+export function askState(list) {
+  if (!list) return { kind: "denied", items: [] };
+  if (!list.ready) return { kind: list.error ? "failed" : "loading", items: [] };
+  return { kind: list.error ? "stale" : "fresh", items: Array.isArray(list.items) ? list.items : [], at: list.at ?? null };
+}
+const ASK_NOTE = {
+  denied: "기록에 동의하고 이 폰에서 연결한 사람만 부탁을 볼 수 있어요.",
+  loading: "부탁을 불러오고 있어요.",
+  failed: "연결이 끊겨 부탁을 불러오지 못했어요. 다시 이어지면 보여 드려요.",
+};
+const staleNote = (asks) => `연결이 끊겨 ${asks.at ? `${hhmm(asks.at)}에 ` : ""}받은 부탁이에요. 그 뒤에 바뀐 것은 아직 보이지 않아요.`;
+
 // 그 장소에서 챙길 미완료 할 일(서버와 같은 이름 포함 규칙).
 export const asksAt = (items, place) => (place && Array.isArray(items) ? items.filter((t) => t.status === "pending" && placeMatches(t.place, place)) : []);
 
@@ -56,24 +72,32 @@ export function askLabel(todo) {
 }
 
 // 도착한 곳의 부탁을 말한 사람별로 묶는다. 이름은 서버가 확인한 화자(participantId)만 붙이고, 모르면 한 묶음으로 둔다.
+// 같은 부탁을 여럿이 말했으면(서버가 원발화를 한 항목으로 합침) 확인된 화자마다 그 사람 카드에 넣는다(중복 없이).
+// 확인된 화자가 하나도 없을 때만 '말한 사람 미확인'에 넣는다. said는 그 사람이 그 부탁을 처음 말한 시각(items와 같은 순서).
 // 묶음 순서는 그 사람이 처음 말한 시각, 모르는 화자는 맨 뒤.
 export function arrivalAsks(items, place, participants = []) {
   const groups = new Map();
+  const add = (person, todo, sources) => {
+    const id = person?.id ?? "";
+    if (!groups.has(id)) groups.set(id, { person, name: person?.name ?? "말한 사람 미확인", items: [], said: [], first: Infinity });
+    const group = groups.get(id), at = Math.min(...sources.map((s) => s.at).filter(Number.isFinite));
+    group.items.push(todo);
+    group.said.push(Number.isFinite(at) ? at : null);
+    group.first = Math.min(group.first, at);
+  };
   for (const todo of asksAt(items, place)) {
     const sources = Array.isArray(todo.sources) ? todo.sources : [];
-    const speaker = sources.find((s) => participants.some((p) => p.id === s.participantId))?.participantId;
-    const person = participants.find((p) => p.id === speaker) ?? null;
-    const id = person?.id ?? "";
-    if (!groups.has(id)) groups.set(id, { person, name: person?.name ?? "말한 사람 미확인", items: [], first: Infinity });
-    const group = groups.get(id);
-    group.items.push(todo);
-    group.first = Math.min(group.first, ...sources.map((s) => s.at).filter(Number.isFinite));
+    const speakers = participants.filter((p) => sources.some((s) => s.participantId === p.id));
+    if (!speakers.length) add(null, todo, sources);
+    for (const person of speakers) add(person, todo, sources.filter((s) => s.participantId === person.id));
   }
   return [...groups.values()].sort((a, b) => !a.person - !b.person || a.first - b.first);
 }
 
-// 제목과 부제. todos가 null이면 할 일을 볼 수 없는 사람(동의 전)이라 부탁 수를 말하지 않는다.
-export function rideHeading(state, { title, waiting = [], todos = null } = {}) {
+// 제목과 부제. asks는 askState(). 마지막 읽기가 성공한 목록(fresh)일 때만 부탁을 완료했다거나 몇 건 남았다고 말하고,
+// 동의 전·불러오는 중·읽기 실패(받은 목록이 있어도)에는 중립 문구를 쓴다.
+export function rideHeading(state, { title, waiting = [], asks = null } = {}) {
+  const todos = asks?.kind === "fresh" ? asks.items : null;
   const trip = title || "함께 탄 여행";
   const going = state.target ? `${ro(state.target)} 이동 중` : "";
   switch (state.kind) {
@@ -116,7 +140,7 @@ export function dateRange(from, to) {
 
 // 그 시각에 차가 있던 곳: 그 시각 이전의 마지막 출발·곧 도착·도착 기록. 경유지·목적지는 갈 곳이라 쓰지 않는다.
 export function placeAt(places, at) {
-  let found = "";
+  let found = ""; // places는 at 순(placesOf)이어야 한다
   for (const p of places) if (["start", "approaching", "arrived"].includes(p.kind) && Number.isFinite(p.at) && p.at <= at) found = p.kind === "approaching" ? `${p.name} 근처` : p.name;
   return found;
 }
@@ -124,7 +148,7 @@ export function placeAt(places, at) {
 // 받아 적은 글을 'HH:MM / 장소' 머리로 묶는다. 같은 장소에서 gap 안에 이어진 말은 한 묶음이고,
 // 할 일의 원발화(asks: 'device:seq')는 따로 '부탁' 카드가 된다. lines는 transcriptLines()의 시간순 결과.
 export function transcriptSections(lines, { places = [], asks = new Set(), gap = 5 * 60_000 } = {}) {
-  const log = [...places].filter((p) => Number.isFinite(p?.at)).sort((a, b) => a.at - b.at);
+  const log = placesOf({ places }).filter((p) => Number.isFinite(p.at));
   const out = [];
   for (const line of lines) {
     const place = placeAt(log, line.at);
@@ -173,24 +197,28 @@ export function seatMap(trip, me, avatar) {
   );
 }
 
-// 곧 도착(P19): 그 장소에서 챙길 부탁. todos가 null이면 볼 수 없는 이유를 말한다.
-export function nearCard(state, todos, reason) {
-  const asks = asksAt(todos, state.place);
+// 곧 도착(P19): 그 장소에서 챙길 부탁. asks는 askState(). 목록을 못 믿으면 수를 말하지 않는다.
+export function nearCard(state, asks) {
+  const list = asksAt(asks.items, state.place);
+  const note = ASK_NOTE[asks.kind];
   return h("section", { className: "ride-card near-card", role: "status" },
-    h("h2", {}, reason ? "부탁은 기록에 동의한 사람만 봐요" : asks.length ? `내리기 전에 기억할 ${asks.length}가지` : "이곳에서 챙길 부탁은 아직 없어요"),
-    reason ? h("p", {}, reason) : asks.length > 0 && h("ul", { className: "near-asks" }, asks.map((t) => h("li", {}, askLabel(t)))),
+    h("h2", {}, note ? "내리기 전에 기억할 부탁" : asks.kind === "stale" ? (list.length ? "내리기 전에 기억할 부탁" : "받은 목록에는 이곳 부탁이 없어요") : list.length ? `내리기 전에 기억할 ${list.length}가지` : "이곳에서 챙길 부탁은 아직 없어요"),
+    note ? h("p", {}, note) : list.length > 0 && h("ul", { className: "near-asks" }, list.map((t) => h("li", {}, askLabel(t)))),
+    asks.kind === "stale" && h("p", { className: "meta" }, staleNote(asks)),
     h("p", { className: "meta" }, "주차하면 사람별로 자세히 보여드릴게요."),
   );
 }
 
-// 도착(P20): 사람별 부탁 카드.
-export function arrivalCards(state, todos, participants, avatar, reason) {
-  const groups = arrivalAsks(todos, state.place, participants);
-  if (reason || !groups.length) return [h("section", { className: "ride-card ask-person" }, h("p", { className: "ask-title" }, reason ? "부탁은 기록에 동의한 사람만 봐요" : "여기서 챙길 부탁은 없어요"), reason && h("p", { className: "ask-detail" }, reason))];
+// 도착(P20): 사람별 부탁 카드. asks는 askState(). 읽기가 실패한 목록이면 받은 시각을 밝힌다.
+export function arrivalCards(state, asks, participants, avatar) {
+  const groups = arrivalAsks(asks.items, state.place, participants);
+  const note = ASK_NOTE[asks.kind];
+  const footer = h("p", { className: "ride-note" }, asks.kind === "stale" ? staleNote(asks) : "방금까지의 대화에서 이 장소에 필요한 내용만 모았어요.");
+  if (note || !groups.length) return [h("section", { className: "ride-card ask-person" }, h("p", { className: "ask-title" }, note ? "내리기 전, 일행이 말한 부탁" : asks.kind === "stale" ? "받은 목록에는 이곳 부탁이 없어요" : "여기서 챙길 부탁은 없어요"), note && h("p", { className: "ask-detail" }, note)), !note && asks.kind === "stale" && footer];
   return [
     ...groups.map((g) => {
       const first = g.items[0];
-      const said = first.sources?.find((s) => Number.isFinite(s.at))?.at;
+      const said = g.said[0];
       return h("section", { className: "ride-card ask-person" },
         avatar(g.person ?? {}),
         h("div", { className: "ask-copy" },
@@ -199,7 +227,7 @@ export function arrivalCards(state, todos, participants, avatar, reason) {
         ),
       );
     }),
-    h("p", { className: "ride-note" }, "방금까지의 대화에서 이 장소에 필요한 내용만 모았어요."),
+    footer,
   ];
 }
 

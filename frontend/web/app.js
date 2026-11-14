@@ -14,7 +14,7 @@ import { CHARACTER_OPTIONS, characterKey, characterImage, createShortFilm, expor
 import { createShortStudio } from "/short-studio.js";
 import { createScenePicker } from "/short-scenes.js";
 import { createBoarding } from "/boarding.js";
-import { appBar, arrivalCards, driveState, journeyTabs, nearCard, recordingLine, rideHeading, seatMap, statusMoves } from "/ride.js";
+import { appBar, arrivalCards, askState, driveState, journeyTabs, nearCard, recordingLine, rideHeading, seatMap, statusMoves } from "/ride.js";
 
 // 여행 상태 이름. 상태별 제목·부제·운전석 단추는 ride.js가 고른다.
 const TRIP = { boarding: "탑승 중", driving: "주행 중", parked: "주차 완료", ended: "여행 종료" };
@@ -573,12 +573,13 @@ function tripView(me) {
   const open = trip.requests.filter((r) => !CLOSED.includes(r.status));
 
   // 지금 상태 고르기. 할 일은 기록에 동의하고 이 폰에서 연결한 사람만 읽는다(todos.snapshot이 null이면 부탁을 말하지 않음).
+  // 마지막 읽기가 실패한 목록(stale)으로는 완료·남은 수를 단정하지 않는다.
   const scope = `${trip.code}:${trip.generation ?? 1}`;
   const list = todos.snapshot();
-  const reason = list ? "" : "기록에 동의하고 이 폰에서 연결한 사람만 부탁을 볼 수 있어요.";
+  const asks = askState(list);
   if (trip.status === "parked" && list?.arrival?.place) ride.seen = { key: scope, place: list.arrival.place };
   const state = driveState(trip, { arrival: list?.arrival, seenArrival: ride.seen.key === scope ? ride.seen.place : "", nearSeen: ride.near.key === scope ? ride.near.place : "" });
-  const heading = rideHeading(state, { title: trip.title, waiting, todos: list?.ready ? list.items : null });
+  const heading = rideHeading(state, { title: trip.title, waiting, asks });
   const [recordText, recordOn] = recordingLine(trip, waiting);
 
   // 아래 단추: 기록 중지·재개(주행 중, 누구나), 곧 도착 '확인', 그 밖에는 운전석의 다음 여행 상태. 부탁 남기기는 늘 함께.
@@ -619,8 +620,8 @@ function tripView(me) {
   const band = (withToggle) => h("section", { className: `ride-status${recordOn ? " on" : ""}`, role: "status" },
     h("div", { className: "between" }, h("strong", {}, recordText), withToggle && recordButton("plain")),
     h("p", { className: "meta" }, "실제 녹음 상태는 차 화면에서 확인해 주세요."));
-  const now = state.kind === "near" ? [nearCard(state, list?.items, reason), band(true)]
-    : state.kind === "arrived" ? arrivalCards(state, list?.items, trip.participants, personAvatar, reason)
+  const now = state.kind === "near" ? [nearCard(state, asks), band(true)]
+    : state.kind === "arrived" ? arrivalCards(state, asks, trip.participants, personAvatar)
     : [seatMap(trip, me, personAvatar), band(false)];
 
   return [
