@@ -158,7 +158,7 @@ class MainActivity : ComponentActivity() {
                 if ("${t.code}:${box.generation}" != rawSeen) { rawSeen = "${t.code}:${box.generation}"; dropRaw(filesDir, t.code, below = box.generation) } // 옛 세대의 원음은 지운다
             }
         }
-    private enum class Destination(val label: String) { RIDE("함께 타는 중"), CONVERSATION("대화 기록"), SHORTS("쇼츠") }
+    private enum class Destination(val label: String) { RIDE("함께 타는 중"), CONVERSATION("대화 기록"), SHORTS("콘텐츠 기록") } // 콘텐츠 기록은 K3 전까지 쇼츠 화면
     private var destination by mutableStateOf(Destination.RIDE)
     private var shortStudioActive = false
     private var retentionMs: Long? = null // null은 무기한. 디버그 keepMs 인자가 있을 때만 만료 시험을 한다.
@@ -1792,11 +1792,24 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // 콘텐츠 기록 탭(F6, Contents.kt). 예전 쇼츠 스튜디오(생성·보관함·삭제)는 그 안의 '쇼츠 만들기·보관함'으로 연다.
+    private var studioOpen by mutableStateOf(false)
+
     @Composable
     private fun ShortsLibrary(t: Trip, modifier: Modifier) {
         if (!appVisible || carStatus.restricted || t.status == "driving") return
         val scope = contentScope()
         val url = server
+        if (!studioOpen && shortNote != "숏폼을 받고 있어요") {
+            androidx.compose.runtime.key(url, t.code, t.generation, scope?.token) {
+                ContentsRecord(url, t.code, scope?.token,
+                    canRead = { appVisible && !isDestroyed && s.online && !carStatus.restricted && scope != null && contentScope() == scope && server == url && s.trip?.status != "driving" && handoff.state == Handoff.State.OFF },
+                    canPlay = { appVisible && !isDestroyed && !carStatus.restricted && s.trip?.status != "driving" && handoff.state == Handoff.State.OFF },
+                    onRide = { destination = Destination.RIDE }, onStudio = { studioOpen = true },
+                    onActiveChange = ::shortStudioActiveChanged, members = t.people.size, modifier = modifier)
+            }
+            return
+        }
         Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
             if (shortNote.isNotBlank()) Text(shortNote, fontSize = 22.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             if (shortNote == "숏폼을 받고 있어요") {
@@ -1806,7 +1819,7 @@ class MainActivity : ComponentActivity() {
                 ShortStudio(url, t.code, t.generation, scope?.token, t.title,
                     canRead = { appVisible && !isDestroyed && s.online && !carStatus.restricted && scope != null && contentScope() == scope && server == url && s.trip?.people?.all { it.consent } == true && s.trip?.status != "driving" && handoff.state == Handoff.State.OFF },
                     canPlay = { appVisible && !isDestroyed && !carStatus.restricted && s.trip?.status != "driving" && handoff.state == Handoff.State.OFF },
-                    onClose = { destination = Destination.RIDE },
+                    onClose = { studioOpen = false },
                     onActiveChange = ::shortStudioActiveChanged, participantId = tokens.entries.singleOrNull { it.value == scope?.token }?.key, modifier = Modifier.weight(1f).fillMaxWidth())
             }
         }

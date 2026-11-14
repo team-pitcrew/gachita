@@ -73,6 +73,8 @@ class Server(base: String, private val open: (URL) -> HttpURLConnection = { it.o
         sharedArrival(call("POST", "/api/trips/$code/arrival-briefing", observation.body(generation, parked = true), token)!!)
 
     fun shortform(code: String, token: String): String = call("GET", "/api/trips/$code/shortform", null, token)!!
+    /** 콘텐츠 기록(F6): 이 여행 하나의 구성원·장소·경로·콘텐츠(docs/api/places.md). 녹음에 동의한 참가자 토큰만. */
+    fun contents(code: String, token: String): String = call("GET", "/api/trips/$code/contents", null, token, timeoutMs = 10000)!!
 
     fun shortTemplates(): JSONObject = JSONObject(call("GET", "/api/short-templates", null)!!)
     fun shortPlan(code: String, token: String, template: String, audio: Boolean): JSONObject = JSONObject(call("POST", "/api/trips/$code/short-plans", JSONObject().put("templateId", template).put("audioReference", audio), token)!!)
