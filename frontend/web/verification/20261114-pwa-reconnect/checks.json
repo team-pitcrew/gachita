@@ -1,0 +1,12 @@
+{
+  "browser": "Ego Lite desktop Chromium",
+  "physicalPhone": false,
+  "offlineReloadNotice": true,
+  "newProfileHidden": true,
+  "profileTokenPreserved": true,
+  "autoRecoveryWithoutReload": true,
+  "profileFormHiddenUntilLoaded": true,
+  "profileFormRestored": true,
+  "draftAndFocusPreservedOnReconnect": true,
+  "finalRevisionRecoveryPassed": true
+}

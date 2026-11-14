@@ -57,6 +57,8 @@ const myToken = () => store(`${code()}:token`); // 참가자 토큰: 동의 켜�
 
 let trip = null; // 서버에서 받은 여행
 let profile = null; // 이 폰의 프로필(GET /api/profiles/me). 토큰은 store("profile")
+let profileRead = null; // 같은 토큰의 중복 조회를 합칩니다.
+let profileError = false;
 let photo = ""; // 내 사진(object URL)
 const pdraft = { name: "", character: "", photo: null, preview: "", consentDefault: false };
 let failed = ""; // 여행을 불러오지 못한 이유
@@ -127,20 +129,37 @@ const openConversations = () => {
 };
 
 // 프로필 다시 읽기. 지워졌거나 모르는 토큰이면 이 폰에서도 잊는다.
-async function loadProfile() {
+function loadProfile() {
+  const token = store("profile");
+  if (profileRead?.token === token) return profileRead.promise;
+  const read = { token };
+  profileRead = read;
+  read.promise = readProfile(token).finally(() => { if (profileRead === read) profileRead = null; });
+  return read.promise;
+}
+
+async function readProfile(token) {
   profile = null;
+  profileError = false;
   URL.revokeObjectURL(photo);
   photo = "";
-  if (!store("profile")) return;
+  if (!token) return;
   try {
-    profile = await mine("GET", "/profiles/me");
+    const next = await api("GET", "/profiles/me", undefined, token);
+    if (store("profile") !== token) return;
+    profile = next;
   } catch (e) {
-    if (e.status === 401) store("profile", null); // 서버가 모르는 토큰일 때만 잊는다(서버가 잠시 멈춘 것과 구분)
+    if (store("profile") !== token) return;
+    if (e.status === 401) store("profile", null); // 서버가 모르는 토큰일 때만 잊습니다.
+    else profileError = true;
     return;
   }
   if (profile.hasPhoto) {
-    const res = await fetch("/api/profiles/me/photo", { headers: { authorization: `Bearer ${store("profile")}` } }).catch(() => null);
-    if (res?.ok) photo = URL.createObjectURL(await res.blob());
+    const res = await fetch("/api/profiles/me/photo", { headers: { authorization: `Bearer ${token}` } }).catch(() => null);
+    if (res?.ok) {
+      const image = await res.blob();
+      if (store("profile") === token) photo = URL.createObjectURL(image);
+    }
   }
 }
 
@@ -197,6 +216,11 @@ const typing = () => app.contains(document.activeElement) && /^(INPUT|SELECT)$/.
 
 async function refresh(force) {
   if (failed && !force) return;
+  const recoveringProfile = !profile && !!store("profile") && navigator.onLine !== false;
+  if (recoveringProfile) {
+    await loadProfile();
+    if (profile && location.hash === "#me") fillDraft();
+  }
   if (code()) {
     try {
       const next = await call("GET", `/${code()}${trip && !force ? `?v=${trip.version}` : ""}`);
@@ -215,7 +239,7 @@ async function refresh(force) {
       trip = null;
       failed = e.message;
     }
-  } else if (!force) return; // 첫 화면은 서버에서 바뀔 것이 없다
+  } else if (!force && !recoveringProfile) return;
   if (typing() && !force) stale = true;
   else render();
 }
@@ -370,7 +394,16 @@ async function googleBack() {
   }
 }
 
+function profileConnection() {
+  return h("section", { className: "card", role: "status" },
+    h("h2", {}, profileError ? "프로필을 불러오지 못했어요" : "프로필을 확인하고 있어요"),
+    h("p", { className: "meta" }, "연결이 돌아오면 기존 프로필을 다시 보여 드려요. 새 프로필을 만들 필요는 없어요."),
+    button("다시 불러오기", () => refresh(true)),
+  );
+}
+
 function profileView() {
+  if (!profile && store("profile")) return [header(button("이전", () => (location.hash = ""), "plain")), profileConnection()];
   const remove = () =>
     confirm("프로필과 남긴 장면 앨범이 지워져요. 지울까요?") &&
     act(async () => {
@@ -429,7 +462,7 @@ function home() {
       profile ? h("div", { className: "home-profile" }, editPortrait(), h("div", {}, h("p", { className: "meta" }, "오늘도 함께해요"), h("h1", {}, `${profile.name} 님`))) : h("h1", {}, "같이 탄 오늘,", h("br"), "함께 남겨요."),
       h("p", { className: "sub" }, profile ? "차 안에서 나눈 이야기가 우리만의 기록이 돼요." : "이름과 얼굴을 정하고, 차에 QR을 보여 주세요."),
     ),
-    profile ? entry("qr", "동승 연결", "차에 내 QR 보여주기", startRide, "ride-entry") : entry("pencil", "내 프로필 만들기", "사진 또는 캐릭터로 나를 소개해요", () => { location.hash = "me"; }, "ride-entry"),
+    profile ? entry("qr", "동승 연결", "차에 내 QR 보여주기", startRide, "ride-entry") : store("profile") ? profileConnection() : entry("pencil", "내 프로필 만들기", "사진 또는 캐릭터로 나를 소개해요", () => { location.hash = "me"; }, "ride-entry"),
     entry("play", "우리 쇼츠", "짧게 남긴 대화와 내 보관함", launchShort),
     last && h("section", { className: "home-section" },
       h("div", { className: "between" }, h("h2", {}, "함께한 여행"), button("여행 열기", () => { location.hash = last; }, "plain")),
@@ -967,7 +1000,13 @@ app.addEventListener("focusout", () => setTimeout(() => stale && !typing() && re
 setInterval(refresh, 2000); // ponytail: 2초마다 묻는다(바뀐 게 없으면 304). 지연이 문제가 되면 SSE로 바꾼다.
 setInterval(pollRide, 2000); // 동승 연결 QR을 띄워 둔 동안만 묻는다
 render();
-api("GET", "/config").then((c) => ((googleId = c.googleClientId ?? ""), render()), () => {}); // 못 받으면 구글 단추를 숨긴 채로 둔다
+const refreshConfig = () => api("GET", "/config").then((c) => {
+  googleId = c.googleClientId ?? "";
+  if (typing()) stale = true;
+  else render();
+}, () => {});
+refreshConfig(); // 못 받으면 구글 단추를 숨기고 재연결 때 다시 읽습니다.
+addEventListener("online", () => { refreshConfig(); refresh(); });
 const back = location.pathname === "/oauth/google/callback" && (await googleBack());
 await loadProfile();
 fillDraft();

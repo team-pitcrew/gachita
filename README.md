@@ -15,7 +15,7 @@
 | 기준 | 무엇을 했나 | 근거와 확인 수준 |
 |---|---|---|
 | 차량특화성 | 차 마이크로 수음해 차 안에서 받아 적고, 말로 수락한 부탁을 순정 내비 경유지로 넣고, 기어 P에서 그 장소의 할 일을 알립니다. 주행 제한 값에 맞춰 화면을 가립니다. 폰에서는 수음하지 않습니다 | [차량 앱 README](frontend/car/README.md), [E2E 실측](docs/emulator/e2e-flow.md). 에뮬레이터에서 확인, 실차는 아님 |
-| 창의성 | 시키지 않은 대화에서 부탁과 할 일을 뽑습니다. 말한 자리의 캐릭터를 강조하고, 고른 장면을 영상 파일 없이 숏폼으로 다시 봅니다 | [차량 화면](frontend/spec/car.md), [도착 후 화면](frontend/spec/after-trip.md). 부탁·할 일은 에뮬레이터에서 확인. 숏폼 재생은 웹에 있음(브라우저). 차의 말하는 사람 강조도 에뮬레이터에서 확인 |
+| 창의성 | 시키지 않은 대화에서 부탁과 할 일을 뽑습니다. 말한 자리의 캐릭터를 강조하고, 고른 장면을 세로 숏폼으로 다시 보고 기기에서 영상 파일로 저장합니다 | [차량 화면](frontend/spec/car.md), [도착 후 화면](frontend/spec/after-trip.md). 부탁·할 일은 에뮬레이터에서 확인. 숏폼 재생은 웹에 있음(브라우저). 영상 만들기는 웹·차에 코드가 있고, 서버의 힉스필드 생성은 꺼 둠([ADR-0022](docs/adr/0022-shortform-video-on-device-and-server-generation-off.md)). 차의 말하는 사람 강조도 에뮬레이터에서 확인 |
 | 기술 활용성 | Pleos SDK 넷(Vehicle, NaviHelper, SpeechToText, TextToSpeech)과 Gleo 함수 선언, 좌석 두 구역과 등록한 목소리로 말한 사람 맞추기, 실서비스(Cloudflare → ALB → K3s, CloudNativePG, Argo CD) | [구조와 스택](docs/architecture.md)의 '음성 처리 흐름', [ADR-0008](docs/adr/0008-in-car-capture-and-sdk-stt.md), [ADR-0019](docs/adr/0019-speaker-matching.md). SDK와 Gleo에 마이크 넘기기는 에뮬레이터, 서버는 실서비스에서 확인. Gleo가 우리 함수를 음성으로 부르는 것은 확인 전 |
 | 사업성 | 첫 고객은 어린 자녀와 이동하는 부모입니다. 사람마다 기록이 프로필에 쌓이고, 여행 뒤에는 고른 장면만 남깁니다. 서버는 한 대로 동시 접속 300까지 재었고 월 약 $99로 둡니다 | [ADR-0016](docs/adr/0016-slo-capacity-single-postgres.md)(실제 EC2에서 잼), [음성 처리 명세](docs/api/voice.md) |
 
@@ -52,7 +52,7 @@ adb shell am start --user 10 -n io.github.teampitcrew.gachita/.MainActivity
 4. **기록 시작:** 첫 화면에서 가족을 고르고 'N명으로 여행 만들기' → 기어 P에서 '대화 기록 동의'를 켬('● 기록 중'). 마이크·알림 권한은 처음 기록할 때 묻습니다(`-g`로 설치하면 미리 허용).
 5. **부탁이 경유지로:** 순정 내비에서 목적지를 정하고(예: 강릉역) 우리 앱을 다시 앞으로, 기어 D → 차량 마이크에 "화장실 가고 싶어" → 제안 카드와 "용인휴게소에 들를까요?" → "응, 다음 휴게소 가자"(또는 '경유지로 추가') → 내비가 앞으로 나와 경유지가 들어가고, 앱으로 돌아오면 '경유지를 추가했어요'.
 6. **도착 브리핑:** 내비 목적지를 이름에 '마트'가 든 곳(예: 이마트 강릉점)으로 정하고 경유지는 두지 않음 → 기어 D에서 "마트에서 우유랑 간식 사자" → 속도를 5 km/h 이하로 두고 기어 P → '마트에서 할 일' 카드와 TTS. 앱은 주차한 순간 내비가 향하는 다음 곳(첫 경유지, 없으면 목적지)이 할 일의 장소일 때 알리므로, 5에서 넣은 휴게소가 남아 있으면 알리지 않습니다.
-   - 자동으로 같은 흐름을 도는 스크립트(`frontend/car/demo.py`, `waypoint_e2e.py`, `arrival_e2e.py`)는 디버그 빌드용입니다(서버·목적지를 실행 인자로 받음). 시연 영상도 디버그 빌드와 `demo.py`로 찍었습니다. 11/13의 이전 release는 4까지 확인했습니다. 11/14 갱신 release는 서명·설치·첫 화면을 확인했습니다. 같은 차량 소스의 디버그 APK에서는 합성 음성·제안·주차·대화 전체 보기와 동의·단절 검사를 수행했습니다([결과](frontend/car/verification/20261114/README.md)).
+   - 자동으로 같은 흐름을 도는 스크립트(`frontend/car/demo.py`, `waypoint_e2e.py`, `arrival_e2e.py`)는 디버그 빌드용입니다(서버·목적지를 실행 인자로 받음). 시연 영상도 디버그 빌드와 `demo.py`로 찍었습니다. 11/13의 이전 release는 4까지 확인했습니다. 11/14 갱신 release는 서명·설치·첫 화면과 기본 HTTPS 주소의 여행 생성·동의 기본 꺼짐을 확인했습니다. 같은 차량 소스의 디버그 APK에서는 합성 음성·제안·주차·대화 전체 보기와 동의·단절 검사를 수행했습니다([결과](frontend/car/verification/20261114/README.md)).
 
 ### 서버와 웹앱
 
@@ -66,7 +66,7 @@ make check     # CI와 같은 검사
 
 ## 테스트 환경 및 필요한 설정
 
-- **차량 앱:** Pleos Connect Emulator 2.1.0(Android 14, API 34, arm64), Mac mini M5 Pro, 2026-11-13. 실차에서는 확인하지 않았습니다. 화면 크기와 확인 범위는 [에뮬레이터 스펙](docs/emulator/README.md)에 있습니다.
+- **차량 앱:** Pleos Connect Emulator 2.1.0(Android 14, API 34, arm64), Mac mini M5 Pro, 2026-11-13. 실차에서는 확인하지 않았습니다. 에뮬레이터 화면은 2560×1440 px(160 dpi), 전체 앱 창은 1682×1210 px이며 반쪽 창 검증은 너비 841dp를 사용했습니다. 화면 크기와 확인 범위는 [에뮬레이터 스펙](docs/emulator/README.md)에 있습니다.
 - 차량 앱이 서버에 닿는 주소의 기본값은 실제 서버 `https://gachita.mangowhois.ai`입니다. 디버그 빌드만 실행 인자 `--es server`로 바꿉니다(첫 화면의 '서버 주소' 칸은 #239에서 뺌). 평문 http는 `10.0.2.2`·`localhost`·`127.0.0.1`에만 열려 있고 그 밖은 https만 씁니다.
 - 차량 앱을 빌드하려면 JDK 21과 Android SDK 34가 필요합니다(`cd frontend/car && ./gradlew assembleRelease`). 릴리스 서명 키는 저장소에 없고, `~/.gachita/keystore.properties`가 있을 때만 서명합니다.
 - Node.js 22 이상, Docker(로컬 Postgres 17 컨테이너용). API 서버의 의존성은 `pg` 하나입니다.
@@ -93,4 +93,4 @@ make check     # CI와 같은 검사
 - 파일 SHA-256: `7bafb82e90756425597fe208ce12431fc09953152375aae728319750813c1e6b`
 - 서명 인증서 SHA-256: `6f07b9fd44ef8e0e04782c160983e05b91cf8c7f10cff22cf7d5e690e599b2f6`. 이전 제출용 APK와 같습니다.
 - [최신 UI 세로 검토 영상](frontend/car/verification/20261114/current-ui-review.mp4) · 54.96초 · Pleos 에뮬레이터와 합성 음성입니다.
-- [제출 준비와 영상 검증](docs/submission-readiness.md), [실제 휴대폰·심사 접근 확인](docs/device-acceptance.md)을 함께 봅니다. 실제 휴대폰 검사와 심사용 계정 접근은 미확인입니다.
+- [제출 준비와 영상 검증](docs/submission-readiness.md), [실제 휴대폰·심사 접근 확인](docs/device-acceptance.md)을 함께 봅니다. 실제 휴대폰 검증은 진행 중입니다. 저장소는 공개 상태이며 심사 계정 초대가 필요하지 않습니다. [GitHub 심사 접근과 고정 커밋](docs/submission-package.md)을 따릅니다.

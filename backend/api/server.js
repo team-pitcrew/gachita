@@ -1207,8 +1207,9 @@ async function handle(trip, { req, m, sub, id, leaf, b, query, profile }, client
   }
 
   if (sub === "shortform") {
-    // 숏폼 구성(T43, ADR-0021): 영상 파일을 만들지 않고, 클립이 올라온 장면마다 소리 주소와 자막 큐와 말한 사람을 준다.
-    // 웹은 9:16 화면에, 차는 그 자리에서 이 데이터로 재생한다. 말한 사람은 화자 대조(T38)로 붙은 프로필만 — 자리만으로 이름을 붙이지 않는다.
+    // 숏폼 구성(T43, ADR-0021·ADR-0022): 클립이 올라온 장면마다 소리 주소와 자막 큐와 말한 사람을 준다.
+    // 웹 9:16 화면과 주차 중 차가 이 데이터로 그 자리에서 재생하고, 기기에서 영상 파일로도 만든다(서버로 올리지 않음).
+    // 서버의 힉스필드 생성(T85, 꺼서 배포)은 short-generations.js. 말한 사람은 화자 대조(T38)로 붙은 프로필만 — 자리만으로 이름을 붙이지 않는다.
     const all = await lines();
     return [200, await composition(trip, client, all)];
   }
