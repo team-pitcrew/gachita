@@ -9,6 +9,7 @@ RUN cd backend/api && npm ci --omit=dev && npm cache clean --force
 COPY backend/api/server.js backend/api/db.js backend/api/log.js backend/api/scenes.js backend/api/ride-links.js backend/api/profile-lifecycle.js backend/api/result-shares.js backend/api/short-*.js backend/api/*.sql backend/api/
 COPY backend/api/todos.js backend/api/
 COPY backend/api/providers backend/api/providers
+COPY backend/api/boarding-invites.js backend/api/
 COPY frontend/web frontend/web
 USER node
 EXPOSE 8787

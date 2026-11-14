@@ -1,6 +1,6 @@
 // 가치타 모바일 화면(gachita.mangowhois.ai). 빌드 없이 브라우저가 그대로 읽는다.
-// 주소: /#코드는 이 폰이 들어간 여행, /#me는 내 프로필. 여행에는 차가 이 폰의 동승 연결 QR을 읽어 넣는다(#71, 11/14).
-// 이 폰이 누구인지(프로필 토큰, 여행마다 참가자 id와 토큰)는 localStorage에 둔다. 폰에서는 수음하지 않는다.
+// 주소: /#코드는 이 폰이 들어간 여행, /#me는 내 프로필. 여행에는 차가 표시한 참석 QR을 이 폰의 카메라로 읽어 참여한다.
+// 이 폰이 누구인지(프로필 토큰, 여행마다 참가자 id와 토큰)는 localStorage에 둔다. 폰에서는 수음하지 않는다. 차가 표시한 참석 QR을 폰 카메라로 읽어 참여한다.
 // 사용자가 쓴 글은 textContent로만 넣는다(innerHTML 금지).
 
 import { SEATS, SEAT, WHEN, REQ, CLOSED, api, h, toast } from "/shared.js";
@@ -129,6 +129,7 @@ const studio = createShortStudio({ getTrip: () => trip, getParticipant: () => tr
 const scenes = createScenePicker({ getTrip: () => trip, getParticipant: () => trip?.participants.find((p) => p.id === myId()), getToken: myToken,
   onChoose: (momentId) => studio.open({ momentId }), onLocal: launchLocalShort, onCandidates: () => records.openScenes(), onCaptions: (options) => captions.open(options), onShare: (momentId) => shares.openCompose({ momentId }) });
 const boarding = createBoarding({ getProfile: () => profile, getToken: () => store("profile"), consentText: CONSENT, consentOffMessage: OFF_WIPES,
+  onProfile: () => { location.hash = "me"; },
   onLinked: ({ code, participant, token }) => { store(code, participant.id); store(`${code}:token`, token); store(`${code}:asked`, null); store("trip", code); },
   onDecision: ({ code }) => { store(`${code}:asked`, "1"); reading = false; },
   onLeave: ({ code: joinedCode }) => { store(`${joinedCode}:asked`, "1"); reading = false; if (code() === joinedCode) refresh(true); else location.hash = joinedCode; } });
@@ -373,7 +374,7 @@ async function google() {
   const challenge = b64url(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier))));
   const { name, character, consentDefault } = pdraft; // 사진은 옮기지 못한다(돌아오면 다시 고른다)
   // 시작한 프로필(없으면 null = 새 로그인)을 묶어 둔다: 돌아왔을 때 이 폰의 프로필이 바뀌었으면 연결하지 않는다
-  sessionStorage.setItem(GOOGLE_KEY, JSON.stringify({ state, verifier, profileId: profile?.id ?? null, draft: { name, character, consentDefault } }));
+  sessionStorage.setItem(GOOGLE_KEY, JSON.stringify({ state, verifier, invite: boarding.pending(), profileId: profile?.id ?? null, draft: { name, character, consentDefault } }));
   const q = { client_id: googleId, redirect_uri: GOOGLE_BACK, response_type: "code", scope: "openid profile", state, code_challenge: challenge, code_challenge_method: "S256", prompt: "select_account" };
   location.href = `https://accounts.google.com/o/oauth2/v2/auth?${new URLSearchParams(q)}`;
 }
@@ -386,6 +387,7 @@ async function googleBack() {
   const saved = JSON.parse(sessionStorage.getItem(GOOGLE_KEY) ?? "null");
   sessionStorage.removeItem(GOOGLE_KEY);
   const fail = (message) => (toast(message), saved?.draft ?? null);
+  if (q.get("state") === saved?.state && /^[A-Za-z0-9_-]{20,120}$/.test(saved?.invite || "")) history.replaceState(null, "", `/?join=${encodeURIComponent(saved.invite)}#me`);
   if (q.get("error")) return fail(q.get("error") === "access_denied" ? "구글 로그인을 취소했어요." : "구글 로그인을 마치지 못했어요. 다시 해 주세요.");
   if (!saved?.verifier || !q.get("code") || q.get("state") !== saved.state) return fail("로그인 요청을 확인하지 못했어요. 다시 해 주세요.");
   // 다른 탭에서 프로필을 지우거나 새로 만들었으면 엉뚱한 프로필에 구글을 붙이지 않게 멈춘다
@@ -394,6 +396,7 @@ async function googleBack() {
   try {
     const res = await api("POST", "/profiles/me/links/google", { code: q.get("code"), redirectUri: GOOGLE_BACK, codeVerifier: saved.verifier, device: "폰" }, saved.profileId && store("profile"));
     if (res.token) store("profile", res.token);
+    if (saved.invite) history.replaceState(null, "", `/?join=${encodeURIComponent(saved.invite)}`);
     toast(res.token ? "구글 계정으로 들어왔어요." : "이 프로필에 구글 계정을 연결했어요.");
     return null;
   } catch (e) {
@@ -472,9 +475,9 @@ function home() {
     header(h("span", { className: "brand" }, "가치타"), h("span", { className: "meta" }, "함께 타고, 함께 남기고")),
     h("section", { className: "home-intro" },
       profile ? h("div", { className: "home-profile" }, editPortrait(), h("div", {}, h("p", { className: "meta" }, "오늘도 함께해요"), h("h1", {}, `${profile.name} 님`))) : h("h1", {}, "같이 탄 오늘,", h("br"), "함께 남겨요."),
-      h("p", { className: "sub" }, profile ? "차 안에서 나눈 이야기가 우리만의 기록이 돼요." : "이름과 얼굴을 정하고, 차에 QR을 보여 주세요."),
+      h("p", { className: "sub" }, profile ? "차 안에서 나눈 이야기가 우리만의 기록이 돼요." : "이름과 얼굴을 정하고, 차 화면의 QR을 스캔해 주세요."),
     ),
-    profile ? entry("qr", "참석 QR", "차에 내 QR 보여주기", startRide, "ride-entry") : store("profile") ? profileConnection() : entry("pencil", "내 프로필 만들기", "사진 또는 캐릭터로 나를 소개해요", () => { location.hash = "me"; }, "ride-entry"),
+    profile ? entry("qr", "차량 QR로 참여", "차 화면의 QR을 휴대폰으로 스캔해요", startRide, "ride-entry") : store("profile") ? profileConnection() : entry("pencil", "내 프로필 만들기", "사진 또는 캐릭터로 나를 소개해요", () => { location.hash = "me"; }, "ride-entry"),
     h("section", { className: "home-section" }, h("div", { className: "between" }, h("h2", {}, "다시 만나는 우리 이야기"), button("보관함", () => studio.open({ view: "library" }), "plain")), entry("play", "우리 쇼츠", "원래 목소리로 남긴 짧은 여행", launchShort)),
     last && h("section", { className: "home-section" },
       h("div", { className: "between" }, h("h2", {}, "함께한 여행"), button("여행 열기", () => { location.hash = last; }, "plain")),
@@ -504,11 +507,11 @@ const missing = () => [
   bar(button("처음으로", () => (location.hash = ""), "primary")),
 ];
 
-// 이 폰이 들어가지 않은 여행. 여행 코드로는 들어갈 수 없고, 차가 동승 연결 QR을 읽어 넣는다(#71).
+// 이 폰이 들어가지 않은 여행. 여행 코드로는 들어갈 수 없고, 차의 참석 QR로 참여한다.
 const notHere = () => [
   header(h("span", { className: "brand" }, "가치타")),
   h("h1", {}, "이 폰은 이 여행에 없어요"),
-  h("p", { className: "sub" }, "차 화면의 '동승자 설정'에서 이 폰의 참석 QR을 읽으면 들어갈 수 있어요."),
+  h("p", { className: "sub" }, "차 화면의 동승자 설정에서 참석 QR을 열고, 이 휴대폰의 카메라로 스캔해 주세요."),
   bar(button("처음으로", () => (location.hash = ""), "primary")),
 ];
 
@@ -891,7 +894,7 @@ function shortView() {
 }
 
 function render() {
-  boarding.sync();
+  boarding.sync(trip);
   studio.sync();
   scenes.sync();
   shares.sync();
@@ -912,6 +915,7 @@ function render() {
   if (!short && me && ownProfile && myToken() && (asking(me) || reading)) boarding.openConsent(trip, me, myToken());
   if (conversationPending && me && !asking(me) && !reading) { conversationPending = false; conversations.open(); }
   if (failed || (trip && !me)) conversationPending = false;
+  if (location.hash !== "#me" && !savingProfile && boarding.pending()) boarding.resume();
 }
 
 // 부탁 남기기 시트는 한 번만 채운다
