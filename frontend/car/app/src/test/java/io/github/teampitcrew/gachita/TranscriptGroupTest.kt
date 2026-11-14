@@ -35,8 +35,8 @@ class TranscriptGroupTest {
     @Test fun dateRangeChip() {
         val seoul = TimeZone.getTimeZone("Asia/Seoul")
         val start = 1_794_615_600_000L // 2026-11-14 09:20 KST
-        assertEquals("11월 14일 / 09:20–10:28", tripRange(0, listOf(line(1, start), line(2, start + 68 * min)), seoul))
-        assertEquals("11월 14일 / 09:20", tripRange(start, emptyList(), seoul))
+        assertEquals("11월 14일  09:20–10:28", tripRange(0, listOf(line(1, start), line(2, start + 68 * min)), seoul))
+        assertEquals("11월 14일  09:20", tripRange(start, emptyList(), seoul))
     }
 
     @Test fun transcriptCarriesAskSources() {

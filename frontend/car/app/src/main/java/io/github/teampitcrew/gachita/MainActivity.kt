@@ -67,6 +67,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -1804,8 +1805,14 @@ class MainActivity : ComponentActivity() {
         online?.let { if (it) "서버 연결됨" to true else "연결 끊김" to false },
     ).toTypedArray()
 
+    // 녹음 시계(A D17–D20 '00:12:48'): 실제로 받아 적는 동안만 흐르고 멈추면 그 자리에 선다. 여행마다 prefs "recClock"({여행}:{ms}) 하나에 남긴다
+    private var recordedMs by mutableLongStateOf(0L)
+    private var recordedTrip: String? = null
+    private var profileMenu by mutableStateOf(false) // 머리 줄 '내 얼굴' 드롭다운(C17m)
+    private var logoutAsk by mutableStateOf(false) // 로그아웃 확인(2220:5864)
+
     /**
-     * 여행 화면(최종 시안 C17·C20·C44): 머리 줄(주행 중 '연결됨', 주차 중 '주차 중  P'), 세 탭, 선택한 탭의 본문.
+     * 여행 화면(시안 A D17–D20·C44·C20): 머리 줄(주행 중 '연결됨', 주차 중 '주차 중  P', 오른쪽 끝 '내 얼굴'), 세 탭, 선택한 탭의 본문.
      * 주행 제한 중(T11)에는 함께 타는 중만 열리고, 반쪽 창(841 × 1210)을 기준으로 칸을 고정한다. 새 화면 조각은 Drive.kt·Arrival.kt·TranscriptScreen.kt.
      */
     @Composable
@@ -1813,58 +1820,102 @@ class MainActivity : ComponentActivity() {
         BackHandler(boarding.page != BoardingPage.HIDDEN) {
             if (boarding.page == BoardingPage.PEOPLE) closeBoarding() else openBoarding()
         }
-        val mockDriving = f4Mock in MOCK_DRIVING // mock: 도착 전 시연은 주행 중 모양
+        BackHandler(profileMenu || logoutAsk) { profileMenu = false; logoutAsk = false }
+        val mockDriving = f4Mock in MOCK_DRIVING // mock: 주행 시연은 주행 중 모양, 시연 여행은 서버에 없어 머리 줄은 '연결됨'으로 둔다
         val parked = !carStatus.restricted && !mockDriving
         if (boarding.page == BoardingPage.QR && parked && s.gear == "P") {
             BoardingQrScreen(boarding, s, ::boardingAction)
             return
         }
         val scope = contentScope()
+        val rolling = s.recording && !muted && shortAt < 0 && handoff.state == Handoff.State.OFF && Live.mic == Mic.ON
+        LaunchedEffect(t.code, rolling) {
+            if (recordedTrip != t.code) {
+                recordedTrip = t.code
+                recordedMs = prefs.getString("recClock", null)?.takeIf { it.substringBeforeLast(':') == t.code }?.substringAfterLast(':')?.toLongOrNull() ?: 0L
+            }
+            if (!rolling) return@LaunchedEffect
+            val base = recordedMs; val since = android.os.SystemClock.elapsedRealtime()
+            while (true) { // 1초에 한 번 글자만 바꾼다(움직이는 표시 없음)
+                kotlinx.coroutines.delay(1000 - (android.os.SystemClock.elapsedRealtime() - since) % 1000)
+                recordedMs = base + android.os.SystemClock.elapsedRealtime() - since
+                prefs.edit().putString("recClock", "${t.code}:$recordedMs").apply()
+            }
+        }
         LaunchedEffect(destination, scope, afterStart) {
             if (destination == Destination.CONVERSATION || (destination == Destination.SHORTS && afterStart != null)) loadTranscript()
         }
         val b = mockBrief() ?: brief?.takeIf { vehicleParked() && offer?.stage.let { it == null || it == Offer.Stage.FINDING } } // 실제 P이고 제한이 풀린 동안만, 휴게소 제안이 먼저
         val shell = tripShell(parked, destination == Destination.RIDE && b?.place != null && !managing && boarding.page == BoardingPage.HIDDEN, destination == Destination.SHORTS)
-        Column(Modifier.fillMaxSize().padding(horizontal = shell.padH, vertical = shell.padV), verticalArrangement = Arrangement.spacedBy(shell.gap)) {
-            TripHeader(shell, carStatus.gear, s.online, listening = s.recording && Live.mic == Mic.ON && !muted && handoff.state == Handoff.State.OFF) { WindowSize() }
-            TripTabs(Destination.entries.map { it.label }, destination.ordinal, { parked || it != Destination.SHORTS.ordinal }) { i ->
-                val tab = Destination.entries[i]
-                if (destination != tab) {
-                    stopShort(); closeBoarding(); managing = false; shortsCreate = false; studioOpen = false
-                    // 주차·종료한 여행의 콘텐츠 기록 탭은 여행 마무리(C22)부터. 거기서 '콘텐츠 기록으로'를 누르면 쇼츠 화면
-                    afterStart = if (tab == Destination.SHORTS && t.status in listOf("parked", "ended")) AfterStep.UPLOAD else null
-                    destination = tab
+        val ride = shell == Shell.RIDE
+        val me = mePerson(t.people)
+        val myFace = charDrawable(onboarding.character)
+        Box(Modifier.fillMaxSize()) {
+            // 시안 A·C44는 여백 32·칸 간격 24·탭 80(28 SemiBold). Shell.RIDE(32/28/16)는 옛 C17 값이라 함께 타는 중·대화 기록은 시안 값으로 둔다
+            Column(Modifier.fillMaxSize().padding(horizontal = shell.padH, vertical = if (ride) shell.padH else shell.padV),
+                verticalArrangement = Arrangement.spacedBy(if (ride) 24.dp else shell.gap)) {
+                TripHeader(shell, carStatus.gear, s.online || mockDriving, listening = s.recording && Live.mic == Mic.ON && !muted && handoff.state == Handoff.State.OFF,
+                    extra = { WindowSize() }, me = { MeButton(myFace) { profileMenu = true } })
+                TripTabs(Destination.entries.map { it.label }, destination.ordinal, { parked || it != Destination.SHORTS.ordinal },
+                    height = if (ride) 80.dp else 76.dp, style = if (ride) RideTabText else CarText.Label, onSelect = { i ->
+                        val tab = Destination.entries[i]
+                        if (destination != tab) {
+                            stopShort(); closeBoarding(); managing = false; shortsCreate = false; studioOpen = false
+                            // 주차·종료한 여행의 콘텐츠 기록 탭은 여행 마무리(C22)부터. 거기서 '콘텐츠 기록으로'를 누르면 쇼츠 화면
+                            afterStart = if (tab == Destination.SHORTS && t.status in listOf("parked", "ended")) AfterStep.UPLOAD else null
+                            destination = tab
+                        }
+                    })
+                Box(Modifier.weight(1f).fillMaxWidth()) {
+                    when {
+                        takeover() -> Takeover(t, Modifier.fillMaxSize())
+                        boarding.page != BoardingPage.HIDDEN && parked -> BoardingPanel(boarding, s, carStatus.seats, Modifier.fillMaxSize(), ::boardingAction)
+                        managing && parked -> ManageTrip(t, Modifier.fillMaxSize())
+                        destination == Destination.CONVERSATION -> Conversations(t, Modifier.fillMaxSize())
+                        destination == Destination.SHORTS && parked && afterStart != null -> AfterTripTab(t, afterStart!!, Modifier.fillMaxSize())
+                        destination == Destination.SHORTS && parked -> ShortsLibrary(t, Modifier.fillMaxSize())
+                        b?.place != null -> ArrivalBrief(b.place, b.final, b.arrivalItems ?: placeAsks(b.place, todoList), if (f4Mock != null) F4Mock.people else t.people,
+                            when { arrivalNote.isNotEmpty() -> arrivalNote; todoState.note.isNotEmpty() -> todoState.note; else -> "" },
+                            onMain = { arrivalMain(b) }, onRefresh = { loadTodos(force = true) },
+                            onArrive = (::arrive).takeIf { vehicleParked() && todoScope() != null && !arrivalLoading }, modifier = Modifier.fillMaxSize(),
+                            details = if (f4Mock == "final") F4Mock.lodgeDetails else emptyMap())
+                        b != null -> BriefCard(b, Modifier.fillMaxSize())
+                        else -> RideOverview(t, Modifier.fillMaxSize())
+                    }
                 }
             }
-            Box(Modifier.weight(1f).fillMaxWidth()) {
-                when {
-                    takeover() -> Takeover(t, Modifier.fillMaxSize())
-                    boarding.page != BoardingPage.HIDDEN && parked -> BoardingPanel(boarding, s, carStatus.seats, Modifier.fillMaxSize(), ::boardingAction)
-                    managing && parked -> ManageTrip(t, Modifier.fillMaxSize())
-                    destination == Destination.CONVERSATION -> Conversations(t, Modifier.fillMaxSize())
-                    destination == Destination.SHORTS && parked && afterStart != null -> AfterTripTab(t, afterStart!!, Modifier.fillMaxSize())
-                    destination == Destination.SHORTS && parked -> ShortsLibrary(t, Modifier.fillMaxSize())
-                    b?.place != null -> ArrivalBrief(b.place, b.final, b.arrivalItems ?: placeAsks(b.place, todoList), if (f4Mock != null) F4Mock.people else t.people,
-                        when { arrivalNote.isNotEmpty() -> arrivalNote; todoState.note.isNotEmpty() -> todoState.note; else -> "" },
-                        onMain = { arrivalMain(b) }, onRefresh = { loadTodos(force = true) },
-                        onArrive = (::arrive).takeIf { vehicleParked() && todoScope() != null && !arrivalLoading }, modifier = Modifier.fillMaxSize(),
-                        details = if (f4Mock == "final") F4Mock.lodgeDetails else emptyMap())
-                    b != null -> BriefCard(b, Modifier.fillMaxSize())
-                    else -> RideOverview(t, Modifier.fillMaxSize())
-                }
-            }
+            if (profileMenu) ProfileMenu(
+                name = onboarding.name.ifBlank { me?.name.orEmpty() }.ifBlank { "내 프로필" }, face = myFace, group = t.title.ifBlank { TITLE }, people = t.people,
+                driving = !parked, top = (if (ride) shell.padH else shell.padV) + shell.head + 8.dp, end = shell.padH, onClose = { profileMenu = false },
+                onSeats = { profileMenu = false; destination = Destination.RIDE; managing = false; openBoarding() }, // 동승자·자리·동의 설정(T106)
+                onGallery = { profileMenu = false; stopShort(); closeBoarding(); managing = false; afterStart = null; destination = Destination.SHORTS },
+                onManage = { profileMenu = false; closeBoarding(); destination = Destination.RIDE; managing = true }.takeIf { parked },
+                onLogout = { profileMenu = false; logoutAsk = true },
+            )
+            if (logoutAsk) LogoutConfirm(onCancel = { logoutAsk = false }, onLogout = { logoutAsk = false; logout() })
         }
     }
 
     /**
-     * 함께 타는 중(C17·C17p·C19·C19p·C21·C21p). 칸: 기록 상태 → 가운데 칸 → 일행 → 큰 단추(기록 중지·재개·시작).
-     * 가운데 칸은 휴게소 제안 > (주차 중) 목소리 등록 > 방금 받아 적은 말 두 줄. 도착 전·도착 브리핑의 시안은 흐름 F4. 시안에 없는 Gleo에게 말하기·여행 관리는
-     * 기록 상태 칸 오른쪽, 주행 중 동의 철회·주차 중 동승자 설정은 일행 칸 머리에 둔다.
+     * 로그아웃(C17m → 2220:5864 확인): 이 차의 계정 토큰을 지우고 시작 화면(온보딩)을 다시 연다. 여행·참가자 토큰·동의는 계정과 따로라 그대로 두고,
+     * 여행 화면이 닫히면(새 여행) 시작 화면이 보인다.
+     * ponytail: 계정 토큰 키("account")를 여기서 지운다. 흐름 F1이 Onboarding.logout()을 두면 그것으로 바꾼다.
+     */
+    private fun logout() {
+        prefs.edit().remove("account").apply()
+        profileToken = null
+        onboarding.reopen()
+    }
+
+    /**
+     * 함께 타는 중. 기록 중(일시정지·Gleo·쇼츠·마이크 막힘 포함)은 시안 A(Drive.kt RecordView: 큰 시계·파형·2×2 좌석·마지막 말·도착 전 브리핑·
+     * 일시정지/계속 기록). 기록 전·끝난 여행(2026:2410)·휴게소 제안·주차 중 목소리 등록은 C17 칸: 기록 상태 → 가운데 칸 → 일행 → 큰 단추.
+     * 시안에 없는 Gleo에게 말하기·주행 중 동의 철회는 A의 '차량 앞쪽 ↑' 줄, 여행 관리·동승자 설정(좌석 배정)은 '내 얼굴' 드롭다운에도 둔다.
      */
     @Composable
     private fun RideOverview(t: Trip, modifier: Modifier) {
         val c = MaterialTheme.colorScheme
-        val mock = f4Mock?.takeIf { it in MOCK_DRIVING } // mock: 도착 전 시연(C19·C19p·finalNear·finalPaused)
+        val mock = f4Mock?.takeIf { it in MOCK_DRIVING } // mock: 주행 중 시연(A D17–D20p, finalNear·finalPaused)
         val parked = !carStatus.restricted && mock == null
         heardTick // 말한 사람이 바뀌면 다시 그린다
         val sp = speakers?.takeIf { it.trip == t.code }
@@ -1874,9 +1925,35 @@ class MainActivity : ComponentActivity() {
         val st = if (mock != null) driveStatus(true, mockPaused, false, Handoff.State.OFF, Mic.ON, "", false, false, false, emptyList(), resumed = mock == "driveResumed")
             else driveStatus(s.recording, muted, shortAt >= 0, handoff.state, Live.mic, Live.why, s.offPending, s.waiting, s.gear == "P",
             t.people.filterNot { it.consent }.map { it.name }, ended = ended, resumed = justResumed)
-        // 도착 전 카드: 내비가 다음 장소까지 5분 이하라고 알렸고 그 장소의 서버 할 일이 있을 때(C19·finalNear)
+        // 도착 전 브리핑: 내비가 다음 장소까지 5분 이하라고 알렸고 그 장소의 서버 할 일이 있을 때(D20·finalNear)
         val nearAsks = (mockApproach() ?: near?.takeIf { it.trip == t.code && !parked })?.let { a ->
             (if (mock != null) mockNearAsks() else placeAsks(a.place, todoList)).takeIf { it.isNotEmpty() }?.let { a to it }
+        }
+        val o = offer?.takeIf { it.stage != Offer.Stage.FINDING }
+        val consentNote = { p: Person -> when { p.consent -> null; s.waitsFor(p) -> "동의 대기" to c.secondary; else -> "동의 전" to c.onSurfaceVariant } }
+        if (mock != null || s.recording && !ended && o == null && !(enrolling != null && parked)) {
+            val paused = if (mock != null) mockPaused else muted
+            // 이 차가 받아 적은 말이 없으면(앱을 다시 켰거나 시드한 여행) 서버 기록본의 마지막 줄과 그 말한 사람
+            val last = Live.recent.lastOrNull()?.let { u ->
+                LastLine(sp?.get(u.seq)?.who?.let { id -> t.people.firstOrNull { p -> p.id == id }?.name } ?: heardMeta(null, null, u.seatZone), u.text)
+            } ?: transcript.lastOrNull()?.let { l -> LastLine(t.people.firstOrNull { it.id == l.participantId }?.name ?: heardMeta(null, null, null), l.text) }
+            LaunchedEffect(t.code, Live.recent.isEmpty()) { if (mock == null && Live.recent.isEmpty() && transcript.isEmpty()) loadTranscript() }
+            RecordView(
+                status = st, paused = paused, note = if (mock != null) "" else s.note,
+                time = recordClock(if (mock != null) mockClock() else recordedMs),
+                wave = if (mock != null) DESIGN_WAVE else Live.wave,
+                people = if (mock != null) F4Mock.people else t.people, seats = gridSeats(seatRows(carStatus.seats), if (mock != null) F4Mock.people else t.people),
+                occupied = carStatus.occupied,
+                speaking = if (mock != null) F4Mock.talking(mock) else talking?.let { u -> sp?.get(u.seq)?.who }, consentNote = consentNote,
+                last = if (mock != null) mockLast() else last, unsent = if (parked) Live.pending else 0,
+                near = nearAsks?.let { (a, asks) -> a to briefLines(asks) },
+                control = driveButton(true, paused, true, !parked), onControl = { if (mock == null) recordingAction() },
+                onGleo = { handoff.give(wake = false) }.takeIf { mock == null && s.recording && !muted && handoff.state == Handoff.State.OFF },
+                // 주행 중에도 철회는 바로(T11). 한 번 누르면 수음을 멈추고 이 여행의 원음과 대화를 지운다
+                onWithdraw = { turnOff() }.takeIf { mock == null && t.people.any { it.consent } && !s.offPending },
+                modifier = modifier,
+            )
+            return
         }
         DriveLayout(
             status = {
@@ -1886,16 +1963,13 @@ class MainActivity : ComponentActivity() {
                 }
             },
             middle = { m ->
-                val o = offer?.takeIf { it.stage != Offer.Stage.FINDING }
                 when {
                     o != null -> OfferCard(o, m)
                     enrolling != null && parked -> EnrollCard(t, m)
-                    nearAsks != null -> NearCard(nearAsks.first, nearLine(nearAsks.second, if (mock != null) F4Mock.people else t.people), m)
-                    // mock: 주행 시연(C17·C17p·resumed·C21, --es f4 drive…)은 시안의 받아 적은 말 두 줄과 '42건'(frames-text.md)
-                    mock != null && mock.startsWith("drive") -> HeardCard(if (mockPaused) "멈추기 전 마지막 대화" else "방금 받아 적은 말 42건", "", F4Mock.heard(mock), dim = mockPaused, modifier = m)
+                    nearAsks != null -> Surface(m, CarShape.Card, color = c.surface) { NearCard(nearAsks.first, briefLines(nearAsks.second), Modifier.padding(24.dp)) }
                     else -> HeardCard(
                         if (s.recording && muted || ended) "멈추기 전 마지막 대화" else "방금 받아 적은 말 ${Live.count}건",
-                        // 시안 C17은 제목만 둔다(부탁·할 일 수는 도착 전 카드·장소별 할 일에서). 주차 중 미전송 수는 원음을 잃지 않게 남긴다
+                        // 시안은 제목만 둔다(부탁·할 일 수는 도착 전 브리핑·장소별 할 일에서). 주차 중 미전송 수는 원음을 잃지 않게 남긴다
                         "미전송 ${Live.pending}".takeIf { parked && Live.pending > 0 }.orEmpty(),
                         Live.recent.asReversed().map { u ->
                             val who = sp?.get(u.seq)?.who?.let { id -> t.people.firstOrNull { it.id == id } }
@@ -1906,14 +1980,13 @@ class MainActivity : ComponentActivity() {
                 }
             },
             seats = { compact ->
-                SeatCard(t.people, carStatus, if (mock != null) F4Mock.talking(mock) else talking?.let { u -> sp?.get(u.seq)?.who }, if (mock != null) null else talking?.seatZone, compact,
-                    note = { p -> when { p.consent -> null; s.waitsFor(p) -> "동의 대기" to c.secondary; else -> "동의 전" to c.onSurfaceVariant } }) {
+                SeatCard(t.people, carStatus, talking?.let { u -> sp?.get(u.seq)?.who }, talking?.seatZone, compact, note = consentNote) {
                     // 주행 중에도 철회는 바로(T11). 한 번 누르면 수음을 멈추고 이 여행의 원음과 대화를 지운다
                     if (!parked && t.people.any { it.consent } && !s.offPending) CardAction("동의 철회 · 기록 삭제", c.error) { turnOff() }
                     if (parked) CardAction("동승자 설정", onClick = ::openBoarding)
                 }
             },
-            button = if (mock != null) driveButton(true, mockPaused, true, true) else driveButton(s.recording, muted, s.agreed, carStatus.restricted, ended = ended),
+            button = driveButton(s.recording, muted, s.agreed, carStatus.restricted, ended = ended),
             // 새 여행은 지금처럼 동의를 끈 뒤에만(#239). 그 전이면 여행 관리의 '새 여행 만들기'와 그 안내를 연다
             onButton = { if (!ended) recordingAction() else if (!s.agreed && !s.switchOn && !s.busy) newTrip() else managing = true }, modifier = modifier,
         )
@@ -1940,47 +2013,62 @@ class MainActivity : ComponentActivity() {
         "finalPaused" -> Approach("F4DEMO", "강릉 숙소", 3, 170, final = true) // 시안 화면 글이 '약 3분'(frames-text.md)
         else -> null
     }
-    private fun mockNearAsks(): List<SharedTodo> = if (f4Mock == "finalNear") F4Mock.lodge else F4Mock.martNear // finalPaused의 시안 글은 C19와 같다
+    // 시안 A D20·D20p의 부탁 세 줄('화장실 가기 / 장보기 / 쓰레기 정리하기'). 최종 목적지 시연은 숙소 부탁
+    private fun mockNearAsks(): List<SharedTodo> = if (f4Mock?.startsWith("final") == true) F4Mock.lodge else F4Mock.martNear.take(2) +
+        SharedTodo("n4", "마트", "쓰레기 정리하기", "pending", 0, emptyList(), "remember", listOf(TodoItem("쓰레기", null)), listOf("dad"), "쓰레기 정리하기")
+    // 시안 A의 시계(D17·D18 00:12:48, D19 00:12:49, D20 00:38:14)와 마지막 말(T150 시연 상태 이름 그대로)
+    private fun mockClock(): Long = when (f4Mock) { "drive", "drivePaused" -> 768_000L; "driveResumed" -> 769_000L; else -> 2_294_000L }
+    private fun mockLast() = when (f4Mock) {
+        "driveResumed" -> LastLine("서준", "그럼 바다도 국이야?")
+        "driveContinue" -> LastLine("하은", "우리 내일도 같이 타면 안 돼?")
+        else -> LastLine("서준", "아빠, 바다는 왜 짜?")
+    }
     private fun mockBrief(): Brief? = when (f4Mock) {
         "mart" -> Brief("하나로마트", F4Mock.mart, final = false)
         "final" -> Brief("강릉 숙소", F4Mock.lodge, final = true)
         else -> null
     }
 
+    /**
+     * 여행 관리(주차 중, 시안 없음 — 기록 상태 칸의 '여행 관리'와 '내 얼굴' 드롭다운에서 연다). 함께 탄 사람, 목소리 등록(T37), 말한 사람 고치기,
+     * 도착해서 할 일, 원음 지우기, 새 여행. 함께 타는 중·대화 기록의 머리 줄은 시안대로 '연결됨'만이라 창 크기 안내(T112)도 여기에 둔다.
+     */
     @Composable
     private fun ManageTrip(t: Trip, modifier: Modifier) {
         val c = MaterialTheme.colorScheme
-        Card(modifier = modifier) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("여행 관리", Modifier.weight(1f), fontSize = 32.sp, fontWeight = FontWeight.Bold)
-                WindowSize() // 함께 타는 중·대화 기록의 머리 줄은 시안대로 '연결됨'만이라 창 크기 안내(T112)는 여기(주차 화면은 머리 줄에도 있음)
-                OutlinedButton({ managing = false }, Modifier.heightIn(min = 56.dp), shape = RoundedCornerShape(10.dp)) { Text("닫기") }
-            }
-            Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                Text("함께 탄 사람 ${t.people.size}명", fontWeight = FontWeight.Bold)
-                Text("폰의 동승 QR을 연결하면 그 사람이 직접 동의하고 대화 기록을 볼 수 있어요.", color = c.onSurfaceVariant)
-                if (s.recording) EnrollCard(t, Modifier.fillMaxWidth().heightIn(min = 300.dp))
-                if (Live.recent.isNotEmpty()) {
-                    Text("말한 사람 고치기", fontSize = 28.sp, fontWeight = FontWeight.Bold)
-                    Live.recent.asReversed().forEach { HeardLine(t, it, fix = true) }
+        Surface(modifier, CarShape.Card, color = c.surface) {
+            Column(Modifier.padding(28.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("여행 관리", Modifier.weight(1f), style = CarText.Title, maxLines = 1)
+                    WindowSize()
+                    CardAction("닫기", c.onSurface) { managing = false }
                 }
-                OutlinedButton({ showTodos(); managing = false }, Modifier.fillMaxWidth().heightIn(min = 64.dp), shape = RoundedCornerShape(10.dp)) { Text("도착해서 할 일") }
-                OutlinedButton(::dropRawNow, Modifier.fillMaxWidth().heightIn(min = 64.dp), shape = RoundedCornerShape(10.dp)) { Text("이 차에 둔 원음 지우기") }
-                OutlinedButton(::newTrip, Modifier.fillMaxWidth().heightIn(min = 64.dp), enabled = !s.agreed && !s.switchOn && !s.busy, shape = RoundedCornerShape(10.dp)) { Text("새 여행 만들기") }
-                Text("새 여행은 대화 기록 동의를 끈 뒤 만들 수 있어요.", color = c.onSurfaceVariant, fontSize = 22.sp)
+                Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    Text("함께 탄 사람 ${t.people.size}명", style = CarText.Headline)
+                    Text("폰의 동승 QR을 연결하면 그 사람이 직접 동의하고 대화 기록을 볼 수 있어요.", color = c.onSurfaceVariant, style = CarText.Body)
+                    if (s.recording) EnrollCard(t, Modifier.fillMaxWidth().heightIn(min = 300.dp))
+                    if (Live.recent.isNotEmpty()) {
+                        Text("말한 사람 고치기", style = CarText.Headline)
+                        Live.recent.asReversed().forEach { HeardLine(t, it, fix = true) }
+                    }
+                    CarButton("도착해서 할 일", kind = CarButtonKind.Secondary, height = 80.dp) { showTodos(); managing = false }
+                    CarButton("이 차에 둔 원음 지우기", kind = CarButtonKind.Secondary, height = 80.dp, onClick = ::dropRawNow)
+                    CarButton("새 여행 만들기", kind = CarButtonKind.Secondary, height = 80.dp, enabled = !s.agreed && !s.switchOn && !s.busy, onClick = ::newTrip)
+                    Text("새 여행은 대화 기록 동의를 끈 뒤 만들 수 있어요.", color = c.onSurfaceVariant, style = CarText.Label)
+                }
             }
         }
     }
 
     /**
-     * 대화 기록(C44). 지금 여행의 서버 기록을 바로 보인다. 말한 사람 고치기(T37)는 여행 관리, 추천 장면 고르기는 콘텐츠 기록의 만들기 화면(F5 전까지).
-     * 주행 중(시안 2026:2308·2358)은 읽기만: 고치기·새로고침·장면 고르기 없이 가장 새 줄을 보이고 '함께 타는 중으로'만 둔다.
+     * 대화 기록(C44). 지금 여행의 서버 기록을 채팅으로 바로 보인다. 말한 사람 고치기(T37)는 여행 관리, 추천 장면 고르기는 콘텐츠 기록의 장면 고르기(C23).
+     * 주행 중(시안 2026:2308·2358)은 읽기만: 고치기·장면 고르기 없이 가장 새 줄을 보이고 '함께 타는 중으로'만 둔다. '(나)'는 운전석의 프로필 참가자.
      */
     @Composable
     private fun Conversations(t: Trip, modifier: Modifier) {
         val scope = contentScope()
         val live = carStatus.restricted
-        TranscriptScreen(t, transcript, transcriptAsks, transcriptPlaces, transcriptLoading,
+        TranscriptScreen(t, transcript, transcriptPlaces, transcriptLoading,
             when {
                 scope == null -> "대화 기록에 동의한 참가자만 볼 수 있어요"
                 transcriptNote.isNotEmpty() -> transcriptNote
@@ -1992,6 +2080,7 @@ class MainActivity : ComponentActivity() {
             onFixSpeakers = { managing = true },
             onPick = { stopShort(); closeBoarding(); afterStart = AfterStep.SELECT; destination = Destination.SHORTS }, modifier = modifier, // 추천 장면 3개(C23)
             live = if (live) liveChip(s.recording && !muted && handoff.state == Handoff.State.OFF && Live.mic == Mic.ON) else null,
+            me = mePerson(t.people)?.id,
             onBack = { destination = Destination.RIDE })
     }
 
