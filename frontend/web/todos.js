@@ -45,22 +45,27 @@ export function createTodos({ getTrip, getParticipant, getToken, request, onChan
     return trip && me && !todoAccess(me, getToken()) ? `${trip.code}:${trip.generation ?? 1}:${me.id}` : "";
   };
 
+  // 권한이 없어졌으면 받은 글(목록·도착·펼친 원발화)을 화면에 남기지 않는다. 먼저 떠난 조회가 늦게 돌아와 되살리지 못하게 판을 올린다.
+  const DENIED = "지금은 할 일을 볼 수 없어요. 기록 동의와 동승 연결을 확인해 주세요.";
+  const deny = (s) => { Object.assign(s, { items: [], arrival: null, error: "", denied: DENIED, ready: true, epoch: s.epoch + 1 }); open.clear(); onChange(); };
+
   async function load() {
     const k = key();
     if (!k || loading) return;
     loading = true;
-    const s = state;
+    const s = state, epoch = s.epoch;
+    const current = () => key() === k && state === s && s.epoch === epoch;
     try {
       const data = await request("GET", "/todos");
-      if (key() !== k || state !== s) return;
+      if (!current()) return;
       const before = JSON.stringify([s.items, s.arrival, s.error, s.denied, s.ready]);
       Object.assign(s, { items: data.items, arrival: data.arrival ?? null, generation: data.generation, at: Date.now(), error: "", denied: "", ready: true });
       if (JSON.stringify([s.items, s.arrival, s.error, s.denied, s.ready]) !== before) onChange();
     } catch (e) {
-      if (key() !== k || state !== s) return;
-      // 권한이 없어졌으면 받은 글을 화면에 남기지 않는다. 연결만 끊겼으면 마지막 목록을 두고 고치지 못하게 한다.
-      if ([401, 403, 404].includes(e.status)) Object.assign(s, { items: [], arrival: null, denied: "지금은 할 일을 볼 수 없어요. 기록 동의와 동승 연결을 확인해 주세요.", ready: true });
-      else s.error = e.status === 0 ? "연결이 끊겼어요." : "할 일을 불러오지 못했어요.";
+      if (!current()) return;
+      // 연결만 끊겼으면 마지막 목록을 두고 고치지 못하게 한다(이미 접근 불가면 그대로 둔다).
+      if ([401, 403, 404].includes(e.status)) return deny(s);
+      s.error = e.status === 0 ? "연결이 끊겼어요." : "할 일을 불러오지 못했어요.";
       onChange();
     } finally {
       loading = false;
@@ -70,25 +75,27 @@ export function createTodos({ getTrip, getParticipant, getToken, request, onChan
   // 화면을 그릴 때마다 부른다. 여행·동의 세대·참가자가 바뀌면 받은 목록을 버리고, 여행이 바뀌었으면(도착 포함) 다시 읽는다.
   function sync() {
     const k = key(), trip = getTrip();
-    if (state?.key !== k) { state = k ? { key: k, items: [], arrival: null, error: "", denied: "", ready: false } : null; open.clear(); seen = ""; }
+    if (state?.key !== k) { state = k ? { key: k, items: [], arrival: null, error: "", denied: "", ready: false, epoch: 0 } : null; open.clear(); seen = ""; }
     if (!state) return;
     const version = `${trip.code}:${trip.version}`;
     if (version !== seen) { seen = version; load(); }
   }
   // 받아 적은 말은 여행 버전을 올리지 않으므로 보이는 동안 따로 묻는다. ponytail: 6초 폴링, 지연이 문제면 SSE로.
-  setInterval(() => { if (state && !document.hidden) load(); }, 6000);
+  setInterval(() => { if (state && !document.hidden) load(); }, 6000).unref?.();
 
   async function set(todo, status) {
     const s = state;
     if (!s || busy) return;
     busy = true;
+    const epoch = s.epoch;
     try {
       const { item } = await request("PATCH", `/todos/${todo.id}`, { generation: s.generation, expectedVersion: todo.version, status });
-      if (state !== s) return;
+      if (state !== s || s.epoch !== epoch) return;
       s.items = s.items.map((t) => (t.id === item.id ? item : t));
       onChange();
     } catch (e) {
       if (state !== s) return;
+      if (e.status === 401 || e.status === 403) return deny(s); // 동의가 꺼졌거나 토큰을 잃었다: 다시 읽기를 기다리지 않고 바로 지운다
       // 다른 사람이 먼저 바꿨거나 원문이 바뀌었으면 덮어쓰지 않고 최신 목록을 다시 보인다.
       toast(e.status === 409 || e.status === 404 ? "그사이 바뀌었어요. 최신 목록을 다시 읽었어요." : e.status === 0 ? "연결이 끊겨서 바꾸지 못했어요." : e.message);
       await load();
