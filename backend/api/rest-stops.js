@@ -1,14 +1,16 @@
 // 경로 위 휴게소 추천(T97). 순정 내비(NaviHelper)는 경로 좌표도 장소 검색도 주지 않고, 지금 위치·진행 방향과
-// 목적지·남은 거리만 준다(SDK 3.0.5). 그 셋과 한국도로공사 휴게소 위치정보(rest-stops.json, 202곳)로 앞으로 들를 수 있는 곳을 고른다.
+// 목적지·남은 거리만 준다(SDK 3.0.5). 그 셋과 한국도로공사 휴게소 위치정보(rest-stops.json, 200곳)로 앞으로 들를 수 있는 곳을 고른다.
 // 키·비용·바깥 호출이 없다. DB도 네트워크도 모른다.
 //
 // 규칙(모두 직선 거리):
 // 1. 길 위의 점은 '여기→그곳→목적지'가 남은 길보다 길 수 없다. 그래서 그 합이 남은 거리(+2 km, 휴게소는 길 옆)를 넘으면 뺀다.
 //    남은 거리를 모르면 직선의 1.25배로 본다.
 // 2. 목적지까지가 지금보다 가까워야 앞쪽이다(지나친 곳은 뺀다).
-// 3. 방향: 휴게소마다 가는 쪽 행선지(이름의 괄호, 예 '용인(강릉)휴게소'의 강릉)가 있다. 그 휴게소에서 행선지 쪽과 목적지 쪽이
-//    같은 편(사잇각 90도 미만)이어야 내 쪽이다. 짝이 있든 없든, 한 노선에 행선지 표기가 여럿이든(순천완주선의 광양·순천) 휴게소마다 본다.
-//    행선지가 없는 곳(덕평·행담도처럼 양방향)은 거르지 않는다.
+// 3. 방향: 휴게소마다 가는 쪽 행선지(이름의 괄호, 예 '용인(강릉)휴게소'의 강릉)가 있다. 노선의 선(4)에서 행선지 도시에 가까운 끝이
+//    그 휴게소 차로가 가는 쪽이고, 그 휴게소 자리에서 그 끝 쪽으로 가는 도로 구간과 목적지 쪽이 같은 편(사잇각 90도 미만)이어야
+//    내 쪽이다. 도로가 행선지와 다른 쪽으로 굽는 곳(경부선 건천: 부산방향 차로가 경주 쪽 동쪽으로 감)도 맞게 본다.
+//    짝이 있든 없든, 한 노선에 행선지 표기가 여럿이든(순천완주선의 광양·순천) 휴게소마다 본다. 행선지가 없는 곳(덕평·행담도처럼
+//    양방향)은 거르지 않는다. 선이 없는 노선(휴게소 한 곳)과 고리 노선(순환선)은 행선지 도시로 곧게 본다.
 // 4. 지금 달리는 고속도로(여기서 3 km 안을 지나는 노선의 선)의 휴게소를 먼저, 그다음 '여기까지 거리 + 3 × 직선에서 벗어난
 //    정도'가 작은 순. 노선의 선은 같은 노선 휴게소(짝은 한 점)를 가장 먼 두 곳을 잇는 축 위 순서로 이은 꺾은선이다.
 // ponytail: 직선 근사라 길이 크게 도는 곳(나란한 고속도로)에서는 다른 노선을 고를 수 있다. 경로 좌표를 주는 길찾기
@@ -84,12 +86,27 @@ const ahead = (from, heading, m = 30_000) => {
   return { lat: from.lat + (m * Math.cos(r)) / KM_LAT, lng: from.lng + (m * Math.sin(r)) / (111_320 * Math.cos((from.lat * Math.PI) / 180)) };
 };
 
-// 그 휴게소에서 행선지 쪽과 목적지 쪽이 같은 편인가(사잇각 90도 미만). 행선지가 없으면(양방향) 그렇다.
-const myWay = (s, end) => {
-  if (!s.toward) return true;
-  const [p, c, t] = [s, s.toward, end].map((x) => xy(x, s.lat));
-  return (c.x - p.x) * (t.x - p.x) + (c.y - p.y) * (t.y - p.y) > 0;
-};
+// 휴게소 자리에서 행선지 쪽으로 가는 도로 구간(평면 벡터). 노선의 선에서 휴게소에 가장 가까운 꼭짓점과, 행선지 도시에 가까운 끝
+// 쪽 이웃 꼭짓점을 잇는다(그 끝에 있으면 앞 꼭짓점에서 온다). 선이 없거나 고리 노선이면 행선지 도시로 곧게.
+// ponytail: 꼭짓점이 휴게소(짝은 한 점)라 구간이 수십 km다. 그 사이에서 길이 크게 꺾이면 어림이 틀릴 수 있다.
+for (const s of STOPS) {
+  if (!s.toward) continue;
+  const pts = LINES.get(s.route);
+  const p = xy(s, s.lat);
+  if (pts.length < 2 || s.route.includes("순환")) {
+    const c = xy(s.toward, s.lat);
+    s.way = { x: c.x - p.x, y: c.y - p.y };
+    continue;
+  }
+  const i = pts.reduce((b, q, k) => (dist(q, s) < dist(pts[b], s) ? k : b), 0);
+  const step = dist(pts.at(-1), s.toward) < dist(pts[0], s.toward) ? 1 : -1; // 행선지 쪽 끝으로 가는 방향
+  const [a, b] = pts[i + step] ? [pts[i], pts[i + step]] : [pts[i - step], pts[i]];
+  const [u, v] = [xy(a, s.lat), xy(b, s.lat)];
+  s.way = { x: v.x - u.x, y: v.y - u.y };
+}
+
+// 그 휴게소 차로가 내가 가는 쪽(v: 그 휴게소에서 목적지 쪽, 목적지가 없으면 진행 방향)으로 가는가. 행선지가 없으면(양방향) 그렇다.
+const myWay = (s, v) => !s.way || s.way.x * v.x + s.way.y * v.y > 0;
 
 /**
  * 앞으로 들를 수 있는 휴게소, 좋은 순으로 limit곳.
@@ -103,8 +120,14 @@ export function restStops({ from, heading = null, to = null, remain = null, limi
   const left = remain && remain > straight ? remain : straight * 1.25;
   const onWay = STOPS.filter((s) => dist(from, s) + dist(s, end) <= left + 2_000);
   const road = roadOf(from);
+  const r = ((heading ?? 0) * Math.PI) / 180;
+  const goes = (s) => {
+    if (!to) return { x: Math.sin(r), y: Math.cos(r) }; // 목적지가 없으면 30 km 앞 점보다 진행 방향이 차로 방향에 가깝다
+    const [p, t] = [xy(s, s.lat), xy(end, s.lat)];
+    return { x: t.x - p.x, y: t.y - p.y };
+  };
   return onWay
-    .filter((s) => dist(s, end) < straight && myWay(s, end))
+    .filter((s) => dist(s, end) < straight && myWay(s, goes(s)))
     .map((s) => {
       const meters = dist(from, s);
       return { s, meters, score: (s.route === road ? 0 : 1e9) + meters + 3 * (meters + dist(s, end) - straight) };

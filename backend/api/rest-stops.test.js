@@ -49,15 +49,26 @@ test("한 노선에 행선지 표기가 여럿이어도 같은 쪽이면 낸다:
   assert.deepEqual(names({ from: { lat: 35.73, lng: 127.25 }, to: { lat: 34.95, lng: 127.49 }, remain: 110_000 }).slice(0, 2), ["관촌휴게소 광양방향", "오수휴게소 순천방향"]);
 });
 
-test("휴게소 자료 검사: 좌표가 노선에서 크게 벗어난 줄(홍천(양양) 부산 좌표)은 없고, 행선지는 모두 좌표가 있다(T97)", () => {
+test("휴게소 자료 검사: 좌표가 노선에서 크게 벗어난 줄(홍천(양양) 부산 좌표, 점곡 짝 강원 좌표)은 없고, 행선지는 모두 좌표가 있다(T97)", () => {
   const d = (a, b) => Math.hypot((a.lat - b.lat) * 110_574, (a.lng - b.lng) * 111_320 * Math.cos((((a.lat + b.lat) / 2) * Math.PI) / 180));
   for (const s of STOPS) {
     assert.ok(s.lat > 33 && s.lat < 39 && s.lng > 124 && s.lng < 132, s.name);
     if (s.dir) assert.ok(s.toward, `${s.name}: 행선지 ${s.dir} 좌표 없음`);
     const same = STOPS.filter((x) => x !== s && x.route === s.route);
-    if (same.length) assert.ok(Math.min(...same.map((x) => d(s, x))) < 60_000, `${s.name}: 같은 노선 휴게소에서 60 km 넘게 떨어짐`);
+    const others = same.filter((x) => x.base !== s.base); // 짝은 이웃으로 치지 않는다(짝이 함께 틀린 자료를 거르려고)
+    if (others.length) assert.ok(Math.min(...others.map((x) => d(s, x))) < 60_000, `${s.name}: 짝 밖의 같은 노선 휴게소에서 60 km 넘게 떨어짐`);
     for (const x of same.filter((x) => x.base === s.base)) assert.ok(d(s, x) < 10_000, `${s.name}: 짝과 10 km 넘게 떨어짐`);
   }
-  assert.ok(!STOPS.some((s) => s.name === "홍천휴게소 양양방향"));
+  assert.ok(!STOPS.some((s) => s.name === "홍천휴게소 양양방향" || s.name.startsWith("점곡휴게소")));
+  assert.deepEqual(restStops({ from: { lat: 37.78, lng: 128.0 }, to: { lat: 37.7, lng: 128.01 }, remain: 12_000 }), []);
   assert.ok(!restStops({ from: { lat: 35.3, lng: 129.02 }, to: { lat: 35.18, lng: 129.07 }, remain: 20_000 }).some((s) => s.name.startsWith("홍천")));
+});
+
+// Astra 리뷰 2차(#324)
+test("방향은 그 자리 도로 구간으로 본다: 경부선 건천은 부산방향 차로가 경주 쪽(동쪽)으로 간다(T97)", () => {
+  const pyeongsa = { lat: 35.885738, lng: 128.867177 };
+  assert.deepEqual(names({ from: pyeongsa, to: { lat: 35.856, lng: 129.224 }, remain: 40_000 }), ["건천휴게소 부산방향"]);
+  // 목적지 없이 동쪽으로 달리면 진행 방향으로 본다. 서쪽으로 달리면 건너편
+  for (const heading of [80, 90, 100]) assert.deepEqual(names({ from: pyeongsa, heading }), ["건천휴게소 부산방향"], `heading ${heading}`);
+  assert.deepEqual(names({ from: { lat: 35.8, lng: 129.2 }, heading: 270 }), ["건천휴게소 서울방향"]);
 });
