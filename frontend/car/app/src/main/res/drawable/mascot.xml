@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 가치타 마스코트(최종 시안 '04 재사용 요소'의 Mascot 7:544, Figma MCP 에셋 그대로). 앱 머리 줄·쇼츠 무대에서 쓴다. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp" android:height="48dp" android:viewportWidth="48" android:viewportHeight="48">
+    <path android:fillColor="#FFFFFF" android:strokeColor="#1D1A28" android:strokeWidth="2.25" android:strokeLineJoin="round"
+        android:pathData="M10.5,16.5C10.5,12.375 13.875,9 18,9H30C34.125,9 37.5,12.375 37.5,16.5V18H40.5C42.15,18 43.5,19.35 43.5,21V33C43.5,36.3 40.8,39 37.5,39H10.5C7.2,39 4.5,36.3 4.5,33V21C4.5,19.35 5.85,18 7.5,18H10.5V16.5Z" />
+    <path android:fillColor="#1D1A28"
+        android:pathData="M18,29.25C19.2426,29.25 20.25,28.2426 20.25,27C20.25,25.7574 19.2426,24.75 18,24.75C16.7574,24.75 15.75,25.7574 15.75,27C15.75,28.2426 16.7574,29.25 18,29.25Z" />
+    <path android:fillColor="#1D1A28"
+        android:pathData="M30,29.25C31.2426,29.25 32.25,28.2426 32.25,27C32.25,25.7574 31.2426,24.75 30,24.75C28.7574,24.75 27.75,25.7574 27.75,27C27.75,28.2426 28.7574,29.25 30,29.25Z" />
+    <path android:strokeColor="#1D1A28" android:strokeWidth="1.8" android:strokeLineCap="round"
+        android:pathData="M21.75,32.25C23.25,33.25 24.75,33.25 26.25,32.25" />
+    <path android:fillColor="#60C090"
+        android:pathData="M37.5,15C39.9853,15 42,12.9853 42,10.5C42,8.01472 39.9853,6 37.5,6C35.0147,6 33,8.01472 33,10.5C33,12.9853 35.0147,15 37.5,15Z" />
+</vector>

@@ -1867,8 +1867,8 @@ class MainActivity : ComponentActivity() {
                     nearAsks != null -> NearCard(nearAsks.first, nearLine(nearAsks.second, if (mock != null) F4Mock.people else t.people), m)
                     else -> HeardCard(
                         if (s.recording && muted || ended) "멈추기 전 마지막 대화" else "방금 받아 적은 말 ${Live.count}건",
-                        listOfNotNull("부탁 ${t.heldRequests}".takeIf { t.heldRequests > 0 }, "할 일 ${todoList.count { it.pending }}".takeIf { todoList.any { it.pending } },
-                            "미전송 ${Live.pending}".takeIf { parked && Live.pending > 0 }).joinToString(" · "),
+                        // 시안 C17은 제목만 둔다(부탁·할 일 수는 도착 전 카드·장소별 할 일에서). 주차 중 미전송 수는 원음을 잃지 않게 남긴다
+                        "미전송 ${Live.pending}".takeIf { parked && Live.pending > 0 }.orEmpty(),
                         Live.recent.asReversed().map { u ->
                             val who = sp?.get(u.seq)?.who?.let { id -> t.people.firstOrNull { it.id == id } }
                             HeardRow(heardMeta(who?.name, who?.seat, u.seatZone), u.text, who?.let(::seatCharacter))
@@ -1958,10 +1958,10 @@ class MainActivity : ComponentActivity() {
                 transcriptNote.isNotEmpty() -> transcriptNote
                 live -> ""
                 transcriptLoading -> "대화를 불러오고 있어요"
-                else -> "서버에 저장된 대화 · ${transcript.size}개"
+                else -> "" // 시안 C44는 목록 밑에 상태 줄이 없다. 불러오기·동의·오류일 때만 적는다
             },
             canPick = scope != null && s.online,
-            onRefresh = ::loadTranscript, onFixSpeakers = { managing = true },
+            onFixSpeakers = { managing = true },
             onPick = { stopShort(); closeBoarding(); afterStart = AfterStep.SELECT; destination = Destination.SHORTS }, modifier = modifier, // 추천 장면 3개(C23)
             live = if (live) liveChip(s.recording && !muted && handoff.state == Handoff.State.OFF && Live.mic == Mic.ON) else null,
             onBack = { destination = Destination.RIDE })
