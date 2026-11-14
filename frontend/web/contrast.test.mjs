@@ -39,6 +39,7 @@ const PAIRS = [
   ["ink", "accent-soft", "기록·공유 결과 줄"],
   ["rec", "accent-soft", "기록·공유 오류 줄"],
   ["bg", "ink", "알림 띠"],
+  ["ink-2", "accent-soft", "고른 장면·여행 요약의 보조 글, 막힌 주 단추"],
 ];
 
 for (const [name, theme] of [["밝은 화면", light], ["어두운 화면", dark]]) {
