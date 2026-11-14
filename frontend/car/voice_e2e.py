@@ -1,7 +1,7 @@
 """좌석 구역과 말한 사람 E2E(T37): 출발 전 가족 넷이 목소리를 등록하고, 대화를 넣어 발화마다 좌석 구역(앞줄·뒷줄)과 말한 사람이 맞게 붙는지 센다.
 
 준비: capture_e2e.py와 같다(Cold boot한 Pleos 에뮬레이터 -grpc 8556 -grpc-use-token -audio none, adb forward tcp:8088 tcp:8088, ./gradlew assembleDebug).
-      서버는 여행 참가자 목소리 등록과 줄 대조(#65 계약, T38)가 있는 것을 띄운다.
+      서버는 대조 값 조회(GET /voice-prints)와 발화의 화자 칸(ADR-0023)이 있는 것을 띄운다. 차는 차 안에서 대조해 화자를 발화와 함께 올린다.
 실행: GACHITA_PORT=<서버 포트> python3 frontend/car/voice_e2e.py <APK> <저장소 밖 폴더> [문장 수]
 
 - 넣는 소리는 macOS say(Yuna) 한 목소리의 음높이만 바꾼 합성 음성이다(아빠 0.84, 엄마 1.0, 아들 1.14, 딸 1.28). 사람 목소리가 아니다.
@@ -9,7 +9,7 @@
 - 좌석 구역은 앱 로그(GachitaCapture '발화 N … 구역 0|1|모름'), 말한 사람은 서버 기록(GET /utterances의 participantId)으로 본다.
 - 결과는 OUT/results.json과 OUT/speakers.tsv(넣은 문장, 넣은 사람·줄, 받은 구역·사람).
 """
-import io, json, re, sys, threading, time, urllib.request, wave
+import io, json, os, re, sys, threading, time, urllib.request, wave
 import numpy as np
 import e2e, capture_e2e as cap
 from e2e import ADB, PKG, OUT, adb, shot, texts, tap_text, tap_switch, gear, check, note, phone_join, phone_consent
@@ -57,23 +57,12 @@ def baseline(talk):
     return out
 
 
-def heard(ui):
-    """대화록 줄을 옛 한 줄 꼴 '시각 · 이름 · 말'(보내는 중이면 끝에 ' (보내는 중)')로 모은다.
-    화면(T83)은 한 줄을 두 글로 그린다: '시각 · 이름 · 앞줄 · 보내는 중'(이름·구역·보내는 중은 있을 때만)과 그 아래 말."""
-    out = []
-    for i, t in enumerate(ui[:-1]):
-        m = re.match(r"^(\d\d:\d\d) · (아빠|엄마|서준|하은|누구\?)(?: · (?:앞줄|뒷줄))?( · 보내는 중)?$", t)
-        if m: out.append(f"{m.group(1)} · {m.group(2)} · {ui[i + 1]}" + (" (보내는 중)" if m.group(3) else ""))
-    return out
-
-
 def main(apk, n):
     threading.Thread(target=e2e.heartbeat, daemon=True).start()
     threading.Thread(target=cap.logcat, daemon=True).start()
     inj = Injector()
     for name, who in VOICE.items(): fixture(f"enroll-{name}", [(who, l) for l in LINES], lead=0.5, tail=0.5)
     talk = fixture("talk", TALK[:n], tail=4.0)
-    fixture("unsure", [("딸", "바다는 왜 짜?")], tail=4.0)  # 서버도 가르지 못하는 짧은 뒷줄 말(기준 모름): 화면에 '누구?'가 남게 해 고치기를 본다
     note("apk", sha256=e2e.hashlib.sha256(open(apk, "rb").read()).hexdigest())
     note("install", out=e2e.subprocess.run(ADB + ["install", "--user", "10", "-r", "-g", apk], capture_output=True, text=True).stdout.strip()[-200:])
     gear("Park")
@@ -81,12 +70,26 @@ def main(apk, n):
     for perm in ("RECORD_AUDIO", "POST_NOTIFICATIONS"): adb("shell", "pm", "grant", "--user", "10", PKG, f"android.permission.{perm}")
     adb("shell", "am", "start", "--user", "10", "-n", f"{PKG}/.MainActivity", "--es", "server", f"http://10.0.2.2:{PORT}")
     wait_texts(lambda u: e2e.SETUP in u, 30); e2e.tap_make(); time.sleep(4)  # 설치 직후 첫 화면은 바쁜 기기에서 4초를 넘기기도 함
-    code = next((t.split()[-1] for t in texts() if t.startswith("여행 코드")), None); note("trip", code=code)
+    code = next((t.split()[-1] for t in texts() if t.startswith("여행 코드")), None)
+    if not code:  # 첫 화면에 여행 코드가 없는 화면(T83 뒤): 이 시험 서버의 DB에서 방금 만든 여행을 읽는다
+        code = e2e.subprocess.run(["docker", "exec", os.environ.get("GACHITA_PG", "gachita-pg"), "psql", "-U", "gachita", "-Atc",
+                                   "SELECT code FROM trips ORDER BY (doc->>'createdAt')::bigint DESC LIMIT 1"], capture_output=True, text=True).stdout.strip() or None
+    note("trip", code=code)
     phone = phone_join(code)  # 서버 기록을 읽을 참가자(뒷자리 가운데, 목소리 등록 없음)
-    wait_texts(lambda u: "일행 5명" in u, 15); tap_switch(); wait_texts(lambda u: "동의 대기" in " ".join(u), 10)
+    wait_texts(lambda u: "일행 5명" in u, 15)
     phone_consent(code, phone, True)
-    ui = wait_texts(lambda u: "● 기록 중" in u, 15)
-    if not check("모두 동의하면 기록 중", "● 기록 중" in ui): raise SystemExit("수음이 열리지 않아 멈춥니다")
+    # 동의는 사람마다 본인이 켠다(동승자 설정 → 본인 동의 설정 → 본인 동의 켜기). 모두 켠 뒤 홈에서 녹음 시작
+    tap_text("동승자 설정", last=False); wait_texts(lambda u: "누가 함께 타나요?" in u, 10)
+    for i in range(len(VOICE)):
+        x = [n for n in e2e.nodes()[0] if n[0] == "본인 동의 설정"][i]
+        adb("shell", "input", "tap", str((int(x[2]) + int(x[4])) // 2), str((int(x[3]) + int(x[5])) // 2))
+        wait_texts(lambda u: "본인 동의 켜기" in u, 10); tap_text("본인 동의 켜기")
+        wait_texts(lambda u: "내 녹음 동의 철회" in u, 10); tap_text("동승자 설정으로"); wait_texts(lambda u: "누가 함께 타나요?" in u, 10)
+    tap_text("닫기"); wait_texts(lambda u: "녹음 시작" in " ".join(u), 10); note("ui", texts=texts())
+    next(tap_text(t) for t in texts() if "녹음 시작" in t)
+    ui = wait_texts(lambda u: "녹음 중" in u, 15)
+    if not check("모두 동의하고 녹음 시작을 누르면 녹음 중", "녹음 중" in ui): raise SystemExit("수음이 열리지 않아 멈춥니다")
+    tap_text("여행 관리"); ui = wait_texts(lambda u: "출발 전 목소리 등록" in u, 10)  # 목소리 등록은 여행 관리에 있다
     shot("01-enroll-card"); note("ui", texts=ui)
     check("주차 중 기록이 시작되면 목소리 등록 카드에 이 차의 가족 넷", "출발 전 목소리 등록" in ui and all(x in ui for x in VOICE))
     # 1. 출발 전 목소리 등록: 사람마다 단추를 누르고 그 목소리로 두 문장을 넣는다
@@ -95,7 +98,7 @@ def main(apk, n):
         inj.play(f"enroll-{name}")
         ui = wait_texts(lambda u: any(t.endswith("목소리를 등록했어요") or "등록하지 못했어요" in t for t in u), 20); note("ui", texts=ui)
         check(f"{name} 목소리 등록", f"{name} 목소리를 등록했어요" in ui, ui=[t for t in ui if "등록" in t])
-    shot("02-enrolled")
+    shot("02-enrolled"); tap_text("닫기"); time.sleep(1)
     # 2. 대화를 넣고 서버가 받은 발화마다 대조를 기다린다(올린 뒤 다음 조회)
     t0 = inj.play("talk"); time.sleep(3)  # play는 넣기가 끝날 때 돌아온다
     ids = {p["name"]: p["id"] for p in server(code)["participants"]}
@@ -140,31 +143,13 @@ def main(apk, n):
     wrong_known = [r["text"] for r, b in zip(rows, base) for g in r["got"] if g is not None and g != r["who"] and b[1] is not None]
     check("발화에 말한 사람이 붙음(서버가 가르는 문장에서는 틀림 0, 맞힘은 차를 거치지 않은 서버 기준의 절반 이상)",
           sr and not wrong_known and spk["right"] * len(lines) >= bs["right"] * len(sr) * 0.5, car=spk, baseline=bs, wrong_where_server_knows=wrong_known)
-    # 3. 화면: 방금 받아 적은 말에 이름이 붙고, '누구?'면 주차 중에 고칠 수 있다
+    # 3. 화면: 대화 기록의 기록본(서버 기록)에 차가 붙인 이름이 보인다. 못 붙인 줄은 '말한 사람 미확인'
+    # ponytail: 말한 사람 고치기(여행 관리)는 화면이 바뀐 뒤(T83) 이 스크립트가 누르지 않는다. 서버 쪽은 server.test.js가 본다
     adb("shell", "am", "start", "--user", "10", "-n", f"{PKG}/.MainActivity"); time.sleep(3)
-    before = matched(); inj.play("unsure")
-    end = time.time() + 60
-    while not (matched() - before) and time.time() < end: time.sleep(3)
-    time.sleep(2)
-    ui = texts(); shot("03-heard-names"); note("ui", texts=ui)
-    named = [t for t in heard(ui) if re.match(r"\d\d:\d\d · (아빠|엄마|서준|하은|누구\?) · ", t)]
-    check("받아 적은 말 줄에 말한 사람 이름(또는 누구?)이 보임", named, lines=named)
-    fixed = None
-    unknown = [t for t in heard(ui) if " · 누구? · " in t]
-    if unknown:  # 모름인 줄마다 이름 단추가 모두 있다(그 구역 사람이 앞). 화면 위쪽의 첫 '누구?' 줄의 '엄마'를 누른다
-        fixed = re.sub(r" · 누구\? · ", " · 엄마 · ", unknown[0], count=1)
-        for _ in range(3):  # 경유지 카드가 사라지며 줄이 밀리면 누름이 빗나간다. 바뀔 때까지 다시
-            tap_text("엄마", last=False); time.sleep(2); ui = texts(); note("ui", texts=ui)
-            if fixed in heard(ui) or fixed + " (보내는 중)" in heard(ui): break
-        check("모름인 말은 주차 중에 사람을 골라 고칠 수 있음", fixed in heard(ui) or fixed + " (보내는 중)" in heard(ui), line=fixed)
-        ui = wait_texts(lambda u: fixed in heard(u), 20)  # 서버에 남기면 '보내는 중'이 사라진다(#65 PATCH)
-        check("고친 것을 서버에 남기면 '보내는 중'이 사라짐", fixed in heard(ui))
-        text = fixed.split(" · ", 2)[2]
-        srv = [u for u in wait_uploaded(code, phone, 1)["items"] if u["text"].startswith(text[:8])]
-        check("고친 말한 사람이 서버 기록에도 남음", srv and srv[0].get("participantId") == ids["엄마"], got=[u.get("participantId") for u in srv], want=ids["엄마"])
-    else:
-        note("fix.skip", why="이번 화면의 두 줄에 '누구?'가 없어 고치기 단계는 건너뜀")
-    tap_switch(); time.sleep(3)
+    tap_text("대화 기록"); wait_texts(lambda u: "열기" in u, 15); tap_text("열기")
+    ui = wait_texts(lambda u: "우리의 대화" in u, 15); shot("03-transcript-names"); note("ui", texts=ui)
+    named = [t for t in ui if re.match(r"^(아빠|엄마|서준|하은) · \d\d:\d\d$", t)]
+    check("기록본 줄에 차가 붙인 말한 사람 이름이 보임", named, lines=named, unknown=sum(t.startswith("말한 사람 미확인") for t in ui))
     (OUT / "results.json").write_text(json.dumps({"code": code, "rows": rows, "zone": zone, "speaker": spk, "log": e2e.log}, ensure_ascii=False, indent=1))
     fails = [e["name"] for e in e2e.log if e["step"] == "check" and not e["ok"]]
     print("실패:", fails if fails else "없음")
