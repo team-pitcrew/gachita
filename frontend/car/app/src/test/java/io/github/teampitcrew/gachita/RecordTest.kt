@@ -12,17 +12,6 @@ class RecordTest {
         assertEquals("01:02:03", recordClock(3_723_000))
     }
 
-    @Test fun waveLevelMapsMinus60To0dBFS() {
-        assertEquals(0f, waveLevel(0.0, 0.0, 3200), 0f) // digital silence (blocked mic)
-        val full = 32767.0 * 32767.0 * 1600
-        assertEquals(1f, waveLevel(full, full, 3200), 0.001f)
-        val minus30 = (32768.0 * 0.0316228).let { it * it } * 1600 // −30 dBFS in both channels
-        assertEquals(0.5f, waveLevel(minus30, minus30, 3200), 0.01f)
-        val carNoise = (32768.0 * 0.00014).let { it * it } * 1600 // about −77 dBFS stays on the floor
-        assertEquals(0f, waveLevel(carNoise, carNoise, 3200), 0f)
-        assertEquals(0f, waveLevel(1.0, 1.0, 0), 0f)
-    }
-
     @Test fun recordWordIsNullOnlyWhileTakingDown() {
         assertNull(recordWord(false, false, Handoff.State.OFF, Mic.ON, ""))
         assertEquals("마이크 꺼짐", recordWord(true, false, Handoff.State.OFF, Mic.ON, ""))

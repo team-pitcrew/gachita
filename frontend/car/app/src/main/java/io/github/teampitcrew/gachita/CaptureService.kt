@@ -292,7 +292,7 @@ class CaptureService : Service() {
     private fun chunk(c: Chunk, now: Long) {
         if (stopping) return
         block.chunk(c.allZero, now)
-        Live.wave = (Live.wave + waveLevel(c.left, c.right, c.mono.size)).takeLast(WAVE_BARS)
+        Live.wave = (Live.wave + meterLevel(chunkRms(c, c.mono.size)).toFloat()).takeLast(WAVE_BARS) // 목소리 등록 파형(T142)과 같은 눈금. mono 바이트 수 = 2채널 값의 수
         if (sttReady) runCatching { stt?.sendAudio(c.mono) }.onFailure { Log.w(TAG, "sendAudio 실패", it) }
         judge()
     }

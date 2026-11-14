@@ -34,8 +34,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import kotlin.math.log10
-import kotlin.math.sqrt
 
 /*
  * Ride tab while driving, option A '파형 중심' of the recording redesign (Figma 6I2bH121Z5pzWz2yciJUD8): D17 recording 2107:5597,
@@ -48,16 +46,6 @@ internal const val WAVE_BARS = 60 // 6 s of 0.1 s chunks
 
 /** Recorded time as '00:12:48'. */
 internal fun recordClock(ms: Long): String = (ms / 1000).let { s -> "%02d:%02d:%02d".format(s / 3600, s / 60 % 60, s % 60) }
-
-/**
- * Bar height (0..1) of one 0.1 s chunk: RMS over both channels in dBFS, −60 dB → 0, 0 dB → 1. left/right are the per-channel sums of
- * squared samples (Chunk), values the number of samples in both channels. Quiet car noise (about −77 dBFS) stays at the floor.
- */
-internal fun waveLevel(left: Double, right: Double, values: Int): Float {
-    if (values <= 0 || left + right <= 0) return 0f
-    val rms = sqrt((left + right) / values) / 32768.0
-    return ((20 * log10(rms) + 60) / 60).toFloat().coerceIn(0f, 1f)
-}
 
 /**
  * Small status words (a pending note, e.g. an error, takes their place). D20 shows them left of the timer ('녹음' when null, '마이크 꺼짐' when paused); D17–D19 show only the
