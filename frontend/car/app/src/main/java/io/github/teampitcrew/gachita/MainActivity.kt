@@ -160,6 +160,9 @@ class MainActivity : ComponentActivity() {
         }
     private enum class Destination(val label: String) { RIDE("함께 타는 중"), CONVERSATION("대화 기록"), SHORTS("콘텐츠 기록") } // 콘텐츠 기록은 K3 전까지 쇼츠 화면
     private var destination by mutableStateOf(Destination.RIDE)
+    // 가족·동승 그룹(흐름 F2, Family.kt). mock: 차 로그인(흐름 F1) 전에는 디버그 실행 인자(--es profileToken)로만 토큰을 받는다.
+    private var familyOpen by mutableStateOf(false)
+    private var profileToken by mutableStateOf<String?>(null)
     private var shortStudioActive = false
     private var retentionMs: Long? = null // null은 무기한. 디버그 keepMs 인자가 있을 때만 만료 시험을 한다.
     private var managing by mutableStateOf(false)
@@ -171,6 +174,7 @@ class MainActivity : ComponentActivity() {
     private var transcriptAsks by mutableStateOf(emptySet<Pair<String, Int>>()) // 서버 할 일이 나온 줄(C44 '○○의 부탁')
     private var transcriptPlaces by mutableStateOf(emptyList<TripPlace>()) // 기록본에 실린 여행 장소(A3). 없으면 머리에 시각만
     private var shortsCreate = false // 대화 기록의 '추천 장면 고르기'로 콘텐츠 기록 탭을 열면 만들기 화면부터
+    private var afterStart by mutableStateOf<AfterStep?>(null) // 여행 마무리·장면 고르기(C22–C32, F5). null이면 콘텐츠 기록은 쇼츠 화면
     private var justResumed by mutableStateOf(false) // 기록 재개 뒤 새 말을 받기 전(시안 2026:1969 '중지한 지점부터 이어서 기록해요')
     private var transcriptLoading by mutableStateOf(false)
     private var transcriptNote by mutableStateOf("")
@@ -330,6 +334,7 @@ class MainActivity : ComponentActivity() {
         // 실행 인자(--es server, --ei widthDp, --es route)는 디버그 빌드에서만 받는다. 밖에서 연 화면이 서버 주소를 바꾸지 못하게
         debug = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
         if (debug) intent.getStringExtra("server")?.let { prefs.edit().putString("server", it).apply() }
+        if (debug) { profileToken = intent.getStringExtra("profileToken"); familyOpen = intent.getBooleanExtra("family", false) }
         server = prefs.getString("server", null) ?: DEFAULT_SERVER
         device = prefs.getString("device", null) ?: UUID.randomUUID().toString().also { prefs.edit().putString("device", it).apply() }
         onboarding = Onboarding(this, prefs) { server }
@@ -386,6 +391,7 @@ class MainActivity : ComponentActivity() {
                             canRead = { false }, canPlay = { appVisible && !isDestroyed && !carStatus.restricted },
                             onClose = { destination = Destination.RIDE },
                             onActiveChange = ::shortStudioActiveChanged, modifier = Modifier.fillMaxSize())
+                        familyOpen -> FamilyFlow(server, profileToken, onClose = { familyOpen = false }, onStart = ::startGroupTrip)
                         else -> Setup()
                     }
                 }
@@ -459,6 +465,26 @@ class MainActivity : ComponentActivity() {
             r.onSuccess { (got, mine) ->
                 tokens = mine
                 prefs.edit().putString("tokens", Live.seal(this).line(JSONObject(mine).toString())).commit() // 다시 받을 수 없는 값이라 디스크에 쓰고 돌아온다
+                s = Session(gear = s.gear, ours = mine.keys).withTrip(keep(got))
+            }
+                .onFailure { s = s.copy(busy = false); error = "여행을 만들지 못했어요 · ${reason(it)}" }
+        }
+    }
+
+    /** '이 가족과 출발'(C13): 그룹의 저장된 자리·각자 동의로 여행을 만들고, 이 차가 맡을 참가자 토큰(나와 내 아이)을 받는다(T133). */
+    private fun startGroupTrip(groupId: String) {
+        val token = profileToken ?: return
+        val url = server
+        s = s.copy(busy = true); error = ""
+        bg({
+            val api = Server(url)
+            val (code, mine) = api.groupTrip(token, groupId, TITLE)
+            api.trip(code)!! to mine
+        }) { r ->
+            r.onSuccess { (got, mine) ->
+                tokens = mine
+                prefs.edit().putString("tokens", Live.seal(this).line(JSONObject(mine).toString())).commit() // 다시 받을 수 없는 값이라 디스크에 쓰고 돌아온다
+                familyOpen = false
                 s = Session(gear = s.gear, ours = mine.keys).withTrip(keep(got))
             }
                 .onFailure { s = s.copy(busy = false); error = "여행을 만들지 못했어요 · ${reason(it)}" }
@@ -1563,6 +1589,7 @@ class MainActivity : ComponentActivity() {
             Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 OutlinedButton(onClick = { destination = Destination.SHORTS }, shape = RoundedCornerShape(10.dp)) { Text("저장한 쇼츠", fontSize = 24.sp) }
                 OutlinedButton(onClick = { onboarding.reopen() }, shape = RoundedCornerShape(10.dp)) { Text("계정·목소리 등록", fontSize = 24.sp) }
+                OutlinedButton(onClick = { familyOpen = true }, shape = RoundedCornerShape(10.dp)) { Text("우리 가족", fontSize = 24.sp) }
                 WindowSize()
             }
             Spacer(Modifier.height(8.dp))
@@ -1651,14 +1678,19 @@ class MainActivity : ComponentActivity() {
             return
         }
         val scope = contentScope()
-        LaunchedEffect(destination, scope) {
-            if (destination == Destination.CONVERSATION) loadTranscript()
+        LaunchedEffect(destination, scope, afterStart) {
+            if (destination == Destination.CONVERSATION || (destination == Destination.SHORTS && afterStart != null)) loadTranscript()
         }
         Column(Modifier.fillMaxSize().padding(horizontal = 32.dp, vertical = 28.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             TripHeader(parked, carStatus.gear, s.online, listening = s.recording && Live.mic == Mic.ON && !muted && handoff.state == Handoff.State.OFF) { WindowSize() }
             TripTabs(Destination.entries.map { it.label }, destination.ordinal, { parked || it != Destination.SHORTS.ordinal }) { i ->
                 val tab = Destination.entries[i]
-                if (destination != tab) { stopShort(); closeBoarding(); managing = false; shortsCreate = false; destination = tab }
+                if (destination != tab) {
+                    stopShort(); closeBoarding(); managing = false; shortsCreate = false
+                    // 주차·종료한 여행의 콘텐츠 기록 탭은 여행 마무리(C22)부터. 거기서 '콘텐츠 기록으로'를 누르면 쇼츠 화면
+                    afterStart = if (tab == Destination.SHORTS && t.status in listOf("parked", "ended")) AfterStep.UPLOAD else null
+                    destination = tab
+                }
             }
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 val b = brief?.takeIf { vehicleParked() && offer?.stage.let { it == null || it == Offer.Stage.FINDING } } // 실제 P이고 제한이 풀린 동안만, 휴게소 제안이 먼저
@@ -1667,6 +1699,7 @@ class MainActivity : ComponentActivity() {
                     boarding.page != BoardingPage.HIDDEN && parked -> BoardingPanel(boarding, s, carStatus.seats, Modifier.fillMaxSize(), ::boardingAction)
                     managing && parked -> ManageTrip(t, Modifier.fillMaxSize())
                     destination == Destination.CONVERSATION -> Conversations(t, Modifier.fillMaxSize())
+                    destination == Destination.SHORTS && parked && afterStart != null -> AfterTripTab(t, afterStart!!, Modifier.fillMaxSize())
                     destination == Destination.SHORTS && parked -> ShortsLibrary(t, Modifier.fillMaxSize())
                     b != null -> BriefCard(b, Modifier.fillMaxSize())
                     else -> RideOverview(t, Modifier.fillMaxSize())
@@ -1770,9 +1803,23 @@ class MainActivity : ComponentActivity() {
             },
             canPick = scope != null && s.online,
             onRefresh = ::loadTranscript, onFixSpeakers = { managing = true },
-            onPick = { stopShort(); closeBoarding(); shortsCreate = true; destination = Destination.SHORTS }, modifier = modifier,
+            onPick = { stopShort(); closeBoarding(); afterStart = AfterStep.SELECT; destination = Destination.SHORTS }, modifier = modifier, // 추천 장면 3개(C23)
             live = if (live) liveChip(s.recording && !muted && handoff.state == Handoff.State.OFF && Live.mic == Mic.ON) else null,
             onBack = { destination = Destination.RIDE })
+    }
+
+    /** 여행 마무리·추천 장면 고르기·생성·결과(C22–C32). 후보는 차 안 규칙, 고른 장면은 POST /moments, 소리는 이 차의 클립 올리기(clips). */
+    @Composable
+    private fun AfterTripTab(t: Trip, start: AfterStep, modifier: Modifier) {
+        if (!appVisible || carStatus.restricted || t.status == "driving") return
+        val scope = contentScope()
+        val url = server
+        val lines = remember(t.code, t.generation, transcript, Live.count) { afterLines(this, t, transcript) }
+        androidx.compose.runtime.key(t.code, t.generation, start) {
+            AfterTrip(t, lines, url, scope?.token, start,
+                canUse = { appVisible && !isDestroyed && s.online && !carStatus.restricted && scope != null && contentScope() == scope && server == url && s.trip?.people?.all { it.consent } == true && s.trip?.status != "driving" },
+                onContents = { afterStart = null }, modifier = modifier)
+        }
     }
 
     @Composable
