@@ -40,7 +40,7 @@
 | [C7 QR 읽은 뒤 자리 고르기](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=12-531) | 차, 주차 | C5의 '동승자 연결' | 흐름 1의 2 |
 | [C1](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=2-2)·[C1n](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=4-254) 기록 중과 말하는 사람 강조 | 차, 주행 | 기어 D | 흐름 2 |
 | [C2](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=2-121)·[C2n](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=4-357) 휴게소 제안과 말로 수락 | 차, 주행 | 쉬어 가자는 말 | 흐름 3 |
-| [C4 기록 잠시 멈춤](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=3-537) | 차, 주행 | 호출어나 'Gleo 쓰기' | 흐름 5 |
+| [C4 기록 잠시 멈춤](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=3-537) | 차, 주행 | 호출어 | 흐름 5 |
 | [C3 도착 브리핑](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=3-93) | 차, 주차 | 할 일 장소에서 기어 P | 흐름 4 |
 | [P1 홈·내 기록본](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=5-345) | 폰 | 주소를 열면 | [프로필 화면](profile.md) 1절, [도착 후 화면](after-trip.md) 4절 |
 | [P2 프로필 만들기](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=5-431) | 폰 | P1의 '프로필 만들기', 동승 연결 전 | 프로필 1절 |
@@ -49,6 +49,8 @@
 | [P5 여행 중](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=6-464) | 폰 | P4 뒤 | 프로필 4절의 4 |
 | [P6 부탁 남기기](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=6-546) | 폰 | P5의 '부탁 남기기' | 문서 없음(처음 웹앱 때 만든 화면) |
 | [P7 기록본](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=6-581) | 폰 | 여행 뒤, P1의 내 기록본 | 도착 후 1~2절, 4절 피드 |
-| [P8 9:16 숏폼](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=6-651) | 폰, 주차 중 차 | P7의 '숏폼 보기' | 도착 후 4절 |
+| [P8 9:16 숏폼](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=6-651) | 폰, 주차 중 차 | 폰 여행 화면의 '쇼츠' 탭, 차 '쇼츠' 탭의 '생성된 쇼츠 보기' | 도착 후 4절 |
+| 시안 없음: 여행 관리 | 차, 주차 | '함께 타는 중'의 '여행 관리' | 차량 화면 '화면 요소' |
+| 시안 없음: 대화 기록(대화방) | 차, 주차 / 폰 | 차 '대화 기록' 탭, 폰 여행 화면 '대화' 탭 | 차량 화면 '화면 요소', 도착 후 4절 |
 
 11/13 뒤 화면의 시안은 [개편 파일(11/14)](https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n?node-id=0-1)에 있고, 시안과 화면 문서가 다르면 화면 문서를 따릅니다. 만든 것과 만드는 중인 것은 각 문서의 흐름 끝에 '목표 동작 + 구현 상태'로 적습니다.

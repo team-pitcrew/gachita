@@ -50,8 +50,8 @@ flowchart LR
 
 | 묶음 | 스택 | 고른 이유 | 상태 |
 |---|---|---|---|
-| 웹앱 `frontend/web` | HTML · CSS · ES 모듈, 빌드 없음. 글꼴 Pretendard. 홈 화면 설치(매니페스트와 서비스 워커) | 화면 수가 적고, 폰 브라우저가 파일을 그대로 읽음. 의존성이 없어 CI가 1초 안에 끝남. 화면이 열 개를 넘거나 상태가 얽히면 Vite + React로 옮김([ADR-0002](adr/0002-stack-split.md)) | 있음. 프로필, 동승 연결 QR, 기록 동의, 여행 화면, 여행 뒤 기록본·자막 고치기·공유·9:16 숏폼, 홈 화면 설치, 웹 시연(`/demo`). 데스크톱·헤드리스 브라우저에서 확인 |
-| 차량 앱 `frontend/car` | Kotlin 2.0 · Jetpack Compose · AGP 8.6 · minSdk 29 · targetSdk 34. Pleos Vehicle 2.3.2, NaviHelper 3.0.5, TextToSpeech 3.3.1, SpeechToText 3.3.1 | 내비·기어·TTS·STT는 Pleos SDK로만 부를 수 있음. 에뮬레이터에서 웹뷰 방식은 메모리 약 253 MB, 네이티브는 약 96 MB였음(Pleos 기준 400 MB) | 있음. 여행과 기록 동의, 수음과 받아쓰기, 주행 중 화면, 부탁을 경유지로, 도착 브리핑(에뮬레이터에서 확인, [차량 앱 README](../frontend/car/README.md)). 실차에서는 확인하지 않음 |
+| 웹앱 `frontend/web` | HTML · CSS · ES 모듈, 빌드 없음. 글꼴 Pretendard. 홈 화면 설치(매니페스트와 서비스 워커) | 화면 수가 적고, 폰 브라우저가 파일을 그대로 읽음. 의존성이 없어 CI가 1초 안에 끝남. 화면이 열 개를 넘거나 상태가 얽히면 Vite + React로 옮김([ADR-0002](adr/0002-stack-split.md)) | 있음. 프로필, 동승 연결 QR, 기록 동의, 여행 화면의 여행·대화·쇼츠 탭(대화방, 세로 쇼츠, #239), 여행 뒤 기록본·자막 고치기·공유, 홈 화면 설치, 웹 시연(`/demo`). 데스크톱·헤드리스 브라우저에서 확인 |
+| 차량 앱 `frontend/car` | Kotlin 2.0 · Jetpack Compose · AGP 8.6 · minSdk 29 · targetSdk 34. Pleos Vehicle 2.3.2, NaviHelper 3.0.5, TextToSpeech 3.3.1, SpeechToText 3.3.1 | 내비·기어·TTS·STT는 Pleos SDK로만 부를 수 있음. 에뮬레이터에서 웹뷰 방식은 메모리 약 253 MB, 네이티브는 약 96 MB였음(Pleos 기준 400 MB) | 있음. 여행과 기록 동의, 수음과 받아쓰기, 주행 중 화면, 부탁을 경유지로, 도착 브리핑, 동승자 연결 QR 읽기, 목소리 등록과 말한 사람 강조, 기본 내비 옆 반쪽 창의 탭 셋(함께 타는 중·대화 기록·쇼츠, #239)(에뮬레이터에서 확인. #239 뒤 다시 돈 E2E는 쇼츠뿐, [차량 앱 README](../frontend/car/README.md)). 실차에서는 확인하지 않음 |
 | API 서버 `backend/api` | Node 22 표준 `http`. Postgres 드라이버 `pg` 하나 | 경로가 서른 개 안팎이어도 프레임워크 없이 읽힘. 타입이 필요해지면 TypeScript로 옮김 | 있음. 프로필과 구글 연결, 동승 연결, 여행, 발화·기록본·피드, 목소리 등록과 대조, 장면 후보·숏폼 구성, 클립과 다시 받아 적기, 자막 고치기, 공유([API 명세](api/openapi.yaml)). 그룹과 초대 코드 경로는 닫음(11/14) |
 | 데이터 | Postgres 17, CloudNativePG로 클러스터 안에서 운영 | 관리형 DB 없이 직접 운영하는 조건. 백업과 복구를 선언으로 다룸 | 실서비스: CloudNativePG 클러스터 하나에 `trips`·`profiles` 두 DB([ADR-0016](adr/0016-slo-capacity-single-postgres.md)). 로컬과 CI는 Postgres 17 컨테이너 |
 | 클라우드 | AWS. EC2 한 대에 K3s 직접 설치. Terraform으로 자원을 만들고 Argo CD가 `backend/infra/gitops`를 읽어 맞춤 | 한 대로 시작해 비용을 낮추고, 클러스터 상태를 저장소에서 읽을 수 있게 함 | 11/13부터 실서비스(`https://gachita.mangowhois.ai`). EC2 t4g.large 한 대에 K3s, Cloudflare → ALB → API. 실제 주소 E2E 통과, Route 53이 밖에서 30초마다 점검. 선언은 [backend/infra/terraform](../backend/infra/terraform/README.md), [backend/infra/gitops](../backend/infra/gitops/README.md) |
@@ -84,7 +84,7 @@ Pleos는 주행 중 내비가 아닌 앱의 CPU를 5% 미만, RAM을 400 MB 이�
 | 7 | 장면 후보 | API. 규칙 | LLM 계약 전이라 규칙으로 고름(11/14) | 서버 있음(#181, 합성 대화 시험) |
 | 8 | 사람이 고른 장면의 클립 | 차가 고른 구간만 올림. 그때까지 차 안에 48시간 암호화 | 원음 전체는 차 밖으로 보내지 않음([ADR-0007](adr/0007-voice-processing-flow.md)). 클립은 기존 API 주소에서 참가자 토큰을 확인하고 내줌([ADR-0021](adr/0021-shortform-as-composition-data.md), ADR-0020의 `media` 하위 도메인은 두지 않음) | 서버와 클립 버킷 있음(#163·#167), 차에서 고른 구간 잘라 올리기 있음(에뮬레이터, 가짜 S3, #222). 실제 버킷으로는 확인 전 |
 | 9 | 고른 클립 다시 받아 적기 | API → 재전사 서버. 고른 클립만, 서버에 설정이 있을 때만 | Pleos 초안이 짧은 물음에서 틀린 것을 자막에서 고침. 동의 화면에 밝힘 | 서버 있음(#183, 실패하면 원문 자막. 서버에 설정이 있을 때만, 길은 #191) |
-| 10 | 숏폼 | 폰 9:16 재생 페이지, 주차 중 차 | 영상 파일을 만들지 않고 클립·자막·말한 사람을 이어 틈([ADR-0021](adr/0021-shortform-as-composition-data.md)) | 폰 있음(#185, 브라우저). 차는 주차 중 재생 있음(에뮬레이터, #233) |
+| 10 | 숏폼 | 폰 9:16 재생 페이지, 주차 중 차 | 영상 파일을 만들지 않고 클립·자막·말한 사람을 이어 틈([ADR-0021](adr/0021-shortform-as-composition-data.md)) | 폰 있음(#185, 브라우저). 차는 주차 중 재생 있음(에뮬레이터, #233). #239부터 폰·차 모두 전신 캐릭터와 자막을 그리는 세로 쇼츠 화면. #239의 영상 만들기·저장은 이 줄의 '영상 파일을 만들지 않고'와 어긋나 유지 여부를 정하는 중 |
 
 ## 외부 API
 
