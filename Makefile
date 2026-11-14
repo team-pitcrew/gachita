@@ -12,8 +12,10 @@ hooks: ## 커밋 훅과 커밋 양식을 이 저장소에 건다(복제한 뒤 �
 	@echo "커밋 훅(.githooks)과 커밋 양식(.gitmessage)을 걸었습니다"
 
 check-fast: ## 올리기 전에 도는 빠른 검사(1초 안팎)
-	node --check frontend/web/app.js
-	node --check frontend/web/demo/demo.js
+	@# 파일 이름(.js)으로 주면 Node가 모듈로 읽지 않아 중복 import 같은 오류를 놓친다. import/export가 있는 파일은 모듈로 읽어 본다
+	@for f in $$(grep -lE '^(import|export) ' frontend/web/*.js frontend/web/demo/*.js); do \
+		node --input-type=module --check < "$$f" || { echo "문법 오류: $$f" >&2; exit 1; }; \
+	done
 	node --test "frontend/web/*.test.mjs"
 
 check: check-fast db api ## CI와 같은 검사(로컬 Postgres 컨테이너를 띄운다)
