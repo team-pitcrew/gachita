@@ -20,7 +20,7 @@ export function transcriptLines(data) {
     .sort((a, b) => a.at - b.at || a.seq - b.seq || String(a.device).localeCompare(String(b.device)));
 }
 
-export function createConversations({ getTrip, getParticipant, getToken, request, avatar, onCaptions, onShorts }) {
+export function createConversations({ getTrip, getParticipant, getToken, request, avatar, onCaptions, onShorts, onScenes }) {
   const dialog = h("dialog", { className: "conversations-dialog", "aria-labelledby": "conversation-title" });
   document.body.append(dialog);
   let state = null;
@@ -71,7 +71,7 @@ export function createConversations({ getTrip, getParticipant, getToken, request
     const top = h("header", { className: "conversation-heading" },
       button(s.view === "thread" ? "이전" : "닫기", () => { if (s.view === "thread" && !s.unavailable) { s.view = "list"; paint(s); } else close(); }, "plain"),
       h("div", { className: "grow" }, h("h1", { id: "conversation-title" }, title), h("p", { className: "meta" }, s.view === "thread" ? `${date(s.createdAt)} · ${participants.length}명` : "차 안에서 함께 나눈 이야기")),
-      h("span", { className: `record-state${trip?.recording ? " is-recording" : ""}` }, trip?.recording ? "기록 중" : "녹취"),
+      h("span", { className: "record-state" }, getParticipant()?.consent ? "내 기록 동의 켜짐" : "내 기록 동의 꺼짐"),
     );
     let body;
     if (s.unavailable) body = bodyStatus(s.unavailable);
@@ -109,6 +109,7 @@ export function createConversations({ getTrip, getParticipant, getToken, request
       h("footer", { className: "conversation-bottom" },
         h("span", { className: "meta" }, s.unavailable ? "기록은 화면에 남기지 않았어요" : "차에서 받아 적은 대화예요"),
         !s.unavailable && s.view === "thread" && s.lines.length > 0 && button("자막 수정", () => { close(); onCaptions(); }, "plain"),
+        !s.unavailable && s.view === "thread" && s.lines.length > 0 && onScenes && button("장면 고르기", () => { close(); onScenes(); }, "primary"),
       ),
     );
     if (s.view === "thread") scroll.scrollTop = s.enteredThread && !nearEnd ? oldTop : scroll.scrollHeight;

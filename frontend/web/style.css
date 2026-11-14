@@ -4,7 +4,7 @@
    민트 바탕(--accent-fill)은 흰 바탕과 2.2:1이라 위 글자는 먹색(--on-accent), 민트 글자·링은 짙은 민트(--accent)를 쓴다.
    시안: https://www.figma.com/design/bkASxUWEfhJKjawI1sVK8n
    규칙(k-style): 칩 선택은 먹색, 주 단추만 민트, 숫자는 먹색, 이모지·이름 글자 아바타 없음.
-   모서리: 카드 24px, 단추·입력·칩 16px, 상태 표시만 알약 모양. 대비는 contrast.test.mjs가 검사한다. */
+   모서리: 카드 14px, 단추·입력 10px. 목록은 면을 쌓지 않고 구분선과 여백으로 나눈다. 대비는 contrast.test.mjs가 검사한다. */
 :root {
   --bg: #f6f4f1;
   --surface: #ffffff;
@@ -19,8 +19,8 @@
   --rec: #b3261e;
   --ok: #2b7a53;
   --warn: #8c6400;
-  --r-card: 24px;
-  --r-ctl: 16px;
+  --r-card: 14px;
+  --r-ctl: 10px;
   --pad: 20px;
   --mascot: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22%3E%3Cpath d=%22M14 22C14 16.5 18.5 12 24 12H40C45.5 12 50 16.5 50 22V24H54C56.2 24 58 25.8 58 28V44C58 48.4 54.4 52 50 52H14C9.6 52 6 48.4 6 44V28C6 25.8 7.8 24 10 24H14V22Z%22 fill=%22%23fff%22 stroke=%22%2328221B%22 stroke-width=%223.5%22 stroke-linejoin=%22round%22/%3E%3Ccircle cx=%2224%22 cy=%2236%22 r=%223.2%22 fill=%22%2328221B%22/%3E%3Ccircle cx=%2240%22 cy=%2236%22 r=%223.2%22 fill=%22%2328221B%22/%3E%3Cpath d=%22M29 43Q32 45.5 35 43%22 fill=%22none%22 stroke=%22%2328221B%22 stroke-width=%222.6%22 stroke-linecap=%22round%22/%3E%3C/svg%3E");
 }
@@ -865,4 +865,99 @@ input[type="file"]::file-selector-button {
 @media (max-width: 520px) { .short-studio { width: 100vw; margin: 0; } }
 :root { --reel-cta: #2b7a53; }
 .short-studio .reel-solid { background: var(--reel-cta); color: var(--reel-ink); }
-.short .short-close { border-radius: 8px; }
+
+/* 기획서 7장: 모바일은 여행 이름을 유지하며 대화 → 장면 → 영상으로 이어진다. */
+.mobile-heading { display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: max(14px, env(safe-area-inset-top)) 20px 14px; border-bottom: 1px solid var(--line); background: var(--bg); }
+.mobile-heading .meta { text-align: right; overflow-wrap: anywhere; }
+.eyebrow { color: var(--ink-2); font-size: 13px; letter-spacing: .02em; }
+.scene-picker { width: min(100%, 520px); max-width: 520px; height: 100dvh; max-height: 100dvh; padding: 0; margin: 0 auto; border: 0; border-radius: 0; background: var(--bg); color: var(--ink); }
+.scene-picker[open] { display: flex; flex-direction: column; }
+.scene-picker .mobile-heading { position: sticky; top: 0; z-index: 1; flex-shrink: 0; }
+.scene-list, .scene-detail { display: grid; align-content: start; gap: 14px; padding: 24px 20px max(28px, env(safe-area-inset-bottom)); }
+.scene-list h1, .scene-detail h1 { margin: 0; font-size: 27px; line-height: 1.3; }
+.scene-rows { margin: 12px 0; }
+.scene-row { width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--line); background: none; color: var(--ink); border-radius: 0; padding: 20px 0; }
+.scene-row > span { display: grid; gap: 5px; }
+.scene-row strong { font-size: 18px; font-weight: 650; }
+.scene-excerpt { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; color: var(--ink-2); font-size: 14px; line-height: 1.5; }
+.scene-audio { padding: 24px 0; display: grid; gap: 14px; border-bottom: 1px solid var(--line); }
+.scene-audio h2 { font-size: 17px; }
+.scene-audio audio { width: 100%; }
+.scene-dialogue { padding: 8px 0; list-style: none; }
+.scene-dialogue li { display: flex; gap: 14px; padding: 18px 0; }
+.scene-dialogue img { width: 44px; height: 54px; object-fit: contain; flex: none; }
+.scene-dialogue li > div { display: grid; gap: 6px; }
+.scene-dialogue .meta { font-size: 12px; }
+.scene-text-action { display: block; min-height: 44px; padding: 10px 0; background: none; color: var(--ink); text-align: left; border-radius: 0; text-decoration: underline; text-underline-offset: 4px; }
+.scene-next { display: grid; gap: 12px; margin-top: 24px; padding-top: 24px; border-top: 1px solid var(--line); }
+.scene-empty, .scene-waiting { display: grid; gap: 12px; padding: 40px 0; }
+.scene-empty p, .scene-waiting p { color: var(--ink-2); }
+.scene-error { padding: 12px 20px; display: grid; gap: 12px; }
+.scene-cast { display: flex; gap: 24px; padding: 16px 0; }
+.scene-cast > div { display: grid; justify-items: center; gap: 8px; font-size: 14px; }
+.scene-cast img { width: 64px; height: 80px; object-fit: contain; }
+.library-trip { margin-top: 24px; }
+.library-trip-heading { display: grid; gap: 4px; margin-bottom: 16px; }
+.library-trip-heading h2 { font-size: 18px; }
+.library-trip-heading .meta { font-size: 12px; }
+.reel-library .reel-grid { margin-top: 0; }
+.reel-library input[type=search] { margin-top: 20px; }
+.home-section > .between { margin-bottom: 10px; }
+.home-section > .between h2 { font-size: 18px; }
+.home-section > .between button { padding: 8px 0 8px 16px; font-size: 14px; }
+.home-library { gap: 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.home-library .home-entry { background: none; border-radius: 0; padding: 20px 4px; }
+.home-library .home-entry + .home-entry { border-left: 1px solid var(--line); padding-left: 16px; }
+.preference-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 18px 0; }
+.preference-row > span { font-size: 15px; }
+.mobile-switch { flex: none; width: 48px; min-width: 48px; min-height: 28px; height: 28px; padding: 3px; border: 0; border-radius: 7px; background: var(--ink-2); }
+.mobile-switch > span { display: block; width: 22px; height: 22px; background: var(--bg); border-radius: 4px; transition: transform .15s; }
+.mobile-switch.is-on { background: var(--accent); }
+.mobile-switch.is-on > span { transform: translateX(20px); }
+.mobile-switch:disabled { opacity: .4; }
+.recipient-row { width: 100%; display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 16px 12px; background: none; color: var(--ink); border-radius: 8px; border: 1px solid var(--line); margin-top: 8px; }
+.recipient-row.is-selected { border-color: var(--ink); background: var(--surface-2); }
+.recipient-row .meta { font-size: 13px; }
+.records-dialog, .captions-dialog, .shares-dialog { width: min(100%, 520px); max-width: 520px; min-height: 100dvh; height: 100dvh; max-height: 100dvh; margin: 0 auto; padding: max(20px, env(safe-area-inset-top)) 20px max(32px, env(safe-area-inset-bottom)); border-radius: 0; border: 0; }
+.records-list > .card, .shares-list > .card, .captions-list > .card, .records-dialog .stack > .card { background: none; border: 0; border-bottom: 1px solid var(--line); padding: 20px 0; border-radius: 0; box-shadow: none; }
+.records-list, .shares-list, .captions-list { padding: 0; list-style: none; }
+.candidate-lines { padding-left: 22px; color: var(--ink-2); display: grid; gap: 8px; margin: 16px 0; }
+.records-dialog details summary { cursor: pointer; line-height: 1.6; padding: 8px 0; }
+.conversation-bottom { flex-wrap: wrap; gap: 8px; }
+.conversation-bottom > span { flex: 1 1 100%; }
+.conversation-bottom button { flex: 1; min-height: 44px; }
+.short .short-close { border-radius: 8px; width: auto; padding: 8px 12px; }
+
+/* 참석 QR은 시트가 아니라 화면 전체를 덮는 연결 흐름이다. */
+:root { --boarding-bg: #fff; --boarding-ink: #28221b; --boarding-sub: #5a5044; --boarding-line: #edeae6; --boarding-seat: #e4f4ec; --boarding-action: #2b7a53; }
+.boarding-dialog { position: fixed; inset: 0; width: 100vw; max-width: none; height: 100dvh; min-height: 100dvh; max-height: 100dvh; margin: 0; padding: 0; border: 0; border-radius: 0; background: var(--boarding-bg); color: var(--boarding-ink); overflow-y: auto; }
+.boarding-dialog[open] { display: block; animation: none; }
+.boarding-dialog::backdrop { background: var(--boarding-bg); }
+.boarding-heading { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 24px; max-width: 480px; margin: auto; padding: max(12px, env(safe-area-inset-top)) 20px 12px; background: var(--boarding-bg); }
+.boarding-dialog button { border-radius: 9px; min-height: 48px; }
+.boarding-heading button { background: none; padding: 8px 0; color: var(--boarding-sub); }
+.boarding-content { max-width: 480px; margin: 0 auto; padding: 12px 24px max(28px, env(safe-area-inset-bottom)); display: grid; gap: 18px; }
+.boarding-content h1 { margin: 0; font-size: 28px; line-height: 1.35; }
+.boarding-content h2 { font-size: 20px; }
+.boarding-content p { line-height: 1.6; }
+.boarding-dialog .meta { color: var(--boarding-sub); font-size: 14px; }
+.boarding-person { display: flex; align-items: center; gap: 14px; }
+.boarding-person img { width: 52px; height: 62px; object-fit: contain; }
+.boarding-person p { font-size: 14px; }
+.boarding-code { min-height: 288px; display: grid; place-items: center; margin: 4px 0 8px; }
+.boarding-qr { display: block; width: min(288px, 100%); height: auto; background: var(--boarding-bg); }
+.boarding-countdown { font-variant-numeric: tabular-nums; font-size: 16px; font-weight: 600; }
+.boarding-dialog .boarding-secondary { border: 1px solid var(--boarding-line); background: var(--boarding-bg); color: var(--boarding-ink); }
+.boarding-dialog .primary { background: var(--boarding-action); color: var(--boarding-bg); min-height: 54px; }
+.boarding-hint { padding-top: 16px; }
+.boarding-seat { display: grid; gap: 8px; padding: 20px; background: var(--boarding-seat); }
+.boarding-seat img { width: 64px; height: 78px; object-fit: contain; }
+.boarding-seat p { color: var(--boarding-sub); font-size: 14px; }
+.boarding-consent summary { cursor: pointer; padding: 8px 0; font-size: 14px; color: var(--boarding-sub); }
+.boarding-consent ul { margin: 4px 0; padding-left: 20px; display: grid; gap: 10px; font-size: 14px; }
+.boarding-actions { display: grid; gap: 10px; }
+.boarding-complete { padding-top: 28px; }
+.boarding-complete > img { width: 112px; height: 130px; object-fit: contain; }
+.boarding-status { padding: 20px 0; border-top: 1px solid var(--boarding-line); display: grid; gap: 10px; }
+.boarding-status p { color: var(--boarding-sub); font-size: 14px; }
+.boarding-error { max-width: 480px; margin: 0 auto; padding: 16px 24px max(24px, env(safe-area-inset-bottom)); display: grid; gap: 12px; color: var(--boarding-ink); }

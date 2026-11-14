@@ -2,6 +2,11 @@
 import { h, toast } from "./shared.js";
 
 const key = (row) => `${row.device}\n${row.seq}`;
+export function captionSelection(rows, cues) {
+  if (!cues) return rows;
+  const keys = new Set(cues.map(key));
+  return rows.filter((row) => keys.has(key(row)));
+}
 const shown = (row) => row.editedText ?? row.asrText ?? row.text;
 const button = (text, onclick, className = "") => h("button", { type: "button", onclick, className }, text);
 const when = (at) => new Date(at).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -61,12 +66,12 @@ export function createCaptions({ getTrip, getParticipant, request, refreshTrip }
     if (!s.selected) s.rows = [];
     s.error = e.status === 0 ? (s.selected ? "연결이 끊겨 마지막으로 받은 자막을 보여 드려요. 입력은 그대로 두었으니 다시 연결한 뒤 저장해 주세요." : "자막을 읽지 못했어요. 다시 연결한 뒤 눌러 주세요.") : e.message;
   }
-  async function open() {
+  async function open({ cues, onReturn } = {}) {
     if (state && !close()) return;
     const trip = getTrip();
     const me = getParticipant();
     if (!trip || !me?.consent) return toast("기록에 동의한 참가자만 자막을 확인할 수 있어요.");
-    const s = state = { code: trip.code, generation: trip.generation, participantId: me.id, rows: [], selected: null, draft: "", busy: false, error: "", conflict: false, revision: 0 };
+    const s = state = { code: trip.code, generation: trip.generation, participantId: me.id, rows: [], cues, onReturn, selected: null, draft: "", busy: false, error: "", conflict: false, revision: 0 };
     shell(s, h("p", { role: "status" }, "자막을 불러오고 있어요."));
     dialog.showModal();
     await load(s);
@@ -94,9 +99,10 @@ export function createCaptions({ getTrip, getParticipant, request, refreshTrip }
       if (revision !== s.revision) return;
       if (data.generation !== s.generation) { close(true); return toast("기록 동의가 바뀌었어요. 여행 화면에서 다시 확인해 주세요."); }
       const previousError = s.error;
-      repaint ||= !s.selected && JSON.stringify(s.rows) !== JSON.stringify(data.utterances);
+      const rows = captionSelection(data.utterances, s.cues);
+      repaint ||= !s.selected && JSON.stringify(s.rows) !== JSON.stringify(rows);
       s.error = "";
-      s.rows = data.utterances;
+      s.rows = rows;
       const selectedKey = s.selected && key(s.selected);
       if (selectedKey) {
         const latest = s.rows.find((row) => key(row) === selectedKey);
@@ -140,7 +146,7 @@ export function createCaptions({ getTrip, getParticipant, request, refreshTrip }
         h("p", { className: "what" }, shown(row)),
         Number.isInteger(row.editVersion) ? button("자막 고치기", () => { s.selected = row; s.draft = shown(row); s.conflict = false; s.latest = null; s.error = ""; s.notice = ""; editor(s); }) : h("p", { className: "meta" }, "자막 편집을 준비하고 있어요."),
       ))) : !s.error && h("p", { className: "empty" }, "아직 받아쓴 자막이 없어요."),
-      button("새로 읽기", () => load(s)),
+      h("div", { className: "row" }, button("새로 읽기", () => load(s)), s.onReturn && button("장면으로 돌아가기", () => { const back = s.onReturn; if (close()) back(); }, "primary")),
     );
   }
   function editor(s) {
@@ -176,6 +182,7 @@ export function createCaptions({ getTrip, getParticipant, request, refreshTrip }
       s.conflict && s.latest && h("section", { className: "card" }, h("h2", {}, "서버의 최신 자막"), h("p", {}, shown(s.latest))),
       s.conflict && reload,
       h("div", { className: "row" }, save, cancel), reset,
+      s.onReturn && button("장면으로 돌아가기", () => { const back = s.onReturn; if (close()) back(); }),
     );
     if (focused && !input.disabled) { input.focus({ preventScroll: true }); input.setSelectionRange(...selection); }
   }

@@ -6,11 +6,12 @@
 import { SEATS, SEAT, WHEN, REQ, CLOSED, api, h, toast } from "/shared.js";
 import { createShares, shareIconButton } from "/shares.js";
 import { createCaptions } from "/captions.js";
-import qrcode from "/qrcode.js";
 import { createRecords } from "/records.js";
 import { createConversations } from "/conversations.js";
 import { CHARACTER_OPTIONS, characterKey, characterImage, createShortFilm, exportShortFilm, recordingFormat } from "/short-film.js";
 import { createShortStudio } from "/short-studio.js";
+import { createScenePicker } from "/short-scenes.js";
+import { createBoarding } from "/boarding.js";
 
 const TRIP = {
   boarding: ["탑승 중", "모두 타면 운전자가 출발을 눌러요."],
@@ -97,6 +98,8 @@ const records = createRecords({
   participantRequest: (method, path, body) => asMe(trip.participants.find((p) => p.id === myId()), (c, token) => api(method, `/trips/${c}${path}`, body, token)),
   onSaved: () => refresh(true),
   onProfile: () => (location.hash = "me"),
+  onMoment: (id) => scenes.open({ momentId: id }),
+  onConversation: () => conversations.open(),
 });
 
 const conversations = createConversations({
@@ -114,13 +117,22 @@ const conversations = createConversations({
   },
   onCaptions: () => captions.open(),
   onShorts: () => launchShort(),
+  onScenes: () => scenes.open(),
 });
-const launchLocalShort = () => {
+const launchLocalShort = (momentId) => {
   const me = trip?.participants.find((p) => p.id === myId());
-  if (me) openShort(me).catch((e) => toast(e.status === 0 ? "연결이 끊겨서 열지 못했어요." : e.message));
+  if (me) openShort(me, momentId).catch((e) => toast(e.status === 0 ? "연결이 끊겨서 열지 못했어요." : e.message));
 };
 const studio = createShortStudio({ getTrip: () => trip, getParticipant: () => trip?.participants.find((p) => p.id === myId()), getToken: myToken,
-  getOwner: () => profile?.id ? `profile:${profile.id}` : (() => { let id = store("short-owner"); if (!id) { id = crypto.randomUUID(); store("short-owner", id); } return `device:${id}`; })(), onLocal: launchLocalShort });
+  getOwner: () => profile?.id ? `profile:${profile.id}` : (() => { let id = store("short-owner"); if (!id) { id = crypto.randomUUID(); store("short-owner", id); } return `device:${id}`; })(), onLocal: launchLocalShort,
+  onPick: (momentId) => scenes.open({ momentId }), onConnect: () => { if (trip && code()) { render(); } else if (profile) startRide(); else location.hash = "me"; } });
+const scenes = createScenePicker({ getTrip: () => trip, getParticipant: () => trip?.participants.find((p) => p.id === myId()), getToken: myToken,
+  onChoose: (momentId) => studio.open({ momentId }), onLocal: launchLocalShort, onCandidates: () => records.openScenes(), onCaptions: (options) => captions.open(options), onShare: (momentId) => shares.openCompose({ momentId }) });
+const boarding = createBoarding({ getProfile: () => profile, getToken: () => store("profile"), consentText: CONSENT, consentOffMessage: OFF_WIPES,
+  onLinked: ({ code, participant, token }) => { store(code, participant.id); store(`${code}:token`, token); store(`${code}:asked`, null); store("trip", code); },
+  onDecision: ({ code }) => { store(`${code}:asked`, "1"); reading = false; },
+  onLeave: ({ code: joinedCode }) => { store(`${joinedCode}:asked`, "1"); reading = false; if (code() === joinedCode) refresh(true); else location.hash = joinedCode; } });
+const startRide = () => boarding.open();
 const launchShort = () => studio.open();
 const openConversations = () => {
   if (trip?.code === code()) return conversations.open();
@@ -317,7 +329,7 @@ function profileFields(full) {
     ),
     h("label", { className: "field" }, h("span", {}, "이름 또는 별명"), h("input", { value: pdraft.name, required: true, maxLength: 20, autocomplete: "nickname", placeholder: "함께 타는 사람들에게 보일 이름", oninput: (e) => (pdraft.name = e.target.value) })),
     chipGroup("나를 닮은 캐릭터", "character", CHARACTERS, pdraft.character, (v) => { pdraft.character = v; repaint(); }),
-    full && h("label", { className: "chip" }, h("input", { type: "checkbox", checked: pdraft.consentDefault, onchange: (e) => (pdraft.consentDefault = e.target.checked) }), "다음 여행에서 기록 동의를 먼저 제안받기"),
+    full && h("div", { className: "preference-row" }, h("span", {}, "다음 여행에서 기록 동의 먼저 제안받기"), h("button", { type: "button", role: "switch", "aria-checked": String(pdraft.consentDefault), "aria-label": "기록 동의 먼저 제안받기", className: `mobile-switch${pdraft.consentDefault ? " is-on" : ""}`, onclick: (e) => { pdraft.consentDefault = !pdraft.consentDefault; e.currentTarget.setAttribute("aria-checked", String(pdraft.consentDefault)); e.currentTarget.classList.toggle("is-on", pdraft.consentDefault); } }, h("span"))),
   ];
 }
 
@@ -462,8 +474,8 @@ function home() {
       profile ? h("div", { className: "home-profile" }, editPortrait(), h("div", {}, h("p", { className: "meta" }, "오늘도 함께해요"), h("h1", {}, `${profile.name} 님`))) : h("h1", {}, "같이 탄 오늘,", h("br"), "함께 남겨요."),
       h("p", { className: "sub" }, profile ? "차 안에서 나눈 이야기가 우리만의 기록이 돼요." : "이름과 얼굴을 정하고, 차에 QR을 보여 주세요."),
     ),
-    profile ? entry("qr", "동승 연결", "차에 내 QR 보여주기", startRide, "ride-entry") : store("profile") ? profileConnection() : entry("pencil", "내 프로필 만들기", "사진 또는 캐릭터로 나를 소개해요", () => { location.hash = "me"; }, "ride-entry"),
-    entry("play", "우리 쇼츠", "짧게 남긴 대화와 내 보관함", launchShort),
+    profile ? entry("qr", "참석 QR", "차에 내 QR 보여주기", startRide, "ride-entry") : store("profile") ? profileConnection() : entry("pencil", "내 프로필 만들기", "사진 또는 캐릭터로 나를 소개해요", () => { location.hash = "me"; }, "ride-entry"),
+    h("section", { className: "home-section" }, h("div", { className: "between" }, h("h2", {}, "다시 만나는 우리 이야기"), button("보관함", () => studio.open({ view: "library" }), "plain")), entry("play", "우리 쇼츠", "원래 목소리로 남긴 짧은 여행", launchShort)),
     last && h("section", { className: "home-section" },
       h("div", { className: "between" }, h("h2", {}, "함께한 여행"), button("여행 열기", () => { location.hash = last; }, "plain")),
       entry("record", "대화 기록", "최근에 탄 여행의 이야기를 이어 봐요", openConversations),
@@ -483,76 +495,6 @@ function home() {
   ];
 }
 
-// 동승 연결(#71, 11/14): 이 폰의 프로필로 1회용 QR을 띄우면 주차 중인 차가 읽어 운전자가 고른 자리에 넣는다.
-// QR에는 짧은 코드만 담기고, 참가자 토큰은 발급 응답으로 이 폰에만 온다. 연결되면 그 토큰으로 이 폰의 동의를 묻는다.
-const RIDE_KEY = "gachita:ride"; // sessionStorage: 새로 고쳐도 기다리던 연결을 잇는다
-let ride = JSON.parse(sessionStorage.getItem(RIDE_KEY) ?? "null"); // { id, qr, expiresAt, token }
-const keepRide = (r) => ((ride = r), r ? sessionStorage.setItem(RIDE_KEY, JSON.stringify(r)) : sessionStorage.removeItem(RIDE_KEY));
-// 띄운 QR을 거둔다. 204·404면 거둠(true), 409면 그사이 차가 읽은 것이라 그 여행으로 간다(false).
-// 그 밖의 오류(끊김·503)는 던져 연결 정보와 토큰을 남긴다 — 다시 누르면 된다.
-async function withdraw() {
-  const r = ride;
-  const gone = await mine("DELETE", `/ride-links/${r.id}`).then(
-    () => true,
-    (e) => (e.status === 404 ? true : e.status === 409 ? false : Promise.reject(e)),
-  );
-  if (!gone) return (await pollRide(), false);
-  if (ride === r) keepRide(null);
-  return true;
-}
-// 새로 띄우기: 앞 QR이 이미 읽혔으면 새로 띄우지 않고 그 여행으로 간다(앞 연결의 토큰을 덮지 않게)
-const startRide = () =>
-  act(async () => {
-    if (ride && !(await withdraw())) return;
-    const r = await mine("POST", "/ride-links", {});
-    keepRide({ id: r.id, qr: r.qr, expiresAt: r.expiresAt, token: r.participantToken });
-  });
-const cancelRide = () => act(withdraw);
-// 차가 읽었는지 2초마다 본다. 끝은 서버가 정한다: linked면 그 여행으로, 404(만료·거둠)면 접는다.
-// 폰이 잠들었다 깨도 서버가 연결 결과를 5분 남겨 두니 그때 이어 간다. 묻는 사이 새로 띄웠으면 옛 답은 버린다.
-async function pollRide() {
-  const r = ride;
-  if (!r) return;
-  const res = await mine("GET", `/ride-links/${r.id}`).catch((e) => (e.status === 404 ? { status: "gone" } : null));
-  if (ride !== r) return;
-  if (res?.status === "gone") (keepRide(null), toast("QR이 만료됐어요. 다시 띄워 주세요."));
-  if (res?.status !== "linked") return !code() && !typing() && render(); // 남은 시간을 다시 그린다
-  store(res.tripCode, res.participant.id);
-  store(`${res.tripCode}:token`, r.token);
-  keepRide(null);
-  toast(`${SEAT[res.participant.seat] ?? "차"}에 탔어요`);
-  location.hash = res.tripCode;
-}
-
-// QR을 SVG로 그린다(innerHTML 없이). 카메라가 읽게 테마와 관계없이 흰 바탕에 검은 칸, 둘레 4칸을 비운다.
-// data-payload는 /demo의 차가 같은 출처 iframe에서 QR을 '읽는' 흉내에 쓴다(실제 차는 카메라로 읽는다).
-function qrSvg(text, expired) {
-  const q = qrcode(0, "M");
-  q.addData(text);
-  q.make();
-  const n = q.getModuleCount();
-  const d = [];
-  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (q.isDark(r, c)) d.push(`M${c + 4} ${r + 4}h1v1h-1z`);
-  const ns = "http://www.w3.org/2000/svg";
-  const el = (tag, attrs) => Object.entries(attrs).reduce((e, [k, v]) => (e.setAttribute(k, v), e), document.createElementNS(ns, tag));
-  const svg = el("svg", { viewBox: `0 0 ${n + 8} ${n + 8}`, class: `qr${expired ? " expired" : ""}`, role: "img", "aria-label": "동승 연결 QR", "shape-rendering": "crispEdges", "data-payload": text });
-  svg.append(el("rect", { width: n + 8, height: n + 8, fill: "#fff" }), el("path", { d: d.join(""), fill: "#000" }));
-  return svg;
-}
-
-function rideView() {
-  const left = ride.expiresAt - Date.now();
-  return [
-    header(button("닫기", cancelRide, "plain"), h("span", { className: "meta" }, "동승 연결")),
-    h("h1", {}, "차에 이 QR을 보여 주세요"),
-    h("p", { className: "sub" }, "주차 중인 차 화면의 '동승자 연결'에서 이 QR을 읽으면, 운전자가 고른 자리로 여행에 들어가요."),
-    profile && h("div", { className: "card face" }, avatar(profile, photo), h("p", { className: "what grow" }, `${profile.name} 님`)),
-    qrSvg(ride.qr, left <= 0),
-    h("p", { className: "meta center", "aria-live": "polite" }, left > 0 ? `${Math.ceil(left / 60_000)}분 남았어요` : "QR이 만료됐어요. 새로 띄워 주세요."),
-    bar(button("새로 띄우기", startRide, left > 0 ? "" : "primary")),
-  ];
-}
-
 const loading = () => [header(h("span", { className: "brand" }, "가치타")), h("div", { className: "skeleton" }), h("div", { className: "skeleton" })];
 
 const missing = () => [
@@ -566,7 +508,7 @@ const missing = () => [
 const notHere = () => [
   header(h("span", { className: "brand" }, "가치타")),
   h("h1", {}, "이 폰은 이 여행에 없어요"),
-  h("p", { className: "sub" }, "차 화면의 '동승자 연결'에서 이 폰의 동승 연결 QR을 읽으면 들어갈 수 있어요."),
+  h("p", { className: "sub" }, "차 화면의 '동승자 설정'에서 이 폰의 참석 QR을 읽으면 들어갈 수 있어요."),
   bar(button("처음으로", () => (location.hash = ""), "primary")),
 ];
 
@@ -579,6 +521,7 @@ function consentView(me) {
     asking(me) && h("p", { className: "state" }, `${SEAT[me.seat] ?? "차"}에 탔어요`),
     h("h1", {}, "이동 중 대화를 기록해도 될까요?"),
     h("p", { className: "sub" }, "도착한 뒤 재미있던 장면을 클립으로 남기는 데 써요. 한 명이라도 동의하지 않으면 기록하지 않아요."),
+    h("p", { className: "meta" }, "내 동의는 기록을 허락하는 설정이에요. 실제 녹음은 차에서 따로 시작해요."),
     h("ul", { className: "card" }, CONSENT.map((line) => h("li", {}, line))),
     bar(myToken() ? button("동의해요", decide(true), "primary") : h("p", { className: "meta" }, ONLY_HERE), button("동의하지 않아요", decide(false))),
   ];
@@ -620,10 +563,10 @@ function tripView(me) {
       toast(deleted ? `내 이름이 붙은 글 ${deleted}줄을 지웠어요.` : "지울 내 글이 없어요.");
     });
   const open = trip.requests.filter((r) => !CLOSED.includes(r.status));
-  const rec = trip.recording ? ["기록 중", "rec"] : trip.status !== "driving" ? ["기록 안 함", ""] : waiting.length ? ["동의 대기", ""] : ["기록 일시정지", ""];
+  const rec = trip.recording ? ["차량 기록 설정 켜짐", ""] : waiting.length ? ["기록 동의 대기", ""] : ["차량 기록 설정 꺼짐", ""];
   const next = NEXT_TRIP[trip.status];
   const controls = [
-    trip.status === "driving" && !waiting.length && button(trip.recording ? "기록 일시정지" : "다시 기록", patch("", { recording: !trip.recording })),
+    trip.status === "driving" && !waiting.length && button(trip.recording ? "차량 기록 끄기" : "차량 기록 켜기", patch("", { recording: !trip.recording })),
     driver && next && button(next[0], patch("", { status: next[1] }), "primary grow"),
   ].filter(Boolean);
 
@@ -655,7 +598,8 @@ function tripView(me) {
       "section",
       { className: "card" },
       h("div", { className: "between" }, h("p", { className: "state" }, TRIP[trip.status][0]), h("span", { className: `pill ${rec[1]}` }, rec[0])),
-      h("p", { className: "sub" }, waiting.length ? `${waiting.join(", ")} 님이 동의하면 기록을 시작해요.` : TRIP[trip.status][1]),
+      h("p", { className: "sub" }, waiting.length ? `${waiting.join(", ")} 님의 기록 동의를 기다리고 있어요.` : TRIP[trip.status][1]),
+      h("p", { className: "meta" }, "실제 녹음 상태는 차 화면에서 확인해 주세요."),
       controls.length > 0 && h("div", { className: "row" }, controls),
     ),
     h(
@@ -690,7 +634,7 @@ function tripView(me) {
       // 이미 동의한 사람도 지금의 동의 문구(바뀐 것 포함)를 언제든 다시 본다
       h("details", {}, h("summary", { className: "meta" }, "동의 문구 보기"), h("ul", {}, CONSENT.map((line) => h("li", {}, line)))),
     ),
-    me.consent && myToken() && h("div", { className: "row" }, button("장면 후보 보기", records.openScenes, "grow"), button("자막 수정", captions.open, "plain")),
+    me.consent && myToken() && h("div", { className: "row" }, button("쇼츠로 남길 장면", () => scenes.open(), "grow primary"), button("자막 수정", () => captions.open(), "plain")),
     trip.moments.length > 0 &&
       h(
         "section",
@@ -705,6 +649,7 @@ function tripView(me) {
               "li",
               { className: "between" },
               h("div", { className: "grow" }, h("span", { className: "what" }, m.label || "이름 없는 장면"), " ", h("span", { className: "meta" }, new Date(m.at).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" }))),
+              me.consent && myToken() && button("원음·자막", () => scenes.open({ momentId: m.id }), "plain"),
               myToken() && button("소리 지우기", () => eraseClip(m), "plain"),
             ),
           ),
@@ -767,7 +712,7 @@ async function makeShortFilm(s) {
 async function saveShortFilm(s) {
   if (!s.file || shortReadReason(s)) return;
   try {
-    const id = await studio.keepFile(s.file, { id: s.libraryId ||= `local:${crypto.randomUUID()}`, title: s.scenes[s.at].label || s.title, seconds: s.scenes[s.at].seconds, verify: () => checkFilmAccess(s, s.controller.signal) });
+    const id = await studio.keepFile(s.file, { id: s.libraryId ||= `local:${crypto.randomUUID()}`, title: s.scenes[s.at].label || s.title, seconds: s.scenes[s.at].seconds, tripCode: s.code, tripTitle: s.title, tripCreatedAt: s.createdAt, momentId: s.scenes[s.at].momentId, verify: () => checkFilmAccess(s, s.controller.signal) });
     closeShort(); studio.open({ selectedId: id }); toast("이 기기 보관함에 저장했어요.");
   } catch (e) { toast(e.message); }
 }
@@ -778,7 +723,7 @@ async function shareShortFilm(s) {
   catch (error) { if (error.name !== "AbortError") { s.exportError = "공유를 마치지 못했어요. 영상을 저장해 다시 공유해 주세요."; s.paint?.(); } }
 }
 
-async function openShort(me) {
+async function openShort(me, momentId) {
   const c = trip.code;
   const generation = trip.generation;
   if (!me.consent || !myToken()) return toast("기록에 동의한 사람만 숏폼을 볼 수 있어요.");
@@ -789,9 +734,11 @@ async function openShort(me) {
   });
   if (opening.signal.aborted || trip?.code !== c || trip.generation !== generation || data.generation !== generation) return;
   if (!data.scenes.length) return toast("아직 숏폼으로 만들 장면 클립이 없어요.");
+  const at = momentId ? data.scenes.findIndex((scene) => scene.momentId === momentId) : 0;
+  if (at < 0) return toast("선택한 장면의 원음을 다시 확인해 주세요.");
   // 연 때의 여행·동의 세대를 남긴다: 보는 사이 바뀌면 render()가 닫는다
   if (short) closeShort();
-  short = { ...data, code: c, generation, participantId: me.id, token: myToken(), createdAt: trip.createdAt, at: 0, clips: [], started: false, req: 0, controller: new AbortController() };
+  short = { ...data, code: c, generation, participantId: me.id, token: myToken(), createdAt: trip.createdAt, at, clips: [], started: false, req: 0, controller: new AbortController() };
   short.film = createShortFilm({ title: short.title, cast: short.cast });
   const current = short;
   const animate = () => {
@@ -927,7 +874,7 @@ function shortView() {
   }, s.film.canvas, caption);
   const editConversation = button("대화·자막 수정", () => { closeShort(); conversations.open(); }, "short-existing-share");
   const connectedShare = profile && trip?.participants.find((p) => p.id === s.participantId)?.profileId === profile.id
-    ? button("동승자에게 장면 공유", () => { closeShort(); shares.openCompose(); }, "short-existing-share") : null;
+    ? button("동승자에게 장면 카드 공유", () => { const id = s.scenes[s.at].momentId; closeShort(); shares.openCompose({ momentId: id }); }, "short-existing-share") : null;
   return [h("section", { className: "short", "aria-label": "가공한 쇼츠 재생과 공유" },
     h("div", { className: "short-shell" },
       h("header", { className: "short-top" }, h("span", { className: "what" }, "추천 쇼츠"), count, button("닫기", () => closeShort(), "short-close")),
@@ -944,7 +891,9 @@ function shortView() {
 }
 
 function render() {
+  boarding.sync();
   studio.sync();
+  scenes.sync();
   shares.sync();
   captions.sync();
   records.sync();
@@ -956,9 +905,11 @@ function render() {
   // 숏폼은 기록에 동의한 사람만 본다. 보는 사이 여행이 사라지거나 동의가 꺼지면(세대가 오름) 닫고 받은 소리를 버린다.
   const gone = short && (failed || trip?.code !== short.code ? "여행을 더 볼 수 없어 숏폼을 닫았어요." : !me?.consent || trip.generation !== short.generation ? "기록 동의가 바뀌어 숏폼을 닫았어요." : "");
   if (gone) return closeShort(gone);
-  const view = short ? shortView() : location.hash === "#me" ? profileView() : !code() ? (ride ? rideView() : home()) : failed ? missing() : !trip ? loading() : !me ? notHere() : asking(me) || reading ? consentView(me) : tripView(me);
-  app.classList.toggle("home-view", !short && !code() && !ride && location.hash !== "#me");
+  const ownProfile = profile && me?.profileId === profile.id;
+  const view = short ? shortView() : location.hash === "#me" ? profileView() : !code() ? home() : failed ? missing() : !trip ? loading() : !me ? notHere() : (asking(me) || reading) && !ownProfile ? consentView(me) : tripView(me);
+  app.classList.toggle("home-view", !short && !code() && location.hash !== "#me");
   app.replaceChildren(...view.flat().filter(Boolean));
+  if (!short && me && ownProfile && myToken() && (asking(me) || reading)) boarding.openConsent(trip, me, myToken());
   if (conversationPending && me && !asking(me) && !reading) { conversationPending = false; conversations.open(); }
   if (failed || (trip && !me)) conversationPending = false;
 }
@@ -993,10 +944,9 @@ function render() {
   };
 }
 
-addEventListener("hashchange", () => (openingShort?.abort(), (reading = false), short && closeShort(), location.hash === "#me" && fillDraft(), (trip = null), (failed = ""), refresh(true)));
+addEventListener("hashchange", () => (boarding.close(), openingShort?.abort(), (reading = false), short && closeShort(), location.hash === "#me" && fillDraft(), (trip = null), (failed = ""), refresh(true)));
 app.addEventListener("focusout", () => setTimeout(() => stale && !typing() && render())); // 입력이 끝나면 밀린 변경을 그린다
 setInterval(refresh, 2000); // ponytail: 2초마다 묻는다(바뀐 게 없으면 304). 지연이 문제가 되면 SSE로 바꾼다.
-setInterval(pollRide, 2000); // 동승 연결 QR을 띄워 둔 동안만 묻는다
 render();
 const refreshConfig = () => api("GET", "/config").then((c) => {
   googleId = c.googleClientId ?? "";
@@ -1007,6 +957,7 @@ refreshConfig(); // 못 받으면 구글 단추를 숨기고 재연결 때 다�
 addEventListener("online", () => { refreshConfig(); refresh(); });
 const back = location.pathname === "/oauth/google/callback" && (await googleBack());
 await loadProfile();
+boarding.resume();
 fillDraft();
 if (back) Object.assign(pdraft, back); // 구글에서 실패·취소로 돌아오면 쓰던 입력을 되돌린다
 refresh(true);

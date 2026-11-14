@@ -21,12 +21,13 @@ export class ShortGeneration {
     await this.refresh();
   }
   async refresh() { this.items = (await this.call("GET", this.path("/short-generations"))).items; }
-  async preview(templateId, audioReference = false) {
+  async preview(templateId, audioReference = false, momentId) {
     if (this.busy || this.pending) throw new Error("먼저 이전 요청의 접수 여부를 확인해 주세요.");
     this.busy = true; this.plan = null;
     try {
-      const plan = await this.call("POST", this.path("/short-plans"), { templateId, audioReference });
+      const plan = await this.call("POST", this.path("/short-plans"), { templateId, audioReference, ...(momentId ? { momentId } : {}) });
       if (plan.generation !== this.generation) throw new Error("기록이 바뀌었어요. 쇼츠 화면을 다시 열어 주세요.");
+      if (momentId && plan.momentId !== momentId) throw new Error("선택한 장면과 제작 구성이 달라요. 장면을 다시 확인해 주세요.");
       this.plan = plan;
     } finally { this.busy = false; }
   }
