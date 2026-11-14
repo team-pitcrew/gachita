@@ -4,7 +4,7 @@
 
 ## 전사와 할 일의 연결
 
-`GET /api/trips/{code}/todos`는 참가자 토큰과 기록 동의를 확인한 뒤 `{generation, method, items}`를 반환합니다. `method`는 `place-rules-v1`입니다. 차량 `Todos.kt`의 규칙을 옮겼으며 모델 추론이 아닙니다. ‘마트에서 우유 사자’, ‘숙소에서는 가방을 꺼내야지’처럼 장소 뒤 ‘에서’가 있고 권유·의무형으로 끝나는 문장을 추출합니다. 장소 없이 말하거나 복잡한 문장은 놓칠 수 있습니다.
+`GET /api/trips/{code}/todos`는 참가자 토큰과 기록 동의를 확인한 뒤 `{generation, method, items, arrival}`를 반환합니다. `method`는 `place-rules-v1`입니다. 차량 `Todos.kt`의 규칙을 옮겼으며 모델 추론이 아닙니다. ‘마트에서 우유 사자’, ‘숙소에서는 가방을 꺼내야지’처럼 장소 뒤 ‘에서’가 있고 권유·의무형으로 끝나는 문장을 추출합니다. 장소 없이 말하거나 복잡한 문장은 놓칠 수 있습니다.
 
 할 일은 `{id,place,text,status,version,sources}`입니다. `sources`에는 원발화의 `device`, `seq`, `at`, `text`, `displayText`와 확인된 경우 `participantId`가 있습니다. 수동 교정본, 자동 교정본, 원문 순으로 읽고 원전사는 함께 남깁니다. 같은 장소와 문장은 하나로 묶고 출처 발화들을 모두 연결합니다. `GET /transcript.todos`에도 같은 목록이 들어갑니다.
 
@@ -36,6 +36,12 @@
 응답은 `{generation,eligible,reason,source,observedAt,place,distanceMeters,method,items}`입니다. `reason`은 성공 시 `null`, 조건 미충족 시 `not_parked`, `stale_position`, `outside_place`입니다. 조건이 맞아도 해당 장소의 미완료 항목이 없으면 `items`는 빈 배열입니다. 완료·취소한 항목과 다른 장소 항목은 제외합니다.
 
 `source`는 `vehicle` 또는 `browser`이며 클라이언트가 전달한 근거 출처입니다. 서버가 실차 센서를 직접 확인하거나 GPS의 진위를 보증한다는 의미가 아닙니다. 브라우저에서 기어 신호나 차량 도착을 만들어 보내면 안 됩니다. 위치·장소·주차 상태를 실제 연결 경로에서 확보하지 못하면 전체 할 일 목록을 표시하고 자동 도착 브리핑으로 표현하지 않습니다. 이 API는 여행 상태를 바꾸거나 내비 명령을 보내지 않습니다.
+
+### 도착한 장소를 폰이 읽는 길(T119)
+
+폰은 내비의 장소 좌표를 모르므로 스스로 도착을 판정하지 않습니다. `eligible=true`가 나오면 서버가 그 장소의 `{place, at, source}`(이름·관측 시각·출처)만 여행에 남기고, `GET /todos`의 `arrival`로 알립니다. 좌표와 거리는 남기지 않습니다. 같은 장소를 다시 확인해도 처음 시각을 유지합니다.
+
+`arrival`은 여행이 다시 `driving`이나 `boarding`으로 바뀌거나 동의 세대가 오르면 `null`이 됩니다. 토큰 없이 읽는 `GET /api/trips/{code}`에는 들어가지 않습니다. 폰은 `arrival.place`에 할 일의 `place`가 들어 있는 미완료 항목을 '지금 도착한 곳에서 할 일'로 보일 수 있습니다(브리핑과 같은 이름 포함 규칙). 이 값도 클라이언트가 보낸 관측에 대한 판정이며 실차 센서를 서버가 확인했다는 뜻이 아닙니다.
 
 ## 배포와 확인 범위
 
