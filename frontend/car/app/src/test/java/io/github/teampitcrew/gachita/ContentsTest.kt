@@ -38,7 +38,9 @@ class ContentsTest {
         assertEquals("민준과\n서준의 이야기", contentHeadline(item))
         assertEquals("캐릭터 자막형", contentStyle(item))
         assertEquals("가족 대화형", contentStyle(item.copy(kind = "generated")))
-        assertEquals("아빠보다 빠른 서…", contentPinLabel("아빠보다 빠른 서준의 정답"))
+        assertEquals("아빠보다 빠른 정답", contentPinLabel("아빠보다 빠른 서준의 정답", listOf("서준")))
+        assertEquals("아빠보다 빠른…", contentPinLabel("아빠보다 빠른 서준의 정답"))
+        assertEquals("내일도 같이 타면…", contentPinLabel("내일도 같이 타면 안 돼?", listOf("하은")))
         assertEquals("01:12", contentClock(72.4))
     }
 
@@ -48,5 +50,19 @@ class ContentsTest {
         assertTrue(b.y < a.y && b.x > a.x)
         for (o in listOf(a, b)) assertTrue(o.x in 0f..800f && o.y in 0f..400f)
         assertNull(contentProjector(emptyList(), 800f, 400f, 40f))
+    }
+
+    @Test
+    fun `moment place reads the way to the next place after a stop`() {
+        val min = 60_000L
+        val log = listOf(ContentPlace("start", "집", 0), ContentPlace("stop", "하나로마트", 0), ContentPlace("destination", "강릉 숙소", 0),
+            ContentPlace("approaching", "하나로마트", 35 * min), ContentPlace("arrived", "하나로마트", 40 * min))
+        assertEquals("동해고속도로", contentWay(12 * min, "동해고속도로", log))
+        assertEquals("하나로마트 가는 길", contentWay(37 * min, "하나로마트", log))
+        assertEquals("강릉 숙소 가는 길", contentWay(62 * min, "하나로마트", log))
+        val done = log + ContentPlace("arrived", "강릉 숙소", 68 * min)
+        assertEquals("강릉 숙소 가는 길", contentWay(62 * min, "하나로마트", done))
+        assertEquals("강릉 숙소", contentWay(70 * min, "강릉 숙소", done))
+        assertEquals(null, contentWay(0, null, emptyList()))
     }
 }
