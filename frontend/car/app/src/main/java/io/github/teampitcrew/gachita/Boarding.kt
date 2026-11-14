@@ -25,10 +25,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-internal enum class BoardingPage { HIDDEN, PEOPLE, QR, SEAT, NAME, CONSENT, RESULT }
+// 동승자의 녹음 동의는 각자 휴대폰에서 QR로 받는다(11/15 오너). 차에는 남의 동의를 켜는 화면이 없다.
+internal enum class BoardingPage { HIDDEN, PEOPLE, QR, SEAT }
 internal data class BoardingState(
     val page: BoardingPage = BoardingPage.HIDDEN,
-    val name: String = "",
     val personId: String? = null,
     val seat: Seat? = null,
     val note: String = "",
@@ -41,14 +41,9 @@ internal sealed interface BoardingAction {
     data object Back : BoardingAction
     data object Invite : BoardingAction
     data object ExpireInvite : BoardingAction
-    data object AddName : BoardingAction
-    data class Name(val value: String) : BoardingAction
     data class PickSeat(val seat: Seat) : BoardingAction
     data class Move(val person: Person) : BoardingAction
-    data class Consent(val person: Person) : BoardingAction
     data object Connect : BoardingAction
-    data object Agree : BoardingAction
-    data object Withdraw : BoardingAction
 }
 
 /** API 거절을 성공으로 표시하지 않는다. 자리 충돌은 QR을 유지하므로 빈자리를 다시 고를 수 있다. */
@@ -75,18 +70,13 @@ internal fun BoardingPanel(
                 Text(when (state.page) {
                     BoardingPage.QR -> "참석 QR"
                     BoardingPage.SEAT -> "자리 선택"
-                    BoardingPage.NAME -> "이름으로 추가"
-                    BoardingPage.CONSENT -> "본인 녹음 동의"
-                    BoardingPage.RESULT -> "함께 타고 있어요"
                     else -> "동승자 설정"
                 }, Modifier.weight(1f), fontSize = 30.sp, fontWeight = FontWeight.Bold)
                 OutlinedButton({ onAction(BoardingAction.Close) }, shape = RoundedCornerShape(10.dp), modifier = Modifier.heightIn(min = 56.dp)) { Text("닫기") }
             }
             when (state.page) {
                 BoardingPage.PEOPLE -> PassengerList(trip, session, seats, onAction, Modifier.weight(1f))
-                BoardingPage.SEAT, BoardingPage.NAME -> BoardingSeatForm(state, session, seats, onAction, Modifier.weight(1f))
-                BoardingPage.CONSENT -> PassengerConsent(state, session, onAction, Modifier.weight(1f))
-                BoardingPage.RESULT -> BoardingResult(state, session, onAction, Modifier.weight(1f))
+                BoardingPage.SEAT -> BoardingSeatForm(state, session, seats, onAction, Modifier.weight(1f))
                 else -> Unit
             }
         }
@@ -112,9 +102,6 @@ private fun PassengerList(trip: Trip, session: Session, seats: List<String>, act
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         OutlinedButton({ action(BoardingAction.Move(person)) }, enabled = !session.busy && session.online && session.gear == "P",
                             shape = RoundedCornerShape(10.dp), modifier = Modifier.heightIn(min = 56.dp)) { Text("자리 변경", fontSize = 22.sp) }
-                        OutlinedButton({ action(BoardingAction.Consent(person)) }, shape = RoundedCornerShape(10.dp), modifier = Modifier.heightIn(min = 56.dp)) {
-                            Text(if (person.id in session.ours) "본인 동의 설정" else "휴대폰 동의 안내", fontSize = 22.sp)
-                        }
                     }
                 }
             }
@@ -126,7 +113,6 @@ private fun PassengerList(trip: Trip, session: Session, seats: List<String>, act
         val canInvite = canAdd && trip.status in setOf("boarding", "parked") && trip.people.any { it.seat == Seat.ROW_1_LEFT.name && it.id in session.ours }
         BoardingButton("참석 QR 띄우기", canInvite) { action(BoardingAction.Invite) }
         if (!canInvite && canAdd) Text("운전석이 이 차에 연결된 주차 여행에서 QR을 열 수 있어요.", color = c.onSurfaceVariant)
-        BoardingButton("휴대폰 없이 이름으로 추가", canAdd, secondary = true) { action(BoardingAction.AddName) }
         if (freeSeats(trip, seats).isEmpty()) Text("지금은 빈자리가 없어요.", color = c.onSurfaceVariant)
         if (!session.online) Text("연결이 끊겼어요. 연결되면 다시 추가할 수 있어요.", color = c.error)
         Text(session.note.ifBlank { "주차 중에만 자리를 바꾸거나 새로 연결할 수 있어요." }, color = c.onSurfaceVariant, fontSize = 22.sp)
@@ -139,9 +125,7 @@ private fun BoardingSeatForm(state: BoardingState, session: Session, seats: List
     val person = trip.people.firstOrNull { it.id == state.personId }
     val c = MaterialTheme.colorScheme
     Column(modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(20.dp)) {
-        if (state.page == BoardingPage.NAME) OutlinedTextField(state.name, { action(BoardingAction.Name(it.take(24))) },
-            label = { Text("이름") }, singleLine = true, enabled = !session.busy, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(10.dp))
-        else Text(person?.let { "${it.name}님의 자리를 바꿔요" } ?: "자리를 골라 주세요", fontSize = 32.sp, fontWeight = FontWeight.Bold)
+        Text(person?.let { "${it.name}님의 자리를 바꿔요" } ?: "자리를 골라 주세요", fontSize = 32.sp, fontWeight = FontWeight.Bold)
         Text("어느 자리에 앉았나요?", fontSize = 28.sp, fontWeight = FontWeight.Bold)
         Text("차 앞쪽", color = c.onSurfaceVariant, fontSize = 22.sp)
         seatRows(seats).forEach { row ->
@@ -163,48 +147,10 @@ private fun BoardingSeatForm(state: BoardingState, session: Session, seats: List
             }
         }
         Text(state.seat?.let { "선택한 자리 · ${it.label}" } ?: "빈자리를 골라 주세요", fontWeight = FontWeight.Bold)
-        if (person == null) Text(if (state.page == BoardingPage.NAME) "녹음 동의는 꺼진 상태로 추가해요. 연결 뒤 본인이 동의를 확인해 주세요."
-            else "연결 후 본인의 휴대폰에서 녹음에 동의해 주세요. 다른 사람의 동의를 대신 켤 수 없어요.", color = c.onSurfaceVariant)
         if (state.note.isNotBlank()) Text(state.note, color = c.error)
-        BoardingButton(if (session.busy) "연결하고 있어요" else if (person != null) "이 자리로 변경" else "이 자리에 연결",
-            !session.busy && session.online && session.gear == "P" && selectableSeat(trip, seats, state.seat, state.personId) && (state.page != BoardingPage.NAME || state.name.isNotBlank()) && (state.page != BoardingPage.SEAT || person != null)) { action(BoardingAction.Connect) }
+        BoardingButton(if (session.busy) "바꾸고 있어요" else "이 자리로 변경",
+            !session.busy && session.online && session.gear == "P" && person != null && selectableSeat(trip, seats, state.seat, state.personId)) { action(BoardingAction.Connect) }
         BoardingButton("동승자 설정으로", !session.busy, secondary = true) { action(BoardingAction.Back) }
-    }
-}
-
-@Composable
-private fun PassengerConsent(state: BoardingState, session: Session, action: (BoardingAction) -> Unit, modifier: Modifier) {
-    val person = session.trip?.people?.firstOrNull { it.id == state.personId } ?: return
-    val c = MaterialTheme.colorScheme
-    Column(modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(20.dp)) {
-        Character(Seat.entries.indexOfFirst { it.name == person.seat }, 80.dp)
-        Text("${person.name}님의 녹음 동의", fontSize = 34.sp, fontWeight = FontWeight.Bold)
-        Text("${person.name}님 본인이 확인해 주세요. 다른 사람 대신 동의를 켤 수 없어요.", color = c.onSurfaceVariant)
-        Text("함께 나눈 목소리를 받아 적고, 고른 장면을 쇼츠로 남겨요. 모두 동의한 상태에서 녹음 시작을 눌러야 마이크가 켜져요.")
-        Text("기간 제한 없이 보관해요. 동의를 철회하면 녹음을 즉시 멈추고 여행의 원음과 대화를 지워요. 이미 기기에 저장한 영상은 따로 삭제해 주세요.", color = c.onSurfaceVariant)
-        if (person.id in session.ours) {
-            BoardingButton(if (person.consent) "내 녹음 동의 철회" else "본인 동의 켜기", if (person.consent) !session.offPending else session.blockOn() == null) {
-                action(if (person.consent) BoardingAction.Withdraw else BoardingAction.Agree)
-            }
-        } else Text("참석 QR로 연결한 사람은 자신의 휴대폰에서 동의를 바꿀 수 있어요.", color = c.primary, fontWeight = FontWeight.Bold)
-        Text(session.note.ifBlank { if (person.consent) "현재 동의 켜짐" else "현재 동의 꺼짐" }, color = c.onSurfaceVariant)
-        BoardingButton("동승자 설정으로", secondary = true) { action(BoardingAction.Back) }
-    }
-}
-
-@Composable
-private fun BoardingResult(state: BoardingState, session: Session, action: (BoardingAction) -> Unit, modifier: Modifier) {
-    val person = session.trip?.people?.firstOrNull { it.id == state.personId }
-    val c = MaterialTheme.colorScheme
-    Column(modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(24.dp)) {
-        Character(state.seat?.ordinal ?: 0, 96.dp)
-        Text("${person?.name ?: state.name}님이 함께 타고 있어요", fontSize = 34.sp, fontWeight = FontWeight.Bold)
-        Text(state.seat?.label.orEmpty(), fontSize = 28.sp)
-        Text(if (person?.consent == true) "녹음 동의가 완료됐어요. 모두 동의하면 홈에서 녹음을 시작할 수 있어요."
-            else "녹음 동의를 기다리고 있어요. ${if (person?.id in session.ours) "본인이 동의 설정을 확인해 주세요." else "본인의 휴대폰에서 동의를 선택해 주세요."}", color = c.onSurfaceVariant)
-        if (state.note.isNotBlank()) Text(state.note, color = c.onSurfaceVariant)
-        if (person != null && person.id in session.ours) BoardingButton("본인 동의 설정") { action(BoardingAction.Consent(person)) }
-        BoardingButton("동승자 설정으로", secondary = true) { action(BoardingAction.Back) }
     }
 }
 

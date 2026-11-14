@@ -631,8 +631,7 @@ def start_trip(from_family):
     if not code:
         launch("--ez", "onboarding", "false", restart=True); tap("함께 타는 중", timeout=3)
         if seen("새 여행 시작"): tap("새 여행 시작")  # 앱 데이터를 지우지 않으므로 지난 여행이 끝난 채 남아 있을 수 있다
-        e2e.tap_make(); time.sleep(5)
-        consent_on_car()
+        e2e.tap_make(); time.sleep(5)  # 옛 여행의 동승자 동의는 차에서 켜지 않는다(11/15: 동의는 휴대폰 QR로) — 기록 없이 시드 화면으로 간다
         try: code = e2e.trip_code()
         except RuntimeError: code = None
         mark(16, "대체", "옛 여행 만들기(가족 넷 손님, 프로필 없음 → 화자 식별 없음)로 여행을 만듦")
@@ -642,19 +641,6 @@ def start_trip(from_family):
     tap("함께 타는 중", timeout=3); tap("기록 시작", timeout=6)  # 모두 동의면 주차 중 '기록 시작'(자동 기록이 들어오면 저절로)
     note("trip", code=code, recording=wait(["아래 버튼으로 언제든 멈출 수 있어요"], 20))
     return code
-
-
-def consent_on_car():
-    """develop의 옛 경로(대체): '동승자 설정' → 사람마다 '본인 동의 설정' → '본인 동의 켜기'. 차가 참가시킨 사람만 켤 수 있다(T68)."""
-    if not tap("동승자 설정", timeout=4): return False
-    for i in range(len(PEOPLE)):
-        rows = sorted((n for n in ui() if n[0] == "본인 동의 설정"), key=lambda n: n[4][1])
-        if i >= len(rows): break
-        x1, y1, x2, y2 = rows[i][4]; adb("shell", "input", "tap", str((x1 + x2) // 2), str((y1 + y2) // 2)); time.sleep(1.5)
-        tap("본인 동의 켜기", timeout=4)
-        adb("shell", "input", "keyevent", "4"); time.sleep(1.5)  # 동의 화면 → 동승자 목록
-    adb("shell", "input", "keyevent", "4"); time.sleep(1.5)  # 동승자 목록 닫기
-    return True
 
 
 # ---- 시드 시나리오(오너 지시 11/15: 시연 동안은 화자 분리와 전체 시나리오를 목업 데이터로) ----------------------------------
