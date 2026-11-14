@@ -1,12 +1,6 @@
 package io.github.teampitcrew.gachita
 
-import android.content.ClipData
-import android.content.ContentValues
-import android.content.Intent
 import android.media.MediaPlayer
-import android.net.Uri
-import android.os.Environment
-import android.provider.MediaStore
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -50,7 +44,6 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import java.util.UUID
 
 /*
  * '콘텐츠 기록' 탭 본문(원본 Figma Y7zFqGUEAFDWTumG30MsOs '민준 개선안' 2004:57의 현재 판: C33 갤러리 2005:4482, C34 타임라인 2005:4522,
@@ -59,7 +52,8 @@ import java.util.UUID
  * 서버 값으로만 그린다(docs/api/places.md):
  * - 차는 프로필 토큰이 없어(계정 로그인은 흐름 F1) 지금 여행 하나를 GET /trips/{code}/contents(동의한 참가자 토큰)로 읽는다.
  * - 장소·경로·자막 줄은 녹음에 동의한 참가자에게만 온다. 없으면 그 칸을 비워 그리고 지어내지 않는다.
- * - 영상 파일은 그 여행의 참가자 토큰으로 받는다(전원 동의 규칙, short-assets.md). 내보내기는 MediaStore 저장 + 공유 시트.
+ * - 영상 파일은 그 여행의 참가자 토큰으로 받는다(전원 동의 규칙, short-assets.md). C38 내보내기는 안내만 있고(시안 글 '폰으로 저장하고 공유'),
+ *   차에서 저장·공유하지 않는다(11/15 오너: C#에 없는 것은 덜어냄).
  * 지도는 번들 OpenStreetMap 그림(시안 'Asset / 강릉 실제 지도 / OpenStreetMap' 2067:3071, 실행 중 타일 서버를 부르지 않음) 위에 기록한 좌표를 투영한다.
  * 좌표가 그 그림 밖이면 지도 제공자 없이 상자에 투영한 도식 지도다(개편 계획 결정 5).
  */
@@ -68,7 +62,13 @@ internal data class ContentPerson(val id: String, val name: String, val characte
 internal data class ContentLine(val at: Long, val participantId: String?, val name: String?, val text: String)
 internal data class ContentPlace(val kind: String, val name: String, val at: Long)
 internal data class ContentItem(val id: String, val title: String, val seconds: Double, val at: Long, val from: Long?, val lat: Double?, val lng: Double?,
-    val place: String?, val kind: String, val cast: List<ContentPerson>, val lines: List<ContentLine>, val url: String)
+    val place: String?, val kind: String, val cast: List<ContentPerson>, val lines: List<ContentLine>, val url: String, val momentId: String? = null)
+
+/**
+ * C32 완성 표지 → C37 플레이어(시안 '완성 장면 1 → C37', '완성 장면 3 → player3'): 여행 마무리(AfterTrip)가 고른 장면의 id를 남기고 콘텐츠 기록을 열면,
+ * 콘텐츠 기록은 목록을 읽은 뒤 그 장면의 플레이어를 바로 연다. 한 번 쓰면 비운다.
+ */
+internal object ContentLink { var moment: String? = null }
 internal data class ContentTrip(val code: String, val title: String, val createdAt: Long, val members: List<ContentPerson>, val places: List<ContentPlace>,
     val route: List<Pair<Double, Double>>, val contents: List<ContentItem>, val startedAt: Long? = null, val endedAt: Long? = null,
     val routeAt: List<Long> = emptyList())
@@ -93,7 +93,7 @@ internal fun parseContentTrip(json: JSONObject): ContentTrip {
                 c.str("place"), c.optString("kind"),
                 c.optJSONArray("cast").list { ContentPerson(it.getString("participantId"), it.optString("name"), it.optString("character"), seat[it.getString("participantId")]) },
                 c.optJSONArray("lines").list { ContentLine(it.getLong("at"), it.str("participantId"), it.str("name"), it.optString("text")) },
-                c.getString("url"))
+                c.getString("url"), c.str("momentId"))
         }.map { it.copy(place = contentWay(it.at, it.place, places)) }.sortedBy { it.at },
         json.num("startedAt")?.toLong(), json.num("endedAt")?.toLong(), routeAt)
 }
@@ -265,16 +265,19 @@ private fun ViewSwitch(page: ContentsPage, onPage: (ContentsPage) -> Unit) {
     }
 }
 
-/** 왼쪽 '주행 날짜와 가족'(폭 300, 간격 20): 날짜, 여행 제목 두 줄, 시각, 가족 캐릭터 56(간격 8), 'N명'(시안의 글 단추, 누르면 함께 타는 중). */
+/**
+ * 왼쪽 '주행 날짜와 가족'(갤러리 폭 300, 타임라인 361, 간격 20): 날짜, 여행 제목 두 줄, 시각, 가족 캐릭터 56(간격 8), 'N명'.
+ * 가족 캐릭터('우리 가족 프로필')와 'N명'은 시안대로 C16 groups(내 동승 그룹)로 간다(onFamily).
+ */
 @Composable
-private fun TripInfo(trip: ContentTrip, members: Int, onFamily: () -> Unit) {
+private fun TripInfo(trip: ContentTrip, members: Int, onFamily: () -> Unit, width: Dp = 300.dp) {
     val c = MaterialTheme.colorScheme
     val (start, end) = contentTripRange(trip)
-    Column(Modifier.width(300.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
+    Column(Modifier.width(width), verticalArrangement = Arrangement.spacedBy(20.dp)) {
         Text(SimpleDateFormat("yyyy년 M월 d일", Locale.KOREA).format(Date(start)), style = CarText.Label, color = c.onSurfaceVariant)
         Text(contentTripTitleLines(trip.title.ifBlank { "함께 탄 여행" }), style = CarText.Title, color = c.onSurface)
         Text("${hhmm(start)} — ${hhmm(end)}", style = CarText.Label, color = c.onSurfaceVariant)
-        if (trip.members.isNotEmpty()) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { trip.members.take(4).forEach { ContentFace(it, 56.dp) } }
+        if (trip.members.isNotEmpty()) Row(Modifier.clickable(onClick = onFamily), horizontalArrangement = Arrangement.spacedBy(8.dp)) { trip.members.take(4).forEach { ContentFace(it, 56.dp) } }
         Text("우리 가족 ${maxOf(members, trip.members.size)}명", Modifier.clickable(onClick = onFamily), style = CarText.Label, color = c.onSurfaceVariant)
     }
 }
@@ -289,7 +292,7 @@ private fun LinkText(label: String, onClick: () -> Unit) =
  */
 @Composable
 internal fun ContentsRecord(base: String, code: String, token: String?, canRead: () -> Boolean, canPlay: () -> Boolean,
-    onRide: () -> Unit, onActiveChange: (Boolean) -> Unit, members: Int, modifier: Modifier = Modifier) {
+    onRide: () -> Unit, onActiveChange: (Boolean) -> Unit, members: Int, modifier: Modifier = Modifier, onFamily: () -> Unit = onRide) {
     val context = LocalContext.current
     val c = MaterialTheme.colorScheme
     val read by rememberUpdatedState(canRead)
@@ -301,14 +304,12 @@ internal fun ContentsRecord(base: String, code: String, token: String?, canRead:
     var empty by remember { mutableStateOf("") } // 읽지 못한 까닭(빈 상태 본문 자리)
     var toast by remember { mutableStateOf("") } // 재생·저장 실패와 결과(시안 알림 조각 CarToast)
     var page by remember { mutableStateOf(ContentsPage.GALLERY) }
-    var pin by remember { mutableStateOf<String?>(null) }
     var selected by remember { mutableStateOf<String?>(null) }
     var file by remember { mutableStateOf<Pair<String, File>?>(null) }
     var player by remember { mutableStateOf<MediaPlayer?>(null) }
     var playing by remember { mutableStateOf(false) }
     var position by remember { mutableStateOf(0.0) }
     var busy by remember { mutableStateOf(false) }
-    var saved by remember { mutableStateOf<Uri?>(null) }
 
     fun stop() { runCatching { player?.release() }; player = null; playing = false; position = 0.0 }
     DisposableEffect(Unit) {
@@ -341,7 +342,9 @@ internal fun ContentsRecord(base: String, code: String, token: String?, canRead:
         file?.second?.delete(); file = it.id to f
         return f
     }
-    fun open(id: String) { if (selected != id) { stop(); saved = null }; selected = id; page = ContentsPage.PLAYER; toast = "" }
+    fun open(id: String) { if (selected != id) stop(); selected = id; page = ContentsPage.PLAYER; toast = "" }
+    // C32 완성 표지에서 왔으면(ContentLink) 그 장면의 플레이어로 바로
+    LaunchedEffect(trip) { val m = ContentLink.moment ?: return@LaunchedEffect; trip?.contents?.firstOrNull { it.momentId == m }?.let { ContentLink.moment = null; open(it.id) } }
     fun toggle() {
         val it = item ?: return
         if (busy) return
@@ -358,36 +361,6 @@ internal fun ContentsRecord(base: String, code: String, token: String?, canRead:
             finally { busy = false }
         }
     }
-    fun export() {
-        val it = item ?: return
-        if (busy) return
-        busy = true; toast = ""
-        scope.launch {
-            try {
-                val uri = saved ?: run {
-                    val f = fetch(it)
-                    withContext(Dispatchers.IO) {
-                        val resolver = context.contentResolver
-                        val target = requireNotNull(resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, ContentValues().apply {
-                            put(MediaStore.Video.Media.DISPLAY_NAME, "가치타_${UUID.randomUUID()}.mp4"); put(MediaStore.Video.Media.TITLE, it.title)
-                            put(MediaStore.Video.Media.MIME_TYPE, "video/mp4"); put(MediaStore.Video.Media.RELATIVE_PATH, "${Environment.DIRECTORY_MOVIES}/Gachita"); put(MediaStore.Video.Media.IS_PENDING, 1)
-                        }))
-                        try {
-                            requireNotNull(resolver.openOutputStream(target)).use { out -> f.inputStream().use { input -> input.copyTo(out) } }
-                            check(resolver.update(target, ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) }, null, null) == 1)
-                            target
-                        } catch (e: Exception) { resolver.delete(target, null, null); throw e }
-                    }
-                }
-                saved = uri
-                context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
-                    type = "video/mp4"; putExtra(Intent.EXTRA_STREAM, uri); clipData = ClipData.newRawUri("가치타 영상", uri); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                }, "영상 공유").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-            } catch (e: Exception) { toast = if (e is ApiError) "영상을 받지 못했어요. 기록 동의와 연결을 확인해 주세요" else e.message ?: "저장하지 못했어요" }
-            finally { busy = false }
-        }
-    }
-
     // 틀(시안 C33–C38): 화면 제목(Title 40 · 12 · Label 24) · 24 · 본문 · 24 · 하단 작업(높이 96, 보기 화면은 숨김).
     Box(modifier) {
         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(24.dp)) {
@@ -398,25 +371,24 @@ internal fun ContentsRecord(base: String, code: String, token: String?, canRead:
                 none -> "콘텐츠 기록" to "우리 가족 / 차량과 폰에서 이어보기"
                 page == ContentsPage.PLAYER && item != null -> item.title to listOfNotNull("${monthDay(item.at)} ${hhmm(item.at)}", item.place).joinToString("  ")
                 page == ContentsPage.EXPORT && item != null -> "영상이 준비됐어요" to "내 계정에 저장한 가족의 숏폼"
-                page == ContentsPage.DETAIL -> "이 길에서 나눈 이야기" to "지도에서 선택한 우리 가족의 장면"
+                page == ContentsPage.DETAIL -> "이 길에서 나눈 이야기" to "" // 시안 C36에는 부제 없음
                 else -> "콘텐츠 기록" to "" // 보기 화면: 시안에서 부제는 숨김
             }
             TitleBlock(title, sub, Modifier.fillMaxWidth())
-            val pickedId = (items.firstOrNull { it.id == pin } ?: items.firstOrNull { t != null && contentSpot(it, t) != null } ?: items.firstOrNull())?.id
+            val pickedId = (items.firstOrNull { t != null && contentSpot(it, t) != null } ?: items.firstOrNull())?.id // C36 '이 장면 보기' → 지도의 첫 장면(시안 → C37)
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 when {
                     !loaded -> {}
                     none -> Text(empty.ifBlank { "아직 생성한 콘텐츠가 없어요.\n여행을 마친 뒤 대화에서 장면을 골라 보세요." }, style = CarText.Headline, color = c.onSurfaceVariant)
                     page == ContentsPage.PLAYER && item != null -> PlayerBody(item, t!!, contentTint(items.indexOf(item)), position, playing, busy, ::toggle)
-                    page == ContentsPage.EXPORT && item != null -> ExportBody(item, t!!, contentTint(items.indexOf(item)), busy, ::export)
-                    page == ContentsPage.DETAIL -> MapWithList(t!!, items, link = false, onPin = ::open, onOpen = ::open)
+                    page == ContentsPage.EXPORT && item != null -> ExportBody(item, t!!, contentTint(items.indexOf(item)))
+                    page == ContentsPage.DETAIL -> MapWithList(t!!, items, link = false, onOpen = ::open)
                     else -> Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(28.dp)) {
                         ViewSwitch(if (page in VIEWS.map { it.first }) page else ContentsPage.GALLERY) { page = it }
                         when (page) {
-                            ContentsPage.TIMELINE -> Timeline(t!!, items, members, onRide, ::open)
-                            ContentsPage.MAP -> MapWithList(t!!, items, link = true, onPin = { pin = it; page = ContentsPage.DETAIL }, onOpen = ::open,
-                                onMore = { page = ContentsPage.DETAIL })
-                            else -> Gallery(t!!, items, members, onRide, ::open)
+                            ContentsPage.TIMELINE -> Timeline(t!!, items, members, onFamily, ::open)
+                            ContentsPage.MAP -> MapWithList(t!!, items, link = true, onOpen = ::open, onMore = { page = ContentsPage.DETAIL })
+                            else -> Gallery(t!!, items, members, onFamily, ::open)
                         }
                     }
                 }
@@ -466,26 +438,37 @@ private fun Gallery(trip: ContentTrip, items: List<ContentItem>, members: Int, o
     }
 }
 
-/** C34 타임라인: 왼쪽 주행 정보 · 40 · 시간순 목록(간격 24): '09:20  출발', 장면 줄(시각 88 · 24 · 표지 104×143 · 24 · 제목/장소·길이/따옴표 줄), '10:28  강릉 숙소 도착'. */
+/**
+ * C34 타임라인: 왼쪽 주행 정보(361) · 40 · 시간순 목록(간격 24). 오른쪽 열(148)에 시각: '출발'·'{장소} 도착' 줄은 글 왼쪽·시각 오른쪽(Label 24),
+ * 장면 줄은 표지 104×143 · 24 · 제목(Headline 32)/장소/따옴표 줄(Label 24) · 오른쪽 열에 시각(Body 28)과 길이(22). 시안 2005:4522.
+ */
 @Composable
 private fun Timeline(trip: ContentTrip, items: List<ContentItem>, members: Int, onFamily: () -> Unit, onOpen: (String) -> Unit) {
     val c = MaterialTheme.colorScheme
+    @Composable
+    fun Stop(label: String, at: Long) = Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, Modifier.weight(1f), style = CarText.Label, color = c.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(hhmm(at), Modifier.width(148.dp), style = CarText.Label, color = c.onSurfaceVariant, textAlign = TextAlign.End)
+    }
     Row(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(40.dp)) {
-        TripInfo(trip, members, onFamily)
+        TripInfo(trip, members, onFamily, 361.dp)
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(24.dp)) {
-            trip.places.firstOrNull { it.kind == "start" }?.let { Text("${hhmm(it.at)}  출발", style = CarText.Label, color = c.onSurfaceVariant) }
+            trip.places.firstOrNull { it.kind == "start" }?.let { Stop("출발", it.at) }
             items.forEachIndexed { i, x ->
                 Row(Modifier.fillMaxWidth().clickable { onOpen(x.id) }, horizontalArrangement = Arrangement.spacedBy(24.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(hhmm(x.at), Modifier.width(88.dp), style = CarText.Label, color = c.onSurfaceVariant)
                     ContentCover(coverOf(x, trip), contentTint(i), 104.dp, 143.dp)
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text(x.title, style = CarText.Headline, color = c.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(listOfNotNull(x.place, contentShortClock(x.seconds)).joinToString("  "), style = CarText.Label, color = c.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        x.place?.let { Text(it, style = CarText.Label, color = c.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis) }
                         contentQuote(x)?.let { Text("“${it.text}”", style = CarText.Label, color = c.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                    }
+                    Column(Modifier.width(148.dp), horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(hhmm(x.at), style = CarText.Body, color = c.onSurface)
+                        Text(contentShortClock(x.seconds), style = CarText.Label.copy(fontSize = 22.sp, lineHeight = 30.sp), color = c.onSurfaceVariant)
                     }
                 }
             }
-            trip.places.lastOrNull { it.kind == "arrived" }?.let { Text("${hhmm(it.at)}  ${it.name.trim()} 도착", style = CarText.Label, color = c.onSurfaceVariant) }
+            trip.places.lastOrNull { it.kind == "arrived" }?.let { Stop("${it.name.trim()} 도착", it.at) }
         }
     }
 }
@@ -510,12 +493,12 @@ private fun PlayerBody(item: ContentItem, trip: ContentTrip, tint: Int, position
     }
 }
 
-/** C38 내보내기 본문(가운데, 간격 64): 표지 360×640(누르면 이 기기 Movies/Gachita에 저장하고 공유 시트) · '내보내기 정보'(700, 간격 24). */
+/** C38 내보내기 본문(가운데, 간격 64): 표지 360×640(시안처럼 누름 없음) · '내보내기 정보'(700, 간격 24). 저장·공유는 폰의 콘텐츠 기록에서. */
 @Composable
-private fun ExportBody(item: ContentItem, trip: ContentTrip, tint: Int, busy: Boolean, onExport: () -> Unit) {
+private fun ExportBody(item: ContentItem, trip: ContentTrip, tint: Int) {
     val c = MaterialTheme.colorScheme
     Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(64.dp, Alignment.CenterHorizontally), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.clickable(enabled = !busy, onClick = onExport)) { ContentCover(coverOf(item, trip), tint, 360.dp, 640.dp) }
+        ContentCover(coverOf(item, trip), tint, 360.dp, 640.dp)
         Column(Modifier.width(700.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
             Text(item.title, style = CarText.Title, color = c.onSurface)
             // mock: 형식 글(MP4 · 9:16)은 서버 파일 검사가 지키는 값이라 시안 글 그대로, 길이만 데이터.
@@ -527,26 +510,25 @@ private fun ExportBody(item: ContentItem, trip: ContentTrip, tint: Int, busy: Bo
 }
 
 /**
- * C35 지도·C36 상세 '실제 지도와 장면': 지도(1080×660, 남는 폭) · 28 · '지도 속 장면 목록'(494, 간격 16): 여행 제목(Title 40), '11월 14일  09:20 — 10:28', 장소 줄,
- * 장면 링크(표지 62×85 · 16 · 제목 두 줄 Body 28 / '09:32  0:32'), 지도 화면만 '주행 지도 자세히 보기 →'.
+ * C35 지도·C36 상세 '실제 지도와 장면': 지도(1080×660, 남는 폭) · 28 · '지도 속 장면 목록'(494, 간격 16): '11월 14일'(Label 24), 여행 제목(Title 40), 장소 줄,
+ * 장면 링크(표지 62×85 · 16 · 제목 두 줄 Body 28 · 오른쪽에 '09:32  0:32'), 지도 화면만 '주행 지도 자세히 보기 →'.
+ * 지도 액자와 장면 링크는 둘 다 그 장면의 플레이어로 간다(시안 '지도 장면 1 → C37', '장면 링크 3 → player3').
  */
 @Composable
-private fun MapWithList(trip: ContentTrip, items: List<ContentItem>, link: Boolean, onPin: (String) -> Unit, onOpen: (String) -> Unit, onMore: () -> Unit = {}) {
+private fun MapWithList(trip: ContentTrip, items: List<ContentItem>, link: Boolean, onOpen: (String) -> Unit, onMore: () -> Unit = {}) {
     val c = MaterialTheme.colorScheme
-    val (start, end) = contentTripRange(trip)
+    val (start, _) = contentTripRange(trip)
     Row(Modifier.fillMaxWidth().heightIn(max = 660.dp), horizontalArrangement = Arrangement.spacedBy(28.dp)) {
-        MapBox(trip, items, Modifier.weight(1f).fillMaxHeight(), onPin)
+        MapBox(trip, items, Modifier.weight(1f).fillMaxHeight(), onOpen)
         Column(Modifier.width(494.dp).fillMaxHeight().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            Text(monthDay(start), style = CarText.Label, color = c.onSurfaceVariant)
             Text(trip.title.ifBlank { "함께 탄 여행" }, style = CarText.Title, color = c.onSurface)
-            Text("${monthDay(start)}  ${hhmm(start)} — ${hhmm(end)}", style = CarText.Label, color = c.onSurfaceVariant)
             contentPlaceChain(trip.places).takeIf { it.isNotBlank() }?.let { Text(it, style = CarText.Label, color = c.onSurfaceVariant) }
             items.forEachIndexed { i, x ->
                 Row(Modifier.fillMaxWidth().clickable { onOpen(x.id) }, horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
                     ContentCover(coverOf(x, trip), contentTint(i), 62.dp, 85.dp)
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(contentTwoLines(x.title), style = CarText.Body, color = c.onSurface, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                        Text("${hhmm(x.at)}  ${contentShortClock(x.seconds)}", style = CarText.Label, color = c.onSurfaceVariant)
-                    }
+                    Text(contentTwoLines(x.title), Modifier.weight(1f), style = CarText.Body, color = c.onSurface, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text("${hhmm(x.at)}  ${contentShortClock(x.seconds)}", style = CarText.Label, color = c.onSurfaceVariant, maxLines = 1)
                 }
             }
             if (link) LinkText("주행 지도 자세히 보기 →", onMore)
