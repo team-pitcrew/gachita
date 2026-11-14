@@ -27,7 +27,7 @@ const GALLERY = "M4 5h16v14H4V5Zm4 4h.01M4 16l5-5 4 4 2-2 5 5";
 const LOGOUT = "M10 4H5v16h5m5-12 4 4-4 4m4-4H9";
 const PERSON = "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm-7 8a7 7 0 0 1 14 0";
 
-export function createProfileMenu({ getProfile, face, loadGroups, onProfile, onSignIn, onGroups, onSeats, onGallery, onLogout }) {
+export function createProfileMenu({ getProfile, signedIn = () => false, face, loadGroups, onProfile, onSignIn, onGroups, onSeats, onGallery, onLogout }) {
   let dialog = null;
   const close = () => {
     dialog?.close();
@@ -53,7 +53,8 @@ export function createProfileMenu({ getProfile, face, loadGroups, onProfile, onS
 
   async function open() {
     const me = getProfile();
-    if (!me) return onSignIn(); // 로그인 전·프로필 없는 손님: 기본 얼굴 → 로그인·계정 만들기(P02)
+    // 로그인 전·프로필 없는 손님: 기본 얼굴 → 로그인·계정 만들기(P02). 계정은 있는데 프로필을 읽는 중·못 읽음이면 내 프로필(#me)로.
+    if (!me) return signedIn() ? onProfile() : onSignIn();
     const slot = h("div", { className: "menu-group loading" }, h("small", {}, "현재 동승 그룹"), h("strong", {}, "불러오는 중"));
     overlay("profile-menu", "내 프로필 메뉴", h("div", { className: "menu-panel" },
       h("div", { className: "menu-head" }, face(), h("strong", {}, me.name), h("button", { type: "button", className: "menu-close", "aria-label": "닫기", onclick: close }, "✕")),
@@ -81,7 +82,7 @@ export function createProfileMenu({ getProfile, face, loadGroups, onProfile, onS
 
   return {
     // 머리 줄 오른쪽 끝의 내 얼굴. 모든 화면에 늘 있다(11/15 오너 "예외는 없어"). 프로필이 없으면 빈 원형 + 기본 캐릭터이고 누르면 P02.
-    button: () => getProfile()
+    button: () => getProfile() || signedIn()
       ? h("button", { type: "button", className: "me-button", "aria-label": "내 프로필 메뉴 열기", "aria-haspopup": "dialog", onclick: open }, face())
       : h("button", { type: "button", className: "me-button is-guest", "aria-label": "로그인·계정 만들기", onclick: open }, face()),
     open,

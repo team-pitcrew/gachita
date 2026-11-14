@@ -231,6 +231,7 @@ const openContents = () => contents.open();
 const closeOverlays = () => { [conversations, contents, afterTrip, groups, studio, scenes].forEach((x) => x.close()); boarding.close(true); if (short) closeShort(); };
 const profileMenu = createProfileMenu({
   getProfile: () => profile,
+  signedIn: () => Boolean(store("profile")), // 이 폰에 계정 토큰이 있음(프로필은 읽는 중일 수 있음)
   face: () => avatar(profile, photo),
   loadGroups: async () => (await mine("GET", "/groups")).items,
   onProfile: () => { closeOverlays(); location.hash = "me"; },
