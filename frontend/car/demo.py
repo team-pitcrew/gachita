@@ -761,7 +761,7 @@ def drive_steps_seed(code):
     f4("drivePaused"); step(18, ["멈추기 전 마지막 대화"], note_="차 목업 drivePaused", seeded=True)
     f4("driveResumed"); step(19, ["방금 받아 적은 말"], note_="차 목업 driveResumed", seeded=True)
     seed_lines(code, "B"); seed_place(code, "approaching", "하나로마트", eta=180)
-    f4("near"); step(20, ["도착까지 약"], note_="차 목업 near + 서버 approaching", seeded=True)
+    f4("near"); step(20, ["정차하면 자세히"], note_="차 목업 near + 서버 approaching", seeded=True)
     park(); seed_arrive(code, "하나로마트")
     f4("mart"); step(21, ["먼저 할 일과 살 것을 모았어요", "잊지 말고 살 것"], note_="차 목업 mart + 서버 도착 브리핑", seeded=True)
     tap("계속", timeout=4)
@@ -792,7 +792,7 @@ def drive_steps(code):
     mart, lodge = near(here, 0, -NEAR_M), near(here, -NEAR_M, 0)
     launch("--es", "route", f"{lodge[0]},{lodge[1]},강릉 숙소", "--es", "stops", f"{mart[0]},{mart[1]},하나로마트", "--ei", "approachSeconds", APPROACH_S)
     split(); tap("함께 타는 중", timeout=3)
-    step(20, ["도착까지 약"], 25, f"시연 경로: 경유 하나로마트 {mart}, 목적지 강릉 숙소 {lodge}(내비 위치 {here}에서 약 {NEAR_M:.0f} m)")
+    step(20, ["정차하면 자세히"], 25, f"시연 경로: 경유 하나로마트 {mart}, 목적지 강릉 숙소 {lodge}(내비 위치 {here}에서 약 {NEAR_M:.0f} m)")
     park(); step(21, ["먼저 할 일과 살 것을 모았어요", "잊지 말고 살 것"], 25)
     if results[21]["result"] == "없음" and seen("도착했어요"): results[21] = {**results[21], "result": "다른 화면", "note": "develop의 T123 도착 카드(v1) — " + flow_state("F4")}
     tap("계속", "닫기", timeout=4)

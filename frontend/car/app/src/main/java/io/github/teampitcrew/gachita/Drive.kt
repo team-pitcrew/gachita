@@ -54,6 +54,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -303,7 +304,7 @@ internal fun RideLayout(middle: @Composable (Modifier) -> Unit, seats: @Composab
         // 시안 본문 982(가운데 384 · 좌석 418 · 막대 136 · 간격 16 셋). 낮은 창에서는 좌석 칸을 한 줄로 줄여 가운데 칸이 남게
         val compact = maxHeight < 760.dp
         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            middle(Modifier.fillMaxWidth().weight(1f))
+            middle(Modifier.fillMaxWidth().weight(1f, fill = false).height(384.dp)) // 시안 384, 남는 높이는 아래로(시안도 위 정렬)
             seats(compact)
             bar()
         }
@@ -366,20 +367,26 @@ internal fun Wave(levels: () -> List<Float>, live: Boolean, modifier: Modifier) 
 }
 
 /**
- * '도착 전 브리핑 / C1n 카드' (C19 2014:1079, finalNear): accent-soft, corner 32, padding 24/16, gap 8 — '{place} 도착까지 약 N분' 24 accent,
- * up to three rows (Twemoji 44, gap 20, 40 Bold, 5 apart), '정차하면 자세히 보여드릴게요' 24 ink-2. Details come after parking (C20, flow F4).
+ * '도착 전 브리핑 / C1n 카드' (accent-soft, corner 32, padding 24/16, gap 8, rows 40 Bold ink with Twemoji 44 at gap 20, '정차하면 자세히
+ * 보여드릴게요' 24 ink-2). Details come after parking (C20, flow F4). The live frames differ and each is followed:
+ * - finalNear (2043:1849): '{place} 도착까지 약 N분' 24 accent, picture left, rows 8 apart.
+ * - C19 (2014:1079): '기록' (2254:5849, Noto Sans KR Medium 24 accent — the system Korean font), picture right, rows 99·53·87 high, 5 apart.
  */
 @Composable
 internal fun NearCard(a: Approach, lines: List<NearRow>, modifier: Modifier) {
     val c = MaterialTheme.colorScheme
-    Surface(modifier, CarShape.Card, color = c.primaryContainer) {
+    Surface(modifier, CarShape.Card, color = c.primaryContainer, contentColor = c.onSurface) {
         Column(Modifier.padding(horizontal = 24.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("${a.place} 도착까지 약 ${a.minutes}분", color = c.primary, style = CarText.Label, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                lines.forEach { l ->
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-                        Image(painterResource(l.icon.res), null, Modifier.size(44.dp))
-                        Text(l.text, style = CarText.Title.copy(letterSpacing = (-0.02).em), maxLines = 1, overflow = TextOverflow.Ellipsis) // 40 Bold, -0.8px
+            if (a.final) Text("${a.place} 도착까지 약 ${a.minutes}분", color = c.primary, style = CarText.Label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            else Text("기록", color = c.primary, style = CarText.Label.copy(fontFamily = FontFamily.Default), maxLines = 1)
+            Column(verticalArrangement = Arrangement.spacedBy(if (a.final) 8.dp else 5.dp)) {
+                lines.forEachIndexed { i, l ->
+                    val icon = @Composable { Image(painterResource(l.icon.res), null, Modifier.size(44.dp)) }
+                    Row(if (a.final) Modifier.fillMaxWidth() else Modifier.fillMaxWidth().height(C19_ROWS.getOrElse(i) { 53 }.dp),
+                        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+                        if (a.final) icon()
+                        Text(l.text, Modifier.weight(1f), style = CarText.Title.copy(letterSpacing = (-0.02).em), maxLines = 1, overflow = TextOverflow.Ellipsis) // 40 Bold, -0.8px
+                        if (!a.final) icon()
                     }
                 }
             }
@@ -387,6 +394,9 @@ internal fun NearCard(a: Approach, lines: List<NearRow>, modifier: Modifier) {
         }
     }
 }
+
+/** C19 줄 높이(2246:5864·5873·5886) 그대로. */
+private val C19_ROWS = listOf(99, 53, 87)
 
 // ---- 함께 타는 중 before recording and after the trip: ended 2026:2410 ----
 
