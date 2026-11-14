@@ -333,7 +333,8 @@ internal fun RideLayout(middle: @Composable (Modifier) -> Unit, seats: @Composab
 internal fun RecordBar(control: DriveButton, live: Boolean, time: String, levels: () -> List<Float>, onControl: () -> Unit, onStop: () -> Unit, modifier: Modifier = Modifier) {
     val c = MaterialTheme.colorScheme
     val paused = control.press == Press.GO
-    Box(modifier.fillMaxWidth().height(136.dp).border(1.dp, CarRecord.Edge, CarShape.Card)) {
+    // 테두리 1은 기록 중에만(원본 C19·C21·finalNear·resumed·D17·D18·D20). 멈춤 프레임(C17p·C19p·C21p·finalPaused·D*p)에는 없다. 원본 C17만 예외로 없지만 같은 화면의 D17은 있다.
+    Box(modifier.fillMaxWidth().height(136.dp).then(if (paused) Modifier else Modifier.border(1.dp, CarRecord.Edge, CarShape.Card))) {
         Row(Modifier.align(Alignment.CenterStart).padding(start = 7.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Box(Modifier.size(68.dp).clickable(enabled = control.enabled, role = Role.Button, onClick = onControl)
                 .semantics { contentDescription = control.label }) {
