@@ -35,6 +35,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -67,16 +69,35 @@ private val Dark = darkColorScheme(
  */
 private val SEAT_CHARS = listOf(R.drawable.char_basic, R.drawable.char_cap, R.drawable.char_glasses, R.drawable.char_travel, R.drawable.char_game)
 
-// 칩·단추(labelLarge)와 입력란(bodyLarge)의 기본 14~16sp는 차 화면에서 작다. 주행 화면 글자는 24sp 이상.
-private val CarType = Typography(
-    labelLarge = TextStyle(fontSize = 24.sp, fontWeight = FontWeight.SemiBold),
-    bodyLarge = TextStyle(fontSize = 24.sp),
+/**
+ * 글꼴: Pretendard 1.3.9 정적 OTF 넷(res/font, SIL OFL 1.1 — assets/licenses/pretendard-OFL.txt). 시안 글자 스타일(Car/…)이 모두 Pretendard다(docs/design.md 4절).
+ * Pleos 시스템에도 'pretendard'라는 이름이 있지만 /product/etc/fonts_customization.xml에서 AstaSans로 이어져, 시스템 이름이 아니라 앱에 담은 파일을 쓴다.
+ */
+val Pretendard = FontFamily(
+    Font(R.font.pretendard_regular, FontWeight.Normal),
+    Font(R.font.pretendard_medium, FontWeight.Medium),
+    Font(R.font.pretendard_semibold, FontWeight.SemiBold),
+    Font(R.font.pretendard_bold, FontWeight.Bold),
 )
+
+private fun TextStyle.pretendard() = copy(fontFamily = Pretendard)
+
+// 칩·단추(labelLarge)와 입력란(bodyLarge)의 기본 14~16sp는 차 화면에서 작다. 주행 화면 글자는 24sp 이상.
+private val CarType = Typography().run {
+    Typography(
+        displayLarge = displayLarge.pretendard(), displayMedium = displayMedium.pretendard(), displaySmall = displaySmall.pretendard(),
+        headlineLarge = headlineLarge.pretendard(), headlineMedium = headlineMedium.pretendard(), headlineSmall = headlineSmall.pretendard(),
+        titleLarge = titleLarge.pretendard(), titleMedium = titleMedium.pretendard(), titleSmall = titleSmall.pretendard(),
+        bodyLarge = TextStyle(fontFamily = Pretendard, fontSize = 24.sp), bodyMedium = bodyMedium.pretendard(), bodySmall = bodySmall.pretendard(),
+        labelLarge = TextStyle(fontFamily = Pretendard, fontSize = 24.sp, fontWeight = FontWeight.SemiBold),
+        labelMedium = labelMedium.pretendard(), labelSmall = labelSmall.pretendard(),
+    )
+}
 
 @Composable
 fun GachitaTheme(content: @Composable () -> Unit) =
     MaterialTheme(colorScheme = Dark, typography = CarType) {
-        ProvideTextStyle(TextStyle(fontSize = 24.sp), content)
+        ProvideTextStyle(TextStyle(fontFamily = Pretendard, fontSize = 24.sp), content)
     }
 
 /**

@@ -480,6 +480,8 @@ private class ExportScenePainter(context: Context, private val short: Short, pri
     private val mint = Color.rgb(111, 211, 166)
     private val ink = Color.rgb(244, 241, 236)
     private val resources = context.resources
+    // 자막 글꼴은 앱에 담은 Pretendard Bold(Theme.kt). 시스템 sans-serif는 Pleos에서 다른 글꼴로 이어진다.
+    private val bold: Typeface = androidx.core.content.res.ResourcesCompat.getFont(context, R.font.pretendard_bold) ?: Typeface.create("sans-serif", Typeface.BOLD)
     // 실제로 등장하는 설정만 열어 20개 전신 이미지를 한꺼번에 메모리에 올리지 않습니다.
     private val characters = mutableMapOf<ShortCharacter, Pair<Bitmap, android.graphics.Rect>>()
 
@@ -564,7 +566,7 @@ private class ExportScenePainter(context: Context, private val short: Short, pri
 
     private fun centered(value: String, bounds: RectF, maxSize: Float, color: Int, lines: Int) {
         if (value.isEmpty()) return
-        text.color = color; text.typeface = Typeface.create("sans-serif", Typeface.BOLD)
+        text.color = color; text.typeface = bold
         var size = maxSize
         fun layout() = StaticLayout.Builder.obtain(value, 0, value.length, text, bounds.width().toInt())
             .setAlignment(Layout.Alignment.ALIGN_CENTER).setIncludePad(false).setLineSpacing(4f, 1f)
