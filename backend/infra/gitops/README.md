@@ -39,7 +39,13 @@ backend/infra/gitops/
 
 1. 로컬에서 `make push`로 이미지를 올립니다. 올리기 전에 이미지를 띄워 `/healthz`와 웹앱을 봅니다. 태그는 커밋 SHA 앞 12자입니다.
 2. `make deploy-tag TAG=<올린 태그>`로 `apps/api/overlays/dev/kustomization.yaml`의 `newTag`를 바꾸고 PR로 올립니다.
-3. 병합되면 Argo CD가 하나씩 바꿉니다(새 파드가 두 데이터베이스에 닿아 준비된 뒤 옛 파드를 내림). 되돌릴 때는 이전 태그로 같은 일을 합니다.
+3. 병합되면 Argo CD가 `Recreate` 전략으로 교체합니다. 기존 API 파드를 모두 종료한 뒤 새 파드를 만들며, 새 파드가 두 데이터베이스에 닿아 `/healthz` 준비 검사를 통과하면 요청을 받습니다.
+
+T93의 `Recreate`는 T90에서 제거한 48시간 자동 삭제를 구버전 파드가 계속 실행하는 혼합 배포를 막습니다. 첫 T90 이미지 태그를 반영하기 전에 실제 Deployment의 전략이 `Recreate`이고 `rollingUpdate` 설정이 제거되었는지 확인합니다. 전략만 변경하면 기존 파드가 즉시 교체되지는 않으며, 다음 이미지 등 파드 템플릿 변경 때 적용됩니다. 이미 진행 중인 혼합 배포나 이전에 삭제된 자료를 복구하는 기능은 아닙니다. 교체 중 파드를 수동으로 삭제하거나 강제 종료해 배포 순서를 우회하지 않습니다([Kubernetes Deployment 문서](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/#recreate-deployment)).
+
+이 방식은 기존 파드 종료부터 새 파드 준비까지 짧은 API 중단을 수반하며, 처리 중인 요청이나 원음 업로드도 끊길 수 있습니다. 중단 시간은 이미지 받기·DB 연결·준비 검사에 따라 달라집니다. 새 파드가 준비되지 않으면 중단이 계속되므로 배포 뒤 기존 파드 종료, 새 파드 2개 Ready, `/healthz` 200, Argo CD의 Synced·Healthy를 확인합니다. `replicas: 2`와 PDB `minAvailable: 1`은 유지하지만, PDB는 Deployment의 버전 교체를 제한하지 않아 이 중단을 막지 않습니다([Kubernetes PDB 문서](https://kubernetes.io/docs/concepts/workloads/pods/disruptions/#pod-disruption-budgets)).
+
+롤백은 **T90의 무기한 보관 정책과 명시적 삭제 처리를 포함한 이미지**의 태그로만 같은 절차를 따릅니다. 48시간 자동 삭제가 남은 이전 이미지로 되돌리면 보존할 자료가 다시 삭제될 수 있습니다. `RollingUpdate` 복귀는 실행 중인 이미지와 모든 롤백 후보가 새 정책을 포함하는지 확인한 뒤 별도 변경으로 검토합니다. `SHORTS_ENABLED=false`를 포함한 기존 환경 변수는 이번 전략 전환으로 바꾸지 않습니다.
 
 ## 격리를 확인하는 명령(실제 클러스터에서)
 

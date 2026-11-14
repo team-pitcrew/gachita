@@ -4,10 +4,9 @@ metadata:
   name: gachita-api
 spec:
   replicas: 2
-  # 하나씩 바꾼다. 새 파드가 준비(/healthz)된 뒤에 옛 파드를 내린다
+  # T93: 구버전의 48시간 삭제가 새 보관 정책과 함께 실행되지 않도록 모두 종료한 뒤 교체합니다.
   strategy:
-    type: RollingUpdate
-    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+    type: Recreate
   selector:
     matchLabels: { app: gachita-api }
   template:
@@ -52,7 +51,7 @@ spec:
             - { name: CLIPS_BUCKET, value: gachita-dev-clips-721622471953 }
             # 고른 장면 클립의 재전사(T75, 상현님 Nemotron ASR). 토큰(ASR_TOKEN, 아래 asr Secret)이 있을 때만 보낸다.
             # 주소의 호스트는 network.yaml의 나가는 길과 같아야 한다. 요청 간격(ASR_GAP_MS, 기본 파드마다 1.1초)은 파드 둘이
-            # 상대 서버 한도(IP당 초당 2건) 아래에 들게 정한 값이라 replicas를 바꾸면 같이 맞춘다(롤아웃 중 셋일 때는 429 물러섬이 받음)
+            # 상대 서버 한도(IP당 초당 2건) 아래에 들게 정한 값이라 replicas를 바꾸면 같이 맞춘다
             - { name: ASR_URL, value: "https://llm.kikum.xyz/asr/v1" }
             # 키 연결과 유료 생성 활성화를 분리합니다. 크레딧·실제 생성 검증 전에는 새 작업을 받지 않습니다(T86).
             - { name: SHORTS_ENABLED, value: "false" }
