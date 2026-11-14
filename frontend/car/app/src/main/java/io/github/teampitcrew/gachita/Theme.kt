@@ -114,10 +114,14 @@ fun Character(index: Int, size: Dp, ring: Boolean = false) {
  * ring은 말하는 사람 테두리(6dp, 시안 accent-text). 전신이 필요한 곳(가족 고르기, 쇼츠 무대)은 Character를 쓴다.
  */
 @Composable
-fun Avatar(index: Int, size: Dp, shape: Shape = CircleShape, ring: Boolean = false) {
+fun Avatar(index: Int, size: Dp, shape: Shape = CircleShape, ring: Boolean = false) = CharAvatar(SEAT_CHARS.getOrElse(index) { SEAT_CHARS[0] }, size, shape, ring)
+
+/** Avatar와 같은 잘라 채우기를 캐릭터 그림(res/drawable-nodpi/char_*)으로. 온보딩·가족의 프로필 캐릭터(시안 'Character / 원본', 모서리 48). */
+@Composable
+fun CharAvatar(res: Int, size: Dp, shape: Shape = CircleShape, ring: Boolean = false) {
     val c = MaterialTheme.colorScheme
     Box(Modifier.size(size).then(if (ring) Modifier.border(6.dp, c.onPrimaryContainer, shape) else Modifier).clip(shape).background(c.onSurface)) {
-        Image(painterResource(SEAT_CHARS.getOrElse(index) { SEAT_CHARS[0] }), null,
+        Image(painterResource(res), null,
             Modifier.fillMaxSize().graphicsLayer { scaleX = 1.45f; scaleY = 1.45f; transformOrigin = TransformOrigin(0.5f, 0.32f) },
             contentScale = ContentScale.Fit)
     }
