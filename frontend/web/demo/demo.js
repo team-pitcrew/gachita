@@ -1,11 +1,11 @@
-// 가치타 웹 시연(/demo). 에뮬레이터 모양의 차량 화면을 브라우저에 그리고, 실제 API로 여행 하나를 돌린다(T66).
-// 차량 앱(frontend/car)의 흐름과 문구를 따른다. Pleos SDK에서만 되는 것(내비 경유지, 차량 STT·TTS)은
-// 흉내만 내고 화면에 '시연'이라고 적는다. 마이크는 쓰지 않는다. 사용자가 쓴 글은 textContent로만 넣는다.
-// 차량은 운전석 참가자로 들어가 참가자 토큰을 받고, 여행 코드·토큰·순번은 localStorage에 두어 새로 고쳐도 이어진다.
+// 가치타 웹 시연(/demo). Pleos 에뮬레이터의 차 화면을 브라우저에 다시 그리고, 실제 API로 여행 하나를 돌린다(T66, T82).
+// 차 화면은 차량 앱(frontend/car, T83 #235)의 칸과 문구를 그대로 따른다: 머리 줄 알약, 왼쪽 무대(기록 상태 · 초점 칸 · 부탁/할 일),
+// 오른쪽(좌석 지도 · 주차 중 도구 · 기록 동의). 칸의 크기는 고정이고 내용만 바뀐다.
+// 차량 SDK에서만 되는 것(기어, 마이크·STT, TTS, 내비 경유지, 카메라)은 차 화면 밖 '확장 제어'에서 흉내 내고 '시연'이라고 적는다.
+// 사용자가 쓴 글은 textContent로만 넣는다. 차량은 운전석 참가자로 들어가 참가자 토큰을 받고, 여행 코드·토큰·순번은 localStorage에 둔다.
 
-import { SEATS, SEAT, WHEN, REQ, CLOSED, api as request, h, toast } from "/shared.js";
+import { SEATS, SEAT, api as request, h, toast } from "/shared.js";
 
-const STATUS = { boarding: "탑승 중", driving: "주행 중", parked: "주차 완료", ended: "여행 종료" };
 // 강릉 가족 여행 대사(docs/demo-video.md, frontend/car/demo.py). [누가, 자리, 말]
 const LINES = [
   ["딸", "ROW_2_RIGHT", "아빠, 바다는 언제 보여?"],
@@ -17,18 +17,28 @@ const LINES = [
 ];
 // 위치를 모를 때 차량 앱이 고르는 첫 휴게소(Asks.kt REST_STOPS, 서울 → 강릉). 시연에는 위치가 없다.
 const STOP = "용인휴게소";
+const TITLE = "가치타 가족 여행"; // 차량 앱의 여행 이름(MainActivity.TITLE)
+const DRIVER = ["아빠", "ROW_1_LEFT"]; // 차가 넣는 사람. 시연은 운전석만 넣고 나머지는 폰 QR로 들어온다
 const DEVICE = "car-web-demo";
 const KEY = "gachita-demo";
 const POLL_MS = 2000;
 const NAVI_MS = 1500; // 내비가 경유지를 받았다는 알림을 기다리는 흉내(에뮬레이터 실측은 약 6초)
 const RESULT_MS = 8000;
+// 자리 순서의 캐릭터(차량 앱 Theme.kt SEAT_CHARS: 운전석부터 기본·캡모자·안경·여행·게임)
+const CHAR = { ROW_1_LEFT: "basic", ROW_1_RIGHT: "cap", ROW_2_LEFT: "glasses", ROW_2_CENTER: "travel", ROW_2_RIGHT: "game" };
+// 좌석 지도의 줄: 서버의 자리(SEATS)를 줄(ROW_n)로 묶고 줄 안은 왼쪽 → 가운데 → 오른쪽. 손으로 칸을 놓지 않는다.
+// 차량 앱은 같은 칸을 Vehicle SDK의 좌석 영역에서 만들고, Pleos 에뮬레이터는 이 다섯(SEAT_OCCUPANCY 0x1·0x4·0x10·0x20·0x40)을 줬다(T83).
+const SIDE = ["LEFT", "CENTER", "RIGHT"];
+const ROWS = [...new Set(SEATS.map(([id]) => id.slice(0, 5)))].map((row) =>
+  SEATS.map(([id]) => id).filter((id) => id.startsWith(row)).sort((a, b) => SIDE.indexOf(a.slice(6)) - SIDE.indexOf(b.slice(6))),
+);
 
 const $ = (id) => document.getElementById(id);
 const els = {
-  setup: $("setup"), setupErr: $("setup-err"), tripwin: $("tripwin"), left: $("left"), ops: $("ops"), right: $("right"),
-  stt: $("stt"), sttState: $("stt-state"), sttLines: $("stt-lines"), sttSeat: $("stt-seat"), sttText: $("stt-text"), sttSend: $("stt-send"), sttErr: $("stt-err"),
-  phone: $("phone"), phoneEmpty: $("phone-empty"), phoneOpen: $("phone-open"),
-  fit: $("fit"), screen: $("screen"), speed: $("speed"), gears: $("gears"), seats: $("seats"), net: $("net"), clock: $("clock"),
+  app: $("app"), fit: $("fit"), screen: $("screen"), mic: $("mic"), clock: $("clock"),
+  stt: $("stt"), sttState: $("stt-state"), sttLines: $("stt-lines"), sttSeat: $("stt-seat"), sttText: $("stt-text"), sttErr: $("stt-err"),
+  gearCtl: $("gear-ctl"), recCtl: $("rec-ctl"), endCtl: $("end-ctl"), said: $("said"), momentCtl: $("moment-ctl"), momentMeta: $("moment-meta"),
+  phone: $("phone"), phoneEmpty: $("phone-empty"), phoneOpen: $("phone-open"), phoneClock: $("phone-clock"),
 };
 
 let car = load(); // { code, id, token, seq } — 이 차량(운전석 참가자)
@@ -37,9 +47,16 @@ let lines = []; // 기록본의 발화
 let lineSig = "";
 let online = true;
 let busy = false;
-let said = ""; // 마지막 음성 안내(시연)
 let navi = null; // { id, stage: "adding" | "added" | "failed" } 경유지 반영 흉내
-let loadErr = ""; // 여행을 처음 불러오지 못한 이유(불러오는 화면에서 빠져나갈 길을 보이게)
+let loadErr = "";
+let ride = null; // 동승 연결 무대: { code } 읽은 QR. null이면 무대 없음
+let rideNote = "";
+let short = null; // 숏폼 무대: { title, scenes, at, pos }
+let tab = "ride";
+let managing = false;
+let chat = false; // 대화록을 대화방으로 연 상태(주차 중, 왼쪽 무대 전체)
+let note = ""; // 도구 줄 알림(차량 앱의 rideNote·shortNote 자리)
+let setupErr = "";
 
 function load() {
   try {
@@ -57,12 +74,12 @@ function save() {
   }
 }
 
-const speak = (line) => (said = line);
+const speak = (line) => (els.said.textContent = line);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ---- API ----
 
-// 이 여행의 경로(/api/trips…). auth면 차량의 참가자 토큰을 보낸다. 서버에 닿았는지는 연결 표시에 쓴다.
+// 이 여행의 경로(/api/trips…). auth면 차량의 참가자 토큰을 보낸다. 서버에 닿았는지는 연결 알약에 쓴다.
 async function api(method, path, body, auth = false) {
   try {
     const data = await request(method, `/trips${path}`, body, auth && car.token);
@@ -84,10 +101,10 @@ function plain(e) {
     : e.status === 403 && m.includes("동의하지 않은") ? "동의하지 않은 탑승자가 있어 받아 적은 말을 올리지 않았어요. 모두 동의하면 다시 보낼 수 있어요."
     : e.status === 403 && m.includes("동의한 참가자만") ? "기록에 동의한 참가자만 기록본을 볼 수 있어요."
     : e.status === 403 ? "이 참가자는 할 수 없는 일이에요."
+    : e.status === 404 && m.includes("동승 연결") ? "QR이 만료됐거나 없어요. 폰에서 새로 띄워 주세요."
     : e.status === 404 ? "여행을 찾지 못했어요. 없거나 만든 지 48시간이 지났어요."
     : e.status === 409 && m.includes("동의하지 않은") ? "동의하지 않은 탑승자가 있어 기록을 켤 수 없어요."
     : e.status === 409 && m.includes("주행 중에만") ? "주행 중에만 기록할 수 있어요."
-    : e.status === 404 && m.includes("동승 연결") ? "QR이 만료됐거나 없어요. 폰에서 새로 띄워 주세요."
     : e.status === 409 && m.includes("이미 사용한") ? "이미 쓴 QR이에요. 폰에서 새로 띄워 주세요."
     : e.status === 409 && m.includes("주차 중에만") ? "주차 중에만 동승자를 연결할 수 있어요."
     : e.status === 409 && m.includes("이미 참가한") ? "그 폰은 이미 이 여행에 있어요."
@@ -103,7 +120,7 @@ function plain(e) {
 const path = (p = "") => `/${car.code}${p}`;
 const me = () => trip?.participants.find((p) => p.id === car?.id);
 const everyone = () => trip.participants.length > 0 && trip.participants.every((p) => p.consent);
-const waiting = () => trip.participants.filter((p) => !p.consent).map((p) => p.name);
+const driving = () => trip?.status === "driving";
 const setRequest = (id, status) => api("PATCH", path(`/requests/${id}`), { status });
 
 // 단추가 부르는 동작. 하나씩만 돌리고, 끝나면 최신 여행을 다시 읽는다.
@@ -123,33 +140,34 @@ async function act(fn, show = toast) {
 // ---- 흐름 ----
 
 async function createTrip() {
-  els.setupErr.textContent = "";
-  const title = $("setup-title").value.trim();
-  const name = $("setup-name").value.trim();
+  setupErr = "";
   busy = true;
   render();
   try {
-    const t = await api("POST", "", { title });
+    const t = await api("POST", "", { title: TITLE });
     // 차량은 운전석 참가자로 들어가 참가자 토큰을 받는다(발화 올리기·기록본·장면의 인증).
-    const p = await api("POST", `/${t.code}/participants`, { seat: "ROW_1_LEFT", name, consent: true });
+    const p = await api("POST", `/${t.code}/participants`, { seat: DRIVER[1], name: DRIVER[0], consent: true });
     car = { code: t.code, id: p.id, token: p.token, seq: 0 };
     save();
     speak("여행을 만들었어요. 폰에서 동승 연결 QR을 띄워 주세요");
   } catch (e) {
-    els.setupErr.textContent = `여행을 만들지 못했어요 · ${plain(e)}`;
+    setupErr = `여행을 만들지 못했어요 · ${plain(e)}`;
   }
   busy = false;
   await refresh(true);
 }
 
 function newTrip() {
+  tab = "ride"; managing = false;
   car = null;
   trip = null;
   lines = [];
   lineSig = "";
   navi = null;
-  said = "";
-  loadErr = "";
+  ride = null;
+  short = null;
+  note = rideNote = loadErr = "";
+  speak("아직 안내가 없어요");
   save();
   render();
 }
@@ -177,6 +195,7 @@ async function accept(r) {
 function result(id, stage) {
   const shown = { id, stage };
   navi = shown;
+  render();
   setTimeout(() => navi === shown && ((navi = null), render()), RESULT_MS);
 }
 
@@ -190,7 +209,7 @@ async function say(text, seat) {
   els.sttErr.textContent = "";
   text = text.trim();
   if (!text || !trip) return;
-  if (trip.status !== "driving") return void (els.sttErr.textContent = "출발한 뒤에 받아 적어요. 차량은 주행 중 기록할 때만 들어요.");
+  if (!driving()) return void (els.sttErr.textContent = "출발한 뒤에 받아 적어요. 차량은 주행 중 기록할 때만 들어요.");
   if (!trip.recording && everyone()) return void (els.sttErr.textContent = "기록을 일시정지했어요. ‘기록 다시 시작’을 누르면 받아 적어요.");
   await act(async () => {
     // 같은 브라우저의 다른 탭도 이 차량으로 올린다. 저장소의 순번을 먼저 맞춰 같은 순번이 멱등 키에 걸려 버려지지 않게.
@@ -242,6 +261,53 @@ function answerOf(text) {
   return "";
 }
 
+// 동승자 연결(#71, T46): 차의 '폰 QR 읽기' → 카메라로 탑승자 폰의 1회용 QR → 고른 빈자리에 넣는다.
+// 시연의 '카메라'는 같은 출처인 오른쪽 폰 칸(iframe)의 QR 값을 읽고, 자리 고르기와 API는 차와 같다.
+function scan() {
+  const payload = els.phone.contentDocument?.querySelector(".qr")?.dataset.payload;
+  rideNote = "";
+  ride = { code: payload ? JSON.parse(payload).code : null };
+  if (!payload) rideNote = "폰 화면에 동승 연결 QR이 없어요. 오른쪽 폰에서 '동승 연결'을 눌러 주세요.";
+  render();
+}
+
+async function seatRider(seat) {
+  rideNote = "연결하고 있어요";
+  await act(async () => {
+    try {
+      const r = await api("POST", path("/ride-links"), { code: ride.code, seat });
+      ride = null;
+      rideNote = `${r.participant.name} 님을 ${SEAT[r.participant.seat]}에 넣었어요 · 폰에서 기록에 동의하면 함께 기록해요`;
+      speak(`${r.participant.name} 님이 ${SEAT[r.participant.seat]}에 탔어요`);
+    } catch (e) {
+      rideNote = plain(e);
+      if (e.status === 404) ride.code = null;
+    }
+  });
+}
+
+// 숏폼(T43): 차와 같은 GET /shortform(차의 참가자 토큰). 시연은 자막만 장면 길이대로 넘기고 소리는 틀지 않는다(차에서 원음으로 들려줌).
+async function showShort() {
+  short = null;
+  note = "숏폼을 받고 있어요";
+  await act(async () => {
+    const s = await api("GET", path("/shortform"), null, true);
+    note = s.scenes?.length ? "" : "아직 숏폼으로 만들 장면이 없어요";
+    if (s.scenes?.length) ((short = { title: s.title, scenes: s.scenes, cast: s.cast ?? [], at: 0, pos: 0 }), playShort());
+  }, (m) => (note = m));
+}
+let shortTimer;
+function playShort() {
+  clearInterval(shortTimer);
+  shortTimer = setInterval(() => {
+    if (!short) return clearInterval(shortTimer);
+    short.pos += 0.25;
+    if (short.pos >= short.scenes[short.at].seconds) ((short.at += 1), (short.pos = 0));
+    if (short.at >= short.scenes.length) ((short = null), clearInterval(shortTimer));
+    render();
+  }, 250);
+}
+
 // ---- 읽기 ----
 
 let polling = false;
@@ -259,12 +325,14 @@ async function refresh(force = false) {
         // 지난 여행이 없어졌다(48시간). 새로 만들게 처음 화면으로.
         const why = plain(e);
         newTrip();
-        els.setupErr.textContent = `지난 여행을 이어 가지 못했어요 · ${why}`;
-        return;
+        setupErr = `지난 여행을 이어 가지 못했어요 · ${why}`;
+        return render();
       }
-      if (!trip) loadErr = plain(e); // 처음부터 못 불러왔으면 이유와 새 여행 단추를 보인다
-      changed = true; // 연결 표시만 바꾼다
+      if (!trip) loadErr = plain(e);
+      changed = true; // 연결 알약만 바꾼다
     }
+    if (driving()) { tab = "ride"; managing = false; }
+    if (driving() && (ride || short || chat)) ((ride = null), (short = null), (chat = false)); // 주행 중에는 무대를 닫는다(T11)
     if (await loadLines()) changed = true;
     if (changed) render();
   } finally {
@@ -274,214 +342,271 @@ async function refresh(force = false) {
 
 // 기록본(GET /transcript). 차량이 동의한 참가자라 읽을 수 있다. 바뀐 것이 없으면 다시 그리지 않는다.
 async function loadLines() {
-  if (!trip || !me()?.consent) return false;
+  if (!trip || !me()?.consent) {
+    const changed = lines.length > 0 || short !== null;
+    lines = []; lineSig = ""; short = null;
+    return changed;
+  }
   try {
     const t = await api("GET", path("/transcript"), null, true);
-    const sig = `${t.generation}|${t.utterances.map((u) => `${u.device}:${u.seq}`).join(",")}`;
+    const sig = `${t.generation}|${t.utterances.map((u) => `${u.device}:${u.seq}:${u.version ?? 0}:${u.text}`).join(",")}`;
     if (sig === lineSig) return false;
+    if (lineSig && lineSig.split("|")[0] !== String(t.generation)) short = null;
     lineSig = sig;
     lines = t.utterances;
     return true;
   } catch {
-    return false;
+    // 권한 철회·만료·연결 실패 때 이전 자막과 쇼츠를 남기지 않는다.
+    const changed = lines.length > 0 || short !== null;
+    lines = []; lineSig = ""; short = null;
+    return changed;
   }
 }
 
-// ---- 그리기 ----
+// ---- 차 화면 그리기(frontend/car MainActivity.kt T83의 칸과 문구) ----
 
-const button = (label, onclick, className = "") => h("button", { type: "button", className, onclick, disabled: busy }, label);
-const card = (...kids) => h("section", { className: "card" }, kids);
+const div = (className, ...kids) => h("div", { className }, kids.flat(Infinity)); // h()는 한 겹만 편다
+const text = (className, s) => h("p", { className }, s);
+const btn = (label, onclick, className = "") => h("button", { type: "button", className, onclick, disabled: busy }, label);
+const card = (cls, ...kids) => h("section", { className: `card ${cls}` }, kids.flat(Infinity));
 const hm = (ms) => new Date(ms).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false });
+const char = (seat, cls = "") => h("img", { className: `char ${cls}`, src: `/chars/${CHAR[seat] ?? "basic"}.png`, alt: "" });
+const pill = (label, ok = true) => h("span", { className: `pill${ok ? "" : " bad"}` }, h("i"), label);
 
-// 동승자 연결(#71, 11/14): 탑승자 폰이 1회용 QR을 띄우면 주차 중인 차가 읽어 운전자가 고른 자리에 넣는다.
-// 실제 차는 카메라로 읽는다. 시연은 같은 출처인 오른쪽 폰 칸(iframe)의 QR 값을 읽어 같은 API를 부른다.
-let rideSeat = "";
-function joinCard() {
-  const free = SEATS.filter(([id]) => !trip.participants.some((p) => p.seat === id));
-  if (!free.some(([id]) => id === rideSeat)) rideSeat = free[0]?.[0] ?? "";
-  const seat = h("select", { onchange: (e) => (rideSeat = e.target.value) }, free.map(([id, label]) => h("option", { value: id, selected: id === rideSeat }, label)));
-  return card(
-    h("div", { className: "between" }, h("h3", {}, "동승자 연결"), h("span", { className: "pill sim" }, "QR 읽기는 시연(실제는 차량 카메라)")),
-    h("p", { className: "sub" }, "탑승자 폰에서 '동승 연결'을 누르면 QR이 떠요. 앉을 자리를 고르고 그 QR을 읽어요. 주차 중에만 돼요."),
-    free.length
-      ? h("div", { className: "row" }, h("label", { className: "field" }, h("span", {}, "앉을 자리"), seat), button("폰의 QR 읽기", () => act(() => redeem(rideSeat)), "primary"))
-      : h("p", { className: "meta" }, "빈자리가 없어요."),
+// 가치타 마스코트(차량 앱 Theme.kt Mascot과 같은 64 좌표). 듣는 중은 눈을 뜨고 민트 점, 멈춤은 눈을 감는다.
+function mascot(listening) {
+  const ns = "http://www.w3.org/2000/svg";
+  const el = (tag, a) => Object.entries(a).reduce((e, [k, v]) => (e.setAttribute(k, v), e), document.createElementNS(ns, tag));
+  const svg = el("svg", { viewBox: "0 0 64 64", class: "mascot", "aria-hidden": "true" });
+  svg.append(el("path", { d: "M14 22C14 16.5 18.5 12 24 12H40C45.5 12 50 16.5 50 22V24H54C56.2 24 58 25.8 58 28V44C58 48.4 54.4 52 50 52H14C9.6 52 6 48.4 6 44V28C6 25.8 7.8 24 10 24H14Z", fill: "#fff", stroke: "#28221B", "stroke-width": "3", "stroke-linejoin": "round" }));
+  if (listening) {
+    svg.append(el("circle", { cx: "24.5", cy: "36", r: "2.8", fill: "#28221B" }), el("circle", { cx: "39.5", cy: "36", r: "2.8", fill: "#28221B" }));
+    svg.append(el("path", { d: "M28.5 42.5Q32 45.5 35.5 42.5", fill: "none", stroke: "#28221B", "stroke-width": "2.4", "stroke-linecap": "round" }));
+    svg.append(el("circle", { cx: "52", cy: "12", r: "6", fill: "#60C090" }));
+  } else for (const x of [24, 40]) svg.append(el("path", { d: `M${x - 4} 36Q${x} 39 ${x + 4} 36`, fill: "none", stroke: "#28221B", "stroke-width": "2.6", "stroke-linecap": "round" }));
+  return svg;
+}
+
+function appBar(title, listening, ...pills) {
+  return div("appbar", div("mascot-box", mascot(listening)), div("brand", h("b", {}, "가치타"), h("span", { className: "title" }, title)), ...pills);
+}
+
+// 여행 만들기(C6). 시연은 운전석만 차가 넣고 동승자는 폰 QR로 들어온다(서버 주소 칸 없음).
+function setupScreen() {
+  return div(
+    "setup",
+    appBar(TITLE, false, pill("주차 중 · P")),
+    h("h2", {}, "누구랑 같이 타나요?"),
+    text("sub", "같이 타는 가족을 골라 주세요"),
+    div("members", h("div", { className: "member on" }, char(DRIVER[1], "big"), h("b", {}, DRIVER[0]), text("sub", "운전석"), text("mint", "✓ 같이 타요"))),
+    h("span", { className: "grow" }),
+    text("err", setupErr),
+    btn(busy ? "여행을 만들고 있어요" : "1명으로 여행 만들기", createTrip, "primary make"),
   );
 }
 
-async function redeem(seat) {
-  const payload = els.phone.contentDocument?.querySelector(".qr")?.dataset.payload;
-  if (!payload) throw new Error("폰 화면에 동승 연결 QR이 없어요. 오른쪽 폰에서 '동승 연결'을 눌러 주세요.");
-  const r = await api("POST", path("/ride-links"), { code: JSON.parse(payload).code, seat });
-  speak(`${r.participant.name} 님이 ${SEAT[r.participant.seat]}에 탔어요`);
-}
-
-function recordCard() {
+function status() {
   const s = trip.status;
-  const who = waiting();
-  const [big, sub, rec] = trip.recording
-    ? ["● 기록 중", "동의를 끄면 바로 멈춰요", true]
-    : s === "driving" && everyone() ? ["기록을 일시정지했어요", "‘기록 다시 시작’을 누르면 다시 기록해요"]
-    : s === "driving" ? ["기록 꺼짐", `모두 동의하면 다시 기록할 수 있어요 · ${who.join(", ")} 님 동의 대기`]
-    : s === "boarding" ? ["기록 꺼짐", everyone() ? "출발하면 기록을 시작해요" : `${who.join(", ")} 님이 동의하면 출발과 함께 기록해요`]
-    : s === "parked" ? ["여행 기록을 마쳤어요", "다시 출발하면 이어서 기록해요"]
-    : ["여행을 마쳤어요", "기록본은 여행을 만든 뒤 48시간까지 볼 수 있어요"];
-  return card(
-    h("div", { className: "between" }, h("span", { className: "pill" }, STATUS[s]), h("span", { className: "pill sim" }, "음성 안내는 시연(실제는 차량 TTS)")),
-    h("p", { className: `big${rec ? " rec" : ""}` }, big),
-    h("p", { className: "sub" }, sub),
-    said && h("p", { className: "speak" }, said),
-  );
+  return trip.recording ? ["● 기록 중", "동의를 끄면 바로 멈춰요", "rec"]
+    : s === "driving" && everyone() ? ["기록 멈춤", "동의는 그대로예요 · 확장 제어에서 다시 시작해요", "wait"]
+    : s === "boarding" && everyone() ? ["기록 대기", "출발하면 기록을 시작해요", "wait"]
+    : s === "parked" ? ["기록 꺼짐", "다시 출발하면 이어서 기록해요", ""]
+    : s === "ended" ? ["기록 꺼짐", "여행을 마쳤어요 · 기록본은 48시간까지 볼 수 있어요", ""]
+    : ["기록 꺼짐", trip.participants.some((p) => p.consent) ? "모두 동의하면 다시 기록할 수 있어요" : "주차(P)한 뒤 대화 기록 동의를 켜면 기록해요", ""];
 }
 
-// 경유지 제안 카드(MainActivity.OfferCard). 한 번에 한 건.
-function offerCard() {
-  const by = Object.fromEntries(trip.participants.map((p) => [p.id, p.name]));
-  const pill = h("span", { className: "pill sim" }, "경유지 반영은 시연(실제는 Pleos 내비)");
+function statusHero() {
+  const [big, sub, tone] = status();
+  return card(`hero ${tone}`, text("big", big), text("sub", sub));
+}
+
+// 초점 칸: 제안 > 받아 적은 말. 한 번에 하나만, 크기는 그대로.
+function focus() {
   const next = trip.requests.find((x) => x.status === "proposed");
   if (navi && (navi.stage === "adding" || !next)) {
-    const r = trip.requests.find((x) => x.id === navi.id);
-    const [title, sub] =
-      navi.stage === "adding" ? ["내비에 경유지를 추가하고 있어요", `${STOP} · 시연 경로(서울 → 강릉)`]
-      : navi.stage === "added" ? ["경유지를 추가했어요", `${STOP} · 부탁 “${r?.text ?? ""}”`]
-      : ["경유지를 추가하지 못했어요", "부탁은 보관했어요"];
-    return h("section", { className: "card offer" }, pill, h("h3", {}, title), h("p", { className: "sub" }, sub));
+    const [title, sub, cls] =
+      navi.stage === "adding" ? ["내비에 경유지를 추가하고 있어요", STOP, ""]
+      : navi.stage === "added" ? ["경유지를 추가했어요", `${STOP} · 부탁 1건`, "mint"]
+      : ["경유지를 추가하지 못했어요", "부탁은 보관했어요", "red"];
+    return card("focus accent", div("center", text(`h44 ${cls}`, title), text("sub30", sub)));
   }
-  const r = next;
-  if (!r) return null;
+  if (next)
+    return card(
+      "focus accent",
+      text("h44", `${STOP}에 들를까요?`),
+      text("sub", "부탁 1건"),
+      h("span", { className: "grow" }),
+      div("row2", btn("경유지로 추가", () => act(() => accept(next)), "primary xl"), btn("나중에", () => act(() => later(next)), "outline xl")),
+    );
+  const recent = lines.slice(-2).reverse();
+  const empty = !me()?.consent ? text("sub", "기록에 동의한 참가자만 기록본을 볼 수 있어요") : !lines.length && text("sub", "아직 받아 적은 말이 없어요");
+  return card("focus", div("head", h("b", {}, "방금 나눈 대화"), h("span", {}, `${lines.length}건`)), empty, div("lines", recent.map(line)));
+
+}
+
+const zone = (u) => u.seatArea && (u.seatArea.startsWith("ROW_1") ? "앞줄" : "뒷줄");
+const line = (u) => div("line", h("i", { className: "who" }), div("", text("meta", [hm(u.at), zone(u)].filter(Boolean).join(" · ")), text("said", u.text)));
+// 방 얼굴: 일행 캐릭터를 겹쳐 놓는다(넷까지)
+const groupFace = () => div("group", trip.participants.slice(0, 4).map((p) => char(p.seat, "mini")));
+
+// 대화방(주차 중, 왼쪽 무대 전체): 기록본 전체를 단체 대화방처럼. 웹 시연의 기록본에는 말한 사람이 없어(서버의 화자 대조 전) '누구?'와 자리 구역만.
+function chatStage() {
+  const box = h(
+    "div",
+    { className: "chatlist" },
+    lines.map((u) => div("bubble-row", h("i", { className: "who" }), div("", text("name", ["누구?", zone(u)].filter(Boolean).join(" · ")), div("bubble-line", text("bubble", u.text), text("time", hm(u.at)))))),
+  );
+  requestAnimationFrame(() => (box.scrollTop = box.scrollHeight)); // 처음 열면 맨 아래(최신)부터
   return h(
     "section",
-    { className: "card offer" },
-    pill,
-    h("h3", {}, `${STOP}에 들를까요?`),
-    h("p", { className: "sub" }, `부탁 “${r.text}” · ${by[r.by] ?? "떠난 사람"}`),
-    h("div", { className: "row" }, button("경유지로 추가", () => act(() => accept(r)), "primary"), button("나중에", () => act(() => later(r)))),
+    { className: "chatstage" },
+    div("chathead", btn("‹ 닫기", () => ((chat = false), (tab = "ride"), render()), "outline"), groupFace(), div("grow", h("b", {}, trip.title || "가족 여행"), text("sub", `${trip.participants.length}명 · 받아 적은 말 ${lines.length}건`))),
+    box,
   );
 }
 
-function transcriptCard() {
-  if (!me()?.consent) return card(h("h3", {}, "받아 적은 말"), h("p", { className: "sub" }, "기록에 동의한 참가자만 기록본을 볼 수 있어요."));
-  return card(
-    h("div", { className: "between" }, h("h3", {}, `받아 적은 말 ${lines.length}건`), h("span", { className: "pill" }, "서버 기록본")),
-    h("p", { className: "meta" }, "실제 차량은 주행 중에 최근 두 줄만 보여요. 여기서는 시연을 위해 기록본 전체를 최신순으로 보여요."),
-    lines.length
-      ? h("ul", { className: "list" }, [...lines].reverse().map((u) => h("li", {}, h("span", { className: "meta" }, `${hm(u.at)} · ${SEAT[u.seatArea] ?? "자리 모름"}`), h("span", {}, u.text))))
-      : h("p", { className: "sub" }, "아직 받아 적은 말이 없어요"),
-  );
+function counts() {
+  const held = trip.requests.filter((r) => r.status === "held").length;
+  return div("overview-counts", text("sub", `보관한 부탁 ${held} · 도착 할 일 0`), !driving() && btn("여행 관리", () => { managing = true; render(); }, "text-button"));
 }
 
-function peopleCard() {
+function people() {
+  const at = Object.fromEntries(trip.participants.map((p) => [p.seat, p]));
+  const last = trip.recording && lines.at(-1)?.seatArea; // 방금 받아 적은 말의 좌석 구역(차량 앱 seatZone)
   return card(
-    h("h3", {}, `일행 ${trip.participants.length}명`),
-    h(
-      "ul",
-      { className: "list" },
-      trip.participants.map((p) =>
-        h(
-          "li",
-          {},
-          h("div", { className: "between" }, h("span", { className: "what" }, `${p.name} · ${SEAT[p.seat] ?? p.seat}${p.id === car.id ? " (이 차량)" : ""}`), h("span", { className: `pill${p.consent ? " ok" : ""}` }, p.consent ? "동의" : "동의 안 함")),
+    "people",
+    div("head", h("b", {}, `일행 ${trip.participants.length}명`), h("span", {}, "차 앞쪽 ▲")),
+    div(
+      "seatmap-box",
+      div(
+        "seatmap",
+        ROWS.map((row) =>
+          div(
+            `seatrow${last && row[0].slice(0, 5) === last.slice(0, 5) ? " zone" : ""}`,
+            row.map((seat) => {
+              const p = at[seat];
+              if (!p) return div("seat", h("i", { className: "empty" }), text("name dim", "빈자리"));
+              const [label, cls] = p.consent ? ["동의", "ok"] : ["동의 전", "dim"];
+              return div("seat", char(seat), text("name", p.name), text(`note ${cls}`, label));
+            }),
+          ),
         ),
       ),
     ),
-    trip.participants.length < 2 && h("p", { className: "sub" }, "오른쪽 폰에서 '동승 연결' QR을 띄우고 '폰의 QR 읽기'를 누르면 여기에 나와요."),
   );
 }
 
-function opsCard() {
-  const s = trip.status;
-  const patch = (body) => () =>
-    act(async () => {
-      const was = trip.recording;
-      const t = await api("PATCH", path(), body);
-      speak(t.status === "parked" ? "여행 기록을 마쳤어요" : t.status === "ended" ? "여행을 마쳤어요" : t.recording && !was ? "기록을 시작했어요" : !t.recording && was ? "기록을 멈췄어요" : t.status === "driving" ? "출발해요" : said);
-    });
-  const all = everyone();
-  const buttons =
-    s === "boarding" ? [button("출발", patch({ status: "driving" }), "primary")]
-    : s === "driving" ? [button("도착했어요 · 주차", patch({ status: "parked" }), "primary"), Object.assign(button(trip.recording ? "기록 일시정지" : "기록 다시 시작", patch({ recording: !trip.recording })), { disabled: busy || (!trip.recording && !all) })]
-    : s === "parked" ? [button("다시 출발", patch({ status: "driving" }), "primary"), button("여행 끝", patch({ status: "ended" }))]
-    : [];
-  const open = trip.requests.filter((r) => ["held", "proposed", "accepted"].includes(r.status)).length;
-  const done = trip.requests.filter((r) => r.status === "done" || r.status === "reflected").length;
+// 주차 중 도구(C5): 폰 QR 읽기·숏폼 보기, 여행 코드와 진단(알림이 있으면 그 자리에), 새 여행 만들기.
+// 차량 앱의 '이 차에 둔 원음 지우기'는 웹에 차 원음이 없어 두지 않는다.
+function tools() {
+  return div("row2 ride-tools",
+    btn("동승자 연결", () => { ride = {code: null}; rideNote = ""; render(); }, "tonal"),
+    btn("기본 내비 열기", () => speak("웹 시연에서는 기본 내비를 열지 않아요 · 실제는 Pleos 내비"), "outline"));
+}
+
+function consent() {
+  const on = !!me()?.consent;
   return card(
-    h("div", { className: "between" }, h("h3", {}, "운행"), h("span", { className: "pill" }, `기어 ${s === "driving" ? "D" : "P"} · 시연`)),
-    s === "boarding" && h("p", { className: "sub" }, all ? "출발하면 기록을 켜요." : "모두 동의하지 않아도 출발할 수 있지만 기록은 꺼진 채로 가요."),
-    (s === "parked" || s === "ended") && h("p", { className: "sub" }, `부탁 ${trip.requests.length}건 · 들렀거나 마친 것 ${done}건 · 남은 것 ${open}건. 클립과 주행 기억 지도는 아직 준비 전이에요.`),
-    buttons.length > 0 && h("div", { className: "row" }, buttons),
+    "consent",
+    div("", h("b", {}, "대화 기록 동의"), text("sub", driving() ? "끄기는 주행 중에도 한 번에 돼요" : "기본값은 꺼짐 · 주차 중에만 켤 수 있어요")),
+    h("span", { className: `switch${on ? " on" : ""}`, role: "switch", "aria-checked": String(on), "aria-disabled": "true", title: "시연에서는 운전석 동의를 여행 만들 때 켜요" }, h("i")),
   );
 }
 
-function requestsCard() {
-  const by = Object.fromEntries(trip.participants.map((p) => [p.id, p.name]));
-  const held = trip.requests.filter((r) => r.status === "held").length;
-  const sorted = [...trip.requests].sort((a, b) => CLOSED.includes(a.status) - CLOSED.includes(b.status));
-  const actions = (r) => {
-    const go = (label, status, className) => button(label, () => act(() => setRequest(r.id, status)), className);
-    const adding = navi?.id === r.id && navi.stage === "adding";
-    return [
-      r.status === "held" && go("경유지로 제안", "proposed"),
-      r.status === "held" && go("완료", "done"),
-      r.status === "proposed" && button("경유지로 추가", () => act(() => accept(r))),
-      r.status === "proposed" && button("나중에", () => act(() => later(r))),
-      r.status === "accepted" && !adding && go("경유지 반영 확인(시연)", "reflected"),
-      r.status === "accepted" && !adding && go("반영 못 함 · 보관", "held"),
-      r.status === "reflected" && go("완료", "done"),
-      !CLOSED.includes(r.status) && !adding && go("취소", "cancelled", "plain"),
-    ].filter(Boolean);
-  };
+// 동승 연결 무대(C7): 왼쪽 무대 전체. 카메라 자리는 시연 그림, 읽으면 빈자리 단추.
+function rideStage() {
+  const free = SEATS.filter(([id]) => !trip.participants.some((p) => p.seat === id));
   return card(
-    h("div", { className: "between" }, h("h3", {}, held ? `보관한 부탁 ${held}건` : "보관한 부탁이 없어요"), h("span", { className: "pill" }, `전체 ${trip.requests.length}건`)),
-    trip.requests.length
-      ? h(
-          "ul",
-          { className: "list" },
-          sorted.map((r) => {
-            const acts = actions(r);
-            return h(
-              "li",
-              { className: CLOSED.includes(r.status) ? "closed" : "" },
-              h("div", { className: "between" }, h("span", { className: "what" }, r.text), h("span", { className: `pill${r.status === "reflected" || r.status === "done" ? " ok" : ""}` }, REQ[r.status][0])),
-              h("p", { className: "meta" }, `${by[r.by] ?? "떠난 사람"} · ${WHEN[r.when] ?? r.when}`),
-              acts.length > 0 && h("div", { className: "row" }, acts),
-            );
-          }),
-        )
-      : h("p", { className: "sub" }, "폰에서 ‘부탁 남기기’를 누르거나, 받아쓰기 시연에서 “화장실 가고 싶어”를 보내 보세요."),
+    "stagecard accent",
+    h("h3", {}, "동승자 연결"),
+    ride.code
+      ? [
+          pill("동승 연결 QR을 읽었어요"),
+          h("h4", {}, "어느 자리에 앉았나요?"),
+          text("sub", "빈자리를 눌러 주세요 · 기록 동의는 그 사람이 폰에서 직접 켜요"),
+          div("seatbtns", free.map(([id, label]) => btn(label, () => seatRider(id), "primary xl"))),
+          h("span", { className: "grow" }),
+          btn("취소", () => ((ride = null), (rideNote = ""), render()), "outline wide"),
+        ]
+      : [
+          text("sub", "폰의 동승 QR을 카메라에 보여 주세요"),
+          div("camera", text("", "카메라 시연 · 확장 제어에서 폰 QR을 읽어 주세요")),
+          div("row2", btn("닫기", () => ((ride = null), (rideNote = ""), render()), "outline")),
+        ],
+    text("note20", rideNote),
   );
 }
 
-function momentCard() {
-  const add = () =>
-    act(async () => {
-      // 차량의 참가자 토큰으로 남긴다. 위치는 시연이라 넣지 않는다(위치 없는 장면, ADR-0007).
-      await api("POST", path("/moments"), { label: `장면 ${trip.moments.length + 1}` }, true);
-      toast("장면을 남겼어요.");
-    });
-  return card(
-    h("div", { className: "between" }, h("h3", {}, trip.moments.length ? `남긴 장면 ${trip.moments.length}개` : "장면 남기기"), button("장면 남기기", add)),
-    h("p", { className: "meta" }, "지금 시각을 장면으로 남겨요. 위치는 시연이라 남기지 않아요."),
-    trip.moments.length > 0 && h("ul", { className: "list" }, trip.moments.slice(-3).reverse().map((m) => h("li", {}, h("span", {}, `${m.label || "이름 없는 장면"} · ${hm(m.at)}`)))),
+// 숏폼 무대(T43·T83): 왼쪽 무대 전체에 릴스·쇼츠처럼. 진행 막대, 가운데 말하는 사람, 큰 자막, 오른쪽 세로 단추.
+function shortStage() {
+  const sc = short.scenes[short.at];
+  const cue = sc.cues.findLast((c) => short.pos >= c.start) ?? sc.cues[0];
+  const who = short.cast.find((c) => c.participantId === cue?.participantId);
+  const seat = who?.seat;
+  return h(
+    "section",
+    { className: "shortstage" },
+    div("bars", short.scenes.map((s, i) => h("i", { style: `--f:${i < short.at ? 1 : i > short.at ? 0 : Math.min(1, short.pos / s.seconds)}` }))),
+    text("scene", `${short.at + 1} / ${short.scenes.length} · ${sc.label}`),
+    div("face", seat ? char(seat, "ring huge") : mascot(true)),
+    div("cap", (who?.name || cue?.seatArea) && text("who", who?.name ?? SEAT[cue.seatArea]), text("line", cue?.text ?? ""), text("muted", "시연은 자막만 · 소리는 차에서 원래 목소리로")),
+    div(
+      "rail",
+      btn("다음 장면", () => ((short.at += 1), (short.pos = 0), short.at >= short.scenes.length && (short = null), render()), "rail next"),
+      btn("닫기", () => ((short = null), render()), "rail close"),
+    ),
   );
 }
 
-function connCard() {
-  return card(
-    h("p", { className: online ? "" : "err" }, online ? "서버에 연결됐어요" : "연결이 끊겼어요 · 마지막으로 확인한 정보예요"),
-    h("p", { className: "meta" }, `여행 코드 ${trip.code} · 받아 적은 말을 올리는 기기 ${DEVICE}`),
-    h("div", { className: "row" }, button("새 여행 만들기", newTrip, "plain")),
-  );
+function tripScreen() {
+  const parked = !driving();
+  const pills = [pill(parked ? "주차 중" : "주행 중"), pill(online ? "서버 연결됨" : "연결 대기", online)];
+  const tabs = div("tabs", ...[["ride", "함께 타는 중"], ["chat", "대화 기록"], ["shorts", "쇼츠"]].map(([id, label]) => {
+    const b = btn(label, () => { tab = id; managing = false; ride = null; short = null; render(); }, tab === id ? "selected" : "");
+    b.disabled = busy || (!parked && id !== "ride"); return b;
+  }));
+  let body;
+  if (parked && ride) body = rideStage();
+  else if (parked && managing) body = card("manage", h("h3", {}, "여행 관리"), text("sub", `여행 코드 ${trip.code}`), btn("새 여행 만들기", newTrip, "outline"), btn("닫기", () => { managing = false; render(); }, "outline"));
+  else if (parked && tab === "chat") body = chatStage();
+  else if (parked && tab === "shorts") body = short ? shortStage() : card("manage", h("h3", {}, "쇼츠"), text("sub", note || "남긴 장면을 골라 자막 미리보기를 열어요"), btn("쇼츠 미리보기", showShort, "tonal"));
+  else body = div("overview", statusHero(), div("overview-panels", people(), focus()), counts(), parked && tools());
+  return div("trip", appBar("함께하는 여행", !!trip.recording, ...pills), tabs, div("trip-body", body), consent());
+
 }
+
+function loading() {
+  return div("setup", appBar(TITLE, false), card("hero", text("big", loadErr ? "여행을 불러오지 못했어요" : "여행을 불러오고 있어요"), text("err", loadErr)), btn("새 여행 만들기", newTrip, "outline"));
+}
+
+// ---- 시스템 칸과 확장 제어 ----
 
 function renderSystem() {
-  const driving = trip?.status === "driving";
-  els.speed.textContent = driving ? "80" : "0";
-  for (const li of els.gears.children) li.classList.toggle("on", li.dataset.g === (driving ? "D" : "P"));
-  const at = Object.fromEntries((trip?.participants ?? []).map((p) => [p.seat, p]));
-  const pos = { ROW_1_LEFT: "s11", ROW_1_RIGHT: "s13", ROW_2_LEFT: "s21", ROW_2_CENTER: "s22", ROW_2_RIGHT: "s23" };
-  els.seats.replaceChildren(...SEATS.map(([id, label]) => h("div", { className: `seat ${pos[id]}${at[id] ? " on" : ""}`, title: label }, at[id] ? at[id].name.slice(0, 3) : "")));
-  els.net.textContent = online ? "통신 연결됨" : "연결이 끊겼어요";
-  els.net.classList.toggle("off", !online);
+  const d = driving();
+  els.screen.classList.toggle("driving", d);
+  els.mic.hidden = !trip?.recording; // 기록 중이면 Pleos가 상태 줄에 마이크 표시를 띄운다(에뮬레이터 캡처)
+}
+
+function renderExt() {
+  const s = trip?.status;
+  const none = !trip || busy;
+  for (const b of els.gearCtl.children) {
+    b.disabled = none || s === "ended";
+    b.classList.toggle("on", b.dataset.g === (s === "driving" ? "D" : "P"));
+  }
+  els.recCtl.textContent = trip?.recording ? "기록 일시정지" : "기록 다시 시작";
+  els.recCtl.disabled = none || s !== "driving" || (!trip.recording && !everyone());
+  els.endCtl.disabled = none || s !== "parked";
+  $("scan-ctl").disabled = none || driving() || s === "ended";
+  els.momentCtl.disabled = none;
+  els.momentMeta.textContent = trip?.moments.length ? `남긴 장면 ${trip.moments.length}개 · 마지막 ${hm(trip.moments.at(-1).at)}` : "";
+  const who = trip ? trip.participants.filter((p) => !p.consent).map((p) => p.name) : [];
+  els.sttState.textContent = !trip ? "여행을 만들면 쓸 수 있어요"
+    : trip.recording ? "● 기록 중 · 대사를 누르면 그 자리의 말로 받아 적어요(마이크는 쓰지 않음)"
+    : s !== "driving" ? "출발(D)한 뒤에 받아 적어요"
+    : who.length ? `${who.join(", ")} 님이 동의하지 않아 서버가 받지 않아요(보내 보면 거절 이유가 나와요)`
+    : "기록을 일시정지했어요";
+  for (const b of els.stt.querySelectorAll("button")) b.disabled = none || s === "ended";
 }
 
 let phoneCode = "";
@@ -497,71 +622,62 @@ function renderPhone() {
   }
 }
 
-function renderStt() {
-  const s = trip?.status;
-  const who = trip ? waiting() : [];
-  els.sttState.textContent = !trip ? ""
-    : trip.recording ? "● 기록 중 · 대사를 누르면 받아 적어요"
-    : s !== "driving" ? "출발한 뒤에 받아 적어요"
-    : who.length ? `${who.join(", ")} 님이 동의하지 않아 서버가 받지 않아요(보내 보면 거절 이유가 나와요)`
-    : "기록을 일시정지했어요";
-  for (const b of els.stt.querySelectorAll("button")) b.disabled = busy || !trip || s === "ended";
-}
-
 function render() {
-  const ready = Boolean(car && trip);
-  els.setup.hidden = Boolean(car);
-  els.tripwin.hidden = !car;
-  $("setup-go").disabled = busy;
-  if (car && !trip)
-    els.left.replaceChildren(
-      card(
-        h("p", { className: "big" }, loadErr ? "여행을 불러오지 못했어요" : "여행을 불러오고 있어요"),
-        loadErr && h("p", { className: "err" }, loadErr),
-        h("div", { className: "row" }, button("새 여행 만들기", newTrip, "plain")),
-      ),
-    );
-  if (ready) {
-    els.left.replaceChildren(
-      ...[trip.status === "boarding" && joinCard(), recordCard(), offerCard(), transcriptCard(), peopleCard(), trip.status === "parked" && joinCard()].filter(Boolean),
-    );
-    els.ops.replaceChildren(opsCard());
-    els.right.replaceChildren(requestsCard(), momentCard(), connCard());
-  } else {
-    els.ops.replaceChildren();
-    els.right.replaceChildren();
-  }
+  els.app.replaceChildren(!car ? setupScreen() : !trip ? loading() : tripScreen());
   renderSystem();
+  renderExt();
   renderPhone();
-  renderStt();
 }
 
 // ---- 화면 맞추기: 2560 × 1440 좌표를 보이는 칸에 맞게 줄인다 ----
 
 function fit() {
-  const col = els.fit.parentElement;
+  const col = els.fit.closest(".car-col");
   const wide = matchMedia("(min-width: 1100px)").matches;
-  const top = col.getBoundingClientRect().top + scrollY;
-  const w = col.clientWidth - 12; // 테두리 그림자 자리
-  const h = innerHeight - top - 24;
-  // 좁은 화면에서도 누를 수 있게 0.3배 아래로는 줄이지 않고 가로로 밀어 본다(.car-col이 가로 스크롤)
-  const s = Math.max(0.3, Math.min(w / 2560, wide ? Math.max(h, 280) / 1440 : Infinity));
+  const top = els.fit.getBoundingClientRect().top + scrollY;
+  const ext = document.querySelector(".ext").offsetHeight + 24;
+  const w = wide ? innerWidth - 380 - 24 * 3 : document.querySelector(".stage").clientWidth - 48; // 넓으면 폰 칸 옆, 좁으면 한 줄
+  const hgt = innerHeight - top - ext - 24;
+  // 좁은 화면에서도 누를 수 있게 0.3배 아래로는 줄이지 않고 가로로 밀어 본다(.emu가 가로 스크롤)
+  const s = Math.max(0.3, Math.min(w / 2560, wide ? Math.max(hgt, 280) / 1440 : Infinity));
   els.screen.style.setProperty("--s", String(s));
   els.fit.style.width = `${Math.floor(2560 * s)}px`;
   els.fit.style.height = `${Math.floor(1440 * s)}px`;
+  col.style.width = wide ? `${Math.floor(2560 * s)}px` : ""; // 확장 제어도 차 화면 너비에 맞춘다
+  if (!wide) els.fit.closest(".emu").scrollLeft = Math.round(854 * s);
 }
 
 function tick() {
-  els.clock.textContent = new Date().toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false });
+  const now = new Date();
+  els.clock.textContent = now.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: true }).replace(/^(오전|오후) (.*)$/, "$2 $1");
+  els.phoneClock.textContent = now.toLocaleTimeString("ko-KR", { hour: "numeric", minute: "2-digit", hour12: false });
 }
 
 // ---- 한 번만 하는 준비 ----
 
-els.setup.addEventListener("submit", (e) => (e.preventDefault(), createTrip()));
-els.sttSeat.append(h("option", { value: "" }, "모름"), ...SEATS.map(([id, label]) => h("option", { value: id }, label)));
+const patch = (body) =>
+  act(async () => {
+    const was = trip.recording;
+    const t = await api("PATCH", path(), body);
+    speak(t.status === "parked" ? "여행 기록을 마쳤어요" : t.status === "ended" ? "여행을 마쳤어요" : t.recording && !was ? "기록을 시작했어요" : !t.recording && was ? "기록을 멈췄어요" : t.status === "driving" ? "출발해요" : els.said.textContent);
+  });
+els.gearCtl.addEventListener("click", (e) => {
+  const g = e.target.closest("button")?.dataset.g;
+  if (g && trip) patch({ status: g === "D" ? "driving" : "parked" });
+});
+els.recCtl.addEventListener("click", () => patch({ recording: !trip.recording }));
+els.endCtl.addEventListener("click", () => patch({ status: "ended" }));
+els.momentCtl.addEventListener("click", () =>
+  act(async () => {
+    // 차량의 참가자 토큰으로 남긴다. 위치는 시연이라 넣지 않는다(위치 없는 장면, ADR-0007).
+    await api("POST", path("/moments"), { label: `장면 ${trip.moments.length + 1}` }, true);
+    toast("장면을 남겼어요.");
+  }),
+);
+els.sttSeat.append(h("option", { value: "" }, "자리 모름"), ...SEATS.map(([id, label]) => h("option", { value: id }, label)));
 els.sttLines.append(
-  ...LINES.map(([who, seat, text]) =>
-    h("button", { type: "button", title: `${who}(${SEAT[seat]})의 말로 받아 적기`, onclick: () => ((els.sttSeat.value = seat), say(text, seat)) }, h("small", {}, `${who} · ${SEAT[seat]}`), h("span", {}, text)),
+  ...LINES.map(([who, seat, line]) =>
+    h("button", { type: "button", title: `${who}(${SEAT[seat]})의 말로 받아 적기`, onclick: () => ((els.sttSeat.value = seat), say(line, seat)) }, h("small", {}, `${who} · ${SEAT[seat]}`), h("span", {}, line)),
   ),
 );
 els.stt.addEventListener("submit", (e) => (e.preventDefault(), say(els.sttText.value, els.sttSeat.value)));
@@ -572,3 +688,5 @@ setInterval(tick, 10_000);
 setInterval(refresh, POLL_MS); // 바뀐 것이 없으면 304. 기록본은 따로 읽어 바뀌었을 때만 다시 그린다
 render();
 refresh(true);
+
+$("scan-ctl").onclick = () => { if (trip && !driving() && !busy) scan(); };
