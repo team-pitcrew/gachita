@@ -87,6 +87,7 @@ adb shell am start --user 10 -n io.github.teampitcrew.gachita/.MainActivity --es
 ## 서버 할 일과 도착 브리핑(T113)
 
 - **차 안 도출(T144):** `TodoActions.kt`의 `deriveActionTodos`는 서버 `backend/api/todos.js`(`place-rules-v2`, T141)의 `todoOf`·`actionOf`·`deriveTodos`와 같은 규칙입니다. 받아 적은 발화에서 장소별 할 일과 행동 항목(분류 `first`·`buy`·`remember`·`bring`, 제목, 물건 이름·수량, 요청한 사람)을 차 안에서 냅니다. id는 서버와 같은 `sha256(JSON [장소, 글])` 앞 32자라 서버에 남은 완료·취소 상태가 그대로 붙습니다. 두 구현은 `backend/api/todo-vectors.json` 한 파일로 맞춥니다(`TodoActionsTest.kt`, 18건). 할 일 카드는 차 보관함(`Outbox.lines()`: 지금 동의 세대의 글 있는 발화)으로 도출한 목록을 씁니다. 서버 목록에서는 같은 id의 상태·버전·확인된 화자, 그리고 차에 없는 할 일(폰 입력·교정본)만 받아 붙입니다(`withCarTodos`). 서버가 같은 발화에서 교정본으로 다른 할 일을 냈으면 차 것을 뺍니다. 서버가 아직 받지 못한 발화의 할 일은 대기로 먼저 보이고, 완료·취소는 서버가 그 발화를 받은 뒤에 됩니다(그 전에는 PATCH가 404). 동의가 없거나 보관함의 세대가 서버 목록의 세대와 다르면 차 결과를 쓰지 않습니다. 도착 브리핑의 선정은 아직 서버(`POST /arrival-briefing`)입니다.
+- **차 안 도착 판정(T144):** `Todos.kt`의 `pickArrival`은 서버 `todos.js`의 `arrivalBriefing`과 같은 규칙입니다(주차가 아니면 `not_parked`, 위치가 60초보다 오래면 `stale_position`, 장소에서 250 m 밖이면 `outside_place`, 아니면 그 장소 낱말의 대기 할 일). 서버 응답과 같은 `SharedArrival`을 돌려주고, 두 구현은 `backend/api/arrival-vectors.json`으로 맞춥니다(`TodosTest.kt`). 폰이 읽는 도착 기록은 서버 `POST /arrival-briefing`이 남기므로 그 경로는 그대로입니다. 화면 연결은 개편 흐름 담당(F4)이 합니다.
 - **같은 목록:** 참가자 토큰으로 `GET /api/trips/{code}/todos`를 읽습니다. 웹과 차량이 같은 전사와 보정문에서 추출된 할 일·원발화·상태·버전을 봅니다. 추출은 서버의 `place-rules-v1` 낱말 규칙이며 모델 추론이 아닙니다. 이전 `todos-<여행 코드>.json` 파일은 그대로 두고 새 목록에 합치지 않습니다.
 - **변경:** 실제 P이고 주행 제한이 풀렸을 때 완료·취소·다시 열기를 보냅니다. PATCH에는 현재 동의 세대와 `expectedVersion`이 들어갑니다. 서버 성공 뒤 목록을 다시 읽어 화면에 반영합니다. 404·409는 최신 목록을 보여 주고 다시 선택하도록 안내하며 자동으로 덮어쓰지 않습니다. 연결 실패 시 마지막 서버 목록·동기화 시각·재시도를 표시합니다. 여행·서버·참가 토큰·동의 세대가 바뀌면 이전 응답과 목록을 버립니다.
 - **도착 근거:** 최초 P는 도착으로 보지 않습니다. 주차로 전환하고 주행 제한이 풀렸거나 사용자가 '도착 확인'을 누르면 내비 SDK의 다음 경유지(없으면 목적지) 이름·좌표와 별도의 현재 위치를 읽습니다. 좌표가 없거나 `(0, 0)`이면 도착 안내를 보류합니다. 현재 위치 콜백을 받은 시각을 `observedAt`, 출처를 `vehicle`로 보냅니다. SDK가 원래 측정 시각을 주지 않아 센서의 실제 측정 시각까지 검증하지는 못합니다.
@@ -153,6 +154,7 @@ adb shell am start --user 10 -n io.github.teampitcrew.gachita/.MainActivity --es
 
 ## 생성된 쇼츠 재생(T43)
 
+- **차 안 자막 큐(T144):** `Scenes.kt`의 `cuesOf`는 서버 `scenes.js`의 `cues`와 같은 규칙으로 클립 구간의 발화를 자막 시각(클립 처음부터의 초)과 글로 바꿉니다. 두 구현은 `backend/api/cue-vectors.json`으로 맞춥니다(`ScenesTest.kt`). 재생 화면은 아직 `GET /shortform`의 큐를 씁니다.
 쇼츠는 현재 여행의 음성 클립·자막 큐·화자로 구성한 장면입니다(`GET /api/trips/{code}/shortform`, #63 계약). 미리보기는 앱이 이 데이터를 조합해 재생합니다. 영상 저장은 별도 내보내기 단계에서 실제 AVC 영상과 AAC 원음을 MP4로 만듭니다. 외부 영상 피드는 제공하지 않습니다.
 
 기획은 대화에서 추천한 장면을 먼저 보여 주고, 사용자가 원음을 확인한 뒤 생성·저장하는 흐름을 우선합니다. 수정은 필요한 부분에만 적용하고 녹음된 목소리를 유지합니다. 현재 차량 앱은 서버에 준비된 장면의 재생과 영상 내보내기를 구현합니다. 추천 후보의 선택·확정과 자막 본문 편집 UI는 차량 앱에 아직 없습니다. 서버에서 수정한 자막은 조회 결과에 반영하며, 말한 사람 고치기는 주차 중 여행 관리에서 제공합니다.
@@ -239,7 +241,7 @@ Gleo와 마이크 주고받기(T41)는 `python3 frontend/car/gleo_e2e.py <APK> <
 | `Gleo.kt` | Gleo와 마이크 주고받기(T41): 호출어 변형 목록과 찾기(단위 테스트 `GleoTest.kt`), 넘기고 오디오 포커스로 돌려받기(`Handoff`) |
 | `assets/schema.json` | Gleo 함수 목록(T40·T41). 이름을 바꾸면 `MainActivity`의 `GLEO_*`와 매니페스트의 intent-filter도 같이 |
 | `Raw.kt` | 원음 파일 쓰기·자르기, 장면 구간, WAV(T63, 단위 테스트 `RawTest.kt`) |
-| `Scenes.kt` | 장면 후보 규칙, 서버 `scenes.js`와 같은 값(T144, 단위 테스트 `ScenesTest.kt`) |
+| `Scenes.kt` | 장면 후보·숏폼 자막 큐 규칙, 서버 `scenes.js`와 같은 값(T144, 단위 테스트 `ScenesTest.kt`) |
 | `Places.kt` | 내비 장소 기록(출발·목적지·곧 도착·경유·도착)과 못 보낸 것 보관(T131, 단위 테스트 `PlacesTest.kt`) |
 | `Vault.kt` | 차 안 파일의 암호화(Android Keystore AES-GCM), 명시적 삭제와 디버그 만료 시험(단위 테스트 `VaultTest.kt`) |
 | `Trip.kt` | 여행 응답 해석과 기록 동의 규칙(단위 테스트 `TripTest.kt`) |
