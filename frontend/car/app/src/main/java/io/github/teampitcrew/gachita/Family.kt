@@ -440,7 +440,7 @@ fun FamilyFlow(server: String, token: String?, onClose: () -> Unit, onStart: (St
             when (view) {
                 FamilyView.MEMBER -> {
                     val adult = fam?.members.orEmpty().any { it.role == "adult" }
-                    CarButton(if (adult) "아이 프로필 만들기" else "가족 계정 초대하기", Modifier.weight(1f), enabled = !busy) {
+                    CarButton(if (adult) "아이 프로필 만들기" else "계속", Modifier.weight(1f), enabled = !busy) { // C09 2300:5616 '계속' → C10
                         if (adult) view = FamilyView.CHILD else act { issue(ensureFamily()) }
                     }
                 }
