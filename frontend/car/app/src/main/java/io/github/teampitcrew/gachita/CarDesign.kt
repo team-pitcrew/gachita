@@ -156,7 +156,7 @@ fun TitleBlock(title: String, sub: String, modifier: Modifier = Modifier) = Colu
  */
 @Composable
 fun ParkedFrame(
-    tab: Int? = null, onTab: (Int) -> Unit = {}, tabEnabled: (Int) -> Boolean = { true }, gear: String? = "P", online: Boolean = true,
+    tab: Int? = null, onTab: (Int) -> Unit = {}, tabEnabled: (Int) -> Boolean = { true },
     bottom: (@Composable RowScope.() -> Unit)? = null, overlay: @Composable BoxScope.() -> Unit = {},
     body: @Composable ColumnScope.() -> Unit,
 ) = Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {

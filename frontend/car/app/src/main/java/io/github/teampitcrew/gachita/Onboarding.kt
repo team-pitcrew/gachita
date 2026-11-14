@@ -256,7 +256,7 @@ class Onboarding(private val context: Context, private val prefs: SharedPreferen
 
 /** driving: 주행 제한 중 여행이 없을 때. 진행한 단계와 상관없이 시작 화면(C01)만 보이고 단추는 잠근다(T11, 설정은 주차 중에만). */
 @Composable
-fun OnboardingScreen(o: Onboarding, gear: String?, driving: Boolean = false, onFamily: () -> Unit) {
+fun OnboardingScreen(o: Onboarding, driving: Boolean = false, onFamily: () -> Unit) {
     val c = MaterialTheme.colorScheme
     val ctx = LocalContext.current
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { o.picked(it) }
@@ -268,7 +268,6 @@ fun OnboardingScreen(o: Onboarding, gear: String?, driving: Boolean = false, onF
     // 원본에 없는 오류 글(입력·서버·사진·마이크)은 본문에 따로 두지 않고 2047:2276 알림으로 잠깐 보인다(CarToast)
     LaunchedEffect(o.note) { if (o.note.isNotEmpty()) { delay(toastMs(o.note)); o.clearNote() } }
     ParkedFrame(
-        gear = gear ?: "P",
         overlay = { CarToast(o.note) },
         bottom = {
             when (step) {

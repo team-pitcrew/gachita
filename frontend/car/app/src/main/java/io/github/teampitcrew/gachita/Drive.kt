@@ -323,9 +323,13 @@ internal fun RecordBar(control: DriveButton, live: Boolean, time: String, levels
                 if (paused) Image(painterResource(R.drawable.ic_rec_resume), null, Modifier.offset(3.5.dp, 3.dp).requiredSize(61.dp, 77.dp))
                 else listOf(23.dp, 39.dp).forEach { x -> Box(Modifier.offset(x, 21.dp).size(6.dp, 26.dp).clip(RoundedCornerShape(2.dp)).background(c.onSurface)) }
             }
-            Text(time, color = if (live) CarRecord.Timer else c.onSurface, style = CarText.Status, maxLines = 1)
+            // 시안: 시간 56(x 83)·파형 292×84(x 234). 시간은 고정폭 숫자(tnum)라 초가 바뀌어도 폭이 같고, 시안보다 넓은 시간('00:00', 1시간 넘으면
+            // 'h:mm:ss')이면 파형이 그만큼 오른쪽으로 밀려 겹치지 않는다(시간 칸 최소 143 = 234 − 83 − 간격 8).
+            Box(Modifier.widthIn(min = 143.dp)) {
+                Text(time, color = if (live) CarRecord.Timer else c.onSurface, style = CarText.Status.copy(fontFeatureSettings = "tnum"), maxLines = 1, softWrap = false)
+            }
+            Wave(levels, live, Modifier.size(292.dp, 84.dp))
         }
-        Wave(levels, live, Modifier.align(Alignment.CenterStart).padding(start = 234.dp).size(292.dp, 84.dp))
         Box(Modifier.align(Alignment.CenterEnd).padding(end = 19.dp).size(68.dp).clip(CircleShape).border(2.dp, CarRecord.StopRing, CircleShape)
             .clickable(role = Role.Button, onClick = onStop).semantics { contentDescription = "녹화 종료" }, contentAlignment = Alignment.Center) {
             Box(Modifier.size(24.dp).clip(RoundedCornerShape(3.dp)).background(c.onSurface))

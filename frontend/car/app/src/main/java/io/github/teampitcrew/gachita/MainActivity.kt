@@ -340,13 +340,15 @@ class MainActivity : ComponentActivity() {
                             val family = !carStatus.restricted && signedIn && (familyOpen || t == null && !onboarding.showing)
                             when {
                                 // 로그아웃(2220:5864) → C01: 여행이 남아 있어도 계정이 없으면 시작 화면부터
-                                !signedIn && onboarding.showing -> OnboardingScreen(onboarding, carStatus.gear, driving = carStatus.restricted) { familyOpen = true }
+                                !signedIn && onboarding.showing -> OnboardingScreen(onboarding, driving = carStatus.restricted) { familyOpen = true }
                                 // 프로필 메뉴의 '동승 그룹 변경'·'좌석 배정'도 가족 흐름(C16 groups·C16B)으로 연다. 주차 중에만
                                 family -> FamilyFlow(server, profileToken ?: onboarding.token, onClose = { familyOpen = false },
-                                    onStart = ::startGroupTrip, jump = familyJump, onJumped = { familyJump = null })
+                                    onStart = ::startGroupTrip, jump = familyJump, onJumped = { familyJump = null },
+                                    // 가족 화면 위 탭(C14·C15·C16·C16 guestInvite·C16L·C43): 대화 기록 → C44, 콘텐츠 기록 → C33. 둘 다 여행 단위라 여행이 없으면 그 자리에
+                                    onTab = { i -> if (t != null) { familyOpen = false; closeBoarding(); afterStart = null; destination = if (i == 1) Destination.CONVERSATION else Destination.SHORTS } })
                                 t != null -> TripScreen(t)
-                                carStatus.restricted -> OnboardingScreen(onboarding, carStatus.gear, driving = true) {} // 주행 중 여행이 없으면 시작 화면(C01)만, 단추는 잠근다(T11)
-                                else -> OnboardingScreen(onboarding, carStatus.gear) { familyOpen = true } // C08 '가족 그룹 만들기' → 가족 흐름(F2)
+                                carStatus.restricted -> OnboardingScreen(onboarding, driving = true) {} // 주행 중 여행이 없으면 시작 화면(C01)만, 단추는 잠근다(T11)
+                                else -> OnboardingScreen(onboarding) { familyOpen = true } // C08 '가족 그룹 만들기' → 가족 흐름(F2)
                             }
                             if (t == null) CarToast(error)
                             LaunchedEffect(error) { if (error.isNotEmpty()) { kotlinx.coroutines.delay(5_000); error = "" } }
