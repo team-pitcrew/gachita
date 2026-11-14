@@ -78,7 +78,15 @@ class VoiceTest {
         assertFalse(again.stale(1_000 + PRINTS_KEEP_MS - 1)); assertTrue(again.stale(1_000 + PRINTS_KEEP_MS))
         again.fetchedAt = 0; again.expire(2_000) // 다시 받으라는 표시만으로는 지우지 않는다(끊겼을 때 쓰게)
         assertEquals("dad", again.match(low, listOf("dad")).who)
+        // 앱을 다시 켠 뒤에도 보관 시간 안이면 남는다(끊겨서 다시 받지 못해도 그 사본으로 대조). 대조할 말이 없어도 시간이 지나면 지운다
+        val reopened = VoicePrints(tmp.root, "ABC123", TEST_SEAL, now = 2_000)
+        reopened.expire(1_000 + PRINTS_KEEP_MS - 1)
+        assertEquals("dad", reopened.match(low, listOf("dad")).who); assertTrue(file.exists()); assertFalse(reopened.stale(1_000 + PRINTS_KEEP_MS - 1))
         assertEquals(1, VoicePrints(tmp.root, "ABC123", TEST_SEAL, now = 1_000 + PRINTS_KEEP_MS - 1).size)
+        VoicePrints(tmp.root, "ABC123", TEST_SEAL, now = 2_000).let { idle ->
+            idle.expire(1_000 + PRINTS_KEEP_MS); assertEquals(0, idle.size); assertFalse(file.exists())
+        }
+        again.put(prints(3, "dad" to low), now = 1_000)
         assertEquals(0, VoicePrints(tmp.root, "ABC123", TEST_SEAL, now = 1_000 + PRINTS_KEEP_MS).size); assertFalse(file.exists())
 
         again.put(prints(3, "dad" to low))
@@ -100,5 +108,31 @@ class VoiceTest {
 
         val body = voiceValue(vector(cases[0]), 9.8)
         assertEquals(listOf(EMBEDDER, VOICE_DIMS, 9.8), listOf(body.getString("embedder"), body.getJSONArray("vector").length(), body.getDouble("seconds")))
+    }
+
+    @Test fun `밀린 화자는 묶음으로 나눠 올리고 성공한 묶음만 남긴 것으로 적는다`() {
+        val box = Outbox(tmp.root, "ABC123", TEST_SEAL)
+        val n = SPEAKER_BATCH * 2 + 30 + 1
+        repeat(n) { box.add(Draft(1000L + it, 2000L + it, "말 $it", 0, 900), null, 0) }
+        box.flush({ _, _ -> (n - 1).toLong() }, "car", max = n) // 마지막 하나는 서버가 아직 받지 않음
+        val sp = Speakers(tmp.root, "ABC123", TEST_SEAL)
+        for (seq in 1L..n) sp.set(seq, Speaker("dad", 0.95, sent = false))
+        assertEquals(n, sp.unsentMatches().size)
+
+        val sent = mutableListOf<Int>()
+        runCatching { sendSpeakers(box, sp, { true }) { items -> if (sent.size == 1) throw java.io.IOException("끊김"); sent += items.length() } }
+        assertEquals(listOf(SPEAKER_BATCH), sent) // 둘째 묶음에서 끊김
+        assertEquals(n - SPEAKER_BATCH, sp.unsentMatches().size) // 성공한 첫 묶음만 남긴 것으로
+        assertEquals((SPEAKER_BATCH + 1).toLong(), sp.unsentMatches().keys.min())
+
+        sent.clear(); var ok = true
+        sendSpeakers(box, sp, { ok }) { items -> sent += items.length(); ok = false } // 그사이 동의를 끄면 남은 묶음은 보내지 않는다
+        assertEquals(listOf(SPEAKER_BATCH), sent)
+
+        sent.clear()
+        sendSpeakers(box, sp, { true }) { items -> sent += items.length() }
+        assertEquals(listOf(30), sent)
+        assertEquals(setOf(n.toLong()), sp.unsentMatches().keys) // 서버가 받지 않은 발화의 것은 받은 뒤에 보낸다
+        assertTrue(sent.all { it <= 500 })
     }
 }

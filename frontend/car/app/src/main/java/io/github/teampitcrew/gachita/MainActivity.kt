@@ -146,6 +146,8 @@ class MainActivity : ComponentActivity() {
                 speakersOf(t.code).see(t.generation)
                 printsOf(t.code).let { vp ->
                     vp.see(t.generation) // 동의 세대가 바뀌면 대조 값 사본을 지운다(ADR-0023)
+                    // 보관 시간(3시간 30분)이 지난 사본은 대조할 말이 없어도 지운다: 여행을 받을 때마다(10초 조회) 본다. 녹음을 멈췄거나 아무도 말하지 않아도 남지 않게
+                    vp.expire(System.currentTimeMillis())
                     // 탑승자나 동의가 바뀌면(새로 탐, 폰에서 프로필로 참가) 다음 대조 전에 다시 받는다. 그 밖에는 받은 사본을 3시간 30분 쓴다
                     val who = t.code + t.people.joinToString { "${it.id}${it.consent}" }
                     if (who != printsFor) { printsFor = who; vp.fetchedAt = 0 }
@@ -528,10 +530,7 @@ class MainActivity : ComponentActivity() {
                 for ((seq, f) in sp.unsent()) { api.fixSpeaker(t.code, up, dev, seq, f.who); sp.set(seq, f.copy(sent = true)) }
                 if (todo.isNotEmpty()) { refreshPrints(api, t, up, vp); match(t, todo, sp, vp) }
                 // 찾은 사람을 그 발화와 함께 다시 올린다. 서버는 화자가 빈 줄에만 채운다(사람이 고친 줄은 그대로)
-                val found = sp.unsentMatches()
-                val items = box.wires(found)
-                if (items.isNotEmpty() && clipsAllowed) api.utterances(t.code, up, dev, org.json.JSONArray(items.map { it.second }))
-                if (clipsAllowed) found.forEach { (seq, f) -> sp.set(seq, f.copy(sent = true)) } // 글을 지운 발화의 것도 더 보내지 않는다
+                sendSpeakers(box, sp, { clipsAllowed }) { items -> api.utterances(t.code, up, dev, items) }
             }
             main.post {
                 matching = false; heardTick++

@@ -165,6 +165,8 @@ class VoicePrints(dir: File, val trip: String, private val seal: Seal, now: Long
     private var prints = emptyMap<String, DoubleArray>()
     /** 사본을 받은 시각(파일에 함께 둔다). 0이면 다음 대조 전에 다시 받는다(등록함, 탑승자가 바뀜). */
     @Volatile var fetchedAt = 0L
+    // init보다 앞에 둔다: 뒤에 두면 init의 read()가 되살린 값을 속성 초기화가 다시 0으로 덮어, 다시 켠 뒤 첫 expire()가 유효한 사본을 지운다.
+    private var savedAt = 0L // 파일에 적힌 받은 시각(다시 받으라는 표시 fetchedAt = 0과 따로)
 
     init { runCatching { read(JSONObject(seal.unline(file.readText()))) }; expire(now) } // 없거나 열리지 않으면 빈 사본
 
@@ -173,7 +175,6 @@ class VoicePrints(dir: File, val trip: String, private val seal: Seal, now: Long
 
     /** 보관 시간이 지난 사본은 지운다(끊겨서 다시 받지 못해도 오래된 값으로 대조하지 않게). */
     @Synchronized fun expire(now: Long) { if (generation != 0 && now - savedAt >= PRINTS_KEEP_MS) clear() }
-    private var savedAt = 0L // 파일에 적힌 받은 시각(다시 받으라는 표시 fetchedAt = 0과 따로)
 
     val size: Int @Synchronized get() = prints.size
 
@@ -212,6 +213,27 @@ class VoicePrints(dir: File, val trip: String, private val seal: Seal, now: Long
         for (id in candidates) { val s = similarity(v, prints[id] ?: continue); if (s > bestSim) { bestSim = s; best = id } }
         if (best == null) return Speaker(null, 0.0)
         return Speaker(best.takeIf { bestSim >= threshold }, Math.round(bestSim * 1000) / 1000.0)
+    }
+}
+
+const val SPEAKER_BATCH = 100 // 화자를 다시 올리는 한 묶음. 서버는 한 번에 500건까지 받는다
+
+/**
+ * 차가 찾았지만 서버에 남기지 못한 화자를 그 발화와 함께 다시 올린다(통신 스레드). 서버 한도 아래의 묶음으로 나눠 보내고,
+ * **성공한 묶음의 순번만** 남긴 것으로 적는다 — 오래 끊겨 수백 건이 쌓여도 한 요청이 한도를 넘어 영영 거절되지 않게.
+ * 묶음 하나가 실패하면 던지고, 남은 것은 다음 차례에 이어 보낸다. 글을 지웠거나 옛 세대라 보낼 수 없는 것은 더 보내지 않는다.
+ * allowed는 묶음마다 다시 본다(모두 동의, 끄기 대기 없음).
+ */
+fun sendSpeakers(box: Outbox, sp: Speakers, allowed: () -> Boolean, send: (JSONArray) -> Unit) {
+    val found = sp.unsentMatches()
+    val items = box.wires(found)
+    val sendable = items.map { it.first }.toSet()
+    fun done(seqs: Iterable<Long>) = seqs.forEach { seq -> found[seq]?.let { sp.set(seq, it.copy(sent = true)) } }
+    done(found.keys.filter { it <= box.acked && it !in sendable })
+    for (batch in items.sortedBy { it.first }.chunked(SPEAKER_BATCH)) {
+        if (!allowed()) return
+        send(JSONArray(batch.map { it.second }))
+        done(batch.map { it.first })
     }
 }
 
