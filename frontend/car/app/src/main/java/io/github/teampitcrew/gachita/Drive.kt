@@ -90,15 +90,14 @@ internal data class DriveStatus(val title: String, val sub: String, val hero: He
 /**
  * Status text for the current recording state. Mirrors the old StatusHero order, with the design's '기록' wording.
  * ended: the trip's server status is 'ended' (2026:2410). resumed: recording came back from a pause and nothing new was heard yet (2026:1969).
- * Option A shows only the timer for REC and the user's pause; the sub line appears there for the other holds (Gleo, shorts, microphone).
+ * Option A shows only the timer for REC and the user's pause; the sub line appears there for the other holds (Gleo, microphone).
  */
 internal fun driveStatus(
-    recording: Boolean, muted: Boolean, playingShort: Boolean, handoff: Handoff.State, mic: Mic, why: String,
+    recording: Boolean, muted: Boolean, handoff: Handoff.State, mic: Mic, why: String,
     offPending: Boolean, waiting: Boolean, inPark: Boolean, waitingFor: List<String>, ended: Boolean = false, resumed: Boolean = false,
 ): DriveStatus = when {
     ended && !offPending -> DriveStatus("여행 기록 완료", "오늘의 대화를 오래 간직해 보세요", Hero.PAUSED)
     recording && muted -> DriveStatus("기록 멈춤", "같은 버튼을 누르면 다시 기록해요", Hero.PAUSED)
-    recording && playingShort -> DriveStatus("기록 잠시 멈춤", "쇼츠를 듣는 동안은 기록하지 않아요", Hero.PAUSED)
     recording && handoff != Handoff.State.OFF ->
         DriveStatus("기록 잠시 멈춤", if (handoff == Handoff.State.WAITING) "운전대 버튼을 누르세요" else "Gleo가 끝나면 기록을 이어 가요", Hero.PAUSED)
     recording -> when (mic) {

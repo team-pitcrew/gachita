@@ -2,14 +2,9 @@ package io.github.teampitcrew.gachita
 
 import android.Manifest
 import android.content.Intent
-import android.content.ClipData
 import android.content.SharedPreferences
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
-import android.media.AudioAttributes
-import android.media.AudioFocusRequest
-import android.media.AudioManager
-import android.media.MediaPlayer
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -18,19 +13,14 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.compose.BackHandler
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
-import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
@@ -45,18 +35,13 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -65,34 +50,25 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.File
 import java.util.UUID
 import java.util.concurrent.Executors
-import java.util.concurrent.CancellationException
-import java.util.concurrent.atomic.AtomicReference
-import java.net.HttpURLConnection
 
 private const val DEFAULT_SERVER = "https://gachita.mangowhois.ai" // 실서비스(T27). 로컬 서버는 디버그 빌드에서 '서버 주소'나 --es server로
 private const val POLL_MS = 10_000L // 웹앱은 2초. 차에서는 주행 중 자원 기준(CPU 5% 미만)을 생각해 길게 둔다
 private const val TITLE = "함께하는 여행"
 private const val TAG = "GachitaAsk"
 private const val RESULT_MS = 60_000L // 경유지 결과 카드를 보여 두는 시간
-private const val GLEO_ARRIVAL = "GACHITA_ARRIVAL_TASKS" // assets/schema.json의 함수 이름(T40)
+private const val GLEO_ARRIVAL = "GACHITA_ARRIVAL_TASKS" // 이전 판의 함수 이름(T40). 매니페스트에만 남아 있어 실패로 답한다
 private const val GLEO_START = "GACHITA_START_RECORDING"
 private const val GLEO_PAUSE = "GACHITA_PAUSE_RECORDING" // 같은 곳(T41)
 private const val GLEO_RESUME = "GACHITA_RESUME_RECORDING"
@@ -106,10 +82,6 @@ class MainActivity : ComponentActivity() {
     private val recordingIo = Executors.newSingleThreadExecutor()
     private var cancelRecordingStart: (() -> Unit)? = null
     private val clipIo = Executors.newSingleThreadExecutor() // 장면 클립 올리기(T63). 동의 끄기 요청이 클립 묶음 뒤에 서지 않게 따로
-    private val shortPreviewIo = Executors.newSingleThreadExecutor()
-    private val shortPreviewCloseIo = Executors.newSingleThreadExecutor() // disconnect가 읽기를 기다려도 동의 끄기·화면을 막지 않습니다.
-    private val shortExportIo = Executors.newSingleThreadExecutor() // 인코딩이 동의 확인·일반 API를 막지 않게 분리합니다.
-    private val shortExportCheckIo = Executors.newSingleThreadExecutor()
     @Volatile private var clipsAllowed = false // 모두 동의했고 끄기 대기가 없음. 클립을 하나 올릴 때마다 본다
     private val main = Handler(Looper.getMainLooper())
     private lateinit var prefs: SharedPreferences
@@ -135,7 +107,6 @@ class MainActivity : ComponentActivity() {
             clipsAllowed = v.consented && !v.offPending // 끄면 남은 클립을 더 올리지 않는다
             if (transcriptOf != contentScope()) clearTranscript()
             syncTodoScope()
-            checkShortExportState()
             syncCapture() // 동의가 빠졌으면 수음을 먼저 멈춘다
             v.trip?.let { t ->
                 // 등록값은 그 사람의 동의가 꺼지면 서버가 지운다. 꺼졌다 10초 안에 다시 켜져 차가 못 봤어도 세대가 오르므로 세대가 바뀌면 다시 등록한다
@@ -180,12 +151,9 @@ class MainActivity : ComponentActivity() {
     private var transcriptLoading by mutableStateOf(false)
     private var transcriptNote by mutableStateOf("")
     private var transcriptRequest = 0
-    private var shortMuted by mutableStateOf(false)
-    private var shortRequest = 0
     private var carStatus by mutableStateOf(CarStatus())
     private var server by mutableStateOf(DEFAULT_SERVER)
-    private val picked = mutableStateListOf<String>().apply { addAll(FAMILY.map { it.name }) }
-    private var error by mutableStateOf("")
+    private var error by mutableStateOf("") // 여행을 못 만들었거나 이 차의 기록을 지운 까닭. 여행이 없을 때 알림으로 잠깐 보인다
     private var offer by mutableStateOf<Offer?>(null) // 지금 보이는 경유지 제안(T9)
     private var debug = false
     private var pendingRoute: List<String>? = null // 내비에 붙으면 보낼 목적지(디버그 인자)
@@ -225,8 +193,8 @@ class MainActivity : ComponentActivity() {
         if (carTodos.first != key) carTodos = key to deriveActionTodos(box.lines().map { TodoLine("car", it.seq, it.startedAt, it.text) })
         return withCarTodos(carTodos.second, todoState.items)
     }
-    /** 보이고 있는 도착 브리핑. place가 null이면 모든 장소(Gleo로 부름). 주차해 주행 제한이 풀렸을 때만 그린다. */
-    private data class Brief(val place: String?, val arrivalItems: List<SharedTodo>? = null, val final: Boolean = false)
+    /** 보이고 있는 도착 브리핑(C20). 주차해 주행 제한이 풀렸을 때만 그린다. */
+    private data class Brief(val place: String, val arrivalItems: List<SharedTodo>? = null, val final: Boolean = false)
     private var brief by mutableStateOf<Brief?>(null)
     private var nextPlaceName: String? = null // 내비의 다음 도착지 이름(거리와 상관없이 마지막으로 읽은 것). 그곳에 묶인 부탁은 휴게소를 제안하지 않는다
     private var near by mutableStateOf<Approach?>(null) // 도착 전 브리핑(C19·finalNear). 주행 중 조회마다 내비 남은 시간으로 바꾸고 주차하면 지운다
@@ -240,52 +208,6 @@ class MainActivity : ComponentActivity() {
     private val boardingIo = Executors.newSingleThreadExecutor()
     private data class BoardingRequest(val attempt: BoardingInviteAttempt, val token: String, val call: BoardingInviteCall = BoardingInviteCall())
     private var boardingCall: BoardingRequest? = null
-    // 숏폼 그 자리 재생(T43). 장면 클립을 차례로 틀고 자막과 말한 사람을 보인다. 주차 중에만
-    private var short by mutableStateOf<Short?>(null)
-    private var shortAt by mutableStateOf(-1) // 재생 중인 장면. -1이면 틀지 않음
-    private var shortPos by mutableStateOf(0.0) // 그 장면의 초
-    private var shortPaused by mutableStateOf(false)
-    private var shortNote by mutableStateOf("")
-    private var player: MediaPlayer? = null
-    private var shortGen = 0 // 장면을 열 때마다 하나씩. 늦게 끝난 받기가 닫힌 숏폼이나 다른 장면을 건드리지 않게
-    private var shortOf: Pair<String, Int>? = null // 숏폼을 요청할 때의 여행 코드와 동의 세대. 바뀌면(철회·새 여행) 닫는다
-    private var shortFile: File? = null // 지금 트는 장면의 클립(장면마다 다른 파일, 닫으면 지움)
-    private var shortPreviewDownload: ShortPreviewDownload? = null
-    private class NativeShortExport(val scope: ContentScope, val url: String, val preview: Short, val short: Short, val people: List<Person>, val cache: File) {
-        val control = ShortExportControl()
-        val connection = AtomicReference<HttpURLConnection?>(null)
-        val saved = AtomicReference<SavedShortVideo?>(null)
-        @Volatile var verifying = false
-    }
-    private var shortExport: NativeShortExport? = null
-    private var shortExportBusy by mutableStateOf(false)
-    private var shortExportProgress by mutableStateOf(0f)
-    private var shortExportNote by mutableStateOf("")
-    private var savedShortVideo by mutableStateOf<SavedShortVideo?>(null)
-    private var savedShortScope: ContentScope? = null
-    private var sharingShort by mutableStateOf(false)
-    private val shortExportTick = object : Runnable {
-        override fun run() {
-            val job = shortExport ?: return
-            if (!shortExportValid(job)) { cancelShortExport("상태가 바뀌어 영상 만들기를 멈췄어요"); return }
-            if (!job.verifying && !shortExportCheckIo.isShutdown) {
-                job.verifying = true
-                shortExportCheckIo.execute {
-                    val checked = runCatching { verifyShortExport(job) }
-                    job.verifying = false
-                    main.post {
-                        if (shortExport === job && checked.isFailure) cancelShortExport("기록 권한을 확인할 수 없어 영상 만들기를 멈췄어요")
-                    }
-                }
-            }
-            main.postDelayed(this, 2000)
-        }
-    }
-    private val media = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build()
-    /** 사용자 음악은 듣는 동안만 멈춘다. 전화·Gleo 등이 포커스를 가져가면 닫는다(내비 안내처럼 줄여 달라는 것은 시스템이 줄임). */
-    private val playFocus = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT).setAudioAttributes(media)
-        .setOnAudioFocusChangeListener({ if (it == AudioManager.AUDIOFOCUS_LOSS || it == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT) stopShort() }, Handler(Looper.getMainLooper())).build()
-    private val shortTick = object : Runnable { override fun run() { player?.let { shortPos = it.currentPosition / 1000.0; main.postDelayed(this, 200) } } }
     private lateinit var device: String // 보관함의 기기 값. 설치 단위(ADR-0014의 device)
     /** 이 차가 참가시킨 사람의 참가자 토큰(id → 토큰). 그 사람의 동의 켜기와 발화 올리기에 쓴다(T68). 참가할 때 한 번만 온다. */
     private var tokens: Map<String, String> = emptyMap()
@@ -316,7 +238,6 @@ class MainActivity : ComponentActivity() {
      * 시작은 우리 화면이 앞일 때만. 화면 뒤에서 기록 중이 되면 앱을 열 때 시작한다.
      */
     private fun syncCapture() {
-        if (shortOf != null && !shortValid()) stopShort() // 동의 철회·세대·여행이 바뀌면 듣던 숏폼과 받은 클립을 거둔다
         val code = s.trip?.code
         if (!s.recording || code == null || muted) {
             if (!s.recording && muted) mute(false) // 기록이 끝나면 멈춤 표시도 푼다. 다시 켜면 새로 기록한다
@@ -324,7 +245,7 @@ class MainActivity : ComponentActivity() {
             if (CaptureService.running) CaptureService.stop(this)
             return
         }
-        if (short != null || shortStudioActive || destination == Destination.SHORTS) {
+        if (shortStudioActive || destination == Destination.SHORTS) {
             CaptureService.hold(true) // 이미 있는 서비스도 재생 중에는 멈춘 상태를 유지한다.
             return // onResume이 Compose 활성 콜백보다 먼저 와도 쇼츠 탭에서는 새 수음을 시작하지 않는다.
         }
@@ -347,7 +268,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         prefs = getSharedPreferences("car", MODE_PRIVATE)
         handoff = Handoff.of(this) // 화면이 다시 만들어져도 넘긴 상태를 이어받는다
-        cacheDir.listFiles { f -> f.name.startsWith("short") }?.forEach { it.deleteRecursively() } // 중단된 미리듣기·영상 생성 캐시만 정리합니다.
+        cacheDir.listFiles { f -> f.name.startsWith("short") }?.forEach { it.deleteRecursively() } // 중단된 영상 생성 캐시(ShortVideoExport)와 이전 판의 미리듣기 파일만 정리합니다.
         muted = prefs.getBoolean("muted", false)
         // 실행 인자(--es server, --ei widthDp, --es route)는 디버그 빌드에서만 받는다. 밖에서 연 화면이 서버 주소를 바꾸지 못하게
         debug = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
@@ -356,7 +277,7 @@ class MainActivity : ComponentActivity() {
         server = prefs.getString("server", null) ?: DEFAULT_SERVER
         device = prefs.getString("device", null) ?: UUID.randomUUID().toString().also { prefs.edit().putString("device", it).apply() }
         onboarding = Onboarding(this, prefs) { server }
-        if (debug && !intent.getBooleanExtra("onboarding", true)) onboarding.skipForDebug() // --ez onboarding false: 기존 e2e는 처음 화면을 여행 만들기로 본다
+        if (debug && !intent.getBooleanExtra("onboarding", true)) onboarding.skipForDebug() // --ez onboarding false: 처음 화면을 가족 흐름(F2)으로 본다
         // 기본값은 무기한. --el keepMs를 명시한 디버그 빌드에서만 시간에 따른 정리를 시험한다.
         val now = System.currentTimeMillis()
         retentionMs = if (debug && intent.hasExtra("keepMs")) intent.getLongExtra("keepMs", -1).takeIf { it >= 0 } else null
@@ -376,15 +297,13 @@ class MainActivity : ComponentActivity() {
             if (previousCar.gear != it.gear || previousCar.restricted != it.restricted || previousCar.naviEvent != it.naviEvent) {
                 if (arrivalLoading) arrivalNote = "차량 상태가 바뀌어 도착 확인을 멈췄어요"
                 arrivalRequest++; arrivalLoading = false
-                if (it.gear != "P" || it.restricted) brief = null
+                if (it.gear != "P" || it.restricted) { brief = null; arrivalNote = "" } // 도착 확인을 못 한 까닭은 주차한 동안만 보인다
                 if (!it.restricted) near = null // 주차하면 도착 전 카드는 끝(도착 브리핑이 이어 받음)
             }
-            if (it.restricted) cancelShortExport("주행 중에는 영상 만들기를 멈춰요")
             if (it.restricted) onboarding.stopRecording() // 온보딩은 주차 중에만(목소리 녹음도 멈춤)
             // 주행 중에도 대화 기록은 읽기만으로 보인다(시안 2026:2308·2358, T11 완화). 콘텐츠 기록과 그룹 바꾸기는 주차 중에만
             if (it.restricted) { familyOpen = false; if (destination == Destination.SHORTS) destination = Destination.RIDE }
             if (it.restricted || it.gear != "P") closeBoarding() // 주행 제한·기어 변경은 QR을 즉시 가리고 초대를 폐기한다
-            if (it.restricted && shortOf != null) stopShort() // 주행 중에는 숏폼을 틀지 않는다(T11)
             s = s.withGear(it.gear)
             if (previousCar.gear != it.gear) depart()
             val (parking, arrived) = arrivalParking.observe(it.gear, it.restricted)
@@ -413,15 +332,18 @@ class MainActivity : ComponentActivity() {
                     BackHandler(profileMenu || logoutAsk) { profileMenu = false; logoutAsk = false }
                     CompositionLocalProvider(LocalMe provides me) {
                         Box(Modifier.fillMaxSize()) {
+                            // 여행이 없고 온보딩을 마쳤으면 주차 중 처음 화면은 가족 흐름(C16 groups·C43 → '이 가족과 출발'). 닫아도 같은 화면에 남는다
+                            val family = !carStatus.restricted && (familyOpen || t == null && !onboarding.showing)
                             when {
                                 // 프로필 메뉴의 '동승 그룹 변경'·'좌석 배정'도 가족 흐름(C16 groups·C16B)으로 연다. 주차 중에만
-                                familyOpen && !carStatus.restricted -> FamilyFlow(server, profileToken ?: onboarding.token, onClose = { familyOpen = false },
+                                family -> FamilyFlow(server, profileToken ?: onboarding.token, onClose = { familyOpen = false },
                                     onStart = ::startGroupTrip, jump = familyJump, onJumped = { familyJump = null })
                                 t != null -> TripScreen(t)
-                                carStatus.restricted -> SetupLocked()
-                                onboarding.showing -> OnboardingScreen(onboarding, carStatus.gear) { familyOpen = true } // C08 '가족 그룹 만들기' → 가족 흐름(F2)
-                                else -> Setup()
+                                carStatus.restricted -> OnboardingScreen(onboarding, carStatus.gear, driving = true) {} // 주행 중 여행이 없으면 시작 화면(C01)만, 단추는 잠근다(T11)
+                                else -> OnboardingScreen(onboarding, carStatus.gear) { familyOpen = true } // C08 '가족 그룹 만들기' → 가족 흐름(F2)
                             }
+                            if (t == null) CarToast(error)
+                            LaunchedEffect(error) { if (error.isNotEmpty()) { kotlinx.coroutines.delay(5_000); error = "" } }
                             if (profileMenu) MenuOverlay(t)
                             if (logoutAsk) LogoutConfirm(onCancel = { logoutAsk = false }, onLogout = { logoutAsk = false; familyOpen = false; logout() })
                         }
@@ -456,7 +378,7 @@ class MainActivity : ComponentActivity() {
     override fun onStop() {
         appVisible = false; arrivalRequest++; arrivalLoading = false; arrivalNote = ""
         todoState = todoState.copy(sequence = todoState.sequence + 1, loading = false)
-        closeBoarding(); stopShort(); super.onStop()
+        closeBoarding(); super.onStop()
     }
 
     override fun onResume() {
@@ -474,11 +396,10 @@ class MainActivity : ComponentActivity() {
         boardingIo.shutdown() // 발급 중 닫힌 요청은 같은 실행기에서 초대를 폐기하고 끝난다
         cancelRecordingStart?.invoke()
         recordingIo.shutdownNow()
-        stopShort()
         main.removeCallbacksAndMessages(null) // 조회, 제안 시간 초과, 결과 카드 닫기
         if (Live.onHeard == ::heard) Live.onHeard = null
         if (!isChangingConfigurations) { handoff.stop(); CaptureService.stop(this) } // 동의를 확인할 화면이 없어지면 수음도 멈춘다
-        car.stop(); io.shutdown(); stopsIo.shutdownNow(); clipIo.shutdownNow(); shortPreviewIo.shutdownNow(); shortPreviewCloseIo.shutdown(); shortExportIo.shutdownNow(); shortExportCheckIo.shutdownNow(); super.onDestroy()
+        car.stop(); io.shutdown(); stopsIo.shutdownNow(); clipIo.shutdownNow(); super.onDestroy()
     }
 
     /** 통신은 한 줄로 차례대로 돌리고 결과만 메인 스레드로 돌려받는다. */
@@ -489,26 +410,6 @@ class MainActivity : ComponentActivity() {
     private fun keep(got: Server.Got): Trip { prefs.edit().putString("trip", Live.seal(this).line(got.json)).apply(); return got.trip }
 
     private fun reason(e: Throwable) = failureText(e)
-
-    private fun createTrip() {
-        val members = FAMILY.filter { it.name in picked }
-        val url = server
-        prefs.edit().putString("server", url).apply()
-        s = s.copy(busy = true); error = ""
-        bg({
-            val api = Server(url)
-            val code = api.createTrip(TITLE).trip.code
-            val got = members.associate { api.join(code, it) }
-            api.trip(code)!! to got
-        }) { r ->
-            r.onSuccess { (got, mine) ->
-                tokens = mine
-                prefs.edit().putString("tokens", Live.seal(this).line(JSONObject(mine).toString())).commit() // 다시 받을 수 없는 값이라 디스크에 쓰고 돌아온다
-                s = Session(gear = s.gear, ours = mine.keys).withTrip(keep(got))
-            }
-                .onFailure { s = s.copy(busy = false); error = "여행을 만들지 못했어요 · ${reason(it)}" }
-        }
-    }
 
     /** '이 가족과 출발'(C13): 그룹의 저장된 자리·각자 동의로 여행을 만들고, 이 차가 맡을 참가자 토큰(나와 내 아이)을 받는다(T133). */
     private fun startGroupTrip(groupId: String) {
@@ -1087,45 +988,18 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun changeTodo(item: SharedTodo, status: String) {
-        val scope = todoScope() ?: return
-        syncTodoScope()
-        if (!vehicleParked() || todoState.loading || !s.online) return
-        val (next, attempt) = todoState.begin(); todoState = next
-        bg({
-            val api = Server(scope.server)
-            val changed = api.todoStatus(scope.trip, scope.token, item.id, scope.generation, item.version, status)
-            require(changed.first == scope.generation && changed.second.id == item.id) { "동의 세대나 항목이 바뀌었어요" }
-            api.todos(scope.trip, scope.token)
-        }) { result ->
-            if (isDestroyed || todoScope() != scope || !todoState.accepts(attempt)) return@bg
-            result.onSuccess { data ->
-                todoState = todoState.received(attempt, data, System.currentTimeMillis())
-                if (data.generation != scope.generation) { brief = null; refresh() } else reconcileBrief()
-            }
-                .onFailure { e ->
-                    val conflict = e is ApiError && e.status in setOf(404, 409)
-                    todoState = todoState.failed(attempt, if (conflict) "다른 곳에서 바뀐 항목이에요. 새 목록을 확인한 뒤 다시 선택해 주세요" else "변경을 확인하지 못했어요 · ${reason(e)}",
-                        e is ApiError && e.status in setOf(401, 403, 404))
-                    if (conflict) {
-                        val note = todoState.note
-                        loadTodos(force = true) { if (todoScope() == scope) todoState = todoState.copy(note = note) }
-                    } else if (e is ApiError && e.status in setOf(401, 403)) { brief = null; refresh() }
-                }
-        }
-    }
-
     /** 이름·위치를 SDK로 읽고 실제 P 상태를 재확인합니다. 좌표가 없거나 서버가 거절하면 도착했다고 말하지 않습니다. */
     private fun arrive() {
         syncTodoScope()
         val scope = todoScope() ?: return
         if (!vehicleParked() || !appVisible || arrivalLoading) return
         val request = ++arrivalRequest; val navigation = carStatus.naviEvent
-        arrivalLoading = true; arrivalNote = "도착 위치를 확인하고 있어요"
+        arrivalLoading = true; arrivalNote = ""
         fun current() = !isDestroyed && appVisible && arrivalRequest == request && todoScope() == scope && vehicleParked() && carStatus.naviEvent == navigation
+        // 도착을 확인하지 못하면 카드를 띄우지 않고 까닭만 함께 타는 중의 알림 자리에 남긴다(RideOverview, 주차한 동안만)
         fun failed(note: String) {
             if (!current()) return
-            arrivalLoading = false; arrivalNote = note; brief = Brief(null); loadTodos(force = true)
+            arrivalLoading = false; arrivalNote = note; loadTodos(force = true)
         }
         car.nextArrivalPlace place@{ place, final ->
             if (!current()) return@place
@@ -1159,7 +1033,6 @@ class MainActivity : ComponentActivity() {
                                 else -> "도착 근거가 바뀌었어요. 다시 확인해 주세요"
                             }); return@checked
                         }
-                        arrivalNote = if (answer.items.isEmpty()) "이 장소의 미완료 할 일이 없어요" else "서버에서 도착과 미완료 항목을 확인했어요"
                         if (answer.items.isNotEmpty()) {
                             brief = Brief(place.name, answer.items, final)
                             car.speak(sharedBriefingLine(place.name, answer.items))
@@ -1179,7 +1052,8 @@ class MainActivity : ComponentActivity() {
     private fun gleo(i: Intent?) {
         val fn = i?.action?.substringAfterLast('.') ?: return
         when (fn) {
-            GLEO_ARRIVAL -> arrivalTasks() // 이전 APK 호출 호환. 새 schema의 세 진입점은 녹음 제어다.
+            // 이전 판 호출 호환. 장소별 할 일 목록(옛 카드)은 지웠고 도착 안내는 주차 뒤 도착 브리핑(C20)이 맡는다. 새 schema의 세 진입점은 녹음 제어다.
+            GLEO_ARRIVAL -> reply(fn, false, "Arrival tasks are no longer available by voice. The arrival briefing appears on the car screen after parking.")
             GLEO_START -> {
                 Log.i(TAG, "Gleo 요청 $fn")
                 when {
@@ -1187,7 +1061,7 @@ class MainActivity : ComponentActivity() {
                     checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED ->
                         reply(fn, false, "Microphone permission is required. Open Gachita and grant microphone permission while parked.")
                     else -> {
-                        destination = Destination.RIDE; stopShort(); closeBoarding()
+                        destination = Destination.RIDE; closeBoarding()
                         startRecording { ok, message -> recordingReply(fn, ok, message) }
                     }
                 }
@@ -1206,7 +1080,7 @@ class MainActivity : ComponentActivity() {
                     checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED ->
                         recordingReply(fn, false, "Microphone permission is required before recording can resume.")
                     else -> {
-                        destination = Destination.RIDE; stopShort(); closeBoarding()
+                        destination = Destination.RIDE; closeBoarding()
                         mute(false); justResumed = true; syncCapture()
                         recordingReply(fn, true, "Recording is enabled again. Audio capture resumes when the microphone is available after this voice command.")
                     }
@@ -1325,132 +1199,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // ---- 숏폼 그 자리 재생(T43, #63 계약: GET /shortform, 클립은 참가자 토큰 머리말) ----
-
-    private fun shortExportValid(job: NativeShortExport): Boolean = shortExport === job && !job.control.isCancelled &&
-        appVisible && !isDestroyed && !carStatus.restricted && s.online && contentScope() == job.scope && server == job.url && short === job.preview
-
-    private fun checkShortExportState() {
-        shortExport?.let { if (!shortExportValid(it)) cancelShortExport("기록 상태가 바뀌어 영상 만들기를 멈췄어요") }
-        if (savedShortScope != null && savedShortScope != contentScope()) {
-            savedShortScope = null; savedShortVideo = null; sharingShort = false
-        }
-    }
-
-    private fun verifyShortExport(job: NativeShortExport) {
-        if (job.control.isCancelled) throw CancellationException()
-        val generation = JSONObject(Server(job.url).transcript(job.scope.code, job.scope.token)).getInt("generation")
-        if (generation != job.scope.generation) throw CancellationException("기록 동의가 바뀌었어요")
-        if (job.control.isCancelled) throw CancellationException()
-    }
-
-    private fun discardUnshownVideo(job: NativeShortExport) {
-        job.saved.getAndSet(null)?.let { runCatching { contentResolver.delete(it.uri, null, null) } }
-    }
-
-    private fun cancelShortExport(note: String = "영상 만들기를 취소했어요") {
-        val job = shortExport ?: return
-        shortExport = null
-        job.control.cancel()
-        job.connection.getAndSet(null)?.disconnect()
-        job.cache.deleteRecursively()
-        discardUnshownVideo(job)
-        main.removeCallbacks(shortExportTick)
-        shortExportBusy = false; shortExportProgress = 0f; shortExportNote = note
-    }
-
-    private fun makeShortVideo() {
-        val preview = short ?: return
-        val scope = contentScope() ?: return
-        val trip = s.trip ?: return
-        if (shortExportBusy || !appVisible || carStatus.restricted || !s.online || !shortValid() || shortExportIo.isShutdown) return
-        var seconds = 0.0
-        val scenes = preview.scenes.takeWhile { scene -> (seconds < 45.0).also { if (it) seconds += scene.seconds } }
-        if (scenes.isEmpty()) return
-        val directory = File(cacheDir, "short-export-input-${UUID.randomUUID()}")
-        if (!directory.mkdirs()) { shortExportNote = "영상 만들 공간을 준비하지 못했어요"; return }
-        val job = NativeShortExport(scope, server, preview, preview.copy(scenes = scenes), trip.people.toList(), directory)
-        shortExport = job; shortExportBusy = true; shortExportProgress = 0f; shortExportNote = "장면 소리를 준비하고 있어요"
-        savedShortVideo = null; savedShortScope = null; sharingShort = false
-        shortPaused = true
-        cancelShortPreview()
-        player?.release(); player = null
-        shortFile?.delete(); shortFile = null
-        shortPos = 0.0
-        main.removeCallbacks(shortTick)
-        CaptureService.hold(true)
-        main.removeCallbacks(shortExportTick); main.postDelayed(shortExportTick, 2000)
-        shortExportIo.execute {
-            val result = runCatching {
-                verifyShortExport(job)
-                val api = Server(job.url)
-                val clips = job.short.scenes.mapIndexed { index, scene ->
-                    verifyShortExport(job)
-                    val file = File(job.cache, "scene-$index.wav")
-                    api.downloadShort(shortClipAddress(job.url, job.scope.code, scene.clip), job.scope.token, file,
-                        cancelled = { job.control.isCancelled }, connection = { active ->
-                            job.connection.set(active)
-                            if (job.control.isCancelled) active?.disconnect()
-                        })
-                    verifyShortExport(job)
-                    main.post { if (shortExportValid(job)) shortExportProgress = .1f * (index + 1) / job.short.scenes.size }
-                    file
-                }
-                verifyShortExport(job)
-                main.post { if (shortExportValid(job)) shortExportNote = "목소리와 캐릭터로 영상을 만들고 있어요" }
-                val made = exportShortVideo(applicationContext, job.short, clips, job.people, job.control,
-                    beforePublish = { verifyShortExport(job) },
-                    onProgress = { progress -> main.post { if (shortExportValid(job)) shortExportProgress = .1f + .9f * progress.coerceIn(0f, 1f) } })
-                job.saved.set(made)
-                verifyShortExport(job)
-                made
-            }
-            job.cache.deleteRecursively()
-            if (result.isFailure || job.control.isCancelled) discardUnshownVideo(job)
-            main.post {
-                if (!shortExportValid(job)) { job.control.cancel(); discardUnshownVideo(job); return@post }
-                shortExport = null; shortExportBusy = false; main.removeCallbacks(shortExportTick)
-                result.onSuccess { made ->
-                    // 취소 쪽과 원자적으로 소유권을 나눕니다. 이미 회수한 결과를 UI가 다시 전달하지 않습니다.
-                    val owned = job.saved.getAndSet(null)
-                    if (owned == null) { shortExportNote = "영상 만들기를 취소했어요"; return@onSuccess }
-                    savedShortVideo = owned; savedShortScope = job.scope
-                    shortExportProgress = 1f; shortExportNote = "저장 완료 · MP4"
-                }.onFailure { failure ->
-                    shortExportProgress = 0f
-                    shortExportNote = when (failure) {
-                        is CancellationException -> "기록 상태가 바뀌어 영상 만들기를 멈췄어요"
-                        is ApiError -> "장면 소리를 받지 못했어요 · 서버 응답 ${failure.status}"
-                        else -> failure.message?.take(120)?.takeIf { it.isNotBlank() } ?: "영상을 만들지 못했어요. 다시 시도해 주세요"
-                    }
-                }
-            }
-        }
-    }
-
-    private fun shareShortVideo() {
-        val video = savedShortVideo ?: return
-        val scope = savedShortScope ?: return
-        if (sharingShort || shortExportBusy || !appVisible || carStatus.restricted || !s.online || contentScope() != scope) return
-        val url = server
-        sharingShort = true
-        bg({ JSONObject(Server(url).transcript(scope.code, scope.token)).getInt("generation") }) { result ->
-            sharingShort = false
-            if (isDestroyed || !appVisible || carStatus.restricted || contentScope() != scope || savedShortVideo != video || server != url) return@bg
-            if (result.getOrNull() != scope.generation) { shortExportNote = "기록 권한을 확인하지 못해 공유를 열지 않았어요"; return@bg }
-            val send = Intent(Intent.ACTION_SEND).apply {
-                type = "video/mp4"
-                putExtra(Intent.EXTRA_STREAM, video.uri)
-                putExtra(Intent.EXTRA_TITLE, video.displayName)
-                clipData = ClipData.newUri(contentResolver, "가치타 쇼츠", video.uri)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
-            runCatching { startActivity(Intent.createChooser(send, "쇼츠 공유").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)) }
-                .onFailure { shortExportNote = "이 차에는 영상을 공유할 앱이 없어요. 영상은 갤러리에 저장됐어요" }
-        }
-    }
-
-    /** 녹음에 동의한, 이 차가 참가시킨 사람의 토큰. 숏폼은 기록본처럼 동의한 참가자만 본다. */
+    /** 녹음에 동의한, 이 차가 참가시킨 사람의 토큰. 콘텐츠 기록은 기록본처럼 동의한 참가자만 본다. */
     private fun viewer(): String? = s.trip?.people?.firstOrNull { it.consent && it.id in tokens }?.let { tokens[it.id] }
 
     private fun contentScope(): ContentScope? {
@@ -1482,109 +1231,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** 숏폼을 요청할 때와 같은 여행·동의 세대이고, 아직 동의한 시청자가 있다. */
-    private fun shortValid(): Boolean = !s.offPending && shortOf?.let { (code, gen) -> contentScope()?.let { it.code == code && it.generation == gen } } == true
-
-    private fun showShort() {
-        val t = s.trip ?: return
-        if (s.offPending || carStatus.restricted) return
-        val request = ++shortRequest
-        val tok = viewer() ?: run { shortNote = "기록에 동의한 사람만 볼 수 있어요"; return }
-        val url = server
-        shortNote = "숏폼을 받고 있어요"
-        shortOf = t.code to t.generation
-        bg({ parseShort(Server(url).shortform(t.code, tok)) }) { r ->
-            if (isDestroyed || request != shortRequest) return@bg
-            if (!shortValid()) { shortOf = null; shortNote = ""; return@bg } // 받는 사이 동의 철회·새 여행
-            r.onSuccess { sh ->
-                if (sh.generation != s.trip?.generation) { stopShort(); refresh(); return@bg }
-                if (sh.scenes.isEmpty()) { shortOf = null; shortNote = "아직 숏폼으로 만들 장면 클립이 없어요"; return@bg }
-                if (carStatus.restricted || handoff.state != Handoff.State.OFF) { shortOf = null; shortNote = ""; return@bg }
-                if (getSystemService(AudioManager::class.java).requestAudioFocus(playFocus) != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) { shortOf = null; shortNote = "지금은 소리를 낼 수 없어요"; return@bg }
-                short = sh; shortNote = ""
-                play(0)
-            }.onFailure { shortOf = null; shortNote = "숏폼을 받지 못했어요 · ${reason(it)}" }
-        }
-    }
-
-    /** 장면 i의 클립을 받아 튼다. 끝나면 다음 장면, 마지막이면 닫는다. 트는 동안은 수음을 멈춰 재생 소리가 기록에 다시 들어가지 않게 한다. */
-    private fun play(i: Int) {
-        if (shortExportBusy) return
-        val sh = short ?: return
-        val scope = contentScope()
-        val url = server
-        val clip = scope?.let { sh.scenes.getOrNull(i)?.let { scene -> runCatching { shortClipAddress(url, scope.code, scene.clip) }.getOrNull() } }
-        if (clip == null || !appVisible || carStatus.restricted || !shortValid() || shortPreviewIo.isShutdown) return stopShort()
-        cancelShortPreview()
-        player?.release(); player = null // 다음 장면을 받는 동안 지난 플레이어를 '멈춤'이 다시 틀지 않게
-        shortFile?.delete(); shortFile = null
-        shortAt = i; shortPos = 0.0; shortPaused = false
-        CaptureService.hold(true)
-        val gen = shortGen
-        val f = runCatching { File.createTempFile("short", ".wav", cacheDir) }.getOrElse { shortNote = "재생 공간을 준비하지 못했어요"; return stopShort() } // 요청마다 다른 파일(화면이 다시 만들어져도 겹치지 않게). 이 요청이 만든 것만 지운다
-        val request = ShortPreviewDownload(f) { connection ->
-            // 종료 뒤 늦게 등록된 연결은 이미 취소된 worker가 직접 정리합니다.
-            if (runCatching { shortPreviewCloseIo.execute { runCatching { connection.disconnect() } } }.isFailure) connection.disconnect()
-        }
-        shortPreviewDownload = request
-        shortPreviewIo.execute {
-            val result = runCatching {
-                Server(url).downloadShort(clip, scope.token, f, { request.isCancelled }, request::trackConnection, request::openOutput)
-                request.ready()
-            }
-            if (result.isFailure) request.cancel()
-            main.post {
-                if (isDestroyed || !appVisible || gen != shortGen || short !== sh || shortPreviewDownload !== request) { request.cancel(); return@post }
-                if (contentScope() != scope || server != url || carStatus.restricted || !shortValid()) { request.cancel(); return@post stopShort() }
-                result.exceptionOrNull()?.let { request.cancel(); shortNote = "클립을 받지 못했어요 · ${reason(it)}"; return@post stopShort() }
-                val received = request.takeFile() ?: return@post
-                shortPreviewDownload = null
-                shortFile = received
-                val mp = MediaPlayer()
-                runCatching { mp.setAudioAttributes(media); mp.setDataSource(received.path); mp.prepare(); mp.setOnCompletionListener { if (gen == shortGen) { if (i + 1 < sh.scenes.size) play(i + 1) else { mp.seekTo(0); shortPos = 0.0; shortPaused = true } } }; mp.setVolume(if (shortMuted) 0f else 1f, if (shortMuted) 0f else 1f); if (!shortPaused) mp.start() }
-                    .onFailure { Log.w(TAG, "클립 재생 실패", it); mp.release(); shortNote = "클립을 틀지 못했어요"; return@post stopShort() }
-                player = mp
-                Log.i(TAG, "숏폼 장면 ${i + 1}/${sh.scenes.size} ${received.length()}바이트")
-                main.removeCallbacks(shortTick); main.post(shortTick)
-            }
-        }
-    }
-
-    private fun cancelShortPreview() {
-        shortGen++
-        shortPreviewDownload?.cancel()
-        shortPreviewDownload = null
-    }
-
-    private fun stopShort() {
-        cancelShortExport()
-        cancelShortPreview()
-        shortRequest++
-        if (shortNote == "숏폼을 받고 있어요") shortNote = ""
-        player?.release(); player = null
-        main.removeCallbacks(shortTick)
-        val open = short != null
-        short = null; shortAt = -1; shortOf = null
-        shortFile?.delete(); shortFile = null // 받은 클립은 남기지 않는다
-        if (open) { // 연 숏폼이 있으면(첫 장면을 열기 전에 실패해도) 포커스와 수음을 돌려준다. hold(false)는 멈추지 않았으면 아무것도 안 함
-            getSystemService(AudioManager::class.java).abandonAudioFocusRequest(playFocus)
-            if (handoff.state == Handoff.State.OFF) CaptureService.hold(false)
-            Log.i(TAG, "숏폼 닫음")
-            syncCapture() // 듣는 사이 '다시 기록'을 눌렀거나 동의가 바뀌었으면 지금 상태에 맞춘다
-        }
-    }
-
-    private fun toggleShortPlayback() {
-        if (shortExportBusy) return
-        if (shortPreviewDownload != null) { shortPaused = !shortPaused; return }
-        val current = player
-        if (current == null) { play(shortAt.coerceAtLeast(0)); return }
-        shortPaused = !shortPaused
-        runCatching { if (shortPaused) current.pause() else current.start() }
-        main.removeCallbacks(shortTick)
-        if (!shortPaused) main.post(shortTick)
-    }
-
     private fun mute(on: Boolean) { prefs.edit().putBoolean("muted", on).commit(); muted = on; Log.i(TAG, "기록 멈추기 $on") }
 
     /** Gleo에 결과를 돌려준다(Callback Schema: message는 영어, 항목은 data). 말은 Gleo가 한다. ponytail: 실패 status 값은 Gleo 승인 뒤 확인. */
@@ -1593,17 +1239,6 @@ class MainActivity : ComponentActivity() {
         data?.let { r.put("data", it) }
         sendBroadcast(Intent("ai.pleos.playground.intent.action.APP_ACTION_RESPONSE").putExtra("packageName", packageName).putExtra("response", r.toString()))
         Log.i(TAG, "Gleo 응답 $fn ${r.getString("status")}")
-    }
-
-    private fun arrivalTasks() {
-        syncTodoScope(); brief = Brief(null)
-        loadTodos(force = true) { result ->
-            result.onSuccess { data ->
-                val open = data.items.filter { it.pending }
-                val message = if (open.isEmpty()) "There are no pending tasks in the server record." else "Found ${open.size} pending tasks in the server record. The list is available while parked."
-                reply(GLEO_ARRIVAL, true, message, JSONArray(open.map { JSONObject().put("place", it.place).put("task", it.text) }).toString())
-            }.onFailure { reply(GLEO_ARRIVAL, false, "The server task list could not be refreshed. Please retry after checking the connection and passenger consent.") }
-        }
     }
 
     /** 제안을 결과 단계로 닫고 말로 알린다. 그 제안이 이미 바뀌었으면(새 여행) 화면은 두고 말도 하지 않는다. */
@@ -1617,62 +1252,7 @@ class MainActivity : ComponentActivity() {
     // ---- 화면(T83, 시안: 피그마 '개편 · 차와 폰' C1~C7) ----
     // 칸의 자리와 크기를 고정하고 칸 안의 내용만 바꾼다. 카드가 생기고 사라져도 다른 칸이 밀리지 않는다(주행 중 화면은 움직이지 않아야 함, T11).
     // 넓은 창: 머리 줄 / 왼쪽 무대(기록 상태 · 초점 칸 · 부탁·할 일 수) / 오른쪽(좌석 지도 · 주차 중 도구 · 기록 동의).
-    // 숏폼과 동승 연결은 주차 중에만, 왼쪽 무대 전체를 쓴다.
-
-    /** 여행 만들기(C6): 같이 탈 가족을 캐릭터 카드로 고르고 'N명으로 여행 만들기'. 서버 주소는 화면에 두지 않고 디버그 실행 인자(--es server)로만 바꾼다. */
-    @Composable
-    private fun Setup() {
-        val c = MaterialTheme.colorScheme
-        Column(Modifier.fillMaxSize().padding(32.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
-            TripHeader(Shell.PARKED, carStatus.gear, online = true, listening = false)
-            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                OutlinedButton(onClick = { onboarding.reopen() }, shape = RoundedCornerShape(10.dp)) { Text("계정·목소리 등록", fontSize = 24.sp) }
-                OutlinedButton(onClick = { familyOpen = true }, shape = RoundedCornerShape(10.dp)) { Text("우리 가족", fontSize = 24.sp) }
-            }
-            Spacer(Modifier.height(8.dp))
-            Text("누구랑 같이 타나요?", fontSize = 40.sp, fontWeight = FontWeight.Bold)
-            Text("같이 타는 가족을 골라 주세요", color = c.onSurfaceVariant)
-            Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
-                FAMILY.forEach { m ->
-                    val on = m.name in picked
-                    MemberCard(m, on, Modifier.weight(1f)) { if (on) picked.remove(m.name) else picked.add(m.name) }
-                }
-            }
-            Spacer(Modifier.weight(1f))
-            Text(error, color = c.error, maxLines = 2) // 비어 있어도 자리를 둔다
-            Button(::createTrip, Modifier.fillMaxWidth().height(96.dp), enabled = !s.busy && picked.isNotEmpty(), shape = RoundedCornerShape(10.dp)) {
-                Text(if (s.busy) "여행을 만들고 있어요" else "${picked.size}명으로 여행 만들기", fontSize = 30.sp, fontWeight = FontWeight.Bold)
-            }
-        }
-    }
-
-    /** 가족 한 사람(C6). 누르면 같이 탐·안 탐을 바꾼다(체크 상태라 화면 트리에 checked로 보인다). */
-    @Composable
-    private fun MemberCard(m: Member, on: Boolean, modifier: Modifier, toggle: () -> Unit) {
-        val c = MaterialTheme.colorScheme
-        Surface(
-            checked = on, onCheckedChange = { toggle() }, modifier = modifier, shape = RoundedCornerShape(32.dp),
-            color = if (on) c.primaryContainer else c.surface, border = BorderStroke(3.dp, if (on) c.onPrimaryContainer else c.outlineVariant),
-        ) {
-            Column(Modifier.padding(vertical = 28.dp, horizontal = 12.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Character(m.seat.ordinal, 112.dp)
-                Text(m.name, fontSize = 30.sp, fontWeight = FontWeight.Bold, color = c.onSurface)
-                Text(m.seat.label, color = c.onSurfaceVariant, maxLines = 1)
-                Text(if (on) "✓ 같이 타요" else "안 타요", color = if (on) c.onPrimaryContainer else c.onSurfaceVariant)
-            }
-        }
-    }
-
-    /** 주행 제한 중에는 여행 만들기(가족 고르기)가 설정이라 가린다(T11, NO_SETUP). */
-    @Composable
-    private fun SetupLocked() {
-        Column(Modifier.fillMaxSize().padding(32.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
-            TripHeader(Shell.RIDE, carStatus.gear, online = true, listening = false, chip = false)
-            Spacer(Modifier.height(8.dp))
-            Text("누구랑 같이 타나요?", fontSize = 40.sp, fontWeight = FontWeight.Bold)
-            Card { Text("주차(P)한 뒤 여행을 만들 수 있어요", fontSize = 30.sp, fontWeight = FontWeight.Bold) }
-        }
-    }
+    // 동승 연결은 주차 중에만, 왼쪽 무대 전체를 쓴다.
 
     // 녹음 시계(A D17–D20 '00:12:48'): 실제로 받아 적는 동안만 흐르고 멈추면 그 자리에 선다. 여행마다 prefs "recClock"({여행}:{ms}) 하나에 남긴다
     private var recordedMs by mutableLongStateOf(0L)
@@ -1708,11 +1288,7 @@ class MainActivity : ComponentActivity() {
         }
         val chars = if (f4Mock != null) MOCK_CHARS else memberChars
         val t = remember(raw, chars) { raw.copy(people = raw.people.map { p -> chars[p.id]?.let { p.copy(character = it) } ?: p }) }
-        if (boarding.page == BoardingPage.QR && parked && s.gear == "P") {
-            BoardingQrScreen(boarding, s, ::boardingAction)
-            return
-        }
-        val rolling = s.recording && !muted && shortAt < 0 && handoff.state == Handoff.State.OFF && Live.mic == Mic.ON
+        val rolling = s.recording && !muted && handoff.state == Handoff.State.OFF && Live.mic == Mic.ON
         LaunchedEffect(t.code, rolling) {
             if (recordedTrip != t.code) {
                 recordedTrip = t.code
@@ -1730,10 +1306,10 @@ class MainActivity : ComponentActivity() {
             if (destination == Destination.CONVERSATION || (destination == Destination.SHORTS && afterStart != null)) loadTranscript()
         }
         val b = mockBrief() ?: brief?.takeIf { vehicleParked() && offer?.stage.let { it == null || it == Offer.Stage.FINDING } } // 실제 P이고 제한이 풀린 동안만, 휴게소 제안이 먼저
-        val shell = tripShell(parked, destination == Destination.RIDE && b?.place != null && boarding.page == BoardingPage.HIDDEN, destination == Destination.SHORTS,
+        val shell = tripShell(parked, destination == Destination.RIDE && b != null && boarding.page == BoardingPage.HIDDEN, destination == Destination.SHORTS,
             talk = destination == Destination.CONVERSATION)
         // C17 계열(기록 중인 함께 타는 중)은 머리 줄에 '연결됨'이 없다. 대화 기록(C44)·끝난 여행(2026:2410)·기록 전에는 있다
-        val recordingView = destination == Destination.RIDE && b == null && boarding.page == BoardingPage.HIDDEN && !takeover() &&
+        val recordingView = destination == Destination.RIDE && b == null && boarding.page == BoardingPage.HIDDEN &&
             (mockDriving || s.recording && t.status != "ended")
         // 여행 화면의 '내 얼굴'은 이 여행에서 내 자리 캐릭터(없으면 계정 캐릭터)
         val myFace = mePerson(t.people)?.takeIf { it.character.isNotBlank() }?.let(::faceRes) ?: charDrawable(onboarding.character)
@@ -1746,7 +1322,7 @@ class MainActivity : ComponentActivity() {
                     height = if (shell == Shell.TALK) 80.dp else 76.dp, style = if (shell == Shell.TALK) TalkTabText else CarText.Label, onSelect = { i ->
                         val tab = Destination.entries[i]
                         if (destination != tab) {
-                            stopShort(); closeBoarding()
+                            closeBoarding()
                             // 주차·종료한 여행의 콘텐츠 기록 탭은 여행 마무리(C22)부터. 거기서 '콘텐츠 기록으로'를 누르면 갤러리
                             afterStart = if (tab == Destination.SHORTS && t.status in listOf("parked", "ended")) AfterStep.UPLOAD else null
                             destination = tab
@@ -1754,14 +1330,12 @@ class MainActivity : ComponentActivity() {
                     })
                 Box(Modifier.weight(1f).fillMaxWidth()) {
                     when {
-                        takeover() -> Takeover(t, Modifier.fillMaxSize())
                         boarding.page != BoardingPage.HIDDEN && parked -> BoardingPanel(boarding, s, carStatus.seats, Modifier.fillMaxSize(), ::boardingAction)
                         destination == Destination.CONVERSATION -> Conversations(t, Modifier.fillMaxSize())
                         destination == Destination.SHORTS && parked && afterStart != null -> AfterTripTab(t, afterStart!!, Modifier.fillMaxSize())
                         destination == Destination.SHORTS && parked -> ShortsLibrary(t, Modifier.fillMaxSize())
-                        b?.place != null -> ArrivalBrief(b.place, b.final, b.arrivalItems ?: placeAsks(b.place, todoList), if (f4Mock != null) F4Mock.people else t.people,
+                        b != null -> ArrivalBrief(b.place, b.final, b.arrivalItems ?: placeAsks(b.place, todoList), if (f4Mock != null) F4Mock.people else t.people,
                             onMain = { arrivalMain(b) }, modifier = Modifier.fillMaxSize(), details = if (f4Mock == "final") F4Mock.lodgeDetails else emptyMap())
-                        b != null -> BriefCard(b, Modifier.fillMaxSize())
                         else -> RideOverview(t, Modifier.fillMaxSize())
                     }
                 }
@@ -1788,7 +1362,7 @@ class MainActivity : ComponentActivity() {
                 profileMenu = false
                 if (t != null && !familyOpen) { destination = Destination.RIDE; openBoarding() } else { familyJump = FamilyJump.SEATS; familyOpen = true }
             },
-            onGallery = { profileMenu = false; familyOpen = false; stopShort(); closeBoarding(); afterStart = null; destination = Destination.SHORTS },
+            onGallery = { profileMenu = false; familyOpen = false; closeBoarding(); afterStart = null; destination = Destination.SHORTS },
             onLogout = { profileMenu = false; logoutAsk = true },
         )
     }
@@ -1805,7 +1379,7 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * 함께 타는 중. 기록 중(일시정지·Gleo·쇼츠·마이크 막힘 포함)은 C17 계열(C17·C17p·C19·C19p·C21·C21p·resumed·finalNear·finalPaused):
+     * 함께 타는 중. 기록 중(일시정지·Gleo·마이크 막힘 포함)은 C17 계열(C17·C17p·C19·C19p·C21·C21p·resumed·finalNear·finalPaused):
      * 가운데 칸(방금 받아 적은 말 / 도착 전 카드 / 휴게소 제안) → 일행 → 아래 녹음 막대(⏸·● · 경과 시간 · 파형 · ■).
      * 기록 전과 끝난 여행(2026:2410)은 기록 상태 → 가운데 칸 → 일행 → 큰 단추.
      */
@@ -1836,9 +1410,10 @@ class MainActivity : ComponentActivity() {
                 MicLevels { v -> main.post { Live.levels = (Live.levels + (v * 50f - 55f)).takeLast(WAVE_BARS) } }.also { it.start() } else null
             onDispose { meter?.stop() }
         }
-        val st = if (mock != null) driveStatus(true, mockPaused, false, Handoff.State.OFF, Mic.ON, "", false, false, false, emptyList(), resumed = mock == "driveResumed")
-            else driveStatus(s.recording, muted, shortAt >= 0, handoff.state, Live.mic, Live.why, s.offPending, s.waiting, s.gear == "P",
+        val st = if (mock != null) driveStatus(true, mockPaused, Handoff.State.OFF, Mic.ON, "", false, false, false, emptyList(), resumed = mock == "driveResumed")
+            else driveStatus(s.recording, muted, handoff.state, Live.mic, Live.why, s.offPending, s.waiting, s.gear == "P",
             t.people.filterNot { it.consent }.map { it.name }, ended = ended, resumed = justResumed)
+        val note = s.note.ifBlank { arrivalNote } // 도착을 확인하지 못한 까닭(arrive)은 주차한 동안만 남는다
         // 도착 전 카드: 내비가 다음 장소까지 5분 이하라고 알렸고 그 장소의 서버 할 일이 있을 때(C19·finalNear)
         val nearAsks = (mockApproach() ?: near?.takeIf { it.trip == t.code && !parked })?.let { a ->
             (if (mock != null) mockNearAsks() else placeAsks(a.place, todoList)).takeIf { it.isNotEmpty() }?.let { a to it }
@@ -1859,9 +1434,9 @@ class MainActivity : ComponentActivity() {
                 }
             }
             LaunchedEffect(t.code, Live.recent.isEmpty()) { if (mock == null && Live.recent.isEmpty() && transcript.isEmpty()) loadTranscript() }
-            // 제목: 받아 적는 중 '방금 받아 적은 말 N건'(C17), 멈춤 '멈추기 전 마지막 대화'(C17p). 시안에 없는 멈춤(Gleo·쇼츠·마이크)과 알릴 말은 그 까닭을 제목 자리에
+            // 제목: 받아 적는 중 '방금 받아 적은 말 N건'(C17), 멈춤 '멈추기 전 마지막 대화'(C17p). 시안에 없는 멈춤(Gleo·마이크)과 알릴 말은 그 까닭을 제목 자리에
             val title = when {
-                mock == null && s.note.isNotBlank() -> s.note
+                mock == null && note.isNotBlank() -> note
                 paused -> "멈추기 전 마지막 대화"
                 mock == null && st.hero != Hero.REC -> st.sub
                 else -> "방금 받아 적은 말 ${if (mock != null) 42 else Live.count}건"
@@ -1886,7 +1461,7 @@ class MainActivity : ComponentActivity() {
             return
         }
         DriveLayout(
-            status = { StatusCard(st, s.note) },
+            status = { StatusCard(st, note) },
             middle = { m ->
                 when {
                     o != null -> OfferCard(o, m)
@@ -1934,7 +1509,7 @@ class MainActivity : ComponentActivity() {
         bg({ Server(url).endTrip(scope.code, scope.token) }) { r ->
             r.onSuccess { got ->
                 s = s.withTrip(keep(got))
-                if (!carStatus.restricted) { stopShort(); closeBoarding(); afterStart = AfterStep.UPLOAD; destination = Destination.SHORTS }
+                if (!carStatus.restricted) { closeBoarding(); afterStart = AfterStep.UPLOAD; destination = Destination.SHORTS }
             }.onFailure { s = s.copy(note = "여행을 마치지 못했어요 · ${reason(it)}") }
         }
     }
@@ -1983,7 +1558,7 @@ class MainActivity : ComponentActivity() {
                 else -> "" // 시안 C44는 목록 밑에 상태 줄이 없다. 불러오기·동의·오류일 때만 적는다
             },
             canPick = scope != null && s.online,
-            onPick = { stopShort(); closeBoarding(); afterStart = AfterStep.SELECT; destination = Destination.SHORTS }, modifier = modifier, // 추천 장면 3개(C23)
+            onPick = { closeBoarding(); afterStart = AfterStep.SELECT; destination = Destination.SHORTS }, modifier = modifier, // 추천 장면 3개(C23)
             live = if (live) liveChip(s.recording && !muted && handoff.state == Handoff.State.OFF && Live.mic == Mic.ON) else null,
             me = mePerson(t.people)?.id,
             onBack = { destination = Destination.RIDE })
@@ -2006,150 +1581,18 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /**
-     * 콘텐츠 기록 탭(F6, Contents.kt: 갤러리·타임라인·지도). Gleo로 숏폼을 부르면 받는 동안만 진행 막대.
-     * ponytail: Contents의 onStudio('쇼츠 만들기·보관함')는 F6이 뺀 길이라 빈 동작을 넘긴다. 합칠 때 인자째 지운다.
-     */
+    /** 콘텐츠 기록 탭(F6, Contents.kt: 갤러리·타임라인·지도). */
     @Composable
     private fun ShortsLibrary(t: Trip, modifier: Modifier) {
         if (!appVisible || carStatus.restricted || t.status == "driving") return
         val scope = contentScope()
         val url = server
-        if (shortNote == "숏폼을 받고 있어요") {
-            Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(shortNote, style = CarText.Label, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                LinearProgressIndicator(Modifier.fillMaxWidth())
-            }
-            return
-        }
         androidx.compose.runtime.key(url, t.code, t.generation, scope?.token) {
             ContentsRecord(url, t.code, scope?.token,
                 canRead = { appVisible && !isDestroyed && s.online && !carStatus.restricted && scope != null && contentScope() == scope && server == url && s.trip?.status != "driving" && handoff.state == Handoff.State.OFF },
                 canPlay = { appVisible && !isDestroyed && !carStatus.restricted && s.trip?.status != "driving" && handoff.state == Handoff.State.OFF },
-                onRide = { destination = Destination.RIDE }, onStudio = {},
+                onRide = { destination = Destination.RIDE },
                 onActiveChange = ::shortStudioActiveChanged, members = t.people.size, modifier = modifier)
-        }
-    }
-
-    /** 왼쪽 무대 전체를 쓰는 것: 숏폼 재생, 동승 연결(카메라·자리 고르기). 주차 중에만(제한이 걸리면 각자 닫는다). */
-    private fun takeover() = !carStatus.restricted && short != null && shortAt >= 0
-
-    @Composable
-    private fun Takeover(t: Trip, modifier: Modifier) {
-        val sh = short
-        if (sh != null && shortAt >= 0) Column(modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            GeneratedShortStage(sh, shortAt, shortPos, shortPaused, shortMuted, t.people, Modifier.weight(1f).fillMaxWidth(),
-                onPrevious = { play((shortAt - 1).coerceAtLeast(0)) }, onNext = { play((shortAt + 1).coerceAtMost(sh.scenes.lastIndex)) },
-                onPause = ::toggleShortPlayback,
-                onMute = { if (!shortExportBusy) { shortMuted = !shortMuted; val volume = if (shortMuted) 0f else 1f; player?.setVolume(volume, volume) } },
-                onClose = ::stopShort, controlsEnabled = !shortExportBusy)
-            ShortExportControls()
-        }
-    }
-
-    @Composable
-    private fun ShortExportControls(canCreate: Boolean = true) {
-        val c = MaterialTheme.colorScheme
-        val saved = savedShortVideo
-        Surface(Modifier.fillMaxWidth(), color = c.surfaceVariant, shape = RoundedCornerShape(20.dp)) {
-            Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                        Text(if (shortExportBusy) "영상 만드는 중 · ${(shortExportProgress * 100).toInt()}%" else shortExportNote.ifBlank { "우리 목소리로 영상 만들기" },
-                            fontSize = 22.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                        Text(when {
-                            shortExportBusy -> shortExportNote
-                            saved != null -> saved.displayName
-                            short?.scenes?.sumOf { it.seconds }?.let { it > 45 } == true -> "앞 45초까지 원래 목소리와 함께 갤러리에 저장해요"
-                            else -> "원래 목소리와 함께 갤러리에 저장해요"
-                        }, fontSize = 16.sp, color = c.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    }
-                    when {
-                        shortExportBusy -> OutlinedButton(onClick = { cancelShortExport() }, modifier = Modifier.heightIn(min = 56.dp), shape = RoundedCornerShape(10.dp)) { Text("취소", fontSize = 22.sp) }
-                        saved != null -> {
-                            if (canCreate) OutlinedButton(onClick = ::makeShortVideo, modifier = Modifier.heightIn(min = 56.dp), enabled = !sharingShort && s.online && !carStatus.restricted, shape = RoundedCornerShape(10.dp)) { Text("다시 만들기", fontSize = 20.sp) }
-                            Button(onClick = ::shareShortVideo, modifier = Modifier.heightIn(min = 56.dp), enabled = !sharingShort && s.online && !carStatus.restricted && savedShortScope == contentScope(), shape = RoundedCornerShape(10.dp)) {
-                                Text(if (sharingShort) "확인 중" else "공유", fontSize = 22.sp)
-                            }
-                        }
-                        canCreate -> Button(onClick = ::makeShortVideo, modifier = Modifier.heightIn(min = 56.dp), enabled = s.online && contentScope() != null && !carStatus.restricted, shape = RoundedCornerShape(10.dp)) { Text("영상 만들기", fontSize = 22.sp) }
-                    }
-                }
-                Text("저장한 영상은 동의를 꺼도 기기에 남아요.", fontSize = 16.sp, color = c.onSurfaceVariant, maxLines = 2)
-                if (shortExportBusy) LinearProgressIndicator(progress = { shortExportProgress }, modifier = Modifier.fillMaxWidth())
-            }
-        }
-    }
-
-    /**
-     * 서버 목록과 서버가 선정한 도착 항목만 표시합니다. 상태 변경은 응답을 받은 뒤 반영합니다.
-     * 겉모습은 시안 C3(알약 → 제목 → 부제 → 할 일 줄 → 닫기). 시안에 없는 동기화 줄·원문·취소·다시 열기·도착 확인은 T113에 필요해 남깁니다.
-     */
-    @Composable
-    private fun BriefCard(b: Brief, modifier: Modifier) {
-        val items = b.arrivalItems ?: todoList
-        val c = MaterialTheme.colorScheme
-        val ctl = RoundedCornerShape(24.dp)
-        // 시안 C3의 크기는 넓은 창의 큰 칸 기준입니다. 기본인 반쪽 창의 낮은 초점 칸에서는 제목이 목록을 밀어내지 않게 기존 크기를 씁니다(시안에 좁은 도착 프레임 없음).
-        BoxWithConstraints(modifier) {
-        val roomy = maxHeight >= 600.dp
-        CarCard(Tone.Accent, Modifier.fillMaxSize(), pad = if (roomy) 40.dp else 28.dp, gap = if (roomy) 20.dp else 10.dp) {
-            Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(if (roomy) 20.dp else 12.dp)) {
-                if (b.place != null) Pill("도착 브리핑")
-                Text(if (b.place != null) "${b.place}에 도착했어요" else "장소별 할 일", fontSize = if (roomy) 56.sp else 32.sp, lineHeight = if (roomy) 64.sp else 40.sp, fontWeight = FontWeight.Bold)
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("${if (b.place != null) "여기서 " else ""}할 일 ${items.count { it.pending }}건 · 오는 길에 나온 말로 모았어요", color = c.onSurfaceVariant, fontSize = if (roomy) 28.sp else 22.sp, lineHeight = if (roomy) 40.sp else 30.sp)
-                    val synced = todoState.syncedAt?.let { java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.KOREA).format(java.util.Date(it)) }
-                    Text(when {
-                        todoState.scope == null -> "탑승자 모두의 기록 동의와 참가자 연결이 필요해요"
-                        todoState.loading -> "서버 목록을 갱신하고 있어요"
-                        synced != null -> "마지막 동기화 $synced · 서버 기록"
-                        else -> "아직 서버 목록을 확인하지 못했어요"
-                    }, color = c.onSurfaceVariant, fontSize = 18.sp)
-                    if (todoState.note.isNotEmpty()) Text(todoState.note, color = c.error, fontSize = 18.sp)
-                    if (arrivalNote.isNotEmpty()) Text(arrivalNote, color = c.onSurfaceVariant, fontSize = 18.sp)
-                }
-                if (items.isEmpty() && todoState.data != null && !todoState.loading) Text("이 목록에 할 일이 없어요", color = c.onSurfaceVariant)
-                val enabled = !todoState.loading && s.online && vehicleParked() && todoState.scope == todoScope()
-                items.forEach { item ->
-                    // 서버가 화자를 확인한 원발화만 이름과 캐릭터로 보입니다. 확인되지 않았으면 빈 동그라미와 '말한 사람 미확인'.
-                    val speakers = item.sources.mapNotNull { src -> s.trip?.people?.find { it.id == src.participantId } }.distinct()
-                    val who = speakers.singleOrNull()
-                    var sourceOpen by remember(item.id) { mutableStateOf(false) }
-                    Surface(Modifier.fillMaxWidth(), ctl, color = c.surfaceVariant) {
-                        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-                                if (who != null) Character(runCatching { Seat.valueOf(who.seat).ordinal }.getOrDefault(0), 56.dp)
-                                else Box(Modifier.size(56.dp).clip(CircleShape).background(c.surface))
-                                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                    Text(if (b.place != null) item.text else "${item.place} · ${item.text}", fontSize = 28.sp, lineHeight = 40.sp, fontWeight = FontWeight.Medium)
-                                    Text((if (speakers.isEmpty()) "말한 사람 미확인" else speakers.joinToString("·") { it.name } + "의 말") +
-                                        when (item.status) { "done" -> " · 완료"; "cancelled" -> " · 취소"; else -> "" }, color = c.onSurfaceVariant)
-                                }
-                                OutlinedButton({ changeTodo(item, if (item.pending) "done" else "pending") }, enabled = enabled, modifier = Modifier.height(72.dp), shape = ctl,
-                                    contentPadding = PaddingValues(horizontal = 36.dp)) { Text(if (item.pending) "완료" else "다시 열기") }
-                            }
-                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                TextButton({ sourceOpen = !sourceOpen }, Modifier.heightIn(min = 56.dp)) { Text(if (sourceOpen) "원문 접기" else "원문 ${item.sources.size}개 보기") }
-                                if (item.pending) TextButton({ changeTodo(item, "cancelled") }, Modifier.heightIn(min = 56.dp), enabled = enabled) { Text("취소") }
-                            }
-                            if (sourceOpen) item.sources.forEach { source ->
-                                val at = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.KOREA).format(java.util.Date(source.at))
-                                val speaker = s.trip?.people?.find { it.id == source.participantId }?.name ?: "화자 미확인"
-                                Text("$at · $speaker", color = c.onSurfaceVariant, fontSize = 16.sp)
-                                Text(source.text, fontSize = 18.sp)
-                                if (source.displayText != source.text) Text("보정 · ${source.displayText}", color = c.onSurfaceVariant, fontSize = 18.sp)
-                            }
-                        }
-                    }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    OutlinedButton({ loadTodos(force = true) }, enabled = !todoState.loading, modifier = Modifier.weight(1f).heightIn(min = 56.dp), shape = ctl) { Text("새로고침") }
-                    OutlinedButton(::arrive, enabled = vehicleParked() && !arrivalLoading && todoScope() != null, modifier = Modifier.weight(1f).heightIn(min = 56.dp), shape = ctl) { Text("도착 확인") }
-                }
-            }
-            OutlinedButton({ brief = null }, Modifier.fillMaxWidth().height(if (roomy) 80.dp else 56.dp), shape = ctl) { Text("닫기", fontSize = if (roomy) 32.sp else 24.sp, fontWeight = FontWeight.Bold) }
-        }
         }
     }
 

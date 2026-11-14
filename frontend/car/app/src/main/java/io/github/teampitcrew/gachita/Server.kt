@@ -3,9 +3,9 @@ package io.github.teampitcrew.gachita
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
-import java.io.OutputStream
 import java.net.HttpURLConnection
 import java.net.SocketTimeoutException
+import java.net.URI
 import java.net.URL
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -26,8 +26,6 @@ class Server(base: String, private val open: (URL) -> HttpURLConnection = { it.o
      */
     private fun got(json: String) = Got(json, parseTrip(json))
 
-    fun createTrip(title: String): Got = got(call("POST", "/api/trips", JSONObject().put("title", title))!!)
-
     // ---- 가족·동승 그룹(흐름 F2, docs/api/groups.md). 이 차에 로그인한 프로필 토큰으로 ----
     fun profileName(token: String): String = JSONObject(call("GET", "/api/profiles/me", null, token)!!).getString("name")
     fun groups(token: String): List<CarGroup> = JSONObject(call("GET", "/api/groups", null, token)!!).getJSONArray("items").let { a -> (0 until a.length()).map { parseGroup(a.getJSONObject(it)) } }
@@ -41,11 +39,6 @@ class Server(base: String, private val open: (URL) -> HttpURLConnection = { it.o
     fun groupTrip(token: String, groupId: String, title: String): Pair<String, Map<String, String>> =
         JSONObject(call("POST", "/api/trips", JSONObject().put("groupId", groupId).put("title", title), token)!!)
             .let { o -> o.getString("code") to o.getJSONObject("tokens").let { t -> t.keys().asSequence().associateWith { k -> t.getString(k) } } }
-
-    /** 손님으로 참가. 이름과 자리를 보내고 동의는 꺼짐으로 시작한다. 참가자 id와 참가자 토큰(이때 한 번만 옴). */
-    fun join(code: String, m: Member): Pair<String, String> =
-        JSONObject(call("POST", "/api/trips/$code/participants", JSONObject().put("seat", m.seat.name).put("name", m.name).put("consent", false))!!)
-            .let { it.getString("id") to it.getString("token") }
 
     /** 동의 켜기는 그 사람의 참가자 토큰으로만 된다(T68). 끄기는 토큰 없이 누구나. */
     fun consent(code: String, id: String, on: Boolean, token: String? = null) {
@@ -106,9 +99,9 @@ class Server(base: String, private val open: (URL) -> HttpURLConnection = { it.o
     fun createShortJob(code: String, token: String, body: JSONObject): JSONObject = JSONObject(call("POST", "/api/trips/$code/short-generations", body, token)!!)
     fun cancelShortJob(code: String, token: String, id: String) { call("DELETE", "/api/trips/$code/short-generations/$id", null, token) }
 
-    /** 미리듣기·영상 만들기용 클립 받기. 주소는 shortClipAddress로 제한하고 요청이 연결·파일을 소유합니다. */
+    /** 영상 만들기·콘텐츠 재생용 파일 받기. 장면 클립 주소는 shortClipAddress로 제한합니다. 끝까지 받지 못하면 파일을 지웁니다. */
     fun downloadShort(url: String, token: String, file: File, cancelled: () -> Boolean, connection: (HttpURLConnection?) -> Unit,
-        openOutput: () -> OutputStream = { file.outputStream() }, maxBytes: Long = 5_000_000L, mimeType: String? = null) {
+        maxBytes: Long = 5_000_000L, mimeType: String? = null) {
         val c = URL(url).openConnection() as HttpURLConnection
         var complete = false
         fun checkCancelled() { if (cancelled() || Thread.currentThread().isInterrupted) throw java.util.concurrent.CancellationException("장면 받기를 취소했어요") }
@@ -123,7 +116,7 @@ class Server(base: String, private val open: (URL) -> HttpURLConnection = { it.o
             if (c.responseCode !in 200..299) throw ApiError(c.responseCode, "장면 소리를 받지 못했어요")
             require(mimeType == null || c.contentType?.substringBefore(';') == mimeType) { "영상 형식을 확인하지 못했어요" }
             checkCancelled()
-            c.inputStream.use { input -> checkCancelled(); openOutput().use { output ->
+            c.inputStream.use { input -> checkCancelled(); file.outputStream().use { output ->
                 val bytes = ByteArray(8192)
                 var total = 0L
                 while (true) {
@@ -299,3 +292,17 @@ private val TRIP_GONE = setOf("없는 여행 코드", "보관 기간이 지난 �
 
 /** 서버가 여행을 모른다(404: 삭제되었거나 없음). 차 안 사본도 지운다(T69). */
 class Gone(code: String) : ApiError(404, "없는 여행 $code")
+
+/** 영상 만들기는 현재 여행의 같은 출처 장면 원음만 받습니다(AfterTrip). */
+fun shortClipAddress(server: String, code: String, clip: String): String {
+    val base = URI(server.trim().trimEnd('/'))
+    val address = if (clip.startsWith("/") && !clip.startsWith("//")) base.resolve(clip) else URI(clip)
+    fun port(uri: URI) = if (uri.port >= 0) uri.port else if (uri.scheme.equals("https", true)) 443 else 80
+    require(base.scheme in setOf("http", "https") && base.host != null && base.userInfo == null &&
+        address.scheme.equals(base.scheme, true) && address.host.equals(base.host, true) && port(address) == port(base) &&
+        address.userInfo == null && address.rawQuery == null && address.fragment == null &&
+        Regex("/api/trips/${Regex.escape(code)}/recordings/[A-Za-z0-9-]+").matches(address.rawPath.orEmpty())) {
+        "이 여행의 장면 소리가 아니에요"
+    }
+    return address.toASCIIString()
+}

@@ -59,11 +59,11 @@ import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
 
 /*
- * 차 계정·온보딩(T142, 최종 시안 C01–C08, 피그마 2004:57 · T156에서 11/15 시안으로 다시 옮김). 주차 중 전체 창(1682 × 1210)에만 보인다(주행 제한이면 MainActivity가 잠금 화면).
+ * 차 계정·온보딩(T142, 최종 시안 C01–C08, 피그마 2004:57 · T156에서 11/15 시안으로 다시 옮김). 주차 중 전체 창(1682 × 1210)에만 진행한다(주행 제한이면 여행이 없을 때 C01만 단추를 잠가 보인다).
  * 시작 → 계정 만들기·로그인(이 차의 프로필 토큰) → 기록 동의 → 이름·캐릭터 → 사진 → 15초 목소리 → 등록 완료.
  * 목소리는 차 마이크로 15초를 모아 Voice.kt의 embed(pcmSamples(...))로 값(112차원)을 만들고 값만 올린다(ADR-0023). 소리는 차를 떠나지 않는다.
  * 계정 동의가 켜져 있지 않으면 마이크를 열지 않는다.
- * 계정 토큰이 있으면 지금의 여행 만들기(Setup)로 간다. 디버그 실행 인자 --ez onboarding false로 건너뛴다(기존 e2e 스크립트).
+ * 마치면 가족 흐름(F2, Family.kt)으로 간다. 디버그 실행 인자 --ez onboarding false로 건너뛴다(시연·e2e 스크립트).
  */
 
 const val VOICE_SECONDS = 15
@@ -110,7 +110,7 @@ class Onboarding(private val context: Context, private val prefs: SharedPreferen
     /** 처음 화면의 '계정·목소리'에서 다시 연다. */
     fun reopen() { skipped = false; finished = false; prefs.edit().putBoolean("onboardingSkipped", false).putBoolean("onboardingDone", false).apply(); step = null; start() }
 
-    /** 디버그 실행 인자 --ez onboarding false(기존 e2e 스크립트가 처음 화면을 여행 만들기로 본다). */
+    /** 디버그 실행 인자 --ez onboarding false(시연·e2e 스크립트가 처음 화면을 가족 흐름으로 본다). */
     fun skipForDebug() { skipped = true; prefs.edit().putBoolean("onboardingSkipped", true).apply() }
 
     private fun finish() { stopRecording(); finished = true; prefs.edit().putBoolean("onboardingDone", true).apply() }
@@ -252,21 +252,22 @@ class Onboarding(private val context: Context, private val prefs: SharedPreferen
 // ---- 화면(원본 Figma 2004:57 C01–C08, 11/15 다시 읽음). 틀은 ParkedFrame, 조각은 CarDesign.kt(TitleBlock·InfoCard·CarField·CarButton) ----
 // C02–C08 본문은 가운데 988 폭 한 줄(간격 24), C01은 '두 순간' 글 묶음 680 · 간격 80 · 보관 카드 400 × 550. 오른쪽 가족 카드는 11/15 시안에서 빠졌다.
 
+/** driving: 주행 제한 중 여행이 없을 때. 진행한 단계와 상관없이 시작 화면(C01)만 보이고 단추는 잠근다(T11, 설정은 주차 중에만). */
 @Composable
-fun OnboardingScreen(o: Onboarding, gear: String?, onFamily: () -> Unit) {
+fun OnboardingScreen(o: Onboarding, gear: String?, driving: Boolean = false, onFamily: () -> Unit) {
     val c = MaterialTheme.colorScheme
     val ctx = LocalContext.current
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { o.picked(it) }
     val mic = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { if (it) o.startRecording() }
-    LaunchedEffect(o) { o.start() }
-    val step = o.step ?: OnboardStep.WELCOME
+    LaunchedEffect(o, driving) { if (!driving) o.start() }
+    val step = if (driving) OnboardStep.WELCOME else o.step ?: OnboardStep.WELCOME
     val p = o.profile
     val shownName = p?.name?.takeIf { it.isNotBlank() } ?: o.name
     ParkedFrame(
         gear = gear ?: "P",
         bottom = {
             when (step) {
-                OnboardStep.WELCOME -> CarButton("가치타 시작하기") { o.go(OnboardStep.SIGNUP) }
+                OnboardStep.WELCOME -> CarButton(if (driving) "주차한 뒤 시작할 수 있어요" else "가치타 시작하기", enabled = !driving) { o.go(OnboardStep.SIGNUP) }
                 OnboardStep.SIGNUP -> CarButton("가입하고 계속", enabled = !o.busy) { o.submitAccount() }
                 OnboardStep.CONSENT -> CarButton("동의하고 계속", enabled = !o.busy) { o.agree() }
                 OnboardStep.PROFILE -> CarButton("목소리 등록하기", enabled = !o.busy) { o.saveProfile() }

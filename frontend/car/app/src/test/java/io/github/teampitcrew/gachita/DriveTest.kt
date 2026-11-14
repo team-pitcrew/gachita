@@ -10,7 +10,7 @@ class DriveTest {
     private fun status(recording: Boolean = true, muted: Boolean = false, handoff: Handoff.State = Handoff.State.OFF, mic: Mic = Mic.ON,
                        offPending: Boolean = false, waiting: Boolean = false, inPark: Boolean = true, waitingFor: List<String> = emptyList(),
                        ended: Boolean = false, resumed: Boolean = false) =
-        driveStatus(recording, muted, false, handoff, mic, "", offPending, waiting, inPark, waitingFor, ended, resumed)
+        driveStatus(recording, muted, handoff, mic, "", offPending, waiting, inPark, waitingFor, ended, resumed)
 
     @Test fun statusFollowsDesignWording() {
         assertEquals(DriveStatus("기록 중", "아래 버튼으로 언제든 멈출 수 있어요", Hero.REC), status())
