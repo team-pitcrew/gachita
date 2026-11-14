@@ -332,9 +332,10 @@ private fun Split(trip: Trip, left: @Composable ColumnScope.() -> Unit) {
         Column(Modifier.weight(.62f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(24.dp), content = left)
         CarCard(modifier = Modifier.weight(.38f).fillMaxHeight(), pad = 32.dp, gap = 20.dp) {
             Text("차가 바뀌어도\n우리는 그대로", fontSize = 40.sp, lineHeight = 50.sp, fontWeight = FontWeight.Bold)
-            Text("함께 탄 기록과 콘텐츠를 차량과 폰에서 이어가세요.", fontSize = 26.sp, lineHeight = 36.sp, color = c.onSurfaceVariant)
+            Text("한 번 만든 프로필로 차량과 폰에서 이어가세요.", fontSize = 26.sp, lineHeight = 36.sp, color = c.onSurfaceVariant)
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) { trip.people.take(5).forEach { Character(seatCharacter(it), 88.dp) } }
             Text("우리 일행  ${trip.people.size}명", fontSize = 32.sp, fontWeight = FontWeight.Bold)
+            Text("프로필과 목소리, 그룹을 같은 계정으로 함께 사용", fontSize = 24.sp, lineHeight = 32.sp, color = c.onSurfaceVariant)
         }
     }
 }
