@@ -124,7 +124,7 @@ test("같은 QR을 두 여행에서 동시에 읽어도 한 참가자만 생긴�
   assert.equal(trips.reduce((count, r) => count + r.data.participants.filter((p) => p.profileId === phone.id).length, 0), 1);
 });
 
-test("여행 잠금을 기다리는 사이 48시간이 지나면 참가자 추가와 QR 사용을 되돌린다", async () => {
+test("여행 잠금을 기다리는 사이 48시간이 지나도 유효한 QR은 참가자를 연결한다", async () => {
   const phone = await profile("만료 경계");
   const link = await issue(phone);
   const t = await trip();
@@ -144,10 +144,10 @@ test("여행 잠금을 기다리는 사이 48시간이 지나면 참가자 추�
     await holder.query("UPDATE trips SET created_at=clock_timestamp()-interval '48 hours'+interval '100 milliseconds' WHERE code=$1", [t.code]);
     await sleep(150);
     await holder.query("COMMIT");
-    assert.equal((await pending).status, 404);
+    assert.equal((await pending).status, 201);
     const { rows } = await tripsDb().query("SELECT doc FROM trips WHERE code=$1", [t.code]);
-    assert.equal(rows[0].doc.participants.length, 0);
-    assert.equal((await call("GET", `/ride-links/${link.id}`, undefined, phone.token)).data.status, "pending");
+    assert.equal(rows[0].doc.participants.length, 1);
+    assert.equal((await call("GET", `/ride-links/${link.id}`, undefined, phone.token)).data.status, "linked");
   } finally {
     await holder.query("ROLLBACK").catch(() => {});
     holder.release();

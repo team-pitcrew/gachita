@@ -66,7 +66,7 @@ test("선택한 장면과 확인한 문구만 지정한 동승자에게 보이�
   assert.equal(created.data.caption, "직접 확인한 문구");
   assert.equal(created.data.label, "선택한 바다");
   assert.ok(!("lat" in created.data));
-  assert.ok(Math.abs(created.data.expiresAt - f.trip.createdAt - 48 * 3600_000) < 1000);
+  assert.equal(created.data.expiresAt, null);
   const sent = await f.list(0), received = await f.list(1);
   assert.equal(sent.data.items[0].direction, "sent");
   assert.equal(received.data.items[0].direction, "received");
@@ -114,7 +114,7 @@ test("본인 앨범과 동의한 같은 여행 참가자만 선택하고 오래�
   assert.equal((await f.share({ generation: current.generation })).status, 403);
 });
 
-test("원본 앨범·프로필 삭제와 만료 후에는 공유가 사라지고 여행 삭제 시 함께 지워진다", async () => {
+test("원본 앨범·프로필 삭제는 공유를 없애지만 시간 경과는 보존하고 여행 삭제 시 함께 지워진다", async () => {
   const previous = await fixture();
   assert.equal((await previous.share()).status, 201);
   await tripsDb().query("UPDATE trips SET doc = jsonb_set(doc, '{generation}', to_jsonb((doc->>'generation')::int + 1)) WHERE code = $1", [previous.trip.code]);
@@ -130,8 +130,8 @@ test("원본 앨범·프로필 삭제와 만료 후에는 공유가 사라지고
   const expired = await fixture();
   assert.equal((await expired.share()).status, 201);
   await tripsDb().query("UPDATE trips SET created_at = now() - interval '49 hours' WHERE code = $1", [expired.trip.code]);
-  assert.equal((await expired.list(1)).data.items.length, 0);
-  assert.equal((await expired.share()).status, 404);
+  assert.equal((await expired.list(1)).data.items.length, 1);
+  assert.equal((await expired.share()).status, 201);
   await tripsDb().query("DELETE FROM trips WHERE code = $1", [expired.trip.code]);
   assert.equal((await tripsDb().query("SELECT count(*)::int AS n FROM result_shares WHERE trip_code = $1", [expired.trip.code])).rows[0].n, 0);
 });
@@ -143,4 +143,16 @@ test("옛 그룹의 관리 대상 프로필은 수신·회수할 자기 프로�
   await profilesDb().query("UPDATE profiles SET managed_by = NULL WHERE id = $1", [f.people[1].id]);
   await profilesDb().query("UPDATE profiles SET managed_by = $1 WHERE id = $2", [f.people[2].id, f.people[0].id]);
   assert.equal((await f.share()).status, 403);
+});
+
+
+test("이전 48시간 공유 기한을 무기한으로 바꿔도 내용·동의·명시 회수는 보존합니다(T90)", async () => {
+  const f=await fixture(); const shared=await f.share();
+  await tripsDb().query("UPDATE trips SET created_at=now()-interval '90 days' WHERE code=$1",[f.trip.code]);
+  await tripsDb().query("UPDATE result_shares s SET expires_at=t.created_at+interval '48 hours' FROM trips t WHERE s.trip_code=t.code AND s.id=$1",[shared.data.id]);
+  await migrate(); await migrate();
+  const items=(await f.list(1)).data.items;
+  assert.equal(items.length,1); assert.equal(items[0].expiresAt,null); assert.equal(items[0].caption,shared.data.caption);
+  assert.equal((await call("DELETE", `/profiles/me/shares/${shared.data.id}`,null,f.people[0].token)).status,204);
+  assert.equal((await f.list(1)).data.items.length,0);
 });

@@ -89,7 +89,7 @@ export function shortGenerations(ctx, overrides = {}) {
     return { plan: p, sourceKey: rows[0].object_key };
   }
   async function valid(row) {
-    if (new Date(row.expires_at).getTime() <= Date.now())
+    if ((row.expires_at != null && new Date(row.expires_at).getTime() <= Date.now()))
       fail(410, "보관 기간이 지났어요");
     return ctx.withTrip(row.trip_code, false, async (trip, client) => {
       const caller =
@@ -191,7 +191,7 @@ export function shortGenerations(ctx, overrides = {}) {
               JSON.stringify(
                 prepared.plan.shots.map(() => ({ state: "pending" })),
               ),
-              new Date(trip.createdAt + 48 * 3600_000),
+              null,
             ],
           );
           return [202, view(row.rows[0])];
@@ -211,7 +211,7 @@ export function shortGenerations(ctx, overrides = {}) {
         const row = r.rows[0] ?? fail(404, "없는 생성 작업");
         if (
           row.generation !== (trip.generation ?? 1) ||
-          new Date(row.expires_at).getTime() <= Date.now()
+          (row.expires_at != null && new Date(row.expires_at).getTime() <= Date.now())
         )
           fail(410, "이 생성 작업의 보관 기간이나 동의가 끝났어요");
         if (req.method === "DELETE" && !leaf) {
@@ -461,9 +461,7 @@ export function shortGenerations(ctx, overrides = {}) {
         await client.query("SELECT pg_try_advisory_lock(74629) AS held")
       ).rows[0].held;
       if (!locked) return;
-      await client.query(
-        "DELETE FROM short_generations WHERE state='canceled' AND NOT cleanup_pending AND expires_at<now()-interval '1 day'",
-      );
+      // 취소 행도 멱등 키를 보존합니다. 무기한 여행의 늦은 재전송이 유료 작업을 다시 만들지 않게 합니다.
       const r = await client.query(
         "SELECT * FROM short_generations WHERE next_attempt_at<=now() AND (state<>'canceled' OR cleanup_pending) ORDER BY cleanup_pending DESC,(state NOT IN ('completed','failed','submission_unknown')) DESC,next_attempt_at LIMIT 1",
       );
