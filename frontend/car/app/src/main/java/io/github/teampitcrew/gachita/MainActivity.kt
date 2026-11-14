@@ -173,6 +173,7 @@ class MainActivity : ComponentActivity() {
     private var transcriptAsks by mutableStateOf(emptySet<Pair<String, Int>>()) // 서버 할 일이 나온 줄(C44 '○○의 부탁')
     private var transcriptPlaces by mutableStateOf(emptyList<TripPlace>()) // 기록본에 실린 여행 장소(A3). 없으면 머리에 시각만
     private var shortsCreate = false // 대화 기록의 '추천 장면 고르기'로 콘텐츠 기록 탭을 열면 만들기 화면부터
+    private var afterStart by mutableStateOf<AfterStep?>(null) // 여행 마무리·장면 고르기(C22–C32, F5). null이면 콘텐츠 기록은 쇼츠 화면
     private var justResumed by mutableStateOf(false) // 기록 재개 뒤 새 말을 받기 전(시안 2026:1969 '중지한 지점부터 이어서 기록해요')
     private var transcriptLoading by mutableStateOf(false)
     private var transcriptNote by mutableStateOf("")
@@ -1670,14 +1671,19 @@ class MainActivity : ComponentActivity() {
             return
         }
         val scope = contentScope()
-        LaunchedEffect(destination, scope) {
-            if (destination == Destination.CONVERSATION) loadTranscript()
+        LaunchedEffect(destination, scope, afterStart) {
+            if (destination == Destination.CONVERSATION || (destination == Destination.SHORTS && afterStart != null)) loadTranscript()
         }
         Column(Modifier.fillMaxSize().padding(horizontal = 32.dp, vertical = 28.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             TripHeader(parked, carStatus.gear, s.online, listening = s.recording && Live.mic == Mic.ON && !muted && handoff.state == Handoff.State.OFF) { WindowSize() }
             TripTabs(Destination.entries.map { it.label }, destination.ordinal, { parked || it != Destination.SHORTS.ordinal }) { i ->
                 val tab = Destination.entries[i]
-                if (destination != tab) { stopShort(); closeBoarding(); managing = false; shortsCreate = false; destination = tab }
+                if (destination != tab) {
+                    stopShort(); closeBoarding(); managing = false; shortsCreate = false
+                    // 주차·종료한 여행의 콘텐츠 기록 탭은 여행 마무리(C22)부터. 거기서 '콘텐츠 기록으로'를 누르면 쇼츠 화면
+                    afterStart = if (tab == Destination.SHORTS && t.status in listOf("parked", "ended")) AfterStep.UPLOAD else null
+                    destination = tab
+                }
             }
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 val b = brief?.takeIf { vehicleParked() && offer?.stage.let { it == null || it == Offer.Stage.FINDING } } // 실제 P이고 제한이 풀린 동안만, 휴게소 제안이 먼저
@@ -1686,6 +1692,7 @@ class MainActivity : ComponentActivity() {
                     boarding.page != BoardingPage.HIDDEN && parked -> BoardingPanel(boarding, s, carStatus.seats, Modifier.fillMaxSize(), ::boardingAction)
                     managing && parked -> ManageTrip(t, Modifier.fillMaxSize())
                     destination == Destination.CONVERSATION -> Conversations(t, Modifier.fillMaxSize())
+                    destination == Destination.SHORTS && parked && afterStart != null -> AfterTripTab(t, afterStart!!, Modifier.fillMaxSize())
                     destination == Destination.SHORTS && parked -> ShortsLibrary(t, Modifier.fillMaxSize())
                     b != null -> BriefCard(b, Modifier.fillMaxSize())
                     else -> RideOverview(t, Modifier.fillMaxSize())
@@ -1789,9 +1796,23 @@ class MainActivity : ComponentActivity() {
             },
             canPick = scope != null && s.online,
             onRefresh = ::loadTranscript, onFixSpeakers = { managing = true },
-            onPick = { stopShort(); closeBoarding(); shortsCreate = true; destination = Destination.SHORTS }, modifier = modifier,
+            onPick = { stopShort(); closeBoarding(); afterStart = AfterStep.SELECT; destination = Destination.SHORTS }, modifier = modifier, // 추천 장면 3개(C23)
             live = if (live) liveChip(s.recording && !muted && handoff.state == Handoff.State.OFF && Live.mic == Mic.ON) else null,
             onBack = { destination = Destination.RIDE })
+    }
+
+    /** 여행 마무리·추천 장면 고르기·생성·결과(C22–C32). 후보는 차 안 규칙, 고른 장면은 POST /moments, 소리는 이 차의 클립 올리기(clips). */
+    @Composable
+    private fun AfterTripTab(t: Trip, start: AfterStep, modifier: Modifier) {
+        if (!appVisible || carStatus.restricted || t.status == "driving") return
+        val scope = contentScope()
+        val url = server
+        val lines = remember(t.code, t.generation, transcript, Live.count) { afterLines(this, t, transcript) }
+        androidx.compose.runtime.key(t.code, t.generation, start) {
+            AfterTrip(t, lines, url, scope?.token, start,
+                canUse = { appVisible && !isDestroyed && s.online && !carStatus.restricted && scope != null && contentScope() == scope && server == url && s.trip?.people?.all { it.consent } == true && s.trip?.status != "driving" },
+                onContents = { afterStart = null }, modifier = modifier)
+        }
     }
 
     @Composable
