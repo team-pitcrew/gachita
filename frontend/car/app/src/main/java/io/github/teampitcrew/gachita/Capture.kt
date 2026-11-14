@@ -221,6 +221,10 @@ class Outbox(dir: File, val trip: String, private val seal: Seal) {
 
     @Synchronized fun recent(n: Int): List<Utterance> = said.takeLast(n)
 
+    /** 그 순번들의 발화를 화자와 함께 다시 올릴 모양으로(서버가 화자가 빈 줄에만 채운다, ADR-0023). 글을 지웠거나 옛 세대면 뺀다. */
+    @Synchronized fun wires(who: Map<Long, Speaker>): List<Pair<Long, JSONObject>> =
+        items.filter { it.seq in who && it.seq <= acked }.mapNotNull { u -> u.wire(generation)?.takeIf { it.has("text") }?.let { u.seq to it.spokenBy(who.getValue(u.seq)) } }
+
     /** 서버가 받은 순번 (after, acked]의 글이 있는 발화. 화자 대조(T37)에 쓴다. */
     @Synchronized fun ackedAfter(after: Long): List<Utterance> = items.filter { it.seq in (after + 1)..acked && it.text.isNotEmpty() }
 
@@ -311,14 +315,14 @@ class Outbox(dir: File, val trip: String, private val seal: Seal) {
     }
 }
 
-// ---- 말한 사람(T37): 좌석 구역 + 서버의 목소리 대조(POST /voice-match?row=, #65 계약) ----
+// ---- 말한 사람(T37): 좌석 구역 + 차 안의 목소리 대조(Voice.kt, ADR-0023) ----
 
 /** 출발 전 목소리 등록에서 읽는 두 문장(약 7초, #65 정확도 표의 '2문장'). 등록하는 동안 받아 적힌 말은 보관함에 넣지 않는다. */
 val ENROLL_LINES = listOf("오늘도 안전하게 같이 타고 가요.", "바다가 보이면 창문을 조금 열어 볼까요?")
 const val ENROLL_MS = 10_000L
 const val ENROLL_BYTES = (ENROLL_MS * RATE / 1000 * 2).toInt() // 10초 16 kHz 모노
 
-/** 발화 한 건의 말한 사람: 참가자 id(모르면 null), 대조 확신도, 사람이 화면에서 고쳤는지, 고친 것을 서버에 남겼는지. */
+/** 발화 한 건의 말한 사람: 참가자 id(모르면 null), 대조 확신도, 사람이 화면에서 고쳤는지, 서버에 남겼는지(차가 찾은 사람과 사람이 고친 것 모두). */
 data class Speaker(val who: String?, val confidence: Double, val byPerson: Boolean = false, val sent: Boolean = true)
 
 /**
@@ -353,6 +357,9 @@ class Speakers(dir: File, val trip: String, private val seal: Seal) {
         map[seq] = s
         put(JSONObject().put("seq", seq).put("who", s.who ?: "").put("confidence", s.confidence).put("byPerson", s.byPerson).put("sent", s.sent))
     }
+
+    /** 차가 찾았지만 아직 서버에 남기지 못한 것. 발화와 함께 다시 올린다. */
+    @Synchronized fun unsentMatches(): Map<Long, Speaker> = map.filter { !it.value.byPerson && !it.value.sent && it.value.who != null }
 
     /** 사람이 고쳤지만 아직 서버에 남기지 못한 것(끊김 등). 다음 차례에 다시 보낸다. */
     @Synchronized fun unsent(): List<Pair<Long, Speaker>> = map.filter { it.value.byPerson && !it.value.sent }.map { it.key to it.value }

@@ -81,7 +81,7 @@ const PITCH_BINS = 20;
 const MEL_BANDS = 26;
 export const DIMS = MEL_BANDS * 2 + PITCH_BINS * 3;
 
-// 기기가 계산해 올린 값의 모양을 본다: 길이, 유한한 수, 세 묶음(로그멜 평균·분산·음높이)이 각각 평균 0·길이 1.
+// 등록할 값의 모양을 본다(기기가 계산해 올린 값과 서버가 등록 음성에서 계산한 값 모두): 길이, 유한한 수, 세 묶음(로그멜 평균·분산·음높이)이 각각 평균 0·길이 1.
 // 음높이를 못 잡은 소리는 음높이 묶음이 모두 0이다.
 export function checkVector(v) {
   const bad = (msg) => {
@@ -92,6 +92,9 @@ export function checkVector(v) {
   for (const [from, to, mayBeZero] of [[0, MEL_BANDS, false], [MEL_BANDS, MEL_BANDS * 2, false], [MEL_BANDS * 2, DIMS, true]]) {
     const g = v.slice(from, to);
     const norm = Math.sqrt(g.reduce((s, x) => s + x * x, 0));
+    // 무음처럼 프레임마다 로그멜이 같은 소리는 로그멜 묶음의 길이가 0이다. 누구와도 맞지 않는 값이라 등록하지 않는다(ADR-0023) —
+    // 음성으로 등록하든 값으로 등록하든 같은 기준, 같은 문구.
+    if (!mayBeZero && norm === 0) throw { status: 400, error: "말소리가 없어 등록할 수 없음" };
     if (Math.abs(g.reduce((s, x) => s + x, 0)) > 1e-6 || !(Math.abs(norm - 1) < 1e-6 || (mayBeZero && norm === 0))) bad("이 임베더의 정규화가 아님");
   }
   return v;

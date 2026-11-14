@@ -1279,6 +1279,10 @@ test("차가 대조 값을 받아 가 차 안에서 붙인 화자를 발화와 �
   assert.equal((await json(`${t}/participants/${a.id}/voice`, value(0, { seconds: 0.5 }), a.token)).status, 400, "등록은 1초부터");
   assert.equal((await fetch(`${base}${t}/participants/${a.id}/voice`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${a.token}` }, body: "{" })).status, 400);
   assert.equal((await postRaw(`${t}/participants/${b.id}/voice`, wav(300, 3), b.token)).status, 200, "음성 등록도 그대로 됨");
+  // 말소리가 없는 등록은 음성으로든 값으로든 같은 기준, 같은 문구로 거절한다
+  const silence = wav(300, 3); silence.fill(0, 44);
+  const noVoice = [await postRaw(`${t}/participants/${b.id}/voice`, silence, b.token), await json(`${t}/participants/${b.id}/voice`, value(0, { vector: new Array(112).fill(0) }), b.token)];
+  assert.deepEqual(await Promise.all(noVoice.map(async (r) => [r.status, (await r.json()).error])), [[400, "말소리가 없어 등록할 수 없음"], [400, "말소리가 없어 등록할 수 없음"]]);
 
   // 조회: 녹음에 동의한 참가자가, 동의한 참가자의 값만. 저장하지 않게
   const got = await fetch(`${base}${t}/voice-prints`, { headers: { authorization: `Bearer ${a.token}` } });

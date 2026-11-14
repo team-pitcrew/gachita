@@ -157,5 +157,11 @@ export function createTodos({ getTrip, getParticipant, getToken, request, onChan
       state.ready && !state.items.length && h("p", { className: "empty" }, "아직 장소별 할 일이 없어요. ‘마트에서 우유 사자’처럼 장소와 함께 말하면 여기에 모여요."),
     );
   }
-  return { card, sync };
+  // 주행 화면(ride.js)이 읽는 지금 목록. 볼 수 없으면(동의 전·권한 거부) null이라 부탁을 지어내지 않는다.
+  const snapshot = () => {
+    const me = getParticipant();
+    if (!state || todoAccess(me, getToken()) || state.denied) return null;
+    return { ready: state.ready, items: state.items, arrival: state.arrival, error: state.error, at: state.at ?? null };
+  };
+  return { card, sync, snapshot };
 }

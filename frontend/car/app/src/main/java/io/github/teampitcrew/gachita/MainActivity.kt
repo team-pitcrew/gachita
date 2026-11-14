@@ -95,7 +95,7 @@ private const val GLEO_START = "GACHITA_START_RECORDING"
 private const val GLEO_PAUSE = "GACHITA_PAUSE_RECORDING" // 같은 곳(T41)
 private const val GLEO_RESUME = "GACHITA_RESUME_RECORDING"
 private const val RESYNC_EVERY = 30 // 조회 30번(5분)마다, 그리고 끊겼다 다시 닿을 때 서버의 확인 순번을 다시 받는다(ADR-0014 2절). 5분마다는 서버에서 지운 글도 차 사본에 맞춘다(T69)
-private const val MATCH_MAX = 20 // 한 차례에 대조할 발화 수. 밀린 것이 많아도 통신 줄을 오래 잡지 않게
+private const val MATCH_MAX = 20 // 한 차례에 대조할 발화 수. 밀린 것이 많아도 클립 올리기를 오래 막지 않게
 private const val OFFER_MS = 30_000L // 제안에 답이 없으면 보관으로 되돌리는 시간. 그사이 휴게소를 지나칠 수 있어 길게 두지 않는다
 
 class MainActivity : ComponentActivity() {
@@ -141,6 +141,14 @@ class MainActivity : ComponentActivity() {
                     voiced = it; voicedAt = gen; prefs.edit().putString("voiced", "$gen:" + it.joinToString(",")).apply()
                 }
                 speakersOf(t.code).see(t.generation)
+                printsOf(t.code).let { vp ->
+                    vp.see(t.generation) // 동의 세대가 바뀌면 대조 값 사본을 지운다(ADR-0023)
+                    // 보관 시간(3시간 30분)이 지난 사본은 대조할 말이 없어도 지운다: 여행을 받을 때마다(10초 조회) 본다. 녹음을 멈췄거나 아무도 말하지 않아도 남지 않게
+                    vp.expire(System.currentTimeMillis())
+                    // 탑승자나 동의가 바뀌면(새로 탐, 폰에서 프로필로 참가) 다음 대조 전에 다시 받는다. 그 밖에는 받은 사본을 3시간 30분 쓴다
+                    val who = t.code + t.people.joinToString { "${it.id}${it.consent}" }
+                    if (who != printsFor) { printsFor = who; vp.fetchedAt = 0 }
+                }
                 val box = Live.outbox(this, t.code)
                 if (box.see(t.generation, t.createdAt)) Live.show(box) // 동의 세대가 오르면 옛 세대 발화의 글을 지운다
                 if (v.consented) Live.rawGen = box.generation // 원음은 모두 동의한 세대로만 남긴다(T63)
@@ -182,6 +190,9 @@ class MainActivity : ComponentActivity() {
     private var clipping = false // 장면 클립을 올리는 중(T63)
     private var rawSeen = "" // 옛 세대 원음을 지운 여행·세대. 세대가 바뀔 때만 파일 목록을 본다
     private var speakers: Speakers? = null // 지금 여행의 발화별 말한 사람(T37)
+    private var prints: VoicePrints? = null // 지금 여행 탑승자의 목소리 대조 값 사본(ADR-0023)
+    private var printsFor = "" // 사본을 받을 때의 탑승자와 동의
+    private var consentSeenAt = 0L // 서버에서 여행(동의)을 마지막으로 확인한 시각
     private var matching = false // 대조·고침 보내기가 clipIo에 있음
     private var heardTick by mutableStateOf(0) // 말한 사람이 바뀌면 받아 적은 말 카드를 다시 그린다
     /** 이 차에서 목소리를 등록한 참가자. 그 사람의 동의가 꺼지면 서버가 등록값을 지우므로 여기서도 뺀다(#65). */
@@ -466,12 +477,18 @@ class MainActivity : ComponentActivity() {
                 val wasWithdrawing = s.offPending
                 s = (if (got == null) s.copy(online = true) else s.withTrip(keep(got))).polled()
                 if (wasWithdrawing && !s.offPending) s = s.copy(note = "동의를 철회했어요. 다시 녹음하려면 각자의 동의와 녹음 시작이 필요해요")
+                consentSeenAt = System.currentTimeMillis()
                 upload(t, resync, prune) // 받은 여행의 동의 세대를 보관함에 반영한(철회면 글을 지운) 뒤에만 올린다
                 speakers(t) // 올릴 새 발화가 없어도 밀린 대조와 고침을 잇는다
                 s.trip?.let(::clips)
                 loadTodos()
             }
-                .onFailure { if (it is Gone) forget(t.code) else s = s.pollFailed(it) } // 조회를 못 하면 이번에는 올리지 않는다
+                .onFailure {
+                    if (it is Gone) forget(t.code) else s = s.pollFailed(it) // 조회를 못 하면 이번에는 올리지 않는다
+                    // 서버에 닿지 않아도(끊김) 차 안 대조는 잇는다: 마지막으로 동의를 확인한 지 5분 안이고 그때 모두 동의였을 때만.
+                    // 서버가 거절한 것(ApiError)은 동의·권한이 달라졌을 수 있어 잇지 않는다
+                    if (it !is ApiError && it !is Gone && System.currentTimeMillis() - consentSeenAt < CONSENT_FRESH_MS && s.trip?.code == t.code) speakers(t)
+                }
         }
     }
 
@@ -499,32 +516,45 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * 말한 사람(T37): 서버가 받았지만 아직 대조하지 않은 발화(한 차례 20건)와, 사람이 고쳤지만 서버에 남기지 못한 것을 처리한다.
-     * 올릴 새 발화가 있든 없든 조회마다 본다(밀린 대조를 이어 하게). 대조는 원음을 보내므로 클립과 같은 따로 둔 실행기에서 돌고,
-     * 요청마다 '모두 동의, 끄기 대기 없음'을 다시 본다(동의를 끄면 남은 원음을 보내지 않고, 끄기 요청이 그 뒤에 서지 않게).
+     * 말한 사람(T37, ADR-0023): 서버가 받았지만 아직 대조하지 않은 발화(한 차례 20건)를 차 안에서 대조하고, 찾은 사람과
+     * 사람이 고친 것 가운데 서버에 남기지 못한 것을 보낸다. 올릴 새 발화가 있든 없든 조회마다 본다(밀린 것을 이어 하게).
+     * 소리는 차 밖으로 나가지 않는다. 원음을 풀어 읽으므로 클립과 같은 따로 둔 실행기에서 돌고, 발화마다 '모두 동의, 끄기 대기 없음'을 다시 본다.
      */
     private fun speakers(t: Trip) {
         val box = Live.box?.takeIf { it.trip == t.code } ?: return
         val up = tokens.minByOrNull { it.key }?.value ?: return
         if (matching || !clipsAllowed) return
         val sp = speakersOf(t.code)
+        val vp = printsOf(t.code)
         // 등록값이 있을 만할 때만 대조한다(이 차에서 등록했거나 프로필 참가자가 있음)
         val todo = if (voiced.isNotEmpty() || t.people.any { it.profile }) box.ackedAfter(sp.through).take(MATCH_MAX) else emptyList()
-        val fixes = sp.unsent()
-        if (todo.isEmpty() && fixes.isEmpty()) return
+        if (todo.isEmpty() && sp.unsent().isEmpty() && sp.unsentMatches().isEmpty()) return
         matching = true
         val url = server; val dev = device
         if (!clipIo.isShutdown) clipIo.execute {
-            val r = runCatching {
-                val api = Server(url)
-                for ((seq, f) in fixes) { api.fixSpeaker(t.code, up, dev, seq, f.who); sp.set(seq, f.copy(sent = true)) }
-                match(api, t.code, up, dev, todo, sp)
-            }
+            val api = Server(url)
+            // 대조는 차 안에서 끝나므로 먼저 하고, 보내기(고친 것, 찾은 화자)가 실패해도 대조를 막지 않는다(끊긴 동안에도 사본으로 대조)
+            val failed = speakerRound(
+                match = { if (todo.isNotEmpty()) { refreshPrints(api, t, up, vp); match(t, todo, sp, vp) } },
+                fixes = { for ((seq, f) in sp.unsent()) { api.fixSpeaker(t.code, up, dev, seq, f.who); sp.set(seq, f.copy(sent = true)) } },
+                // 찾은 사람을 그 발화와 함께 다시 올린다. 서버는 화자가 빈 줄에만 채운다(사람이 고친 줄은 그대로)
+                send = { sendSpeakers(box, sp, { clipsAllowed }) { items -> api.utterances(t.code, up, dev, items) } },
+            )
             main.post {
                 matching = false; heardTick++
-                r.exceptionOrNull()?.let { Log.i(TAG, "말한 사람 대조·고침 미룸 ${if (it is ApiError) it.status else "연결"}") }
+                failed?.let { Log.i(TAG, "말한 사람 대조·남기기 미룸 ${if (it is ApiError) it.status else "연결"}") }
             }
         }
+    }
+
+    /**
+     * 대조 값 사본을 서버에서 받는다(통신 스레드). 기록을 시작한 뒤 첫 대조 전에 받아 3시간 30분 쓰고(PRINTS_KEEP_MS), 탑승자·동의가 바뀌거나
+     * 이 차에서 등록하면 다시 받는다. 끊겼으면 보관 시간 안의 사본으로 대조한다.
+     * 서버가 거절하면(동의 대기 403, 옛 서버 404) 던져서 이번 차례의 대조를 미룬다. 소리를 서버로 보내는 옛 대조로 돌아가지 않는다.
+     */
+    private fun refreshPrints(api: Server, t: Trip, token: String, vp: VoicePrints) {
+        if (vp.refresh(System.currentTimeMillis(), t.generation) { api.voicePrints(t.code, token) })
+            Log.i("GachitaCapture", "대조 값 ${vp.size}명 받음") // 값·이름은 남기지 않는다
     }
 
     /** 명시한 디버그 시험 기간이 지난 여행만 정리한다. 운영 기본값에서는 호출하지 않는다. */
@@ -588,35 +618,40 @@ class MainActivity : ComponentActivity() {
     private fun dropRawAll(code: String): Int = synchronized(RAW_LOCK) { RawFile.of(filesDir, code).count { it.file.delete() } }
 
     /**
-     * 말한 사람(T37, #65): 서버가 받은 발화마다 이 차의 원음에서 그 구간(첫 결과 쪽 0.5초를 빼고 10초까지)을 잘라 목소리 대조를 부른다(통신 스레드).
-     * 좌석 구역이 있으면 그 줄(row)의 사람만 후보다. 서버가 찾으면 그 발화 줄에 화자를 붙이고, 차는 결과를 남겨 화면에 보인다. 원음이 없으면 건너뛴다.
+     * 말한 사람(T37, ADR-0023): 발화마다 이 차의 원음에서 그 구간(첫 결과 쪽 0.5초를 빼고 10초까지)을 잘라 차 안에서 벡터로 바꾸고,
+     * 받아 둔 탑승자의 대조 값과 견준다(서버의 /voice-match와 같은 규칙·같은 기준). 좌석 구역이 있으면 그 줄의 사람만 후보다.
+     * 소리와 발화의 벡터는 남기지도 보내지도 않는다. 원음이 없으면 건너뛴다.
      */
-    private fun match(api: Server, code: String, token: String, dev: String, items: List<Utterance>, sp: Speakers) {
-        val files = RawFile.of(filesDir, code)
+    private fun match(t: Trip, items: List<Utterance>, sp: Speakers, vp: VoicePrints) {
+        val files = RawFile.of(filesDir, t.code)
+        val seated = t.people.filter { it.consent } // 동의하지 않은 사람의 이름은 붙이지 않는다
         for (u in items) {
             val to = u.endedAt - 500 // 최종 결과는 말 끝 0.6초 뒤에 온다(11/13): 끝의 무음을 덜어 목소리만
-            val from = maxOf(u.startedAt + LEAD_MS / 2, to - 9_900) // 서버는 0.5~10초를 받는다. 0.1초 묶음 단위로 잘려도 그 안에 들게
-            if (!clipsAllowed) return // 그사이 동의를 껐으면(철회) 원음을 더 보내지 않는다
+            val from = maxOf(u.startedAt + LEAD_MS / 2, to - 9_900) // 서버 대조와 같은 구간(0.5~10초)
+            if (!clipsAllowed) return // 그사이 동의를 껐으면(철회) 원음을 더 읽지 않는다
             val pcm = if (to - from < 600) null else clipFile(files, from..to)?.let { runCatching { it.cut(Live.seal(this), from, to) }.getOrNull() }
-            if (pcm == null || pcm.size < RATE) { sp.done(u.seq); continue } // 원음이 없거나 짧음: 다시 하지 않음
-            val r = try {
-                // 구역이 틀렸을 수 있어(앞뒤 사람이 이어 말함) 그 줄에서 못 찾으면 줄 없이 한 번 더
-                api.voiceMatch(code, token, u.seatZone?.plus(1), dev, u.seq, wav(pcm)).let { r ->
-                    if (r.who == null && u.seatZone != null && clipsAllowed) api.voiceMatch(code, token, null, dev, u.seq, wav(pcm)) else r
-                }
-            } catch (e: ApiError) {
-                if (e.status in listOf(400, 404, 409, 413)) { sp.done(u.seq); continue } else throw e // 403·5xx·끊김: 다음 차례에 이 발화부터
-            }
-            sp.set(u.seq, r); sp.done(u.seq)
+            val v = pcm?.takeIf { it.size >= RATE }?.let { embed(pcmSamples(it)) }
+            if (v == null) { sp.done(u.seq); continue } // 원음이 없거나 짧음: 다시 하지 않음
+            // 구역이 틀렸을 수 있어(앞뒤 사람이 이어 말함) 그 줄에서 못 찾으면 줄 없이 한 번 더
+            val row = u.seatZone?.let { z -> seated.filter { it.seat.startsWith("ROW_${z + 1}_") } }
+            val r = (row?.let { vp.match(v, it.map(Person::id)) }?.takeIf { it.who != null } ?: vp.match(v, seated.map(Person::id)))
+            sp.set(u.seq, r.copy(sent = r.who == null)); sp.done(u.seq) // 찾았으면 서버에 남길 때까지 sent = false
             Log.i("GachitaCapture", "말한 사람 ${u.seq} 구역 ${u.seatZone ?: "모름"} ${if (r.who != null) "찾음" else "모름"} ${r.confidence}") // 이름·글자는 남기지 않는다
         }
     }
 
+    /**
+     * 대조 값 사본을 바로 버린다(ADR-0023): 이 차에서 동의를 철회할 때(끊겨서 서버에 전하지 못해도), 여행을 떠나거나 여행이 지워질 때.
+     * 진행 중인 조회의 늦은 응답도 저장되지 않는다. 철회 대기 중에는 대조가 돌지 않으니(clipsAllowed) 다시 받지도 않는다.
+     */
+    private fun dropPrints() { prints?.drop(); prints = null }
+
+    private fun printsOf(code: String): VoicePrints = prints?.takeIf { it.trip == code } ?: VoicePrints(filesDir, code, Live.seal(this)).also { prints = it }
     private fun speakersOf(code: String): Speakers = speakers?.takeIf { it.trip == code } ?: Speakers(filesDir, code, Live.seal(this)).also { speakers = it; heardTick++ }
 
     /**
-     * 출발 전 목소리 등록(T37, #65): 그 사람이 두 문장을 읽는 동안(10초) 수음 중인 모노 소리를 모아 그 사람의 토큰으로 올린다.
-     * 기록 중(모두 동의)일 때만. 그 사이 받아 적힌 말은 보관함에, 소리는 원음에 남기지 않는다. 서버도 대조용 값만 둔다.
+     * 출발 전 목소리 등록(T37, ADR-0023): 그 사람이 두 문장을 읽는 동안(10초) 수음 중인 모노 소리를 모아 차 안에서 대조 값으로 바꾸고,
+     * 값만 그 사람의 토큰으로 올린다. 소리는 차를 떠나지 않는다. 기록 중(모두 동의)일 때만. 그 사이 받아 적힌 말은 보관함에, 소리는 원음에 남기지 않는다.
      */
     private fun enroll(p: Person) {
         val token = tokens[p.id] ?: return
@@ -632,8 +667,12 @@ class MainActivity : ComponentActivity() {
             enrolling = null
             val pcm = buf.toByteArray()
             val url = server
-            bg({ Server(url).voice(code, p.id, token, wav(pcm)) }) { r ->
+            bg({
+                val v = embed(pcmSamples(pcm)) ?: throw ApiError(400, "소리가 너무 짧아요")
+                Server(url).voice(code, p.id, token, v, pcm.size / 2.0 / RATE)
+            }) { r ->
                 r.onSuccess {
+                    prints?.takeIf { it.trip == code }?.fetchedAt = 0 // 새 값을 다음 대조 전에 받는다
                     voiced = voiced + p.id; prefs.edit().putString("voiced", "$voicedAt:" + voiced.joinToString(",")).apply()
                     voiceNote = "${p.name} 목소리를 등록했어요"
                 }.onFailure { voiceNote = "${p.name} 목소리를 등록하지 못했어요 · ${reason(it)}" }
@@ -741,6 +780,7 @@ class MainActivity : ComponentActivity() {
 
     /** 철회는 네트워크·주행 상태와 무관하게 즉시 수음을 멈춘다. 전송 대기와 대상은 재시작 후에도 보존한다. */
     private fun turnOff(id: String? = null) {
+        dropPrints() // 철회는 서버 응답을 기다리지 않고 이 차의 목소리 대조 값부터 지운다
         s = s.turnOff(id).copy(note = "동의를 철회했어요. 원음과 대화를 지우고 있어요")
         s.trip?.let { dropRawAll(it.code) }
         refresh()
@@ -764,7 +804,7 @@ class MainActivity : ComponentActivity() {
         sweep(filesDir, Live.seal(this), System.currentTimeMillis(), retentionMs).forEach(Live::forget)
         tokens = emptyMap()
         s = Session(gear = s.gear)
-        offer = null; todoState = todoState.bind(null); arrivalRequest++; arrivalLoading = false; arrivalNote = ""; brief = null; speakers = null; voiced = emptySet()
+        offer = null; todoState = todoState.bind(null); arrivalRequest++; arrivalLoading = false; arrivalNote = ""; brief = null; speakers = null; dropPrints(); voiced = emptySet()
     }
 
     // ---- 부탁을 경유지로(T9). 서버의 부탁 상태: held → proposed → accepted → reflected, 못 넣으면 held(openapi.yaml) ----
