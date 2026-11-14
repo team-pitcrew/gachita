@@ -141,18 +141,15 @@ fun EmptySeat(size: Dp) {
     Canvas(Modifier.size(size)) { drawCircle(line, this.size.minDimension / 2 - 2.dp.toPx(), style = Stroke(3.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(14f, 12f)))) }
 }
 
-/** 가치타 본체 마스코트(차 모양). 상태는 자세로만 바꾼다: 듣는 중은 눈을 뜨고 민트 점, 멈춤은 눈을 감는다(Grok Bot의 원리만). */
+/** 웹과 설치 아이콘에 쓰는 같은 대표 캐릭터. 녹음 상태는 옆 상태 표시에서 안내합니다. */
 @Composable
 fun Mascot(listening: Boolean, size: Dp = 56.dp) {
-    val c = MaterialTheme.colorScheme
-    Canvas(Modifier.size(size).clip(RoundedCornerShape(16.dp)).background(c.primaryContainer).padding(4.dp)) {
-        in64 {
-            drawPath(carPath, Color.White)
-            drawPath(carPath, Color(INK), style = Stroke(3f, join = StrokeJoin.Round))
-            face(36f, closed = !listening)
-            if (listening) drawCircle(Color(0xFF60C090), 6f, Offset(52f, 12f))
-        }
-    }
+    Image(
+        painter = painterResource(R.drawable.gachita_launcher_art),
+        contentDescription = if (listening) "가치타 · 대화 기록 중" else "가치타",
+        modifier = Modifier.size(size).clip(RoundedCornerShape(14.dp)),
+        contentScale = ContentScale.Fit,
+    )
 }
 
 /** 화면 맨 위 줄: 마스코트, 이름, 여행 제목, 오른쪽에 상태 알약(주차 중 · P, 서버 연결됨 — 시안 C1·C5·C6). 알약은 (글, 괜찮은지). */
