@@ -55,7 +55,16 @@ gh secret set PROJECT_TOKEN -R team-pitcrew/gachita    # 토큰을 붙여 넣는
 - 보드를 만들고 티켓을 모두 올렸습니다. 화면을 칸반으로 바꾸고 프로젝트 자동화 다섯 개를 켰습니다.
 - 프로젝트 자동화가 도는 것을 봤습니다: PR #45를 열자 T32 카드가 In review로 옮겨졌습니다.
 - `PROJECT_TOKEN`은 2026-11-13 16:39(UTC)에 저장소 비밀 값으로 넣었습니다. 토큰이 있으면 워크플로가 라벨과 함께 보드도 옮깁니다(`tickets.py`). 보드와 라벨이 어긋나 보이면 `board.sh sync`를 돌립니다.
-- 보드에 쓰는 코드(`tickets.py`의 `sync_project`)는 로컬 토큰으로 실제 보드에 돌려 확인했습니다. 토큰을 넣은 뒤 워크플로 안에서 보드가 옮겨지는 것은 이 문서를 쓰며 따로 확인하지 않았습니다.
+- `PROJECT_TOKEN`을 사용하는 실제 워크플로에서 생성 → 브랜치 → PR → 병합의 자동 이동을 확인했습니다. [T84 #241](https://github.com/team-pitcrew/gachita/issues/241)의 이력과 [PR #246](https://github.com/team-pitcrew/gachita/pull/246)을 근거로 합니다. 아래 시각은 KST입니다.
+
+| 이벤트 | 시각 (2026-11-14) | 확인한 상태 |
+|---|---|---|
+| T84 이슈 생성 | 08:11:17 | Backlog |
+| `feature/T84-cluster-foundation` 생성 | 08:12:25 | In progress |
+| PR #246 생성 | 08:27:24 | In review |
+| PR #246 병합과 이슈 닫힘 | 08:51:49~08:52:00 | Done |
+
+- 각 단계의 보드 상태를 작업 중 조회했고, 병합 뒤에도 이슈 `CLOSED`와 프로젝트 `Done`을 다시 확인했습니다. [검증 완료 기록](https://github.com/team-pitcrew/gachita/issues/241#issuecomment-6867926388)에 병합 커밋과 CI 근거가 있습니다. 이 사례는 자동화의 실제 실행 증거이며, 다른 카드의 기능 검증을 대신하지 않습니다.
 - 상태의 기준은 `status:*` 라벨입니다. 보드와 라벨이 다르면 `board.sh sync`가 라벨 쪽으로 맞춥니다.
 
 ## 살펴보는 명령
