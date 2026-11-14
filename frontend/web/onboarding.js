@@ -5,10 +5,9 @@
 import { api, h, toast } from "./shared.js";
 import { appBar } from "./ride.js";
 import { CHARACTER_TYPES, characterImage, characterKey } from "./short-film.js";
-import { embed, RATE, toMono16k, voiceValue } from "./voice-embed.js";
+import { MIN_SECONDS, startVoice, voiceBars, VOICE_SECONDS } from "./voice-meter.js";
 
-export const VOICE_SECONDS = 15;
-export const MIN_SECONDS = 5; // '녹음 완료'가 눌리는 최소 길이. 서버는 1~20초를 받는다
+export { MIN_SECONDS, VOICE_SECONDS };
 const BARS = [10, 18, 28, 14, 24, 32, 12, 20, 30, 16, 26, 10, 22, 30, 18, 12, 24, 34, 20, 28, 14, 26, 32, 16, 22, 30, 12, 18, 26, 14];
 // 시안 P04의 앞 네 캐릭터(안경·힐링·캡모자·기본) 순서로 두고 나머지를 잇는다.
 const LABEL = Object.fromEntries(CHARACTER_TYPES);
@@ -40,6 +39,12 @@ export function callName(name) {
 // 가입 때 서버가 이름을 꼭 받으므로 이메일 앞부분을 임시 이름으로 보낸다. 다음 단계(P04)에서 바꾼다.
 export const provisionalName = (email) => (email.split("@")[0] || "나").slice(0, 20);
 
+// 가입 때 붙인 임시 이름(이메일 앞부분)을 아직 그대로 쓰는지. P04에서 이름을 받기 전의 계정이다.
+export const provisionalOnly = (profile) => Boolean(profile?.email) && profile.name === provisionalName(profile.email);
+
+// 이메일 계정이 온보딩을 마쳤는지: 계정 동의, 직접 정한 이름, 목소리(첫 프로필은 목소리 필수). 초대 링크로 그룹에 들어가기 전에 본다.
+export const accountReady = (profile) => Boolean(profile?.consent && profile.hasVoice && !provisionalOnly(profile));
+
 // 서버 오류를 화면 문장으로. 로그인 실패는 이메일과 비밀번호 중 무엇이 틀렸는지 말하지 않는다(서버와 같음).
 export function accountError(e, mode) {
   if (e.status === 0) return "연결이 끊겨서 보내지 못했어요.";
@@ -50,12 +55,12 @@ export function accountError(e, mode) {
   return e.message;
 }
 
-export function createOnboarding({ getProfile, getToken, setToken, loadProfile, getPhoto, consentText, render, onBegin = () => {}, onDone, onFamily, onOther, isOnline = () => navigator.onLine !== false }) {
+export function createOnboarding({ getProfile, getToken, setToken, loadProfile, getPhoto, consentText, render, onBegin = () => {}, onDone, onFamily, onOther, hasInvite = () => false, isOnline = () => navigator.onLine !== false }) {
   let step = null; // null이면 view()가 firstStep으로 정한다
   let mode = "signup";
   const draft = { email: "", password: "", name: "", character: "", photo: null, preview: "" };
   let busy = false;
-  let rec = null; // { stream, ctx, chunks, frames, rate, done, timer, startedAt }
+  let rec = null; // 녹음 중·끝난 녹음(voice-meter.js startVoice)
   let mic = ""; // 마이크를 열지 못한 이유
 
   const me = () => getProfile();
@@ -63,7 +68,7 @@ export function createOnboarding({ getProfile, getToken, setToken, loadProfile, 
   const go = (next) => { step = next; render(); };
   const fill = () => {
     const p = me();
-    draft.name = p?.name ?? "";
+    draft.name = provisionalOnly(p) ? "" : p?.name ?? ""; // 임시 이름(이메일 앞부분)은 채워 두지 않는다 — P04에서 직접 적게
     draft.character = characterKey(p?.character || "basic").replace(/-small$/, "");
   };
   const work = async (fn) => {
@@ -86,7 +91,8 @@ export function createOnboarding({ getProfile, getToken, setToken, loadProfile, 
     ? h("span", { className: "ob-avatar" }, h("img", { src: draft.preview || getPhoto(), alt: "" }))
     : h("span", { className: "ob-avatar" }, characterImage(draft.character || me()?.character || "glasses"));
   const field = (label, input) => h("label", { className: "field ob-field" }, h("span", {}, label), input);
-  const wave = (filled) => h("div", { className: "ob-wave", "aria-hidden": "true" }, BARS.map((height, i) => h("i", { className: i < filled ? "on" : "", style: `height:${height}px` })));
+  // 녹음 전은 시안 모양(모두 켬), 녹음 중·뒤는 실제 들어온 소리 크기(voice-meter.js). 앞으로 칸은 시안처럼 옅은 막대.
+  const wave = (meter) => voiceBars(meter, { className: "ob-wave", slots: BARS.length, ready: BARS, min: 6, max: 40, upcoming: BARS });
   const clock = (s) => `00:${String(Math.min(99, Math.floor(s))).padStart(2, "0")}`;
 
   // P01
@@ -197,7 +203,7 @@ export function createOnboarding({ getProfile, getToken, setToken, loadProfile, 
   const voice = () => [top(),
     title("15초만 들려주세요", "02 목소리 등록 / 조용한 곳에서 혼자 읽어 주세요."),
     h("div", { className: "ob-script" }, h("strong", {}, `“안녕, 나는 ${callName(me()?.name || draft.name || "나")}.`), h("span", {}, "우리 가족과 함께 여행하는 시간이 좋아. 오늘은 바다를 보러 가고, 맛있는 것도 먹을 거야.”")),
-    h("div", { className: "ob-meter" }, h("span", {}, mic || "목소리 등록 준비"), wave(BARS.length), h("p", {}, h("span", {}, "00:00"), h("span", {}, clock(VOICE_SECONDS)))),
+    h("div", { className: "ob-meter" }, h("span", {}, mic || "목소리 등록 준비"), wave(null), h("p", {}, h("span", {}, "00:00"), h("span", {}, clock(VOICE_SECONDS)))),
     note("등록한 목소리로 차량에서 발화자를 구분해요. 소리는 이 폰에서 값으로 바뀌고, 값만 서버에 저장돼요."),
     bottom(primary("녹음 시작", startRecording))];
 
@@ -205,14 +211,13 @@ export function createOnboarding({ getProfile, getToken, setToken, loadProfile, 
   const recording = () => {
     const s = seconds();
     const done = rec?.done;
-    const filled = Math.round((Math.min(s, VOICE_SECONDS) / VOICE_SECONDS) * BARS.length);
     const late = s >= 7;
     return [top(),
       title(done ? "녹음을 마쳤어요" : "목소리를 듣고 있어요", done ? "‘녹음 완료’를 누르면 등록해요." : "주변 사람은 잠시 조용히 기다려 주세요."),
       h("div", { className: "ob-script" }, late
         ? [h("strong", {}, "“함께 타는 순간을 오래 기억하고 싶어.”"), h("span", {}, "평소 말하는 목소리로 이어 읽어 주세요.")]
         : [h("strong", {}, `“안녕, 나는 ${callName(me()?.name || draft.name || "나")}.`), h("span", {}, "우리 가족과 함께 여행하는 시간이 좋아. 오늘은 바다를 보러 가고, 맛있는 것도 먹을 거야.”")]),
-      h("div", { className: "ob-meter" }, h("span", { role: "status" }, h("b", {}, done ? "녹음 끝" : "녹음 중"), ` ${Math.floor(Math.min(s, VOICE_SECONDS))} / ${VOICE_SECONDS}초`), wave(filled),
+      h("div", { className: "ob-meter" }, h("span", { role: "status" }, h("b", {}, done ? "녹음 끝" : "녹음 중"), ` ${Math.floor(Math.min(s, VOICE_SECONDS))} / ${VOICE_SECONDS}초`), wave(rec),
         h("p", {}, h("span", {}, clock(s)), h("span", {}, clock(VOICE_SECONDS)))),
       bottom(secondary("다시 녹음", startRecording), primary(busy ? "등록 중" : "녹음 완료", submitVoice, s < MIN_SECONDS))];
   };
@@ -223,78 +228,46 @@ export function createOnboarding({ getProfile, getToken, setToken, loadProfile, 
     return [top(),
       title(`${p?.name ?? draft.name}님의 목소리 등록 완료`, "차량과 폰에서 같은 프로필을 사용해요."),
       card(p?.name ?? draft.name, p?.hasVoice ? "캐릭터와 음성 특징 저장 완료" : "캐릭터 저장 완료", { soft: true, face: avatar() }),
-      card("다음은 우리 가족", `아이의 프로필도 ${p?.name ?? draft.name}님이 만들어 줄 수 있어요.`),
-      bottom(primary("가족 그룹 만들기", () => { close(); onFamily(); }))];
+      // 초대 링크로 들어왔으면 새 가족을 만들지 않고 초대받은 그룹으로 간다(참여 화면에서 동의하고 참여).
+      hasInvite()
+        ? card("다음은 초대받은 그룹", "참여하면 같은 차에서 내 캐릭터와 목소리로 함께 기록해요.")
+        : card("다음은 우리 가족", `아이의 프로필도 ${p?.name ?? draft.name}님이 만들어 줄 수 있어요.`),
+      bottom(primary(hasInvite() ? "초대받은 그룹에 참여" : "가족 그룹 만들기", () => { close(); onFamily(); }))];
   };
 
-  // ---- 녹음: 마이크 → (기기 표본율) → 16 kHz 모노 → embed() → 값만 올림 ----
+  // ---- 녹음: 마이크 → 실제 소리 크기로 막대 → 16 kHz 모노 → embed() → 값만 올림(voice-meter.js) ----
   function seconds() {
-    if (!rec) return 0;
-    return rec.frames / rec.rate;
-  }
-
-  function stopMic() {
-    if (!rec) return;
-    clearInterval(rec.timer);
-    rec.stream.getTracks().forEach((t) => t.stop());
-    rec.ctx.close().catch(() => {});
-    rec.done = true;
+    return rec ? Math.min(rec.elapsed(), VOICE_SECONDS) : 0;
   }
 
   async function startRecording() {
     if (!me()?.consent) { toast("기록 동의를 먼저 받아요."); return go("consent"); } // 동의 없이 마이크를 열지 않는다
-    stopMic();
+    rec?.cancel();
     rec = null;
     mic = "";
-    let stream;
+    let current;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+      current = await startVoice({ slots: BARS.length, seconds: VOICE_SECONDS, onChange: () => { if (step === "recording" && rec === current) render(); } });
     } catch (e) {
-      mic = e?.name === "NotAllowedError" ? "마이크 권한이 없어 녹음할 수 없어요" : "이 기기에서는 마이크를 열 수 없어요";
+      mic = e.message;
       return go("voice");
     }
-    const Ctx = globalThis.AudioContext ?? globalThis.webkitAudioContext;
-    const ctx = new Ctx();
-    const source = ctx.createMediaStreamSource(stream);
-    const node = ctx.createScriptProcessor(4096, 1, 1);
-    const mute = ctx.createGain();
-    mute.gain.value = 0; // 처리 노드가 돌도록 출력에 잇되 소리는 내지 않는다
-    const current = { stream, ctx, chunks: [], frames: 0, rate: ctx.sampleRate, done: false, timer: 0 };
-    node.onaudioprocess = (e) => {
-      if (rec !== current || current.done) return;
-      const data = e.inputBuffer.getChannelData(0);
-      const room = Math.max(0, Math.round(VOICE_SECONDS * current.rate) - current.frames);
-      current.chunks.push(new Float32Array(data.subarray(0, Math.min(room, data.length))));
-      current.frames += Math.min(room, data.length);
-      if (current.frames >= VOICE_SECONDS * current.rate) { stopMic(); render(); }
-    };
-    source.connect(node);
-    node.connect(mute);
-    mute.connect(ctx.destination);
-    await ctx.resume().catch(() => {});
     rec = current;
-    current.timer = setInterval(() => { if (step === "recording" && rec === current) render(); }, 250);
     go("recording");
   }
 
   async function submitVoice() {
     if (!rec || seconds() < MIN_SECONDS || busy) return;
     const got = rec;
-    stopMic();
+    got.stop();
     await work(async () => {
       if (!me()?.consent) { step = "consent"; return; }
-      const all = new Float32Array(got.frames);
-      let at = 0;
-      for (const c of got.chunks) { all.set(c, at); at += c.length; }
-      const mono = await toMono16k(all, got.rate);
-      let vector;
-      try { vector = embed(mono); } catch { throw new Error("소리가 너무 짧아요. 다시 녹음해 주세요."); }
+      const { value } = await got.finish(); // 표본은 값을 만든 뒤 버린다
       try {
-        await call("POST", "/profiles/me/voice", voiceValue(vector, mono.length / RATE));
+        await call("POST", "/profiles/me/voice", value);
       } catch (e) {
-        throw e.status === 400 ? new Error("말소리가 잘 들리지 않았어요. 조용한 곳에서 다시 녹음해 주세요.") : e;
+        throw e.status === 400 ? new Error("말소리가 없어 등록할 수 없음") : e;
       }
-      got.chunks = []; // 값만 남기고 소리는 버린다
       await loadProfile();
       step = "done";
     });
@@ -311,7 +284,7 @@ export function createOnboarding({ getProfile, getToken, setToken, loadProfile, 
   }
 
   function close() {
-    stopMic();
+    rec?.cancel();
     rec = null;
     step = null;
     mode = "signup";
@@ -325,7 +298,12 @@ export function createOnboarding({ getProfile, getToken, setToken, loadProfile, 
     close,
     get step() { return step; },
     view() {
-      if (!step) { step = firstStep(me(), !!getToken()); fill(); }
+      if (!step) {
+        // 다시 열었을 때(새로 고침) 프로필을 읽기 전에 단계를 정하면 계정이 있는데도 '계정 만들기'에 멈춘다. 읽은 뒤에 정한다.
+        if (getToken() && !me()) return [top(), title("프로필을 확인하고 있어요")];
+        step = firstStep(me(), !!getToken());
+        fill();
+      }
       if (step === "recording" && !rec) step = "voice";
       return views[step]();
     },
