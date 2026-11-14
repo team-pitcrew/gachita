@@ -1411,7 +1411,8 @@ class MainActivity : ComponentActivity() {
             title = { Text(if (wide) "내비 옆 반쪽 창으로 보기" else "전체화면으로 보기", fontSize = 28.sp, fontWeight = FontWeight.Bold) },
             text = { // 대화 상자 본문 기본 줄 높이(20sp)는 24sp 글자에 겹친다
                 Text(if (wide) "오른쪽 끝 ⋮를 왼쪽으로 끌면 화면이 둘로 나뉘어요. 가운데 ⋮를 누르면 내비가 왼쪽, 가치타가 오른쪽으로 바뀌어요."
-                    else "가운데 ⋮를 왼쪽 끝까지 끌면 가치타가 넓어져요. 창의 자리와 크기는 차량 화면이 정해서 앱이 바꿀 수 없어요.", fontSize = 24.sp, lineHeight = 34.sp)
+                    // ponytail: 좌우는 다시 열거나 운전자가 바꿔 앱이 모르므로 두 경우를 함께 적는다. 쓴 동작(누르기·왼쪽 끝으로 끌기)은 11/14 실측한 것만
+                    else "가치타가 오른쪽이면 가운데 ⋮를 왼쪽 끝까지 끌면 넓어져요. 왼쪽이면 먼저 가운데 ⋮를 눌러 오른쪽으로 옮겨요. 창의 자리와 크기는 차량 화면이 정해서 앱이 바꿀 수 없어요.", fontSize = 24.sp, lineHeight = 34.sp)
             })
     }
 
