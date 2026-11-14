@@ -54,6 +54,21 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.EncodeHintType
 import com.google.zxing.qrcode.QRCodeWriter
@@ -167,7 +182,69 @@ val DEMO_FAMILY = CarGroup("demo", "우리 가족", "family", listOf(
     GroupMember("demo-girl", "하은", "basic-small", true, true, "child", "ROW_2_RIGHT"),
 ), GroupInvite("FAMILY-2714", "/?group=FAMILY-2714"))
 
-private enum class FamilyView { MEMBER, INVITE, CHILD, CHILD_VOICE, GROUP, SEAT, GUEST }
+// ---- 그룹 화면(C16A groupDetail · C16B seatAssignment · C16C memberPicker · C16G guestDetail · C16I groupInvite · C16L groupsCreated) ----
+
+/** 좌석 이름(ROW_2_LEFT)을 화면 글(뒤 왼쪽)로. 모르는 값이나 자리 없음은 null. */
+fun seatLabel(seat: String?): String? = seat?.let { s -> Seat.entries.firstOrNull { it.name == s }?.label?.replace("뒷자리", "뒤") }
+
+/** 좌석 배정(C16B)에 그리는 자리: 앞 둘, 뒤 둘(SeatGrid와 같음). */
+val GRID_SEATS = listOf(listOf(Seat.ROW_1_LEFT, Seat.ROW_1_RIGHT), listOf(Seat.ROW_2_LEFT, Seat.ROW_2_RIGHT))
+
+/** 동승 그룹에 만든 사람만 있을 때(C16G guestDetail, 전체 그룹의 '초대 대기'). 출발할 사람이 없어 초대부터 한다. */
+fun soloGuest(g: CarGroup) = g.kind == "guest" && g.members.size <= 1
+
+/** 그룹 카드의 둘째 줄(C16A·C16L): '4명  |  기본 그룹', 혼자인 동승 그룹에 쓸 수 있는 초대가 있으면 '1명  |  초대 대기'. */
+fun groupLine(g: CarGroup): String =
+    "${g.members.size}명  |  ${if (g.kind == "family") "기본 그룹" else if (soloGuest(g) && g.invite != null) "초대 대기" else "동승 그룹"}"
+
+/** 전체 그룹(C16L) 순서: 가족 그룹이 먼저, 나머지는 서버가 준 순서. */
+fun groupsInOrder(groups: List<CarGroup>) = groups.sortedBy { if (it.kind == "family") 0 else 1 }
+
+/**
+ * 구성원과 저장된 좌석(C16A): 자리 순서로 '운전석 → 아빠'. 자리 없는 구성원은 마지막 줄 하나('자리 없음 → 지우, 민수')로 모은다.
+ * 서버는 자리가 정해진 구성원만 여행에 넣으므로(docs/api/groups.md) 자리 없음은 이번 여행에 타지 않는다는 뜻이다.
+ */
+fun seatLines(members: List<GroupMember>): List<Pair<String, String>> {
+    val order = Seat.entries.map { it.name }
+    val seated = members.filter { it.seat != null && it.seat in order }.sortedBy { order.indexOf(it.seat) }.map { seatLabel(it.seat)!! to it.name }
+    val free = members.filter { it.seat == null || it.seat !in order }
+    return if (free.isEmpty()) seated else seated + ("자리 없음" to free.joinToString(", ") { it.name })
+}
+
+/** 'Group / 2x2 profile' 칸 하나: 구성원 캐릭터, 지금 쓸 수 있는 초대(초대 중), 빈 칸(미등록). */
+sealed interface FaceSlot {
+    data class Member(val character: String) : FaceSlot
+    data object Inviting : FaceSlot
+    data object Empty : FaceSlot
+}
+
+/** 2x2 칸 넷(Group / 2x2 / one·two·three·inviting): 앞 네 사람, 자리가 남고 초대가 있으면 '초대 중' 한 칸, 나머지는 '미등록'. */
+fun faceSlots(g: CarGroup): List<FaceSlot> {
+    val faces: List<FaceSlot> = g.members.take(4).map { FaceSlot.Member(it.character) }
+    val inviting = if (faces.size < 4 && g.invite != null) listOf(FaceSlot.Inviting) else emptyList()
+    return (faces + inviting + List(4) { FaceSlot.Empty }).take(4)
+}
+
+/**
+ * 좌석 구성원 선택(C16C)에서 seat 자리에 who를 고른 결과. 좌석 지도의 seatPick 규칙을 그대로 쓴다: 빈자리면 앉히고,
+ * 앉은 사람끼리는 맞바꾸고('이미 앉은 사람을 선택하면 두 사람의 자리가 바뀌어요'), 자리 없는 사람은 앉은 사람의 자리에 넣지 않는다
+ * — 앉아 있던 사람이 자리를 잃으면 '이 그룹과 출발'이 그 사람 없이 여행을 만든다. 그때 members는 null이고 note가 이유다.
+ */
+fun pickFor(members: List<GroupMember>, seat: String, who: String): SeatResult {
+    val occupant = members.firstOrNull { it.seat == seat }?.profileId
+    val r = seatPick(members, SeatPick(who, members.firstOrNull { it.profileId == who }?.seat), SeatPick(occupant, seat))
+    if (r.members != null || r.note == null) return r
+    val n = members.firstOrNull { it.profileId == who }?.name.orEmpty()
+    return SeatResult(null, null, "$n${if (batchim(n)) "은" else "는"} 자리가 없어 앉은 사람과 바꿀 수 없어요. 빈자리를 골라 주세요.")
+}
+
+private enum class FamilyView { MEMBER, INVITE, CHILD, CHILD_VOICE, GROUP, SEAT, GUEST, GROUPS, DETAIL, ASSIGN, PICKER, GUEST_DETAIL, GROUP_INVITE }
+
+/** 그룹 하나를 열 때의 화면: 혼자인 동승 그룹은 초대부터(C16G), 나머지는 구성원과 좌석(C16A). */
+private fun detailOf(g: CarGroup?) = if (g != null && soloGuest(g)) FamilyView.GUEST_DETAIL else FamilyView.DETAIL
+
+/** 옆 칸 없이 한 줄로 그리는 그룹 화면(C16*). FamilyFlow가 이 값들이면 따로 그린다. */
+private val GROUP_VIEWS = setOf(FamilyView.GROUPS, FamilyView.DETAIL, FamilyView.ASSIGN, FamilyView.PICKER, FamilyView.GUEST_DETAIL, FamilyView.GROUP_INVITE)
 
 private fun charRes(key: String): Int {
     val small = key.endsWith("-small")
@@ -217,6 +294,7 @@ fun FamilyFlow(server: String, token: String?, onClose: () -> Unit, onStart: (St
     var saved by remember { mutableStateOf(false) }
     var guestName by remember { mutableStateOf("") }
     var myName by remember { mutableStateOf("민준") } // mock: 토큰이 없을 때의 시연 이름
+    var pickSeat by remember { mutableStateOf(Seat.ROW_1_LEFT.name) } // 좌석 배정(C16B)에서 누른 자리 → 구성원 선택(C16C)
 
     val api = remember(server) { Server(server) }
     fun family() = groups.firstOrNull { it.kind == "family" }
@@ -247,10 +325,10 @@ fun FamilyFlow(server: String, token: String?, onClose: () -> Unit, onStart: (St
         if (fam != null && seatsAfterChild(fam.members)) { groupId = fam.id; saved = false; view = FamilyView.GROUP } else view = FamilyView.MEMBER
     }
     suspend fun ensureFamily(): CarGroup = family() ?: io { api.createGroup(token!!, "우리 가족", "family") }.also { put(it) }
-    suspend fun issue(g: CarGroup) {
+    suspend fun issue(g: CarGroup, to: FamilyView = FamilyView.INVITE) {
         groupId = g.id
         invite = if (token == null) g.invite else io { api.groupInvite(token, g.id) }
-        view = FamilyView.INVITE
+        view = to
     }
     fun toast(text: String) { note = text; scope.launch { delay(2500); if (note == text) note = "" } }
     fun link() = server.trimEnd('/') + (invite?.url ?: "")
@@ -271,7 +349,12 @@ fun FamilyFlow(server: String, token: String?, onClose: () -> Unit, onStart: (St
         view = when (view) {
             FamilyView.INVITE -> if (current()?.kind == "guest") FamilyView.GROUP else FamilyView.MEMBER
             FamilyView.CHILD, FamilyView.CHILD_VOICE -> FamilyView.MEMBER
-            FamilyView.SEAT, FamilyView.GUEST -> FamilyView.GROUP
+            FamilyView.SEAT -> FamilyView.GROUP
+            FamilyView.GUEST, FamilyView.DETAIL, FamilyView.GUEST_DETAIL -> FamilyView.GROUPS
+            FamilyView.GROUPS -> { groupId = family()?.id; if (family() != null) FamilyView.GROUP else FamilyView.MEMBER }
+            FamilyView.ASSIGN -> FamilyView.DETAIL
+            FamilyView.PICKER -> FamilyView.ASSIGN
+            FamilyView.GROUP_INVITE -> detailOf(current())
             // 좌석 지도에서 뒤로 가면 가족 추가(C40)로 — 아이를 더 더하거나 다시 초대한다.
             FamilyView.GROUP -> if (token != null) FamilyView.MEMBER else { onClose(); view }
             else -> { onClose(); view }
@@ -312,6 +395,74 @@ fun FamilyFlow(server: String, token: String?, onClose: () -> Unit, onStart: (St
     }
 
     val g = current()
+    if (view in GROUP_VIEWS) {
+        // 그룹 화면(C16*): 옆 칸 없이 본문 하나와 아래 단추. 단추는 모두 docs/api/groups.md의 경로로 간다.
+        val guest = g?.kind == "guest"
+        // 전체 그룹을 열 때마다 다시 읽는다: 폰에서 초대로 들어온 사람, 다른 기기에서 바꾼 자리.
+        LaunchedEffect(view) { if (view == FamilyView.GROUPS && token != null) runCatching { load() }.onFailure { note = failureText(it) } }
+        GroupFrame(tabs = view != FamilyView.GROUP_INVITE, note = note, onClose = onClose, body = {
+            when (view) {
+                FamilyView.GROUPS -> {
+                    Heading("내 동승 그룹", "함께 탈 그룹을 선택해 주세요.")
+                    GroupList(groupsInOrder(groups)) { picked -> groupId = picked.id; view = detailOf(picked) }
+                    // 새 그룹은 동승 그룹(C15)으로 만든다. 가족 그룹은 하나뿐이고 가족 추가(C40)에서 만든다.
+                    Centered { Ghost("+ 새 그룹 만들기", !busy, Modifier.fillMaxWidth().height(96.dp)) { guestName = ""; view = FamilyView.GUEST } }
+                }
+                FamilyView.DETAIL -> {
+                    Heading(g?.name ?: "우리 가족", if (guest) "오늘 함께 탈 사람과 좌석을 확인해 주세요." else "오늘 함께 탈 가족과 좌석을 확인해 주세요.")
+                    if (g != null) GroupDetailBody(g)
+                    Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+                        Ghost("좌석 배정", !busy && g != null, Modifier.weight(1f).height(96.dp)) { seats = g!!.members; seatNote = null; view = FamilyView.ASSIGN }
+                        Ghost("구성원 초대", !busy && g != null, Modifier.weight(1f).height(96.dp)) { act { issue(g!!, FamilyView.GROUP_INVITE) } }
+                    }
+                }
+                FamilyView.ASSIGN -> {
+                    Heading("좌석 배정", seatNote ?: "좌석을 누르고 앉을 사람을 선택해 주세요.")
+                    SeatAssignBody(seats) { seat -> pickSeat = seat; view = FamilyView.PICKER }
+                }
+                FamilyView.PICKER -> {
+                    Heading("누가 앉나요?", if (guest) "선택한 좌석에 앉을 사람을 골라 주세요." else "선택한 좌석에 앉을 가족을 골라 주세요.")
+                    MemberPickerBody(seats, pickSeat) { m ->
+                        val r = pickFor(seats, pickSeat, m.profileId)
+                        if (r.members != null) { seats = r.members; seatNote = r.note; view = FamilyView.ASSIGN }
+                        else if (r.note != null) toast(r.note)
+                        else view = FamilyView.ASSIGN // 이미 그 자리에 앉은 사람
+                    }
+                }
+                FamilyView.GUEST_DETAIL -> {
+                    Heading(g?.name ?: "동승 그룹", "초대 코드, QR 또는 링크로 함께할 사람을 초대해 주세요.")
+                    if (g != null) GuestDetailBody(g)
+                    Primary("동승자 초대하기", !busy && g != null, Modifier.fillMaxWidth().height(96.dp)) { act { issue(g!!, FamilyView.GROUP_INVITE) } }
+                }
+                else -> InviteBody(g, invite, ::copy, ::link, ctx) // GROUP_INVITE(C16I)
+            }
+        }) {
+            when (view) {
+                FamilyView.GROUPS -> {
+                    val fam = family()
+                    Primary(if (fam != null) "우리 가족 보기" else "우리 가족 만들기", !busy, Modifier.weight(1f).height(96.dp)) {
+                        if (fam != null) { groupId = fam.id; view = FamilyView.DETAIL } else view = FamilyView.MEMBER
+                    }
+                }
+                FamilyView.DETAIL -> {
+                    Ghost("전체 그룹", !busy, Modifier.weight(1f).height(96.dp)) { view = FamilyView.GROUPS }
+                    // 서버는 자리가 정해진 구성원만 여행에 넣고 아무도 없으면 409다 — 앉힌 사람이 있을 때만 켠다.
+                    Primary("이 그룹과 출발", !busy && token != null && g != null && g.members.any { it.seat != null }, Modifier.weight(1f).height(96.dp)) { g?.let { onStart(it.id) } }
+                }
+                FamilyView.ASSIGN -> {
+                    Ghost("그룹으로", !busy, Modifier.weight(1f).height(96.dp)) { seatNote = null; view = FamilyView.DETAIL }
+                    Primary("이 배치로 저장", !busy && token != null && g != null && seatChanges(g.members, seats).isNotEmpty() && lostSeats(g.members, seats).isEmpty(), Modifier.weight(1f).height(96.dp)) {
+                        act { put(io { api.saveSeats(token!!, g!!.id, seatChanges(g.members, seats)) }); seatNote = null; view = FamilyView.DETAIL; toast("새 좌석을 저장했어요.") }
+                    }
+                }
+                FamilyView.PICKER -> Ghost("좌석 배정으로", true, Modifier.weight(1f).height(96.dp)) { view = FamilyView.ASSIGN }
+                FamilyView.GUEST_DETAIL -> Ghost("전체 그룹 보기", !busy, Modifier.weight(1f).height(96.dp)) { view = FamilyView.GROUPS }
+                // 참여한 사람을 다시 읽고 그 그룹으로(혼자였던 동승 그룹에 누가 들어오면 C16A로).
+                else -> Primary("그룹으로 돌아가기", !busy, Modifier.weight(1f).height(96.dp)) { act { load(); view = detailOf(current()) } }
+            }
+        }
+        return
+    }
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().padding(32.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
             AppBar("", listening = false, "주차 중  P" to true)
@@ -379,9 +530,10 @@ fun FamilyFlow(server: String, token: String?, onClose: () -> Unit, onStart: (St
                             Text("그룹 이름", color = c.onSurfaceVariant)
                             OutlinedTextField(guestName, { guestName = it.take(20) }, Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text("주말 바다 친구들") })
                             Row2(soft = true) { Face("glasses", 72); Column { Text("내 계정", fontSize = 28.sp, fontWeight = FontWeight.Bold); Text("$myName / 운전석", color = c.onSurfaceVariant) } }
-                            Ghost("계정 초대 링크 만들기", !busy && token != null) { act { val made = io { createGuest() }; put(made); issue(made) } }
+                            Ghost("계정 초대 링크 만들기", !busy && token != null) { act { val made = io { createGuest() }; put(made); issue(made, FamilyView.GROUP_INVITE) } }
                             Text("새 동승자는 본인이 동의한 뒤 그룹에 참여해요.", color = c.onSurfaceVariant)
                         }
+                        else -> {} // 그룹 화면(C16*)은 위의 GroupFrame이 그린다
                     }
                 }
                 SidePanel(family() ?: g, Modifier.weight(1f))
@@ -409,7 +561,7 @@ fun FamilyFlow(server: String, token: String?, onClose: () -> Unit, onStart: (St
                         else -> Primary(if (voiceState == "saving") "등록 중" else "녹음 중", false, Modifier.weight(1f)) {}
                     }
                     FamilyView.GROUP -> {
-                        Ghost("새 동승 그룹", true, Modifier.weight(0.6f)) { guestName = ""; view = FamilyView.GUEST }
+                        Ghost("전체 그룹", true, Modifier.weight(0.6f)) { view = FamilyView.GROUPS } // 전체 그룹(C16L)에서 새 동승 그룹을 만든다
                         // 서버는 자리가 정해진 구성원만 여행에 넣고 아무도 없으면 409다 — 앉힌 사람이 있을 때만 켠다.
                         Primary(if (g?.kind == "guest") "이 그룹과 출발" else "이 가족과 출발", !busy && token != null && g != null && g.members.any { it.seat != null }, Modifier.weight(1.4f)) { g?.let { onStart(it.id) } }
                     }
@@ -420,8 +572,9 @@ fun FamilyFlow(server: String, token: String?, onClose: () -> Unit, onStart: (St
                         }
                     }
                     FamilyView.GUEST -> Primary("그룹 저장", !busy && token != null, Modifier.weight(1f)) {
-                        act { val made = io { createGuest() }; put(made); groupId = made.id; saved = false; view = FamilyView.GROUP }
+                        act { val made = io { createGuest() }; put(made); groupId = made.id; saved = false; view = FamilyView.GUEST_DETAIL }
                     }
+                    else -> {}
                 }
             }
         }
@@ -571,6 +724,187 @@ private fun InviteBody(g: CarGroup?, invite: GroupInvite?, copy: (String) -> Uni
                 Ghost("링크 열기", true, Modifier.weight(1f)) { runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(link())).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } }
             }
             Text("코드 입력, QR 스캔, 초대 링크 모두\n같은 그룹으로 참여해요.", lineHeight = 34.sp)
+        }
+    }
+}
+
+// ---- 그룹 화면 조각(C16*). 색은 MaterialTheme.colorScheme만, 크기는 시안(1682×1210)의 값을 dp로. ----
+
+/** 그룹 화면의 틀: 앱 바, 상위 탭(초대 화면 C16I에는 없음), 본문(넘치면 굴림), 아래 단추 줄, 알림. */
+@Composable
+private fun GroupFrame(tabs: Boolean, note: String, onClose: () -> Unit, body: @Composable ColumnScope.() -> Unit, bottom: @Composable RowScope.() -> Unit) {
+    val c = MaterialTheme.colorScheme
+    Box(Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize().padding(32.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
+            AppBar("", listening = false, "주차 중  P" to true)
+            if (tabs) Tabs(onClose)
+            Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(20.dp), content = body)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(24.dp), content = bottom)
+        }
+        if (note.isNotEmpty()) Surface(Modifier.align(Alignment.BottomCenter).padding(bottom = 160.dp), RoundedCornerShape(24.dp), color = c.onSurface) {
+            Text(note, Modifier.padding(horizontal = 48.dp, vertical = 24.dp), color = c.surface, fontSize = 26.sp, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+/** 가운데 좁은 칸(전체 그룹 목록 1200/1602, 좌석 배치 1100/1602). */
+@Composable
+private fun Centered(fraction: Float = 0.75f, content: @Composable ColumnScope.() -> Unit) =
+    Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+        Column(Modifier.fillMaxWidth(fraction), verticalArrangement = Arrangement.spacedBy(20.dp), content = content)
+    }
+
+/** 'Character / 원본' 둥근 칸: 밝은 바탕 위에 전신 PNG를 키워 머리와 윗몸이 보이게(Theme.kt Avatar와 같은 자르기). */
+@Composable
+private fun Round(key: String, size: Int, shape: Shape = CircleShape) =
+    Box(Modifier.size(size.dp).clip(shape).background(MaterialTheme.colorScheme.onSurface)) {
+        Image(painterResource(charRes(key)), null,
+            Modifier.fillMaxSize().graphicsLayer { scaleX = 1.45f; scaleY = 1.45f; transformOrigin = TransformOrigin(0.5f, 0.32f) },
+            contentScale = ContentScale.Fit)
+    }
+
+/** 2x2 칸의 빈 칸: 점선 네모와 작은 글('미등록', 초대가 있으면 민트 '초대 중'). */
+@Composable
+private fun DashedSlot(label: String, color: Color, text: Color) =
+    Box(Modifier.size(56.dp).drawBehind {
+        drawRoundRect(color, cornerRadius = CornerRadius(16.dp.toPx()), style = Stroke(2.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 6f))))
+    }, contentAlignment = Alignment.Center) { Text(label, color = text, fontSize = 13.sp, lineHeight = 18.sp) }
+
+/** 'Group / 2x2 profile / Car'(2094:4293): 구성원 넷, 모자라면 초대 중·미등록 칸(2101:4827–4937). */
+@Composable
+private fun GroupFaces(g: CarGroup) {
+    val c = MaterialTheme.colorScheme
+    Surface(shape = RoundedCornerShape(28.dp), color = c.surfaceVariant) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            faceSlots(g).chunked(2).forEach { row ->
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    row.forEach { slot ->
+                        when (slot) {
+                            is FaceSlot.Member -> Round(slot.character, 56)
+                            FaceSlot.Inviting -> DashedSlot("초대 중", c.primary, c.primary)
+                            FaceSlot.Empty -> DashedSlot("미등록", c.outline, c.onSurfaceVariant)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 그룹 얼굴: 두 사람 이상이면 2x2, 혼자면 큰 캐릭터 하나(C16G·C16L '주말 바다 친구들'). */
+@Composable
+private fun GroupAvatar(g: CarGroup) = if (g.members.size >= 2) GroupFaces(g) else Round(g.members.firstOrNull()?.character ?: "basic", 144, RoundedCornerShape(48.dp))
+
+/** 전체 그룹 목록(C16L): 그룹 카드를 누르면 그 그룹으로. */
+@Composable
+private fun GroupList(groups: List<CarGroup>, onPick: (CarGroup) -> Unit) = Centered {
+    val c = MaterialTheme.colorScheme
+    groups.forEach { g ->
+        Surface(Modifier.fillMaxWidth().clickable { onPick(g) }, RoundedCornerShape(28.dp), color = c.surface) {
+            Row(Modifier.padding(28.dp), horizontalArrangement = Arrangement.spacedBy(24.dp), verticalAlignment = Alignment.CenterVertically) {
+                GroupAvatar(g)
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(if (g.members.size >= 2) 10.dp else 8.dp)) {
+                    Text(g.name, fontSize = if (g.members.size >= 2) 40.sp else 32.sp, fontWeight = FontWeight.Bold, lineHeight = if (g.members.size >= 2) 50.sp else 42.sp)
+                    Text(groupLine(g), color = c.onSurfaceVariant)
+                    if (g.members.size >= 2) Text(g.members.joinToString(", ") { it.name }, color = c.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+        }
+    }
+    if (groups.isEmpty()) Text("아직 만든 그룹이 없어요.", color = c.onSurfaceVariant)
+}
+
+/** 그룹 상세(C16A): 그룹 프로필 카드와 구성원·저장된 좌석 카드. */
+@Composable
+private fun GroupDetailBody(g: CarGroup) {
+    val c = MaterialTheme.colorScheme
+    CarCard {
+        Row(horizontalArrangement = Arrangement.spacedBy(24.dp), verticalAlignment = Alignment.CenterVertically) {
+            GroupAvatar(g)
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(g.name, fontSize = 40.sp, fontWeight = FontWeight.Bold, lineHeight = 50.sp)
+                Text(groupLine(g), color = c.onSurfaceVariant)
+            }
+        }
+    }
+    CarCard(gap = 18.dp) {
+        seatLines(g.members).forEach { (label, names) ->
+            Row(Modifier.fillMaxWidth().height(54.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(label, Modifier.width(220.dp), color = c.onSurfaceVariant)
+                Text(names, Modifier.weight(1f), fontSize = 28.sp, color = if (label == "자리 없음") c.onSurfaceVariant else c.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+    }
+}
+
+/** 좌석 배정(C16B): 앞 둘·뒤 둘 칸. 칸을 누르면 그 자리에 앉을 사람을 고른다(C16C). 자리 없는 사람은 아래 한 줄로. */
+@Composable
+private fun SeatAssignBody(members: List<GroupMember>, onSeat: (String) -> Unit) {
+    val c = MaterialTheme.colorScheme
+    val at = members.filter { it.seat != null }.associateBy { it.seat }
+    Centered(0.69f) {
+        CarCard(gap = 20.dp) {
+            Text("차량 앞쪽 ↑", Modifier.fillMaxWidth(), color = c.onSurfaceVariant, textAlign = TextAlign.Center)
+            GRID_SEATS.forEach { row ->
+                Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+                    row.forEach { seat ->
+                        val m = at[seat.name]
+                        Surface(Modifier.weight(1f).height(240.dp).clickable { onSeat(seat.name) }.semantics { contentDescription = "좌석 ${seatLabel(seat.name)}" }, RoundedCornerShape(28.dp), color = c.surfaceVariant) {
+                            Column(Modifier.padding(28.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically)) {
+                                if (m != null) Round(m.character, 88) else EmptySeat(88.dp)
+                                Text(seatLabel(seat.name)!!, color = c.onSurfaceVariant)
+                                Text(m?.name ?: "빈자리", fontSize = 32.sp, fontWeight = FontWeight.Bold, color = if (m != null) c.onSurface else c.onSurfaceVariant)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    val free = members.filter { it.seat == null }
+    if (free.isNotEmpty()) Text("자리 없음 · ${free.joinToString(", ") { it.name }}", Modifier.fillMaxWidth(), color = c.onSurfaceVariant, textAlign = TextAlign.Center)
+    Text("이미 앉은 사람을 선택하면 두 사람의 자리가 바뀌어요.", Modifier.fillMaxWidth(), color = c.onSurfaceVariant, textAlign = TextAlign.Center)
+}
+
+/**
+ * 좌석 구성원 선택(C16C): 고른 자리와 구성원 줄. 서버에 '오늘 탈 사람'이 따로 없어 자리로 정한다(자리 없음 = 이번 여행에 타지 않음).
+ * 지금 그 자리의 사람은 민트 바탕, 자리 없는 사람은 그 자리가 비었을 때만 고를 수 있어 흐리게(누르면 이유를 알린다).
+ */
+@Composable
+private fun MemberPickerBody(members: List<GroupMember>, seat: String, onPick: (GroupMember) -> Unit) {
+    val c = MaterialTheme.colorScheme
+    val occupied = members.any { it.seat == seat }
+    CarCard {
+        Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+            Text("선택한 좌석", Modifier.weight(1f), color = c.onSurfaceVariant)
+            Text(seatLabel(seat).orEmpty(), Modifier.weight(1f), fontSize = 32.sp, fontWeight = FontWeight.Bold)
+        }
+    }
+    members.forEach { m ->
+        val here = m.seat == seat
+        val dim = occupied && m.seat == null
+        Surface(Modifier.fillMaxWidth().clickable { onPick(m) }, RoundedCornerShape(28.dp), color = if (here) c.primaryContainer else c.surface) {
+            Row(Modifier.padding(horizontal = 28.dp, vertical = 16.dp), horizontalArrangement = Arrangement.spacedBy(24.dp), verticalAlignment = Alignment.CenterVertically) {
+                Round(m.character, 72)
+                Text(m.name, Modifier.weight(1f), fontSize = 32.sp, fontWeight = FontWeight.Bold, color = if (dim) c.onSurfaceVariant else c.onSurface)
+                Text(seatLabel(m.seat) ?: "자리 없음", color = c.onSurfaceVariant)
+            }
+        }
+    }
+}
+
+/** 동승 그룹 상세(C16G): 만든 사람 캐릭터, 그룹 이름, '민준  |  운전석'. */
+@Composable
+private fun GuestDetailBody(g: CarGroup) {
+    val c = MaterialTheme.colorScheme
+    val owner = g.members.firstOrNull { it.role == "owner" } ?: g.members.firstOrNull()
+    CarCard {
+        Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+            Round(owner?.character ?: "basic", 144, RoundedCornerShape(48.dp))
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(g.name, fontSize = 40.sp, fontWeight = FontWeight.Bold, lineHeight = 50.sp)
+                Text("${owner?.name.orEmpty()}  |  ${seatLabel(owner?.seat) ?: "자리 없음"}", fontSize = 28.sp, color = c.onSurfaceVariant)
+            }
         }
     }
 }

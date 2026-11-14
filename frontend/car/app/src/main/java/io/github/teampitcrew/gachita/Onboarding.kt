@@ -57,7 +57,6 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -83,6 +82,9 @@ private val BARS = listOf(40, 70, 96, 54, 84, 100, 44, 74, 92, 60, 88, 36, 80, 9
 // 시안 C04의 캐릭터 순서(안경·힐링·캡모자·기본)와 나머지. 값은 서버 character(웹과 같은 이름).
 private val CHARS = listOf("glasses" to R.drawable.char_glasses, "healing" to R.drawable.char_healing, "cap" to R.drawable.char_cap, "basic" to R.drawable.char_basic,
     "travel" to R.drawable.char_travel, "game" to R.drawable.char_game, "sport" to R.drawable.char_sport, "pet" to R.drawable.char_pet, "camping" to R.drawable.char_camping, "office" to R.drawable.char_office)
+
+/** 시안의 프로필 캐릭터 칸 모서리(Character / 원본, 48). 92 칸에서는 동그라미, 110·140·280 칸에서는 둥근 네모. */
+private val FACE = RoundedCornerShape(48.dp)
 
 fun charDrawable(key: String): Int = CHARS.firstOrNull { it.first == key.removeSuffix("-small") }?.second ?: R.drawable.char_basic
 
@@ -289,8 +291,9 @@ fun OnboardingScreen(o: Onboarding, gear: String?, onFamily: () -> Unit) {
             OnboardStep.RECORDING -> if (o.recordDone) "녹음을 마쳤어요" to "‘녹음 완료’를 누르면 등록해요." else "목소리를 듣고 있어요" to "주변 사람은 잠시 조용히 기다려 주세요."
             OnboardStep.DONE -> "${shownName}님의 목소리 등록 완료" to "차량과 폰에서 같은 프로필을 사용해요."
         }
-        Text(title, fontSize = 40.sp, fontWeight = FontWeight.Bold, lineHeight = 52.sp)
-        Text(sub, color = c.onSurfaceVariant, fontSize = 24.sp)
+        Text(title, fontSize = 40.sp, fontWeight = FontWeight.Bold, lineHeight = 50.sp)
+        Spacer(Modifier.height(12.dp)) // 시안 화면 제목 묶음: Car/Title 40 lh50 · 간격 12 · Car/Label 24 lh32
+        Text(sub, color = c.onSurfaceVariant, fontSize = 24.sp, lineHeight = 32.sp)
         Spacer(Modifier.height(24.dp))
         Row(Modifier.weight(1f).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(24.dp)) {
             Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(24.dp)) {
@@ -306,9 +309,9 @@ fun OnboardingScreen(o: Onboarding, gear: String?, onFamily: () -> Unit) {
                         ObCard(title = if (o.login) "처음이신가요?" else "이미 계정이 있나요?", detail = if (o.login) "새 계정을 만들어 시작해요." else "같은 계정으로 로그인해 기록을 불러와요.", onClick = o::toggleLogin)
                     }
                     OnboardStep.CONSENT -> {
-                        ObCard(title = "탑승 시 대화 자동 기록", detail = "가족 그룹 연결 시 시작 / 기록 상태 표시와 일시정지 제공", tight = true)
-                        ObCard(title = "서버 전송과 콘텐츠 생성", detail = "음성과 전사록 업로드, 요약과 편집에 사용", tight = true)
-                        ObCard(title = "목소리 등록과 발화자 식별", detail = "등록한 음성 특징으로 말하는 사람 구분", tight = true)
+                        ObCard(title = "탑승 시 대화 자동 기록", detail = "가족 그룹 연결 시 시작 / 기록 상태 표시와 일시정지 제공")
+                        ObCard(title = "서버 전송과 콘텐츠 생성", detail = "음성과 전사록 업로드, 요약과 편집에 사용")
+                        ObCard(title = "목소리 등록과 발화자 식별", detail = "등록한 음성 특징으로 말하는 사람 구분")
                         Text("함께 타는 성인은 직접 동의하고, 아이의 프로필과 녹음은 보호자가 관리해요.", color = c.onSurfaceVariant, fontSize = 24.sp)
                         // ADR-0023 8절의 전환기 문장은 빼지 않는다(폰 동의 문구와 같은 뜻).
                         Text("누가 말했는지는 차 안에서 가립니다. 이전 버전의 차량 앱과 웹 입력에서는 이를 위해 말소리가 잠시 서버로 갔다가 저장되지 않고 지워집니다. 등록한 목소리는 화자를 가리는 값으로만 바뀌어 서버에 저장되고, 동의를 끄면 지워집니다.",
@@ -319,13 +322,9 @@ fun OnboardingScreen(o: Onboarding, gear: String?, onFamily: () -> Unit) {
                         Text("내 캐릭터", color = c.onSurfaceVariant, fontSize = 24.sp)
                         Surface(Modifier.fillMaxWidth(), RoundedCornerShape(32.dp), color = c.surface) {
                             Row(Modifier.horizontalScroll(rememberScrollState()).padding(24.dp), horizontalArrangement = Arrangement.spacedBy(30.dp)) {
-                                CHARS.forEachIndexed { i, (key, res) ->
-                                    val on = key == o.character
-                                    Box(Modifier.size(140.dp).clip(RoundedCornerShape(36.dp)).background(c.onSurface) /* 검은 선 캐릭터가 어두운 화면에서도 보이게 밝은 바탕(테마 색) */
-                                        .then(if (on) Modifier.border(4.dp, c.primary, RoundedCornerShape(36.dp)) else Modifier)
-                                        .clickable { o.character = key }, contentAlignment = Alignment.Center) {
-                                        Image(painterResource(res), key, Modifier.size(124.dp), contentScale = ContentScale.Fit)
-                                    }
+                                CHARS.forEach { (key, res) ->
+                                    // 시안 C04: 캐릭터 140 칸을 크게 채움(모서리 48). 고른 캐릭터는 말하는 사람 고리와 같은 테두리
+                                    Box(Modifier.clip(FACE).clickable { o.character = key }) { CharAvatar(res, 140.dp, FACE, ring = key == o.character) }
                                 }
                             }
                         }
@@ -333,11 +332,9 @@ fun OnboardingScreen(o: Onboarding, gear: String?, onFamily: () -> Unit) {
                         Text("캐릭터와 이름은 같은 계정의 차량과 폰에 함께 저장돼요.", color = c.onSurfaceVariant, fontSize = 24.sp)
                     }
                     OnboardStep.PHOTO -> {
-                        Box(Modifier.size(280.dp).clip(RoundedCornerShape(40.dp)).background(c.onSurface), contentAlignment = Alignment.Center) {
-                            val b = o.photo
-                            if (b != null) Image(b.asImageBitmap(), "고른 프로필 사진", Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-                            else Image(painterResource(charDrawable(o.character)), null, Modifier.size(250.dp), contentScale = ContentScale.Fit)
-                        }
+                        val b = o.photo
+                        if (b != null) Image(b.asImageBitmap(), "고른 프로필 사진", Modifier.size(280.dp).clip(FACE), contentScale = ContentScale.Crop)
+                        else CharAvatar(charDrawable(o.character), 280.dp, FACE)
                         ObCard(title = "내 사진 선택", detail = "촬영 또는 사진 보관함에서 가져오기", onClick = {
                             // 기기 사진 보관함(사진 선택기)이 있을 때만. 없으면 '사진 대신 캐릭터'로 계속한다.
                             try { pick.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) } catch (_: ActivityNotFoundException) { o.noGallery() }
@@ -348,7 +345,7 @@ fun OnboardingScreen(o: Onboarding, gear: String?, onFamily: () -> Unit) {
                         val rec = step == OnboardStep.RECORDING
                         val late = rec && o.heard >= 7
                         ObCard(soft = true, title = if (late) "“함께 타는 순간을 오래 기억하고 싶어.”" else "“안녕, 나는 ${callName(shownName.ifBlank { "나" })}.",
-                            detail = if (late) "평소 말하는 목소리로 이어 읽어 주세요." else "우리 가족과 함께 여행하는 시간이 좋아. 오늘은 바다를 보러 가고, 맛있는 것도 먹을 거야.”", tight = true)
+                            detail = if (late) "평소 말하는 목소리로 이어 읽어 주세요." else "우리 가족과 함께 여행하는 시간이 좋아. 오늘은 바다를 보러 가고, 맛있는 것도 먹을 거야.”")
                         Surface(Modifier.fillMaxWidth(), RoundedCornerShape(32.dp), color = c.surface) {
                             Column(Modifier.padding(start = 28.dp, end = 28.dp, top = 28.dp, bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
                                 val s = minOf(o.heard, VOICE_SECONDS.toDouble())
@@ -400,17 +397,15 @@ fun OnboardingScreen(o: Onboarding, gear: String?, onFamily: () -> Unit) {
 }
 
 @Composable
-private fun ObCard(title: String, detail: String, soft: Boolean = false, face: Int? = null, photo: Bitmap? = null, tight: Boolean = false, onClick: (() -> Unit)? = null) {
+private fun ObCard(title: String, detail: String, soft: Boolean = false, face: Int? = null, photo: Bitmap? = null, onClick: (() -> Unit)? = null) {
     val c = MaterialTheme.colorScheme
     Surface(Modifier.fillMaxWidth().then(if (onClick != null) Modifier.clip(RoundedCornerShape(32.dp)).clickable(onClick = onClick) else Modifier), RoundedCornerShape(32.dp),
         color = if (soft) c.primaryContainer else c.surface, contentColor = c.onSurface) {
-        Row(Modifier.padding(horizontal = 26.dp, vertical = if (tight) 26.dp else 28.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(24.dp)) {
-            if (face != null || photo != null) Box(Modifier.size(92.dp).clip(CircleShape).background(c.onSurface), contentAlignment = Alignment.Center) {
-                if (photo != null) Image(photo.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-                else Image(painterResource(face!!), null, Modifier.size(84.dp), contentScale = ContentScale.Fit)
-            }
+        Row(Modifier.padding(26.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(24.dp)) { // 시안 카드: 여백 26 · 간격 24
+            if (photo != null) Image(photo.asImageBitmap(), null, Modifier.size(92.dp).clip(CircleShape), contentScale = ContentScale.Crop)
+            else if (face != null) CharAvatar(face, 92.dp)
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(title, fontSize = 30.sp, fontWeight = FontWeight.Bold, lineHeight = 40.sp)
+                Text(title, fontSize = 32.sp, fontWeight = FontWeight.Bold, lineHeight = 42.sp)
                 Text(detail, color = c.onSurfaceVariant, fontSize = 24.sp, lineHeight = 32.sp)
             }
         }
@@ -471,10 +466,8 @@ private fun FamilyPanel(modifier: Modifier) {
             Text("한 번 만든 가족 프로필로\n차량과 폰에서 이어가세요.", color = c.onSurfaceVariant, fontSize = 28.sp, lineHeight = 40.sp)
             Spacer(Modifier.height(4.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
-                listOf(R.drawable.char_glasses, R.drawable.char_healing, R.drawable.char_cap, R.drawable.char_basic).forEachIndexed { i, res ->
-                    Box(Modifier.size(110.dp).clip(CircleShape).background(c.onSurface), contentAlignment = Alignment.Center) {
-                        Image(painterResource(res), null, Modifier.size(100.dp), contentScale = ContentScale.Fit)
-                    }
+                listOf(R.drawable.char_glasses, R.drawable.char_healing, R.drawable.char_cap, R.drawable.char_basic).forEach { res ->
+                    CharAvatar(res, 110.dp, FACE)
                 }
             }
             Spacer(Modifier.height(8.dp))

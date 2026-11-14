@@ -745,11 +745,12 @@ function tripView(me) {
     ...now,
     // 곧 도착·도착에서는 위의 행동 항목이 같은 할 일을 보이므로 할 일 카드를 겹쳐 두지 않는다(v2 시안 P19·P20, T141)
     !["near", "arrived"].includes(state.kind) && todos.card(),
-    h(
+    // 폰에서 남긴 부탁이 있을 때만 보인다. 비어 있으면 시안(P17–P21)에 없는 빈 카드가 위의 브리핑('기억할 N가지')과 어긋나 보였다(T153).
+    trip.requests.length > 0 && h(
       "section",
       { className: "card" },
       h("h2", {}, open.length ? `챙길 부탁 ${open.length}건` : "챙길 부탁"),
-      trip.requests.length ? h("ul", {}, trip.requests.map(request)) : h("p", { className: "empty" }, "아직 부탁이 없어요. 들르고 싶은 곳이나 챙길 일을 남겨 보세요."),
+      h("ul", {}, trip.requests.map(request)),
     ),
     h(
       "section",

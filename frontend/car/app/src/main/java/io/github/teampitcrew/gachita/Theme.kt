@@ -79,6 +79,15 @@ fun GachitaTheme(content: @Composable () -> Unit) =
         ProvideTextStyle(TextStyle(fontSize = 24.sp), content)
     }
 
+/**
+ * 여행 화면의 두 껍데기(최종 시안). RIDE: 함께 타는 중·대화 기록(C17·C44, 여백 좌우 32·위아래 28, 머리 줄 64·간격 12, 칸 간격 16).
+ * PARKED: 도착 브리핑·콘텐츠 기록(C20·D19·C22–C38, 여백 40, 머리 줄 80·간격 18, 칸 간격 24).
+ */
+enum class Shell(val padH: Dp, val padV: Dp, val head: Dp, val headGap: Dp, val gap: Dp) {
+    RIDE(32.dp, 28.dp, 64.dp, 12.dp, 16.dp),
+    PARKED(40.dp, 40.dp, 80.dp, 18.dp, 24.dp),
+}
+
 /** 카드의 바탕. 기록 상태 머리만 색을 바꾸고 나머지는 Plain이다. */
 enum class Tone { Plain, Rec, Wait, Accent }
 
@@ -105,10 +114,14 @@ fun Character(index: Int, size: Dp, ring: Boolean = false) {
  * ring은 말하는 사람 테두리(6dp, 시안 accent-text). 전신이 필요한 곳(가족 고르기, 쇼츠 무대)은 Character를 쓴다.
  */
 @Composable
-fun Avatar(index: Int, size: Dp, shape: Shape = CircleShape, ring: Boolean = false) {
+fun Avatar(index: Int, size: Dp, shape: Shape = CircleShape, ring: Boolean = false) = CharAvatar(SEAT_CHARS.getOrElse(index) { SEAT_CHARS[0] }, size, shape, ring)
+
+/** Avatar와 같은 잘라 채우기를 캐릭터 그림(res/drawable-nodpi/char_*)으로. 온보딩·가족의 프로필 캐릭터(시안 'Character / 원본', 모서리 48). */
+@Composable
+fun CharAvatar(res: Int, size: Dp, shape: Shape = CircleShape, ring: Boolean = false) {
     val c = MaterialTheme.colorScheme
     Box(Modifier.size(size).then(if (ring) Modifier.border(6.dp, c.onPrimaryContainer, shape) else Modifier).clip(shape).background(c.onSurface)) {
-        Image(painterResource(SEAT_CHARS.getOrElse(index) { SEAT_CHARS[0] }), null,
+        Image(painterResource(res), null,
             Modifier.fillMaxSize().graphicsLayer { scaleX = 1.45f; scaleY = 1.45f; transformOrigin = TransformOrigin(0.5f, 0.32f) },
             contentScale = ContentScale.Fit)
     }

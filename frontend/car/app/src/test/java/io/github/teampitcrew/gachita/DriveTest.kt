@@ -60,11 +60,12 @@ class DriveTest {
         assertEquals("끝난 여행이에요. 새 여행에서 녹음을 시작해 주세요", ended.blockStart())
     }
 
-    @Test fun narrowHeaderAlwaysShowsConnection() {
-        assertFalse(headerParkLabel(wide = false, parked = true)) // C17p·C44: 좁은 창은 주차 중에도 '연결됨'
-        assertFalse(headerParkLabel(wide = false, parked = false))
-        assertTrue(headerParkLabel(wide = true, parked = true)) // C13·C20: 넓은 창 주차 중 '주차 중  P'
-        assertFalse(headerParkLabel(wide = true, parked = false))
+    @Test fun shellFollowsTheScreenNotTheWidth() {
+        assertEquals(Shell.RIDE, tripShell(parked = true, showsBrief = false, contentTab = false)) // C44·D33·ended: 주차 중에도 '연결됨'
+        assertEquals(Shell.RIDE, tripShell(parked = false, showsBrief = false, contentTab = false)) // C17·C21
+        assertEquals(Shell.PARKED, tripShell(parked = true, showsBrief = true, contentTab = false)) // C20·D19·finalBrief: '주차 중  P'
+        assertEquals(Shell.PARKED, tripShell(parked = true, showsBrief = false, contentTab = true)) // C22–C38
+        assertEquals(Shell.RIDE, tripShell(parked = false, showsBrief = true, contentTab = false)) // 주행 중에는 브리핑이 없다
     }
 
     @Test fun seatCharacterFollowsSeatOrder() {
