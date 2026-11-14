@@ -123,14 +123,16 @@ internal object FullAudio {
     }
 }
 
-/** C22 첫 줄. 진행은 이 차가 올린 조각 수(받은 조각은 건너뛰며 셈). 합치기 전에는 99%를 넘기지 않는다. */
+/**
+ * C22 첫 줄(시안 '전체 음성 업로드 중  82%'). 진행은 이 차가 올린 조각 수(받은 조각은 건너뛰며 셈). 합치기 전에는 99%를 넘기지 않는다.
+ * 시작 전·잠깐 멈춤(IDLE)도 시안 글에 지금까지의 진행으로. 다 올림·보관 기간 지남·원음 없음·올리지 않음은 시안 밖 상태라 따로 적는다.
+ */
 internal fun audioLabel(state: AudioState, progress: Float): String = when (state) {
-    AudioState.UPLOADING -> "전체 음성 업로드 중  ${minOf(99, (progress * 100).toInt())}%"
+    AudioState.UPLOADING, AudioState.IDLE -> "전체 음성 업로드 중  ${minOf(99, (progress * 100).toInt())}%"
     AudioState.READY -> "전체 음성 업로드 완료"
     AudioState.EXPIRED -> "전체 음성 보관 기간(2일)이 지났어요"
     AudioState.NONE -> "이 차에 남은 원음이 없어요"
     AudioState.STOPPED -> "전체 음성을 올리지 않아요"
-    AudioState.IDLE -> "전체 음성 올리기를 준비하고 있어요"
 }
 
 internal fun audioNote(state: AudioState): String = when (state) {
