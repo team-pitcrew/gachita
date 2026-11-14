@@ -260,7 +260,7 @@ export function nearCard(state, asks) {
     h("h2", {}, note ? "내리기 전에 기억할 부탁" : asks.kind === "stale" ? (list.length ? "내리기 전에 기억할 부탁" : "받은 목록에는 이곳 부탁이 없어요") : list.length ? `내리기 전에 기억할 ${list.length}가지` : "이곳에서 챙길 부탁은 아직 없어요"),
     note ? h("p", {}, note) : list.length > 0 && h("ul", { className: "near-asks" }, list.map((t) => h("li", {}, askLabel(t)))),
     asks.kind === "stale" && h("p", { className: "meta" }, staleNote(asks)),
-    h("p", { className: "meta" }, "주차하면 가족별로 자세히 보여드릴게요."),
+    h("p", { className: "meta" }, "주차하면 사람별로 자세히 보여드릴게요."),
   );
 }
 

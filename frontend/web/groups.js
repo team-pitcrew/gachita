@@ -271,7 +271,7 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
     const kid = s.child;
     const bars = Array.from({ length: 28 }, (_, i) => h("i", { style: `height:${i < (s.voice / 15) * 28 ? 18 + ((i * 37) % 40) : 10}px` }));
     const done = s.voice >= 15;
-    return page(`${kid?.name ?? "아이"}의 목소리 등록`, `“나는 ${kid?.name ?? "아이"}야. 바다에 가서 모래성을 만들 거야.”`, [
+    return page(`${kid?.name ?? "아이"}의 목소리 등록`, `“나는 ${kid?.name ?? "아이"}${batchim(kid?.name ?? "아이") ? "이야" : "야"}. 바다에 가서 모래성을 만들 거야.”`, [
       h("div", { className: "group-card" }, h("small", {}, `아이 목소리  ${s.voice} / 15초`), h("div", { className: "group-wave", "aria-hidden": "true" }, bars), h("small", {}, `00:${String(s.voice).padStart(2, "0")}`)),
       done && h("div", { className: "group-card soft row" }, face(kid), h("div", {}, h("strong", {}, `${kid?.name ?? "아이"}의 프로필 준비 완료`), h("small", {}, "다음 아이도 같은 방법으로 추가할 수 있어요."))),
     ], [button(done ? "가족 그룹에 저장" : "녹음 중…", () => act(async () => { await load(); go("member"); }), "primary", !done || s.busy)]);
@@ -330,7 +330,8 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
     };
     const changed = s.seats.some((m) => (m.seat ?? null) !== (g.members.find((x) => x.profileId === m.profileId)?.seat ?? null));
     const free = s.seats.filter((m) => !m.seat);
-    const sub = s.swapped ? `${and(s.swapped[0])} ${s.swapped[1]}의 자리 위치를 바꿨어요.` : s.moved ? `${s.moved}의 자리를 정했어요.` : s.picked ? "빈자리나 바꿀 사람을 눌러 주세요." : "사람을 누른 뒤 빈자리나 다른 사람을 눌러 주세요.";
+    const rear = s.swapped && s.seats.filter((x) => s.swapped.includes(x.name)).every((x) => x.seat?.startsWith("ROW_2"));
+    const sub = s.swapped ? `${and(s.swapped[0])} ${s.swapped[1]}의 ${rear ? "뒷자리" : "자리"} 위치를 바꿨어요.` : s.moved ? `${s.moved}의 자리를 정했어요.` : s.picked ? "빈자리나 바꿀 사람을 눌러 주세요." : "사람을 누른 뒤 빈자리나 다른 사람을 눌러 주세요.";
     return page("가족 좌석 바꾸기", sub, [seatGrid(s.seats, pick, s.picked),
       free.length > 0 && h("p", { className: "meta" }, "자리 없음: 눌러서 고른 뒤 빈자리를 눌러요"),
       free.length > 0 && h("div", { className: "group-pair" }, free.map((m) => button(m.name, () => pick(m), `group-ghost${m.profileId === s.picked ? " picked" : ""}`))),
@@ -366,7 +367,7 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
     const p = s.preview;
     const me = getProfile();
     const guest = p.kind === "guest";
-    return page(guest ? "동승 그룹에 초대받았어요" : "우리 가족에 초대받았어요", `${p.ownerName}님의 차량 / 내 프로필로 참여`, [
+    return page(guest ? `${p.groupName || "동승 그룹"}에 초대받았어요` : "우리 가족에 초대받았어요", `${p.ownerName}님의 차량 / 내 프로필로 참여`, [
       h("div", { className: "group-card" }, h("strong", {}, `${and(p.groupName)} 함께 타요`), h("small", {}, `${me?.name ?? ""} / 등록된 캐릭터와 목소리 연결`)),
       h("div", { className: "group-card" }, h("strong", {}, "대화 기록과 콘텐츠 생성"), h("small", {}, "음성과 전사록 업로드, 요약과 편집에 사용")),
       h("div", { className: "group-card" }, h("strong", {}, "내 목소리로 발화자 구분"), h("small", {}, "등록한 음성 특징으로 말하는 사람 구분")),
@@ -384,8 +385,8 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
   function joinedView() {
     const g = current();
     const me = g.members.find((m) => m.profileId === s.meId);
-    return page(g.kind === "guest" ? "동승 그룹에 참여했어요" : "우리 가족에 참여했어요", "차량과 폰에서 같은 프로필을 사용해요.", [
-      h("div", { className: "group-card soft row" }, face(me), h("div", {}, h("strong", {}, `${me?.name ?? ""} / ${me?.seat ? SEAT[me.seat] : "자리 정하기 전"}`), h("small", {}, me?.hasVoice ? "내 프로필과 등록된 목소리 연결 완료" : "내 프로필 연결 완료 / 목소리는 내 프로필에서 등록"))),
+    return page(g.kind === "guest" ? `${g.name || "동승 그룹"}에 참여했어요` : "우리 가족에 참여했어요", "차량과 폰에서 같은 프로필을 사용해요.", [
+      h("div", { className: "group-card soft row" }, face(me), h("div", {}, h("strong", {}, `${me?.name ?? ""} / ${g.kind === "guest" ? "동승자" : me?.seat ? SEAT[me.seat] : "자리 정하기 전"}`), h("small", {}, me?.hasVoice ? "내 프로필과 등록된 목소리 연결 완료" : "내 프로필 연결 완료 / 목소리는 내 프로필에서 등록"))),
       h("div", { className: "group-card" }, h("strong", {}, "이제 함께 출발해요"), h("small", {}, "차량에서 내 캐릭터와 참여 상태를 확인해 주세요.")),
     ], [button("차량에서 참여 확인", () => act(async () => { await load(); go("group"); }), "primary", s.busy)]);
   }
