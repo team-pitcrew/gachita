@@ -1,5 +1,5 @@
 // 여행 마무리 → 추천 장면 고르기 → 생성 → 완성(최종 시안 P22–P32). 화면은 대화상자 하나이고 머리와 세 탭은 ride.js를 쓴다.
-// 값은 서버가 준 것만 쓰고 지어내지 않는다. 장소(도착한 곳)는 기록본(GET /transcript)의 places에서 읽는다(공개 여행 문서에는 없음).
+// 값은 서버가 준 것만 쓰고 지어내지 않는다. 장소(도착한 곳)는 앱이 읽는 GET /places(getPlaces), 없으면 기록본의 places(공개 여행 문서에는 없음).
 // - 전체 음성 올리기 진행률: GET /trips/{code}/audio(T132). 차가 실제로 올리는 중·다 올렸으면 그 값을 쓴다.
 //   mock: 전체 음성의 실제 업로드는 오너의 보관 결정 전까지 꺼 둔다(계획 '속도 우선' ③ — 차는 /audio를 부르지 않음).
 //   그동안 경로가 없거나(404) 차가 시작하지 않았으면(state none) P22는 시안대로 진행률을 흉내 낸다(mockUpload).
@@ -164,7 +164,7 @@ const sleep = (ms, signal) => new Promise((ok, no) => {
 // getTrip/getParticipant/getToken: 지금 여행·이 폰의 참가자·참가자 토큰. request(method, path, body, signal): 이 폰의 참가자 토큰으로 /trips/{code}{path}.
 // remember(key, value?): 이 폰에 남긴 생성 계획 읽기·쓰기(null이면 지움). avatar(person): 얼굴. onContents(selectedId?): 콘텐츠 기록(쇼츠 보관함).
 // onPick(): 옛 장면 고르기(직접 고르기 → 힉스필드 템플릿까지 그대로). onTalk(): 대화 기록.
-export function createAfterTrip({ getTrip, getParticipant, getToken, request, remember, avatar, isOnline = () => true, onHome, onTalk, onContents, onPick }) {
+export function createAfterTrip({ getTrip, getParticipant, getToken, request, remember, avatar, getPlaces = () => [], isOnline = () => true, onHome, onTalk, onContents, onPick }) {
   const dialog = h("dialog", { className: "after-dialog", "aria-labelledby": "after-title" });
   document.body.append(dialog);
   let view = null; // 보고 있는 화면 { code, generation, participantId, step: upload|select|make|done, audio, audioMissing, lines, picks, chosen, error }
@@ -241,7 +241,8 @@ export function createAfterTrip({ getTrip, getParticipant, getToken, request, re
 
   function uploadView(s) {
     const trip = getTrip(), time = timeline(s), audio = shown(s), step = audioStep(audio);
-    const arrived = [...placesOf({ places: s.places })].reverse().find((p) => p.kind === "arrived")?.name;
+    const known = getPlaces();
+    const arrived = [...placesOf(known.length ? known : s.places)].reverse().find((p) => p.kind === "arrived")?.name;
     const bars = densityBars(s.lines ?? [], time.origin, time.end);
     const ratio = step.kind === "ready" ? 1 : (step.percent ?? 0) / 100;
     const canGo = getParticipant()?.consent && (s.picks?.length > 0 || step.kind === "ready");

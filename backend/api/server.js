@@ -20,6 +20,7 @@ import { googleIdentity, googlePublicConfig } from "./providers/google.js";
 import { cues, momentSpan, suggest } from "./scenes.js";
 import { checkVector, DIMS, embed, EMBEDDER, matchThreshold, similarity, wavMono } from "./providers/voice.js";
 import { accountConsents, accounts, CONSENT_VERSION } from "./accounts.js";
+import { groupForTrip, groupInvites, groups, shareGroup } from "./groups.js";
 import { rideLinks, redeemRideLink } from "./ride-links.js";
 import { boardingInvites, tripBoardingInvites } from "./boarding-invites.js";
 import { restStops, SOURCE as REST_STOPS_SOURCE } from "./rest-stops.js";
@@ -42,6 +43,7 @@ const GROUPS_SQL = fileURLToPath(new URL("profiles-4-groups.sql", import.meta.ur
 const VOICE_SQL = fileURLToPath(new URL("profiles-5-voice.sql", import.meta.url));
 const NO_PREFS_SQL = fileURLToPath(new URL("profiles-6-no-prefs.sql", import.meta.url));
 const ACCOUNTS_SQL = fileURLToPath(new URL("profiles-7-accounts.sql", import.meta.url));
+const NEW_GROUPS_SQL = fileURLToPath(new URL("profiles-8-groups.sql", import.meta.url));
 const PHOTO_MAX = 1_000_000; // 프로필 사진 상한. 형식은 매직 바이트로만 확인한다(다시 그리기는 T46 화면, ADR-0009 위험)
 const MAX_BODY = 10_000;
 // ponytail: 여행 하나의 발화는 2만 줄까지(3시간 여행 ≈ 2,500줄). 명시적 삭제 한 번이 2초 제한(T26) 안에 끝나게 묶는다.
@@ -68,7 +70,9 @@ const MIME = {
   ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".ico": "image/vnd.microsoft.icon",
 };
 
+// 옛 QR 초대(/j)와 다른 프로필을 대신 참가시키는 profileId는 계속 닫혀 있다. 그룹은 새 모양으로 되살렸다(T133, groups.js).
 const RETIRED_GROUP = "그룹 초대는 종료됐어요. 탑승자 폰에서 동승 연결 QR을 열고, 주차 중인 차에서 읽어 주세요.";
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const fail = (status, error) => {
   throw { status, error };
@@ -95,6 +99,7 @@ ROUTE_WORDS.add("places");
 ROUTE_WORDS.add("rest-stops");
 ROUTE_WORDS.add("boarding-invites");
 for (const word of ["accounts", "sessions"]) ROUTE_WORDS.add(word);
+for (const word of ["group-invites", "children", "seats"]) ROUTE_WORDS.add(word);
 const routeOf = (pathname) =>
   pathname === "/healthz" ? pathname : pathname.startsWith("/api/") ? `/${pathname.split("/").filter(Boolean).map((s) => (ROUTE_WORDS.has(s) ? s : ":p")).join("/")}` : "/(web)";
 // ALB가 붙이는 추적 id(X-Amzn-Trace-Id)를 그대로 쓴다. 없거나 모양이 이상하면 새로.
@@ -155,6 +160,7 @@ export async function migrate() {
   await profilesDb().query(await readFile(VOICE_SQL, "utf8"));
   await profilesDb().query(await readFile(NO_PREFS_SQL, "utf8"));
   await profilesDb().query(await readFile(ACCOUNTS_SQL, "utf8"));
+  await profilesDb().query(await readFile(NEW_GROUPS_SQL, "utf8"));
 }
 
 async function readBody(req, limit = MAX_BODY) {
@@ -204,8 +210,10 @@ async function issueToken(profileId, device = "", token = randomBytes(32).toStri
 // prefs는 좌석·공조 선호를 걷어내기(T68) 전에 만든 여행 문서에만 있다(응답에서는 제외함).
 const asParticipant = ({ tokenHash, olderTokenHashes, prefs, ...p }) => p;
 // arrival(도착한 장소 이름, T119)은 토큰 없이 읽는 여행 문서에 싣지 않는다. 동의한 참가자가 GET /todos로만 읽는다.
-// places(장소 기록, T131)는 그 전에 만든 여행 문서에 없다 — 빈 목록으로 채워 늘 같은 모양을 준다.
-const tripView = ({ arrival, ...trip }) => ({ ...trip, places: trip.places ?? [], participants: trip.participants.map(asParticipant) });
+// places(차가 남긴 장소, T131)도 같다 — 가족이 어디로 가고 어디에 닿았는지를 여행 코드만 아는 사람(과 서비스 워커 캐시)에게 내주지 않는다.
+// 동의한 참가자가 GET /places·/transcript로만 읽는다.
+// 그룹으로 만든 여행의 그룹 id·이름(T133)도 싣지 않는다 — 구성원은 자기 그룹 목록(GET /groups)과 내 여행 목록으로 안다.
+const tripView = ({ arrival, places, groupId, groupName, ...trip }) => ({ ...trip, participants: trip.participants.map(asParticipant) });
 
 // 참가자 토큰(ADR-0007·docs/api/voice.md). 여행·참가에 묶이고 문서에는 해시만 남는다.
 // 프로필 토큰과 별개다 — 발화 올리기·기록본·동의 켜기의 인증에 쓴다.
@@ -320,13 +328,13 @@ async function profiles(req, seg, b) {
     return [201, { ...(await profileById(p.id)), token }]; // 토큰은 이때 한 번만 준다. 서버에는 해시만 남는다.
   }
   if (seg[0] !== "me") {
-    // 다른 프로필의 사진(T128). 지금은 본인만 — 같은 그룹 구성원으로 넓히는 것은 그룹(A2)에서.
+    // 다른 프로필의 사진(T128): 본인 것과 같은 그룹 구성원의 것(T133, 아이 포함).
     // 볼 수 없는 프로필은 없는 것과 같게 404로 답한다(있는 id인지 알려 주지 않게).
     if (seg[1] !== "photo" || seg[2]) fail(404, "없는 경로");
     if (m !== "GET") fail(405, "GET만 됨");
     const me = (await profileOf(req)) ?? fail(401, "프로필 토큰이 필요함");
-    if (seg[0] !== me.id) fail(404, "사진이 없음");
-    return photoOf(me.id);
+    if (seg[0] !== me.id && !(UUID.test(seg[0]) && (await shareGroup(me.id, seg[0])))) fail(404, "사진이 없음");
+    return photoOf(seg[0]);
   }
   if (seg[1] === "shares" && !seg[3]) {
     if (m !== (seg[2] ? "DELETE" : "GET")) fail(405, seg[2] ? "DELETE만 됨" : "GET만 됨");
@@ -943,13 +951,14 @@ async function retranscribeClip({ code, momentId }) {
   log("info", "clip_retranscribed", { lines: todo, fixed, fellBack: todo - fixed, reasons, changed, ms: Date.now() - started });
 }
 
-// T90: 48시간 자동 정리에 기대지 않고 명시적 삭제를 끝냅니다. 그룹 생성·관리
-// 경로는 폐기되었지만 기존 관리 프로필과 그룹 자료는 함께 지웁니다.
+// T90: 48시간 자동 정리에 기대지 않고 명시적 삭제를 끝냅니다. 내가 보호자인 아이(managed_by)와,
+// 내가 대표인 그룹의 아이(다른 성인이 보호자여도 — 그룹이 없어지면 다룰 사람이 없다, T133)의 프로필도 함께 지웁니다.
 async function deleteProfiles(id) {
   const { rows } = await profilesDb().query(
     `WITH RECURSIVE owned AS (
        SELECT id FROM profiles WHERE id=$1
        UNION SELECT p.id FROM profiles p JOIN owned o ON p.managed_by=o.id
+         OR (p.managed_by IS NOT NULL AND p.id IN (SELECT m.profile_id FROM group_members m JOIN groups g ON g.id=m.group_id WHERE g.owner_id=o.id))
      ) SELECT id FROM owned`, [id]);
   const all = [...new Set([id, ...rows.map(r => r.id)])];
   await withDeletingProfiles(all, async lockedClient => {
@@ -1003,7 +1012,6 @@ async function trips(req, [code, sub, id, leaf, ...rest], b, query, signal) {
   const m = req.method;
   if (!code) {
     if (m !== "POST") fail(405, "POST만 됨");
-    if (b.groupId !== undefined) fail(410, RETIRED_GROUP);
     const trip = {
       code: "",
       title: b.title === undefined ? "" : text(b.title, 40, "title"),
@@ -1013,10 +1021,10 @@ async function trips(req, [code, sub, id, leaf, ...rest], b, query, signal) {
       participants: [],
       requests: [],
       moments: [],
-      places: [], // 차가 내비에서 읽은 장소(T131)
       version: 1,
       createdAt: Date.now(),
     };
+    if (b.groupId !== undefined) return groupTrip(req, b, trip);
     await sweep(); // 여행을 만들 때마다 묵은 여행을 치운다(10분마다도 돈다)
     for (;;) {
       trip.code = newCode();
@@ -1067,6 +1075,35 @@ async function trips(req, [code, sub, id, leaf, ...rest], b, query, signal) {
   // 커밋 뒤에: 클립보다 늦게 온 발화를 다시 받아 적는다(T75)
   if (sub === "utterances" && m === "POST") requeueRetranscribe(String(code).toUpperCase()).catch((e) => log("warn", "clip_retranscribe_failed", { err: errFields(e) }));
   return result;
+}
+
+// 그룹으로 여행 만들기(T133): 자리가 정해진 구성원을 그 자리로 넣는다. 동의는 각자의 계정 동의(아이는 보호자 동의,
+// 지금 문구 판일 때만 — T128과 같은 규칙). 모든 참가자에 profileId를 붙인다: 차 안 화자 식별이 /voice-prints에서
+// 프로필 목소리 값을 받아 간다(ADR-0023, 토큰 없는 아이 포함). 참가자 토큰은 부른 사람과 그가 보호자인 아이 몫만 준다 —
+// 다른 성인은 자기 폰에서 프로필로 다시 참가(POST /participants)해 받는다(있던 참가자를 돌려주고 토큰만 새로).
+// 부른 사람의 프로필 잠금 안에서 만든다(참가와 같은 순서). 다른 구성원의 프로필 지우기와 겹치면 지운 사람이 남을 수 있다 —
+// 그 여행에서는 프로필 지우기가 다시 돌 때 정리된다.
+async function groupTrip(req, b, trip) {
+  const me = (await profileOf(req)) ?? fail(401, "프로필 토큰이 필요함");
+  if (typeof b.groupId !== "string") fail(400, "groupId: 그룹 id");
+  await sweep();
+  let profileClient;
+  return withActiveProfile(me.id, (db) => ((profileClient = db), profileOf(req, db)), async (caller, client) => {
+    const group = await groupForTrip(caller.id, b.groupId, profileClient);
+    Object.assign(trip, { groupId: group.id, groupName: group.name });
+    const tokens = {};
+    for (const member of group.members) {
+      const token = randomBytes(32).toString("base64url");
+      const p = { id: randomUUID().slice(0, 8), profileId: member.profileId, name: member.name, character: member.character, seat: member.seat, consent: member.consent, tokenHash: tokenHash(token).toString("hex") };
+      trip.participants.push(p);
+      if (member.profileId === caller.id || member.guardianId === caller.id) tokens[p.id] = token;
+    }
+    for (;;) {
+      trip.code = newCode();
+      const { rowCount } = await client.query("INSERT INTO trips (code, doc) VALUES ($1, $2) ON CONFLICT DO NOTHING", [trip.code, trip]);
+      if (rowCount) return [201, { ...tripView(trip), groupId: group.id, groupName: group.name, tokens }];
+    }
+  });
 }
 
 // 직접 삭제·동의 철회로 적어 둔 원음만 정리합니다. 여행의 나이로 데이터를 지우지 않습니다.
@@ -1197,9 +1234,14 @@ async function handle(trip, { req, m, sub, id, leaf, b, query, profile }, client
   }
 
   if (sub === "places") {
-    // 장소 기록(T131): 차가 내비의 출발·경유·곧 도착·도착·목적지를 남긴다. 그 여행의 참가자 토큰으로.
+    // 장소 기록(T131): 차가 내비의 출발·경유·곧 도착·도착·목적지를 남긴다(그 여행의 참가자 토큰으로, 녹음 동의와 무관).
+    // 읽기는 /todos의 도착 장소(T119)와 같은 규칙으로 녹음에 동의한 참가자만 — 토큰 없는 여행 문서에는 싣지 않는다.
     if (id) fail(404, "없는 경로");
-    if (m !== "POST") fail(405, "POST만 됨");
+    if (m === "GET") {
+      if (!participantOf(req, trip).consent) fail(403, "녹음에 동의한 참가자만 볼 수 있음");
+      return [200, { items: trip.places ?? [] }];
+    }
+    if (m !== "POST") fail(405, "GET, POST만 됨");
     return changed(201, addPlace(trip, participantOf(req, trip), b, { text, num, int, oneOf }));
   }
 
@@ -1437,7 +1479,7 @@ async function handle(trip, { req, m, sub, id, leaf, b, query, profile }, client
 
   if (sub === "transcript") {
     const all = await lines();
-    return [200, { generation: trip.generation ?? 1, utterances: all, requests: trip.requests, todos: await todos(all) }];
+    return [200, { generation: trip.generation ?? 1, utterances: all, requests: trip.requests, todos: await todos(all), places: trip.places ?? [] }];
   }
 
   if (sub === "scene-suggestions") {
@@ -1555,7 +1597,7 @@ export const server = createServer(async (req, res) => {
       return send(200, { ok: true });
     }
     if (seg[0] === "api") {
-      if (seg[1] === "groups" || seg[1] === "j") fail(410, RETIRED_GROUP);
+      if (seg[1] === "j") fail(410, RETIRED_GROUP);
       if (seg[1] === "config" && !seg[2]) {
         if (req.method !== "GET") fail(405, "GET만 됨");
         return send(200, googlePublicConfig());
@@ -1568,7 +1610,8 @@ export const server = createServer(async (req, res) => {
       const big = seg[1] === "trips" && seg[3] === "utterances";
       // 목소리 등록(…/voice)·발화 대조는 이진 본문(WAV)이다 — JSON으로 먼저 읽지 않는다.
       const binary = req.method === "POST" && (seg.at(-1) === "voice" || (seg[1] === "trips" && (["voice-match", "recordings", "transcriptions"].includes(seg[3]) || (seg[3] === "short-assets" && !seg[4]))));
-      const body = !binary && (req.method === "POST" || req.method === "PATCH") ? await readBody(req, big ? 1_000_000 : MAX_BODY) : {};
+      const json = req.method === "POST" || req.method === "PATCH" || (req.method === "PUT" && seg[1] === "groups"); // 그룹 자리 바꾸기는 PUT(JSON)
+      const body = !binary && json ? await readBody(req, big ? 1_000_000 : MAX_BODY) : {};
       if (seg[1] === "rest-stops" && !seg[2]) {
         if (req.method !== "POST") fail(405, "POST만 됨");
         return send(200, restStopsOf(body));
@@ -1577,6 +1620,9 @@ export const server = createServer(async (req, res) => {
       if (seg[1] === "boarding-invites") return send(...(await boardingInvites(req, seg.slice(2), body, { profileOf, withTrip, seats: SEATS })));
       if (seg[1] === "trips" && seg[2] && seg[3] === "ride-links" && !seg[4])
         return send(...(await redeemRideLink(req, seg[2], body, { profileById, seats: SEATS })));
+      if (seg[1] === "groups")
+        return send(...(await groups(req, seg.slice(2), body, { profileOf, text, bool, oneOf, obj, seats: SEATS, enrollment, enrolled, deleteProfiles })));
+      if (seg[1] === "group-invites") return send(...(await groupInvites(req, seg.slice(2), { profileOf })));
       if ((seg[1] === "accounts" || seg[1] === "sessions") && !seg[2]) return send(...(await accounts(req, seg[1], body, { profileOf, profileById, issueToken, text, tokenHash })));
       if (seg[1] === "profiles") {
         const r = await profiles(req, seg.slice(2), body);
