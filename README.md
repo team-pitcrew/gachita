@@ -15,7 +15,7 @@
 | 기준 | 무엇을 했나 | 근거와 확인 수준 |
 |---|---|---|
 | 차량특화성 | 차 마이크로 수음해 차 안에서 받아 적고, 말로 수락한 부탁을 순정 내비 경유지로 넣고, 기어 P에서 그 장소의 할 일을 알립니다. 주행 제한 값에 맞춰 화면을 가립니다. 폰에서는 수음하지 않습니다 | [차량 앱 README](frontend/car/README.md), [E2E 실측](docs/emulator/e2e-flow.md). 에뮬레이터에서 확인, 실차는 아님 |
-| 창의성 | 시키지 않은 대화에서 부탁과 할 일을 뽑습니다. 말한 자리의 캐릭터를 강조하고, 고른 장면을 영상 파일 없이 숏폼으로 다시 봅니다 | [차량 화면](frontend/spec/car.md), [도착 후 화면](frontend/spec/after-trip.md). 부탁·할 일은 에뮬레이터에서 확인. 숏폼 재생은 웹에 있음(브라우저). 차의 말하는 사람 강조도 에뮬레이터에서 확인 |
+| 창의성 | 시키지 않은 대화에서 부탁과 할 일을 뽑습니다. 말한 자리의 캐릭터를 강조하고, 고른 장면을 세로 숏폼으로 다시 보고 기기에서 영상 파일로 저장합니다 | [차량 화면](frontend/spec/car.md), [도착 후 화면](frontend/spec/after-trip.md). 부탁·할 일은 에뮬레이터에서 확인. 숏폼 재생은 웹에 있음(브라우저). 영상 만들기는 웹·차에 코드가 있고, 서버의 힉스필드 생성은 꺼 둠([ADR-0022](docs/adr/0022-shortform-video-on-device-and-server-generation-off.md)). 차의 말하는 사람 강조도 에뮬레이터에서 확인 |
 | 기술 활용성 | Pleos SDK 넷(Vehicle, NaviHelper, SpeechToText, TextToSpeech)과 Gleo 함수 선언, 좌석 두 구역과 등록한 목소리로 말한 사람 맞추기, 실서비스(Cloudflare → ALB → K3s, CloudNativePG, Argo CD) | [구조와 스택](docs/architecture.md)의 '음성 처리 흐름', [ADR-0008](docs/adr/0008-in-car-capture-and-sdk-stt.md), [ADR-0019](docs/adr/0019-speaker-matching.md). SDK와 Gleo에 마이크 넘기기는 에뮬레이터, 서버는 실서비스에서 확인. Gleo가 우리 함수를 음성으로 부르는 것은 확인 전 |
 | 사업성 | 첫 고객은 어린 자녀와 이동하는 부모입니다. 사람마다 기록이 프로필에 쌓이고, 여행 뒤에는 고른 장면만 남깁니다. 서버는 한 대로 동시 접속 300까지 재었고 월 약 $99로 둡니다 | [ADR-0016](docs/adr/0016-slo-capacity-single-postgres.md)(실제 EC2에서 잼), [음성 처리 명세](docs/api/voice.md) |
 
