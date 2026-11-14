@@ -144,10 +144,10 @@ private fun BriefLine(r: BriefRow, modifier: Modifier = Modifier) {
     Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
         Text(r.emoji, Modifier.width(48.dp), fontSize = 36.sp, lineHeight = 44.sp, textAlign = TextAlign.Center)
         Column(Modifier.weight(1f)) {
-            Text(r.name, fontSize = 32.sp, lineHeight = 42.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(r.name, color = c.onSurface, fontSize = 32.sp, lineHeight = 42.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
             if (r.who.isNotEmpty()) Text(r.who, color = c.onSurfaceVariant, fontSize = 24.sp, lineHeight = 32.sp, maxLines = 1)
         }
-        if (r.qty.isNotEmpty()) Text(r.qty, fontSize = 32.sp, lineHeight = 42.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+        if (r.qty.isNotEmpty()) Text(r.qty, color = c.onSurface, fontSize = 32.sp, lineHeight = 42.sp, fontWeight = FontWeight.Bold, maxLines = 1)
     }
 }
 
