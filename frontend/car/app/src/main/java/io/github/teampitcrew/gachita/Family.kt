@@ -136,6 +136,12 @@ fun seatChanges(saved: List<GroupMember>, edited: List<GroupMember>): Map<String
     return edited.filter { before[it.profileId] != it.seat }.associate { it.profileId to it.seat }
 }
 
+/**
+ * 아이를 저장한 뒤 좌석 지도(C13)로 바로 갈지. 시안 시연 13→16: 첫 아이(서준) 뒤에는 가족 추가(C40 '서준까지 준비됐어요')로
+ * 돌아가 다음 아이(하은)를 더하고, 아이가 둘 이상이 되면 좌석 지도로. 그 밖에는 '우리 가족 좌석 보기'로 언제든 간다.
+ */
+fun seatsAfterChild(members: List<GroupMember>) = members.count { it.role == "child" } >= 2
+
 /** 아이 목소리 등록(C12·C42)의 읽을 문장. 받침에 따라 '서준이야'·'하은이야'·'지우야'(시안 글자). */
 fun childLine(name: String) = "“나는 $name${if (batchim(name)) "이야" else "야"}. 바다에 가서 모래성을 만들 거야.”"
 
@@ -227,6 +233,11 @@ fun FamilyFlow(server: String, token: String?, onClose: () -> Unit, onStart: (St
         val owner = made.members.firstOrNull { it.role == "owner" } ?: return made
         return api.saveSeats(token, made.id, mapOf(owner.profileId to Seat.ROW_1_LEFT.name))
     }
+    // 아이 저장 뒤 갈 곳(seatsAfterChild): 아이가 둘 이상이면 좌석 지도(C13), 아니면 가족 추가(C40).
+    fun afterChildSaved() {
+        val fam = family()
+        if (fam != null && seatsAfterChild(fam.members)) { groupId = fam.id; saved = false; view = FamilyView.GROUP } else view = FamilyView.MEMBER
+    }
     suspend fun ensureFamily(): CarGroup = family() ?: io { api.createGroup(token!!, "우리 가족", "family") }.also { put(it) }
     suspend fun issue(g: CarGroup) {
         groupId = g.id
@@ -253,7 +264,7 @@ fun FamilyFlow(server: String, token: String?, onClose: () -> Unit, onStart: (St
             FamilyView.INVITE -> if (current()?.kind == "guest") FamilyView.GROUP else FamilyView.MEMBER
             FamilyView.CHILD, FamilyView.CHILD_VOICE -> FamilyView.MEMBER
             FamilyView.SEAT, FamilyView.GUEST -> FamilyView.GROUP
-            // 아이를 저장하면 바로 좌석 지도(C13)로 오므로, 다음 아이를 더하려면 뒤로 가족 추가(C40)로 돌아간다.
+            // 좌석 지도에서 뒤로 가면 가족 추가(C40)로 — 아이를 더 더하거나 다시 초대한다.
             FamilyView.GROUP -> if (token != null) FamilyView.MEMBER else { onClose(); view }
             else -> { onClose(); view }
         }
@@ -356,12 +367,7 @@ fun FamilyFlow(server: String, token: String?, onClose: () -> Unit, onStart: (St
                         }
                     }
                     FamilyView.CHILD_VOICE -> Primary(if (voiceSec >= 15) "가족 그룹에 저장" else "녹음 중", voiceSec >= 15 && !busy, Modifier.weight(1f)) {
-                        // 시안 13→16: 아이를 저장하면 가족이 둘 이상일 때 바로 좌석 지도(C13)로 — 자리를 정하고 '이 가족과 출발'.
-                        act {
-                            load(); childName = ""
-                            val fam = family()
-                            if (fam != null && fam.members.size >= 2) { groupId = fam.id; saved = false; view = FamilyView.GROUP } else view = FamilyView.MEMBER
-                        }
+                        act { load(); childName = ""; afterChildSaved() }
                     }
                     FamilyView.GROUP -> {
                         Ghost("새 동승 그룹", true, Modifier.weight(0.6f)) { guestName = ""; view = FamilyView.GUEST }
