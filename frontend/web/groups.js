@@ -4,6 +4,7 @@
 import { api, h, SEAT, SEATS, toast } from "./shared.js";
 import { CHARACTER_OPTIONS, characterImage, characterKey } from "./short-film.js";
 import { qrcode } from "./qrcode.js";
+import { startVoice, voiceBars, VOICE_SECONDS } from "./voice-meter.js";
 
 const PENDING = "gachita:group-pending"; // 프로필을 만들기 전에 연 초대 링크의 코드(이 탭에서만)
 const CODE = /^(FAMILY|TRIP)-[0-9]{4}$/;
@@ -67,14 +68,14 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
 
   function close() {
     if (!s) return;
-    clearInterval(s.timer);
+    s.meter?.cancel(); // 아이 목소리 녹음 중이면 마이크를 놓고 모은 소리를 버린다
     s.dialog.close();
     s.dialog.remove();
     s = null;
   }
   function begin(view) {
     close();
-    s = { view, groups: [], groupId: null, invite: null, busy: false, draft: { name: "", character: "cap", consent: true }, seats: null, swapped: null, voice: 0 };
+    s = { view, groups: [], groupId: null, invite: null, busy: false, draft: { name: "", character: "cap", consent: true }, seats: null, swapped: null, meter: null, voiceState: "", voiceNote: "" };
     s.dialog = h("dialog", { className: "groups-dialog", "aria-label": "가족과 동승 그룹", oncancel: (e) => { e.preventDefault(); back(); } });
     document.body.append(s.dialog);
     s.dialog.showModal();
@@ -242,8 +243,8 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
       const made = await call("POST", `/groups/${g.id}/children`, { name: d.name.trim(), character: d.character, guardianConsent: d.consent });
       s.groups = s.groups.map((x) => (x.id === made.id ? made : x));
       s.child = made.members.filter((m) => m.role === "child").at(-1);
+      s.childGroup = g.id;
       s.draft = { name: "", character: "cap", consent: true };
-      s.voice = 0;
       go("childVoice");
       record();
     }), "primary", !ready());
@@ -256,25 +257,61 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
     ], [submit]);
   }
 
-  // mock: 아이 목소리 15초 등록(P12·P42). 화면과 15초 진행만 실제이고, 값 올리기
-  // (POST /groups/{id}/members/{profileId}/voice, JSON {embedder, vector[112], seconds})는 웹 임베더(흐름 F1)가 들어온 뒤 잇는다.
-  function record() {
-    clearInterval(s.timer);
-    s.timer = setInterval(() => {
+  // 아이 목소리 15초 등록(P12·P42): 보호자 폰의 마이크로 15초를 듣고(막대는 실제 들어온 소리 크기, voice-meter.js),
+  // 이 폰에서 값(112차원)으로 바꿔 POST /groups/{id}/members/{profileId}/voice(JSON, #356·#364 계약)로 값만 올린다.
+  // 보호자 동의가 꺼진 아이는 녹음하지 않는다(서버도 409). 서버 400(말소리 없음)은 다시 녹음하게 한다.
+  async function record() {
+    const kid = s.child;
+    s.meter?.cancel();
+    s.meter = null;
+    s.voiceState = "recording";
+    s.voiceNote = "";
+    if (!kid?.consent) { s.voiceState = "blocked"; s.voiceNote = "보호자 동의가 꺼져 있어 아이 목소리를 녹음하지 않아요."; return paint(); }
+    let meter;
+    try {
+      meter = await startVoice({ slots: 28, seconds: VOICE_SECONDS, onChange: () => {
+        if (!s || s.meter !== meter) return;
+        if (meter.done && s.voiceState === "recording") save(meter);
+        else paint();
+      } });
+    } catch (e) {
       if (!s) return;
-      s.voice = Math.min(15, s.voice + 1);
-      if (s.voice >= 15) clearInterval(s.timer);
-      paint();
-    }, 1000);
+      s.voiceState = "failed";
+      s.voiceNote = e.message;
+      return paint();
+    }
+    if (!s) return meter.cancel();
+    s.meter = meter;
+    paint();
+  }
+  async function save(meter) {
+    s.voiceState = "saving";
+    paint();
+    try {
+      const { value } = await meter.finish();
+      await call("POST", `/groups/${s.childGroup}/members/${s.child.profileId}/voice`, value);
+      if (!s) return;
+      s.voiceState = "saved";
+    } catch (e) {
+      if (!s) return;
+      s.voiceState = "failed";
+      s.voiceNote = e.status === 400 ? "말소리가 없어 등록할 수 없음" : e.message;
+    }
+    paint();
   }
   function childVoiceView() {
     const kid = s.child;
-    const bars = Array.from({ length: 28 }, (_, i) => h("i", { style: `height:${i < (s.voice / 15) * 28 ? 18 + ((i * 37) % 40) : 10}px` }));
-    const done = s.voice >= 15;
+    const sec = Math.floor(Math.min(s.meter?.elapsed() ?? 0, VOICE_SECONDS));
+    const saved = s.voiceState === "saved";
+    const retry = s.voiceState === "failed" || s.voiceState === "blocked";
     return page(`${kid?.name ?? "아이"}의 목소리 등록`, `“나는 ${kid?.name ?? "아이"}야. 바다에 가서 모래성을 만들 거야.”`, [
-      h("div", { className: "group-card" }, h("small", {}, `아이 목소리  ${s.voice} / 15초`), h("div", { className: "group-wave", "aria-hidden": "true" }, bars), h("small", {}, `00:${String(s.voice).padStart(2, "0")}`)),
-      done && h("div", { className: "group-card soft row" }, face(kid), h("div", {}, h("strong", {}, `${kid?.name ?? "아이"}의 프로필 준비 완료`), h("small", {}, "다음 아이도 같은 방법으로 추가할 수 있어요."))),
-    ], [button(done ? "가족 그룹에 저장" : "녹음 중…", () => act(async () => { await load(); go("member"); }), "primary", !done || s.busy)]);
+      h("div", { className: "group-card" }, h("small", {}, `아이 목소리  ${sec} / ${VOICE_SECONDS}초`),
+        voiceBars(s.meter, { className: "group-wave", slots: 28, ready: [10], min: 10, max: 58, upcoming: 10 }), h("small", {}, `00:${String(sec).padStart(2, "0")}`)),
+      s.voiceNote && h("p", { className: "meta", role: "status" }, s.voiceNote),
+      saved && h("div", { className: "group-card soft row" }, face(kid), h("div", {}, h("strong", {}, `${kid?.name ?? "아이"}의 프로필 준비 완료`), h("small", {}, "다음 아이도 같은 방법으로 추가할 수 있어요."))),
+    ], [saved ? button("가족 그룹에 저장", () => act(async () => { await load(); go("member"); }), "primary", s.busy)
+      : retry ? button(s.voiceState === "blocked" ? "가족 그룹에 저장" : "다시 녹음", () => (s.voiceState === "blocked" ? act(async () => { await load(); go("member"); }) : record()), "primary", s.busy)
+      : button(s.voiceState === "saving" ? "등록 중…" : "녹음 중…", () => {}, "primary", true)]);
   }
 
   // 우리 가족(P13·P43)과 좌석 바꾸기(P14): 위가 차 앞쪽, 앞줄 둘·뒷줄 둘(뒤 가운데는 앉았을 때만).
