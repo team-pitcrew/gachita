@@ -95,6 +95,7 @@ private const val TITLE = "함께하는 여행"
 private const val TAG = "GachitaAsk"
 private const val RESULT_MS = 60_000L // 경유지 결과 카드를 보여 두는 시간
 private const val GLEO_ARRIVAL = "GACHITA_ARRIVAL_TASKS" // assets/schema.json의 함수 이름(T40)
+private const val GLEO_START = "GACHITA_START_RECORDING"
 private const val GLEO_PAUSE = "GACHITA_PAUSE_RECORDING" // 같은 곳(T41)
 private const val GLEO_RESUME = "GACHITA_RESUME_RECORDING"
 private const val RESYNC_EVERY = 30 // 조회 30번(5분)마다, 그리고 끊겼다 다시 닿을 때 서버의 확인 순번을 다시 받는다(ADR-0014 2절). 5분마다는 서버에서 지운 글도 차 사본에 맞춘다(T69)
@@ -103,6 +104,8 @@ private const val OFFER_MS = 30_000L // 제안에 답이 없으면 보관으로 
 
 class MainActivity : ComponentActivity() {
     private val io = Executors.newSingleThreadExecutor()
+    private val recordingIo = Executors.newSingleThreadExecutor()
+    private var cancelRecordingStart: (() -> Unit)? = null
     private val clipIo = Executors.newSingleThreadExecutor() // 장면 클립 올리기(T63). 동의 끄기 요청이 클립 묶음 뒤에 서지 않게 따로
     private val shortPreviewIo = Executors.newSingleThreadExecutor()
     private val shortPreviewCloseIo = Executors.newSingleThreadExecutor() // disconnect가 읽기를 기다려도 동의 끄기·화면을 막지 않습니다.
@@ -387,6 +390,8 @@ class MainActivity : ComponentActivity() {
     override fun onPause() { resumed = false; super.onPause() }
 
     override fun onDestroy() {
+        cancelRecordingStart?.invoke()
+        recordingIo.shutdownNow()
         stopShort()
         main.removeCallbacksAndMessages(null) // 조회, 제안 시간 초과, 결과 카드 닫기
         if (Live.onHeard == ::heard) Live.onHeard = null
@@ -640,26 +645,49 @@ class MainActivity : ComponentActivity() {
         car.here { la, ln -> if (la != null && ln != null) Live.fix = Fix(la, ln, System.currentTimeMillis()) }
     }
 
-    /** 동의와 녹음 실행을 분리한다. 최신 동의와 기어를 확인한 뒤, 이번 터치로만 시작한다. */
-    private fun startRecording() {
-        if (carStatus.restricted || s.blockStart() != null) return
+    /** 터치와 음성 모두 같은 최신 동의·주차 검사로 시작하며, 늦은 응답은 수음을 켜지 않는다. */
+    private fun startRecording(done: (Boolean, String) -> Unit = { _, _ -> }) {
+        val trip = s.trip
+        if (trip == null || carStatus.restricted || s.blockStart() != null) {
+            done(false, "Recording requires parking, a connection and every passenger's consent.")
+            return
+        }
+        val url = server
+        val attempt = RecordingStartAttempt(trip.code, trip.generation, android.os.SystemClock.elapsedRealtime())
+        val timeout = Runnable { cancelRecordingStart?.invoke() }
+        fun finish(ok: Boolean, message: String) {
+            if (!attempt.finish()) return
+            main.removeCallbacks(timeout)
+            cancelRecordingStart = null
+            s = s.copy(busy = false, note = if (ok) "" else "녹음을 시작하지 못했어요. 주차·동의·연결 상태를 확인해 주세요")
+            done(ok, message)
+        }
+        cancelRecordingStart = { finish(false, "Recording did not start. The request timed out or was cancelled.") }
+        s = s.copy(busy = true, note = "동의를 확인하고 있어요")
+        main.postDelayed(timeout, RECORDING_START_TIMEOUT_MS)
+        fun current(): Boolean = !isDestroyed && server == url && attempt.accepts(s.trip, android.os.SystemClock.elapsedRealtime())
         car.readGear { gear ->
+            if (!current()) { finish(false, "The trip changed before recording started."); return@readGear }
             s = s.withGear(gear)
-            s.blockStart()?.let { s = s.copy(note = it); return@readGear }
-            val trip = s.trip ?: return@readGear
-            val url = server
-            s = s.copy(busy = true, note = "동의를 확인하고 있어요")
-            bg({ Server(url).trip(trip.code)!! }) { result ->
-                if (s.trip?.code != trip.code || server != url) return@bg
-                result.onSuccess { got ->
-                    s = s.copy(busy = false).withTrip(keep(got))
-                    if (carStatus.restricted || s.gear != "P" || s.offPending || got.trip.generation != trip.generation) {
-                        s = s.copy(note = "상태가 바뀌었어요. 주차 중 동의를 확인하고 다시 시작해 주세요")
-                    } else {
-                        if (Live.mic == Mic.FAILED) { Live.set(Mic.OFF); askedMic = false }
-                        s = s.startRecording().let { if (it.recording) it else it.copy(note = it.blockStart().orEmpty()) }
-                    }
-                }.onFailure { s = s.copy(busy = false, online = it is ApiError, note = "녹음을 시작하지 못했어요. 연결을 확인해 주세요") }
+            if (carStatus.restricted || s.copy(busy = false).blockStart() != null) {
+                finish(false, "Recording requires parking and every passenger's consent.")
+                return@readGear
+            }
+            recordingIo.execute {
+                val result = runCatching { Server(url).trip(trip.code) ?: error("Trip is no longer available") }
+                main.post {
+                    if (!current()) { finish(false, "The trip changed or the request timed out."); return@post }
+                    result.onSuccess { got ->
+                        val ready = s.copy(busy = false).withTrip(got.trip)
+                        if (!attempt.accepts(got.trip, android.os.SystemClock.elapsedRealtime()) || carStatus.restricted || ready.blockStart() != null) {
+                            finish(false, "Consent or parking changed. Recording did not start.")
+                        } else {
+                            if (Live.mic == Mic.FAILED) { Live.set(Mic.OFF); askedMic = false }
+                            s = ready.withTrip(keep(got)).startRecording()
+                            finish(s.recording, "Recording is enabled. Audio capture begins when the microphone is available after this voice command.")
+                        }
+                    }.onFailure { finish(false, "The server could not confirm passenger consent. Recording did not start.") }
+                }
             }
         }
     }
@@ -690,6 +718,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun recordingAction() {
+        cancelRecordingStart?.invoke()
         when {
             s.recording -> {
                 if (muted && Live.mic == Mic.FAILED) { Live.set(Mic.OFF); askedMic = false }
@@ -866,28 +895,54 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * Gleo가 "도착해서 할 일 알려 줘"로 부른 때(assets/schema.json, component activity). 미완료 할 일 전체를 띄우고
-     * Gleo에 결과를 돌려준다(Callback Schema: message는 영어, 항목은 data). 말은 Gleo가 하므로 우리 TTS는 쓰지 않는다.
+     * Gleo 녹음 제어(assets/schema.json, component activity). 동의와 녹음 실행은 별개다.
+     * Callback message는 영어, 실제 상태는 data로 반환한다. 말은 Gleo가 하므로 우리 TTS는 쓰지 않는다.
      * Gleo는 함수 이름이나 '<패키지>.<함수 이름>'을 action으로 보낸다(11/1 프로브). 응답의 functionName은 schema의 함수 이름 그대로.
      */
     private fun gleo(i: Intent?) {
-        when (i?.action?.substringAfterLast('.')) {
-            GLEO_ARRIVAL -> arrivalTasks()
+        val fn = i?.action?.substringAfterLast('.') ?: return
+        when (fn) {
+            GLEO_ARRIVAL -> arrivalTasks() // 이전 APK 호출 호환. 새 schema의 세 진입점은 녹음 제어다.
+            GLEO_START -> {
+                Log.i(TAG, "Gleo 요청 $fn")
+                when {
+                    s.recording -> reply(fn, !muted, if (muted) "Recording is paused. Ask to resume recording." else "Recording is already enabled.")
+                    checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED ->
+                        reply(fn, false, "Microphone permission is required. Open Gachita and grant microphone permission while parked.")
+                    else -> {
+                        destination = Destination.RIDE; stopShort(); closeBoarding()
+                        startRecording { ok, message -> recordingReply(fn, ok, message) }
+                    }
+                }
+            }
             GLEO_PAUSE -> {
-                val on = s.recording
-                if (on) { mute(true); syncCapture() }
-                reply(GLEO_PAUSE, on, if (on) "Recording is paused. Ask to resume recording, or tap Resume on the screen." else "Recording is not on.")
+                Log.i(TAG, "Gleo 요청 $fn")
+                cancelRecordingStart?.invoke()
+                if (s.recording) { mute(true); syncCapture() }
+                recordingReply(fn, true, if (s.recording) "Recording is paused. Consent and saved records are unchanged." else "Recording is already stopped.")
             }
             GLEO_RESUME -> {
+                Log.i(TAG, "Gleo 요청 $fn")
                 val on = s.recording
-                if (on) { mute(false); syncCapture() } // 우리 화면이 앞으로 나오면(onResume) 수음을 시작한다
-                reply(GLEO_RESUME, on, when {
-                    !on -> "Recording has not started. Open Gachita while parked, confirm consent, and tap Start recording."
-                    short != null || shortStudioActive || destination == Destination.SHORTS -> "Recording will resume when the shorts screen closes."
-                    else -> "Recording resumed."
-                })
+                when {
+                    !on -> recordingReply(fn, false, "Recording has not started. Ask to start recording while parked with passenger consent.")
+                    checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED ->
+                        recordingReply(fn, false, "Microphone permission is required before recording can resume.")
+                    else -> {
+                        destination = Destination.RIDE; stopShort(); closeBoarding()
+                        mute(false); syncCapture()
+                        recordingReply(fn, true, "Recording is enabled again. Audio capture resumes when the microphone is available after this voice command.")
+                    }
+                }
             }
         }
+    }
+
+    private fun recordingReply(fn: String, ok: Boolean, message: String) {
+        val data = JSONArray().put(JSONObject().put("recordingEnabled", s.recording && !muted)
+            .put("paused", s.recording && muted).put("microphoneState", Live.mic.name)
+            .put("passengerConsent", s.agreed)).toString()
+        reply(fn, ok, message, data)
     }
 
     // ---- 동승 연결(T46, #195 계약) ----
@@ -1607,6 +1662,11 @@ class MainActivity : ComponentActivity() {
                         Text(action, fontSize = 26.sp, fontWeight = FontWeight.Bold, color = if (enabled) c.primary else c.onSurfaceVariant)
                     }
                     Text(s.note.ifBlank { st.sub }, fontSize = 24.sp, color = c.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                }
+            }
+            if (s.recording && !muted && handoff.state == Handoff.State.OFF) {
+                TextButton({ handoff.give(wake = false) }, shape = RoundedCornerShape(8.dp), modifier = Modifier.heightIn(min = 56.dp)) {
+                    Text("Gleo에게 말하기", fontSize = 24.sp)
                 }
             }
             if (carStatus.restricted && t.people.any { it.consent } && !s.offPending) TextButton({ turnOff() }, shape = RoundedCornerShape(10.dp), modifier = Modifier.heightIn(min = 56.dp)) {

@@ -1,13 +1,13 @@
 {
   "packageName": "io.github.teampitcrew.gachita",
-  "appDescription": "Gachita keeps a family's car conversation as a trip record. It turns requests into navigation stops and collects to-do items for places the family is driving to.",
+  "appDescription": "Gachita records car conversations with every passenger's consent. It lets the driver start, pause and resume conversation recording.",
   "version": "0.1.0",
   "actionCalls": [
     {
       "type": "function",
       "function": {
-        "name": "GACHITA_ARRIVAL_TASKS",
-        "description": "Show the to-do items that the family mentioned during the drive for the places they are going to, and read them out. Use this when the user asks what they need to do after arriving.",
+        "name": "GACHITA_START_RECORDING",
+        "description": "Start recording the car conversation when parked after all passengers have consented. This does not grant consent or resume a paused recording.",
         "parameters": {
           "type": "object",
           "properties": {},
@@ -20,7 +20,7 @@
       "type": "function",
       "function": {
         "name": "GACHITA_PAUSE_RECORDING",
-        "description": "Pause recording the family's conversation in the car. Consent stays on and nothing is deleted. Use this when the user asks to stop or pause the trip recording.",
+        "description": "Pause the current car conversation recording without revoking consent or deleting saved records.",
         "parameters": {
           "type": "object",
           "properties": {},
@@ -33,7 +33,7 @@
       "type": "function",
       "function": {
         "name": "GACHITA_RESUME_RECORDING",
-        "description": "Resume recording the family's conversation in the car after it was paused. Use this when the user asks to continue or restart the trip recording.",
+        "description": "Resume the previously paused car conversation recording with existing passenger consent.",
         "parameters": {
           "type": "object",
           "properties": {},
@@ -42,5 +42,6 @@
         "component": "activity"
       }
     }
-  ]
+  ],
+  "invokeWord": "가치타"
 }

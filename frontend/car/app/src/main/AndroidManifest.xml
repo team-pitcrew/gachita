@@ -29,6 +29,7 @@
    <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
    <!-- Gleo 함수(assets/schema.json, T40·T41). Gleo는 함수 이름이나 '<패키지>.<함수 이름>'을 action으로 보낸다 -->
    <intent-filter>
+    <action android:name="GACHITA_START_RECORDING" /><action android:name="io.github.teampitcrew.gachita.GACHITA_START_RECORDING" />
     <action android:name="GACHITA_ARRIVAL_TASKS" /><action android:name="io.github.teampitcrew.gachita.GACHITA_ARRIVAL_TASKS" />
     <action android:name="GACHITA_PAUSE_RECORDING" /><action android:name="io.github.teampitcrew.gachita.GACHITA_PAUSE_RECORDING" />
     <action android:name="GACHITA_RESUME_RECORDING" /><action android:name="io.github.teampitcrew.gachita.GACHITA_RESUME_RECORDING" />
