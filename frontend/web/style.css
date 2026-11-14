@@ -1088,6 +1088,36 @@ button.ob-other { justify-self: start; min-height: 40px; font-size: 13px; font-w
 .group-share h2 { margin: 0; font-size: 22px; line-height: 30px; letter-spacing: -0.01em; }
 .group-share p { margin: 0; font-size: 17px; line-height: 26px; color: var(--ink); }
 .group-share-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+/* 그룹 상세·좌석 배정·구성원 선택·전체 그룹(P16A·B·C·G·L) */
+.group-faces { display: grid; grid-template-columns: 28px 28px; gap: 4px; padding: 6px; border-radius: var(--r-phone-ctl); background: var(--surface-2); } /* 'Group / 2x2 profile / Phone' 2094:4300 */
+.group-faces .group-face, .group-slot { width: 28px; height: 28px; }
+.group-slot { box-sizing: border-box; border: 2px dashed var(--line); border-radius: 50%; } /* 미등록(폰 28px 칸엔 글이 들어가지 않아 점선만) */
+.group-slot.inviting { border-color: var(--accent); } /* 초대 중 */
+.group-face.big { width: 68px; height: 68px; }
+.group-pick, .group-member { border: 0; font: inherit; color: inherit; width: 100%; }
+.group-card.group-pick > div { gap: 4px; }
+.group-pick strong, .group-head strong, .group-solo strong { font-size: 22px; line-height: 30px; }
+.group-pick.solo strong { font-size: 19px; line-height: 28px; }
+.group-pick.solo > div { gap: 8px; }
+.group-card .group-line { white-space: pre-wrap; }
+.group-card small.group-names { font-size: 13px; line-height: 18px; font-weight: 400; }
+.group-solo { align-items: start; }
+.group-card.group-solo > div { gap: 12px; }
+.group-solo p { margin: 0; font-size: 17px; line-height: 26px; color: var(--ink-2); }
+.group-rows { gap: 10px; }
+.group-rows p { display: grid; grid-template-columns: 110px 1fr; align-items: center; min-height: 38px; margin: 0; font-size: 17px; line-height: 26px; }
+.group-rows p span:first-child { font-size: 15px; line-height: 22px; font-weight: 500; color: var(--ink-2); }
+.group-target { grid-template-columns: 1fr 1fr; gap: 12px; align-items: start; }
+.group-target strong { font-size: 19px; line-height: 28px; }
+.group-card.group-member { padding: 10px 16px; }
+.group-member .group-face { width: 42px; height: 42px; }
+.group-member.picked { outline: 3px solid var(--accent); }
+.group-assign { border: 0; gap: 12px; } /* 시안 P16B 차량 좌석 배치 */
+.group-assign .seat { min-height: 158px; align-content: center; gap: 6px; padding: 16px; }
+.group-assign .seat.me { background: var(--surface-2); }
+.group-assign .seat > :first-child { order: -2; }
+.group-assign .seat small { order: -1; } /* 시안: 캐릭터 · 자리 · 이름 */
+.group-content .group-hint { text-align: center; }
 .group-share-row > *, .group-share > .group-ghost { min-height: 48px; padding: 0; border-radius: var(--r-phone-ctl); background: var(--surface-2); color: var(--ink); font: inherit; font-size: 19px; line-height: 28px; font-weight: 700; letter-spacing: -0.01em; border: 0; display: grid; place-items: center; text-decoration: none; }
 /* v2 도착 브리핑(P19·P20·finalBrief, T141): 분류별 행동 항목. 'Briefing / action item / Phone'(2056:2246) */
 .near-line { font-size: 17px; line-height: 26px; }
