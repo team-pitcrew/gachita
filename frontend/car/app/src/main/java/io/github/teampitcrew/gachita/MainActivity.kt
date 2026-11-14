@@ -206,7 +206,18 @@ class MainActivity : ComponentActivity() {
     private var enrolling by mutableStateOf<Person?>(null)
     private var voiceNote by mutableStateOf("")
     private var clipsAfter = 0L // 다시 해도 되는 실패(403·503·끊김) 뒤에는 이때까지 쉰다. 큰 원음 파일을 10초마다 다시 읽지 않게
-    private val todoList get() = todoState.items
+    private var carTodos: Pair<String, List<TodoAction>> = "" to emptyList()
+    /**
+     * 할 일은 차가 자기 보관함의 발화로 도출하고(T144, TodoActions.kt), 서버 목록에서는 상태·버전과 차에 없는 것(폰 입력·교정본)만 받는다.
+     * 참가자 동의가 없거나 보관함의 동의 세대가 서버 목록의 세대와 다르면 차 결과를 쓰지 않는다. 상태 바꾸기는 그대로 PATCH /todos/{id}.
+     */
+    private val todoList: List<SharedTodo> get() {
+        val scope = todoState.scope ?: return emptyList()
+        val box = Live.box?.takeIf { it.trip == scope.trip && it.generation == scope.generation } ?: return todoState.items
+        val key = "${box.trip}:${box.generation}:${Live.count}" // Live.count는 화면 상태라 새 발화가 들어오면 다시 그린다
+        if (carTodos.first != key) carTodos = key to deriveActionTodos(box.lines().map { TodoLine("car", it.seq, it.startedAt, it.text) })
+        return withCarTodos(carTodos.second, todoState.items)
+    }
     /** 보이고 있는 도착 브리핑. place가 null이면 모든 장소(Gleo로 부름). 주차해 주행 제한이 풀렸을 때만 그린다. */
     private data class Brief(val place: String?, val arrivalItems: List<SharedTodo>? = null)
     private var brief by mutableStateOf<Brief?>(null)

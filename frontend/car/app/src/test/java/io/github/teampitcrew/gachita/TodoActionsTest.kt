@@ -30,4 +30,22 @@ class TodoActionsTest {
             assertEquals(c.getString("name"), want, got)
         }
     }
+
+    @Test fun carTodosTakeServerStateAndKeepServerOnly() {
+        val own = deriveActionTodos(listOf(
+            TodoLine("car", 1, 1_000, "마트에서 우유 사자"),
+            TodoLine("car", 2, 2_000, "편의점에서 물 사자"), // 서버가 교정본으로 다른 할 일을 냄
+            TodoLine("car", 3, 3_000, "숙소에서 짐 내리자"), // 서버가 아직 받지 못함
+        ))
+        val src = { seq: Long, at: Long, text: String -> SharedTodoSource("car-1", seq, at, text, text, "mom") }
+        val server = listOf(
+            SharedTodo(own[0].id, "마트", "마트에서 우유 사자", "done", 2, listOf(src(1, 1_000, "마트에서 우유 사자"))),
+            SharedTodo("edited", "편의점", "편의점에서 생수 사자", "pending", 0, listOf(src(2, 2_000, "편의점에서 물 사자"))),
+            SharedTodo("phone", "약국", "약국에서 밴드 사자", "pending", 1, listOf(src(9, 9_000, "약국에서 밴드 사자"))),
+        )
+        val got = withCarTodos(own, server)
+        assertEquals(listOf(own[0].id, own[2].id, "edited", "phone"), got.map { it.id })
+        assertEquals("done" to 2, got[0].status to got[0].version)
+        assertEquals("pending" to 0, got[1].status to got[1].version)
+    }
 }
