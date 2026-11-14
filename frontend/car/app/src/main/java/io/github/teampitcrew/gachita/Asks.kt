@@ -62,11 +62,28 @@ private fun squash(text: String) = text.replace(Regex("[^가-힣A-Za-z0-9]"), ""
 
 /**
  * 쉬어 가자는 부탁인지. 낱말 규칙(11/13 실측과 같은 방식). 수락하는 말("응, 다음 휴게소 가자")은 부탁이 아니다.
+ * 어느 곳에 가서 할 일로 묶인 말("하나로마트 가면 화장실 먼저 가야 돼", "마트에서 화장실 들르자", 내비의 다음 도착지 이름이 든 말)은
+ * 그곳의 도착 할 일(F4 도착 브리핑)이라 휴게소를 제안하지 않는다(placeBound). 묶인 곳이 휴게소·쉼터면 그대로 쉬어 가자는 부탁이다.
  * ponytail: 낱말 몇 개. LLM 판정은 음성 처리 흐름(T12) 뒤에 바꾼다.
  */
-fun isRestRequest(text: String): Boolean {
+fun isRestRequest(text: String, nextPlace: String? = null): Boolean {
     val t = squash(text)
-    return listOf("화장실", "쉬었다가", "쉬어가", "배고파").any { it in t }
+    return listOf("화장실", "쉬었다가", "쉬어가", "배고파").any { it in t } && !placeBound(text, nextPlace)
+}
+
+// '…(에) 가면·도착하면·도착해서·들르면·들러서'와 '…에서(는|도)': 그 앞 낱말이 할 일이 묶인 곳이다
+private val PLACE_GO = Regex("([가-힣A-Za-z0-9]{1,12}?)(?:에)?\\s*(?:가면|도착하면|도착해서|들르면|들러서)")
+private val PLACE_AT = Regex("([가-힣A-Za-z0-9]{1,12})에서(?:는|도)?")
+private val REST_PLACES = listOf("휴게소", "쉼터")
+private val NOT_PLACES = setOf("화장실", "밥", "빨리", "먼저", "좀", "잠깐", "같이", "다시")
+
+/** 말이 휴게소가 아닌 어느 곳(다음 도착지 포함)에 묶여 있는지. 그런 말은 도착 할 일이지 지금 들를 휴게소 부탁이 아니다. */
+fun placeBound(text: String, nextPlace: String? = null): Boolean {
+    val named = (PLACE_GO.findAll(text) + PLACE_AT.findAll(text)).map { it.groupValues[1] }
+        .any { p -> p !in NOT_PLACES && REST_PLACES.none { it in p } }
+    if (named) return true
+    val t = squash(text)
+    return nextPlace?.split(" ")?.map(::squash)?.any { it.length >= 2 && REST_PLACES.none { r -> r in it } && it in t } == true
 }
 
 enum class Answer { YES, NO, UNCLEAR }
