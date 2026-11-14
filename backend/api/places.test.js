@@ -46,12 +46,18 @@ const profile = async (name, character) => {
 };
 const newTrip = async (title = "바다 여행") => (await call("POST", "/trips", { title })).data;
 // 프로필(토큰 있음)은 이름을 프로필에서, 손님은 이름을 본문으로
+// 장소는 녹음에 동의한 참가자만 읽는다(GET /places). 토큰 없는 여행 문서에는 없다.
+const placesOf = async (code, token) => {
+  const res = await call("GET", `/trips/${code}/places`, undefined, token);
+  assert.equal(res.status, 200);
+  return res.data.items;
+};
 const join = async (code, who, seat, consent = true) =>
   (await call("POST", `/trips/${code}/participants`, who.token ? { seat, consent } : { name: who.name, seat, consent }, who.token)).data;
 
-test("차가 장소를 남기면 여행 문서의 places에 쌓이고, 참가자 토큰이 있어야 하며 200개까지", async () => {
+test("차가 장소를 남기고, 녹음에 동의한 참가자만 읽는다(토큰 없는 여행 문서에는 없음). 200개까지", async () => {
   const trip = await newTrip();
-  assert.deepEqual(trip.places, [], "새 여행은 빈 목록");
+  assert.equal(trip.places, undefined);
   const driver = await join(trip.code, { name: "운전자" }, "ROW_1_LEFT");
   const path = `/trips/${trip.code}/places`;
   const made = await call("POST", path, { kind: "destination", name: " 속초 해수욕장 ", lat: 38.19, lng: 128.6, etaSeconds: 7200 }, driver.token);
@@ -64,8 +70,18 @@ test("차가 장소를 남기면 여행 문서의 places에 쌓이고, 참가자
   const late = await call("POST", path, { kind: "approaching", name: "속초 해수욕장", at: trip.createdAt - 30_000, etaSeconds: 240 }, driver.token);
   assert.equal(late.status, 201);
   assert.equal(late.data.lat, undefined, "좌표 없는 장소도 남긴다");
-  const seen = (await call("GET", `/trips/${trip.code}`)).data;
-  assert.deepEqual(seen.places.map((p) => p.id), [late.data.id, made.data.id], "at 순서");
+  const items = await placesOf(trip.code, driver.token);
+  assert.deepEqual(items.map((p) => p.id), [late.data.id, made.data.id], "at 순서");
+  // 가족이 어디로 가는지는 여행 코드만 아는 사람에게 나가지 않는다(T119의 도착 장소와 같은 규칙)
+  const open = (await call("GET", `/trips/${trip.code}`)).data;
+  assert.equal(open.places, undefined, "토큰 없는 여행 문서에는 장소가 없음");
+  assert.ok(!JSON.stringify(open).includes("속초"));
+  assert.equal((await call("GET", `/trips/${trip.code}/places`)).status, 401);
+  const quiet = await join(trip.code, { name: "동의 안 함" }, "ROW_2_LEFT", false);
+  assert.equal((await call("GET", `/trips/${trip.code}/places`, undefined, quiet.token)).status, 403, "녹음에 동의하지 않은 참가자는 못 읽음");
+  await call("PATCH", `/trips/${trip.code}/participants/${quiet.id}`, { consent: true }, quiet.token);
+  assert.deepEqual((await placesOf(trip.code, quiet.token)).map((p) => p.id), [late.data.id, made.data.id], "동의하면 읽음");
+  assert.deepEqual((await call("GET", `/trips/${trip.code}/transcript`, undefined, quiet.token)).data.places, items, "기록본에도 함께");
 
   // 권한과 입력
   assert.equal((await call("POST", path, { kind: "stop", name: "휴게소" })).status, 401, "참가자 토큰이 없으면 거절");
@@ -84,9 +100,9 @@ test("차가 장소를 남기면 여행 문서의 places에 쌓이고, 참가자
     { kind: "stop", name: "휴게소", at: Date.now() + 120_000 },
   ])
     assert.equal((await call("POST", path, bad, driver.token)).status, 400, JSON.stringify(bad));
-  assert.equal((await call("GET", path, undefined, driver.token)).status, 405);
+  assert.equal((await call("PATCH", path, { kind: "stop", name: "휴게소" }, driver.token)).status, 405);
   assert.equal((await call("POST", `${path}/x`, { kind: "stop", name: "휴게소" }, driver.token)).status, 404);
-  assert.equal((await call("GET", `/trips/${trip.code}`)).data.places.length, 2, "거절한 요청은 남지 않음");
+  assert.equal((await placesOf(trip.code, driver.token)).length, 2, "거절한 요청은 남지 않음");
 
   // 한도: 200개. 넘으면 at이 가장 이른 것부터 버리고, 새로 받은 것은 201
   const doc = (await tripsDb().query("SELECT doc FROM trips WHERE code = $1", [trip.code])).rows[0].doc;
@@ -94,11 +110,11 @@ test("차가 장소를 남기면 여행 문서의 places에 쌓이고, 참가자
   await tripsDb().query("UPDATE trips SET doc = $2 WHERE code = $1", [trip.code, doc]);
   const last = await call("POST", path, { kind: "arrived", name: "속초" }, driver.token);
   assert.equal(last.status, 201);
-  const full = (await call("GET", `/trips/${trip.code}`)).data.places;
+  const full = await placesOf(trip.code, driver.token);
   assert.deepEqual([full.length, full[0].id, full.at(-1).id], [200, "p1", last.data.id], "가장 이른 p0을 버림");
   const older = await call("POST", path, { kind: "stop", name: "더 이른 곳", at: trip.createdAt - 60_000 }, driver.token);
   assert.equal(older.status, 201);
-  const kept = (await call("GET", `/trips/${trip.code}`)).data.places;
+  const kept = await placesOf(trip.code, driver.token);
   assert.deepEqual([kept.length, kept[0].id, kept.some((p) => p.id === older.data.id)], [200, "p1", false], "모두보다 이른 것은 바로 밀려남");
 });
 
@@ -113,17 +129,16 @@ test("늦게 도착한 장소도 at 순서로 놓여, 지금 상태는 at이 가
   const start = (await call("POST", path, { kind: "start", name: "집", at: t }, driver.token)).data;
   const same = (await call("POST", path, { kind: "stop", name: "같은 시각 둘째", at: t + 5000 }, driver.token)).data;
   const now = (await call("POST", path, { kind: "destination", name: "강릉" }, driver.token)).data; // at 없음 = 받은 시각
-  const places = (await call("GET", `/trips/${trip.code}`)).data.places;
+  const places = await placesOf(trip.code, driver.token);
   assert.deepEqual(places.map((p) => p.id), [start.id, approaching.id, arrived.id, same.id, now.id], "at 순서, 같은 at은 받은 순서");
   assert.equal(places.at(-1).kind, "destination");
 });
 
-test("옛 여행 문서도 places를 빈 목록으로 주고, 출발·끝 시각을 상태가 바뀔 때 남긴다", async () => {
+test("장소가 없는 여행은 빈 목록을 주고, 출발·끝 시각을 상태가 바뀔 때 남긴다", async () => {
   const trip = await newTrip();
-  const doc = (await tripsDb().query("SELECT doc FROM trips WHERE code = $1", [trip.code])).rows[0].doc;
-  delete doc.places;
-  await tripsDb().query("UPDATE trips SET doc = $2 WHERE code = $1", [trip.code, doc]);
-  assert.deepEqual((await call("GET", `/trips/${trip.code}`)).data.places, []);
+  const driver = await join(trip.code, { name: "운전자" }, "ROW_1_LEFT");
+  assert.deepEqual(await placesOf(trip.code, driver.token), []);
+  assert.deepEqual((await call("GET", `/trips/${trip.code}/transcript`, undefined, driver.token)).data.places, []);
 
   const status = (s) => call("PATCH", `/trips/${trip.code}`, { status: s });
   assert.equal((await status("driving")).data.startedAt > 0, true);
@@ -185,7 +200,8 @@ test("내 여행: 내 프로필이 참가한 여행만 최신 순으로, 구성�
   assert.equal(status, 200);
   assert.deepEqual(data.items.map((t) => t.code), [second.code, first.code], "최신 순, 남의 여행은 빠짐");
   const [quietTrip, trip] = data.items;
-  assert.deepEqual([quietTrip.route, quietTrip.contents, quietTrip.places.map((p) => p.name)], [[], [], ["회사"]], "동의하지 않은 여행은 장소만");
+  assert.deepEqual([quietTrip.route, quietTrip.contents, quietTrip.places], [[], [], []], "동의하지 않은 여행은 장소·경로·콘텐츠를 비움");
+  assert.deepEqual(quietTrip.members.map((m) => m.name), ["지우"], "구성원은 그대로");
 
   assert.deepEqual([trip.title, trip.status, trip.createdAt, trip.groupName], ["가족 바다 여행", "ended", t0, null]);
   assert.ok(trip.startedAt >= t0 && trip.endedAt >= trip.startedAt);
