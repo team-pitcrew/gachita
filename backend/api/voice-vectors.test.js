@@ -58,9 +58,23 @@ test("임베더가 공유 시험 벡터와 같은 값을 낸다(ADR-0023)", () =
 });
 
 test("말소리가 없는 소리의 값은 등록하지 않는다", () => {
-  const silent = embed(new Float32Array(160000)); // 10초 무음: 세 묶음의 길이가 모두 0
-  assert.ok(silent.every((x) => x === 0));
-  assert.throws(() => checkVector(silent), (e) => e.status === 400 && e.error === "말소리가 없어 등록할 수 없음");
+  assert.throws(() => embed(new Float32Array(160000)), (e) => e.status === 400 && e.error === "말소리가 없어 등록할 수 없음"); // 10초 무음
+  assert.throws(() => embed(new Float32Array(100)), (e) => e.status === 400 && e.error === "소리가 너무 짧음");
+  assert.throws(() => checkVector(new Array(DIMS).fill(0)), (e) => e.status === 400 && e.error === "말소리가 없어 등록할 수 없음");
+});
+
+test("디지털 무음이 섞여도 같은 값을 낸다(에뮬레이터 주입, 무음으로 채운 원음)", () => {
+  // 말소리처럼 프레임마다 달라지는 신호: 음높이·크기가 다른 세 구간을 이어 붙인다(한 가지 톱니파만 쓰면 분산 묶음이 잡음뿐이라 견줄 것이 없다)
+  const parts = fixture.cases.slice(0, 3).map(signal);
+  const voice = new Float32Array(parts.reduce((n, p) => n + p.length, 0));
+  parts.reduce((at, p) => (voice.set(p, at), at + p.length), 0);
+  const clean = embed(voice);
+  const padded = new Float32Array(voice.length + 16000 * 2); // 앞 0.5초·가운데 1초·뒤 0.5초가 0
+  const half = 48000;
+  padded.set(voice.subarray(0, half), 8000);
+  padded.set(voice.subarray(half), 8000 + half + 16000);
+  const sim = similarity(embed(padded), clean);
+  assert.ok(sim > 0.99, `무음을 섞은 것과의 유사도 ${sim}`); // 건너뛰지 않으면 0.9 아래로 떨어진다
 });
 
 test("기기가 올린 값의 모양을 본다", () => {
