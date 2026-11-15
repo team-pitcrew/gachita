@@ -6,6 +6,7 @@ import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { resolve, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { readFileSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
 import { runJourney, wave } from "./journey-e2e.mjs";
 
@@ -86,12 +87,14 @@ try {
     // 공용 DB나 시스템 시계를 바꾸지 않는다. 이 실행에서 만든 여행 한 줄의 시각만 앞당긴다.
     const base = `http://127.0.0.1:${api.server.address().port}`;
     const call = async (method, path, status, { body, raw, token } = {}) => {
-      const res = await fetch(base + path, { method, headers: token ? { authorization: `Bearer ${token}` } : {}, body: raw ?? (body ? JSON.stringify(body) : undefined), signal: AbortSignal.timeout(10000) });
+      const res = await fetch(base + path, { method, headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...(body && !raw ? { "content-type": "application/json" } : {}) }, body: raw ?? (body ? JSON.stringify(body) : undefined), signal: AbortSignal.timeout(10000) });
       assert.equal(res.status, status, `만료 시험 ${method}: ${status} 기대`);
       const text = await res.text();
       return text && res.headers.get("content-type")?.includes("application/json") ? JSON.parse(text) : null;
     };
     const profile = await call("POST", "/api/profiles", 201, { body: { name: "E2E 만료" } });
+    // 프로필은 목소리까지 등록해야 여행에 들어간다(T173)
+    await call("POST", "/api/profiles/me/voice", 200, { token: profile.token, body: { embedder: "logmel-pitch-1", vector: JSON.parse(readFileSync(new URL("../../backend/api/voice-vectors.json", import.meta.url), "utf8")).cases[0].vector, seconds: 7 } });
     const expiring = await call("POST", "/api/trips", 201, { body: { title: "E2E 만료 여정" } });
     const path = `/api/trips/${expiring.code}`;
     const rider = await call("POST", `${path}/participants`, 201, { token: profile.token, body: { seat: "ROW_1_LEFT", consent: true } });
