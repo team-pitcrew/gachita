@@ -13,11 +13,12 @@ const LABEL = Object.fromEntries(CHARACTER_TYPES);
 const ORDER = ["glasses", "healing", "cap", "basic", ...CHARACTER_TYPES.map(([key]) => key).filter((key) => !["glasses", "healing", "cap", "basic"].includes(key))];
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-// 처음 열 때의 단계. 토큰이 없으면 시작, 이메일 계정이 없으면(기기 프로필) 계정 만들기, 동의 전이면 동의, 그 밖은 프로필부터 다시.
+// 처음 열 때의 단계. 토큰이 없으면 시작, 동의 전이면 동의, 그 밖은 프로필부터 다시(→ 목소리). 이메일 계정이 없는 기기 프로필도
+// 같은 길(동의 → 프로필 → 목소리)을 지나고, 목소리까지 마친 기기 프로필이 '이메일 계정 만들기'로 올 때만 계정 만들기(11/15 오너: 프로필엔 목소리 반드시).
 export function firstStep(profile, hasToken) {
   if (!hasToken) return "welcome";
-  if (!profile?.email) return "signup";
-  if (!profile.consent) return "consent";
+  if (!profile?.email && accountReady(profile)) return "signup";
+  if (!profile?.consent) return "consent";
   return "profile";
 }
 

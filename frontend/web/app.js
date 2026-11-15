@@ -215,7 +215,15 @@ const groups = createGroups({
   onRide: () => { if (liveCode()) { groups.close(); goRide(); } },
 });
 groups.remember();
-const startRide = () => boarding.open();
+// 목소리 전 프로필(accountReady 아님)이면 온보딩의 빠진 단계를 열고 true. 이미 #start면 주소가 안 바뀌어 직접 그린다.
+function needsOnboarding() {
+  if (!profile || savingProfile || accountReady(profile)) return false;
+  closeOverlays();
+  onboarding.open();
+  if (location.hash === "#start") render(); else location.hash = "start";
+  return true;
+}
+const startRide = () => needsOnboarding() || boarding.open();
 const launchShort = () => studio.open();
 // 콘텐츠 기록 탭(F6, contents.js). 영상 파일은 그 여행의 참가자 토큰으로 받는다 — 이 폰에 없으면 프로필로 다시 참가해 받는다(places.md).
 const contents = createContents({
@@ -258,9 +266,9 @@ const profileMenu = createProfileMenu({
   onProfile: () => { closeOverlays(); location.hash = "me"; },
   // 로그인 전·손님의 기본 얼굴 → 로그인·계정 만들기(P02). 이미 #start면 주소가 안 바뀌어 직접 그린다.
   onSignIn: () => { closeOverlays(); onboarding.open("signup"); if (location.hash === "#start") render(); else location.hash = "start"; },
-  onGroups: () => { closeOverlays(); groups.openAt("groups"); },
-  onSeats: () => { closeOverlays(); groups.openAt("assign"); },
-  onGallery: () => { closeOverlays(); openContents(); },
+  onGroups: () => { closeOverlays(); if (!needsOnboarding()) groups.openAt("groups"); },
+  onSeats: () => { closeOverlays(); if (!needsOnboarding()) groups.openAt("assign"); },
+  onGallery: () => { closeOverlays(); if (!needsOnboarding()) openContents(); },
   onLogout: logout,
 });
 setAppBarEnd(profileMenu.button);
@@ -529,6 +537,7 @@ async function saveProfile() {
   } finally {
     savingProfile = false;
     if (control?.isConnected) { control.disabled = false; control.textContent = "저장"; }
+    needsOnboarding(); // 저장하는 동안(savingProfile)에는 문지기가 쉬었으므로, 새 기기 프로필은 여기서 동의·목소리로 이어 간다
   }
 }
 
@@ -625,7 +634,7 @@ function profileView() {
     h("div", { className: "profile-rows" },
       row(profile.hasVoice ? "목소리 다시 등록" : "15초 목소리 등록", profile.hasVoice ? "등록했어요 · 차에서 말한 사람을 알아봐요" : "차에서 말한 사람을 알아보는 데 써요", () => { onboarding.open(); location.hash = "start"; }),
       !profile.email && row("이메일 계정 만들기", "같은 계정으로 차에서도 로그인해요", () => { onboarding.open(); location.hash = "start"; }),
-      row("동승 그룹", "가족과 동승 그룹, 좌석과 초대 코드", () => groups.open()),
+      row("동승 그룹", "가족과 동승 그룹, 좌석과 초대 코드", () => needsOnboarding() || groups.open()),
       googleId && !linked && row("구글 계정 연결", "다른 폰에서 구글로 계속해 이 프로필로 들어와요", () => google().catch((e) => toast(e.status === 0 ? "연결이 끊겨서 열지 못했어요." : e.message))),
       linked && row("구글 연결 끊기", "다른 폰에서 구글로 계속하면 이 프로필로 들어와요", () => act(async () => (await mine("DELETE", "/profiles/me/links/google"), await loadProfile(), toast("구글 연결을 끊었어요."))))),
     h("section", { className: "card profile-edit" },
@@ -1090,6 +1099,9 @@ function render() {
   const ownProfile = profile && me?.profileId === profile.id;
   const firstVisit = !location.hash && !store("profile") && !vehicleView && !boarding.pending();
   const page = short ? "short" : location.hash === "#me" ? "profile" : location.hash === "#start" || firstVisit ? "onboarding" : !code() ? "home" : failed ? "missing" : !trip ? "loading" : !me ? "notHere" : (asking(me) || reading) && !ownProfile ? "consent" : "trip";
+  // 프로필은 있는데 동의·이름·목소리를 마치지 않았으면 #me(프로필 화면) 밖 어디서든 빠진 온보딩 단계로(11/15 오너: 프로필엔 목소리 반드시).
+  // 처음 화면·뒤로·새 탭·구글 로그인·초대 링크·차량 QR 첫 방문이 모두 여기를 지난다. 시안에 건너뛰는 길이 없다.
+  if (page !== "onboarding" && page !== "profile" && !short && needsOnboarding()) return;
   const view = { short: shortView, profile: profileView, onboarding: () => onboarding.view(), home, missing, loading, notHere, consent: () => consentView(me), trip: () => tripView(me) }[page]();
   app.classList.toggle("home-view", page === "home");
   app.classList.toggle("onboarding-view", page === "onboarding");
