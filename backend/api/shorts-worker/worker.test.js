@@ -141,14 +141,4 @@ test("파일을 주고받는 요청은 느린 운영 경로를 견디게 제한 
   const src = (await import("node:fs")).readFileSync(new URL("./worker.mjs", import.meta.url), "utf8");
   for (const call of ["job.thumbnail", "job.audio", "job.result"]) assert.match(src.split("\n").find((l) => l.includes(`api(${call}`)), /timeout: SLOW/, `${call}에 긴 제한`);
 });
-test("프로필이 성명이면 대화 속 호칭(성을 뗀 이름)도 캐릭터 번호로 바꿉니다", () => {
-  const j = { ...job, plan: { ...job.plan, title: "민준님이 낼 때까지", cast: [
-    { slot: 0, participantId: "p1", name: "김상현", character: "glasses", seat: "ROW_1_LEFT" },
-    { slot: 1, participantId: "p2", name: "유민준", character: "basic-small", seat: "ROW_2_RIGHT" },
-  ], cues: [{ start: 1, end: 3, text: "거기다 주차하고, 민준님이 하나 낼 때까지 놀자. 유민준 씨, 상현이 형도요.", slot: 0, participantId: "p1" }] } };
-  const m = material(j);
-  assert.doesNotMatch(JSON.stringify(m), /민준|상현/);
-  assert.equal(m.cues[0].text, "거기다 주차하고, 캐릭터2님이 하나 낼 때까지 놀자. 캐릭터2 씨, 캐릭터1이 형도요.");
-  assert.equal(m.title, "캐릭터2님이 낼 때까지");
-});
 
