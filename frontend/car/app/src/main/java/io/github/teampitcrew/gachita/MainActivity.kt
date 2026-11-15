@@ -149,6 +149,7 @@ class MainActivity : ComponentActivity() {
     private var transcriptAsks by mutableStateOf(emptySet<Pair<String, Int>>()) // 서버 할 일이 나온 줄(C44 '○○의 부탁')
     private var transcriptPlaces by mutableStateOf(emptyList<TripPlace>()) // 기록본에 실린 여행 장소(A3). 없으면 머리에 시각만
     private var afterStart by mutableStateOf<AfterStep?>(null) // 여행 마무리·장면 고르기(C22–C32, F5). null이면 콘텐츠 기록은 쇼츠 화면
+    private var shortsVisit by mutableIntStateOf(0) // C33으로 들어올 때마다 하나씩: 콘텐츠 기록을 새로 그려 다시 읽고 갤러리부터(같은 탭을 다시 눌러도)
     private var wrapWhenParked = false // 주행 중 ■로 여행을 마쳤다 — 주차하면 C22
     private var menuGroup by mutableStateOf<String?>(null) // 프로필 메뉴 그룹 칸의 이름(가족 그룹, GET /api/groups)
     private var autoFailed = "" // 자동 시작이 실패한 여행·세대·판. 서버 여행이 바뀔 때만 다시 시도해 실패가 되풀이되지 않게
@@ -351,7 +352,7 @@ class MainActivity : ComponentActivity() {
                                 family -> FamilyFlow(server, profileToken ?: account, onClose = { familyOpen = false },
                                     onStart = ::startGroupTrip, jump = familyJump, onJumped = { familyJump = null },
                                     // 가족 화면 위 탭(C14·C15·C16·C16 guestInvite·C16L·C43): 대화 기록 → C44, 콘텐츠 기록 → C33. 둘 다 여행 단위라 여행이 없으면 그 자리에
-                                    onTab = { i -> if (t != null) { familyOpen = false; closeBoarding(); afterStart = null; destination = if (i == 1) Destination.CONVERSATION else Destination.SHORTS } })
+                                    onTab = { i -> if (t != null) { familyOpen = false; closeBoarding(); afterStart = null; destination = if (i == 1) Destination.CONVERSATION else Destination.SHORTS; shortsVisit++ } })
                                 t != null -> TripScreen(t)
                                 carStatus.restricted -> OnboardingScreen(onboarding, driving = true) {} // 주행 중 여행이 없으면 시작 화면(C01)만, 단추는 잠근다(T11)
                                 else -> OnboardingScreen(onboarding) { familyOpen = true } // C08 '가족 그룹 만들기' → 가족 흐름(F2)
@@ -1340,7 +1341,7 @@ class MainActivity : ComponentActivity() {
                         // 시안 탭 행선: 함께 타는 중 → C17(주차 중이면 C16 groups), 대화 기록 → C44, 콘텐츠 기록 → C33(같은 탭을 다시 눌러도 C33)
                         val tab = Destination.entries[i]
                         closeBoarding()
-                        if (tab == Destination.RIDE) goRide() else { afterStart = null; destination = tab }
+                        if (tab == Destination.RIDE) goRide() else { afterStart = null; destination = tab; shortsVisit++ }
                     })
                 Box(Modifier.weight(1f).fillMaxWidth()) {
                     when {
@@ -1382,7 +1383,7 @@ class MainActivity : ComponentActivity() {
                 profileMenu = false
                 if (t != null && !familyOpen) { destination = Destination.RIDE; openBoarding() } else { familyJump = FamilyJump.SEATS; familyOpen = true }
             },
-            onGallery = { profileMenu = false; familyOpen = false; closeBoarding(); afterStart = null; destination = Destination.SHORTS }, // C33
+            onGallery = { profileMenu = false; familyOpen = false; closeBoarding(); afterStart = null; destination = Destination.SHORTS; shortsVisit++ }, // C33
             onLogout = { profileMenu = false; logoutAsk = true },
         )
     }
@@ -1575,7 +1576,7 @@ class MainActivity : ComponentActivity() {
         if (!appVisible || carStatus.restricted) return // 콘텐츠 기록은 주차 중에만(T11). 주차했는데 여행이 아직 driving이어도 C33
         val scope = contentScope()
         val url = server
-        androidx.compose.runtime.key(url, t.code, t.generation, scope?.token) {
+        androidx.compose.runtime.key(url, t.code, t.generation, scope?.token, shortsVisit) {
             ContentsRecord(url, t.code, scope?.token,
                 canRead = { appVisible && !isDestroyed && s.online && !carStatus.restricted && scope != null && contentScope() == scope && server == url && handoff.state == Handoff.State.OFF },
                 canPlay = { appVisible && !isDestroyed && !carStatus.restricted && handoff.state == Handoff.State.OFF },

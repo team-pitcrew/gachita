@@ -1,6 +1,7 @@
 package io.github.teampitcrew.gachita
 
 import android.media.MediaPlayer
+import androidx.annotation.DrawableRes
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -176,23 +177,27 @@ internal fun contentSpot(item: ContentItem, trip: ContentTrip): Pair<Double, Dou
 }
 
 /**
- * 번들 실제 지도(res/drawable-nodpi/content_map_gangneung, 시안 'Asset / 강릉 실제 지도 / OpenStreetMap' 1200×840, © OpenStreetMap contributors)의 경위도 범위.
- * 그림의 경포호·강릉 공항·성산면 위치로 맞춘 값(메르카토르를 이 넓이에서 선형으로 봄, 닫힌 PR #457). 시연 여행(강릉)의 좌표를 이 그림에 투영한다.
+ * 번들 실제 지도 한 장(1200×840, © OpenStreetMap contributors)과 그 그림 가장자리의 경위도. 메르카토르를 이 넓이에서 선형으로 본다(오차 1px 아래).
+ * 강릉: 시안 'Asset / 강릉 실제 지도 / OpenStreetMap', 경포호·강릉 공항·성산면 위치로 맞춤(닫힌 PR #457).
+ * 강남–분당: OSM 표준 타일 z12를 한 번 이어 붙여 원래 크기로 자름(신논현–정자 카페거리 시연, 위로 한강·아래로 정자까지).
  */
-internal const val OSM_WEST = 128.7905
-internal const val OSM_EAST = 128.9785
-internal const val OSM_NORTH = 37.8184
-internal const val OSM_SOUTH = 37.7138
+internal class BundledMap(@DrawableRes val res: Int, val label: String, val west: Double, val east: Double, val north: Double, val south: Double) {
+    fun has(lat: Double, lng: Double) = lat in south..north && lng in west..east
+}
+internal val BUNDLED_MAPS = listOf(
+    BundledMap(R.drawable.content_map_gangneung, "강릉 지도", 128.7905, 128.9785, 37.8184, 37.7138),
+    BundledMap(R.drawable.content_map_gangnam_bundang, "서울 강남–성남 분당 지도", 126.8619, 127.2739, 37.5549, 37.3259),
+)
 
-/** 좌표가 번들 지도 안에 있는지. 기록 좌표의 절반 이상이 안이면 실제 지도를, 아니면 도식 지도를 그린다. */
-internal fun contentOnBundledMap(points: List<Pair<Double, Double>>): Boolean =
-    points.isNotEmpty() && points.count { (lat, lng) -> lat in OSM_SOUTH..OSM_NORTH && lng in OSM_WEST..OSM_EAST } * 2 >= points.size
+/** 기록 좌표의 절반 이상이 안에 드는 번들 지도. 없으면 null(도식 지도). */
+internal fun contentBundledMap(points: List<Pair<Double, Double>>): BundledMap? =
+    if (points.isEmpty()) null else BUNDLED_MAPS.firstOrNull { m -> points.count { (lat, lng) -> m.has(lat, lng) } * 2 >= points.size }
 
 /** 번들 지도를 w×h 상자에 가운데 맞춰 채울 때(Crop, 시안 object-cover) 경위도 → 상자 좌표. */
-internal fun contentOsmProjector(w: Float, h: Float): (Pair<Double, Double>) -> Offset {
+internal fun contentOsmProjector(m: BundledMap, w: Float, h: Float): (Pair<Double, Double>) -> Offset {
     val s = maxOf(w / 1200f, h / 840f)
     val ox = (w - 1200f * s) / 2; val oy = (h - 840f * s) / 2
-    return { (lat, lng) -> Offset(ox + ((lng - OSM_WEST) / (OSM_EAST - OSM_WEST) * 1200 * s).toFloat(), oy + ((OSM_NORTH - lat) / (OSM_NORTH - OSM_SOUTH) * 840 * s).toFloat()) }
+    return { (lat, lng) -> Offset(ox + ((lng - m.west) / (m.east - m.west) * 1200 * s).toFloat(), oy + ((m.north - lat) / (m.north - m.south) * 840 * s).toFloat()) }
 }
 
 // ---- UI ----
@@ -316,12 +321,21 @@ internal fun ContentsRecord(base: String, code: String, token: String?, canRead:
         onActiveChange(true); CaptureService.hold(true)
         onDispose { stop(); file?.second?.delete(); CaptureService.hold(false); onActiveChange(false) }
     }
+    // 들어올 때마다 읽고(MainActivity가 진입마다 새로 그림), 머무는 동안 10초마다 다시 읽는다 — 만들기가 끝난 쇼츠가 나가지 않아도 보이게.
+    // 다시 읽다 실패하면 보이던 기록을 그대로 둔다. ponytail: 10초 조회, 서버가 새 쇼츠를 알리게 되면 그 신호로.
     LaunchedEffect(code, token) {
         loaded = false; empty = ""
-        if (token == null || !read()) { trip = null; loaded = true; return@LaunchedEffect }
-        try { trip = withContext(Dispatchers.IO) { parseContentTrip(JSONObject(api.contents(code, token))) } }
-        catch (e: Exception) { trip = null; empty = if (e is ApiError && e.status == 403) "기록에 동의한 사람만 콘텐츠 기록을 볼 수 있어요" else e.message ?: "연결을 확인해 주세요" }
-        loaded = true
+        while (true) {
+            if (token == null || !read()) { if (trip == null) loaded = true }
+            else try {
+                trip = withContext(Dispatchers.IO) { parseContentTrip(JSONObject(api.contents(code, token))) }; empty = ""; loaded = true
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) {
+                if (trip == null) { empty = if (e is ApiError && e.status == 403) "기록에 동의한 사람만 콘텐츠 기록을 볼 수 있어요" else e.message ?: "연결을 확인해 주세요"; loaded = true }
+            }
+            if (token == null) break
+            delay(10_000)
+        }
     }
     LaunchedEffect(playing) { while (playing) { position = (player?.currentPosition ?: 0) / 1000.0; delay(250) } }
     LaunchedEffect(play()) { if (!play()) stop() }
@@ -544,7 +558,7 @@ private object MapInk {
 }
 
 /**
- * 지도 상자(모서리 24). 기록 좌표가 번들 강릉 지도(시안 'Asset / 강릉 실제 지도 / OpenStreetMap') 안이면 그 그림(Crop) 위에, 아니면 surface-2 바탕 위에 투영한다.
+ * 지도 상자(모서리 24). 기록 좌표가 번들 실제 지도(BUNDLED_MAPS: 강릉, 강남–분당) 안이면 그 그림(Crop) 위에, 아니면 surface-2 바탕 위에 투영한다.
  * 장면 액자: 'Archive / pin'(88, 바탕 bg, 모서리 16, 안쪽 4, 표지 윗부분이 보임). 액자 아래 가운데가 그 장면 자리(contentSpot).
  * 출처 '© OpenStreetMap contributors'(시안 Pretendard 13/18, 왼쪽 10·아래 4).
  */
@@ -556,9 +570,9 @@ private fun MapBox(trip: ContentTrip, items: List<ContentItem>, modifier: Modifi
         val w = with(density) { maxWidth.toPx() }; val h = with(density) { maxHeight.toPx() }
         val spots = items.mapNotNull { x -> contentSpot(x, trip)?.let { x to it } }
         val points = trip.route + spots.map { it.second }
-        val real = contentOnBundledMap(points)
-        val project = if (real) contentOsmProjector(w, h) else contentProjector(points, w, h, with(density) { 120.dp.toPx() })
-        if (real) Image(painterResource(R.drawable.content_map_gangneung), "강릉 지도", Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+        val real = contentBundledMap(points)
+        val project = if (real != null) contentOsmProjector(real, w, h) else contentProjector(points, w, h, with(density) { 120.dp.toPx() })
+        if (real != null) Image(painterResource(real.res), real.label, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
         Canvas(Modifier.fillMaxSize()) {
             if (project != null && trip.route.size > 1) {
                 val path = Path().apply { trip.route.forEachIndexed { i, p -> val o = project(p); if (i == 0) moveTo(o.x, o.y) else lineTo(o.x, o.y) } }
@@ -576,7 +590,7 @@ private fun MapBox(trip: ContentTrip, items: List<ContentItem>, modifier: Modifi
                 }
             }
         } }
-        if (real) Text("© OpenStreetMap contributors", Modifier.align(Alignment.BottomStart).padding(start = 10.dp, bottom = 4.dp),
+        if (real != null) Text("© OpenStreetMap contributors", Modifier.align(Alignment.BottomStart).padding(start = 10.dp, bottom = 4.dp),
             style = TextStyle(fontFamily = Pretendard, fontSize = 13.sp, lineHeight = 18.sp), color = MapInk.Credit)
     }
 }
