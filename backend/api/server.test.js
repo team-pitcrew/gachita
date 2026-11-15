@@ -1961,6 +1961,32 @@ test('일꾼 임대: 끝난 임대·실패 알림·만드는 중 삭제와 철�
  }finally{shortEnvOff();}
 });
 
+test('재전사가 뒤늦게 글을 바꿔도 계획과 만드는 중인 작업은 그대로이고, 일꾼은 받는 순간의 글로 만든다(T158)',async()=>{
+ shortEnv();
+ try{
+  const f=await shortFixture();const w=shortWorker();
+  const asr=text=>tripsDb().query("UPDATE utterances SET asr_text=$2 WHERE trip_code=$1 AND device='short-test' AND seq=1",[f.trip.code,text]);
+  // 계획을 받은 뒤 재전사가 글을 바꿔도(운영: 클립이 올라온 뒤 30~60초) 같은 계획으로 맡길 수 있다
+  await asr('함께 떠나니 참 좋다');
+  const [status,job]=await call('POST',`${f.path}/short-generations`,shortBody(f,'asr-after-plan'),f.a.token);
+  assert.equal(status,202,'계획→생성 사이의 재전사는 409가 아니다');
+  const path=`${f.path}/short-generations/${job.id}`;
+  // 맡긴 뒤 또 바뀌어도 상태 조회·임대가 된다. 일꾼은 받는 순간의 글을 받는다
+  await asr('함께 떠나니 정말 좋다');
+  assert.equal((await call('GET',path,null,f.a.token))[0],200);
+  await only(job.id);const [,leased]=await w.claim();
+  assert.deepEqual(leased.plan.cues.map(c=>c.text),['함께 떠나니 정말 좋다']);
+  // 만드는 중에 바뀌어도 결과를 받는다
+  await asr('함께 떠나니 아주 좋다');
+  assert.equal((await call('GET',path,null,f.a.token))[1].state,'generating');
+  assert.equal((await w.result(job.id))[1].state,'completed');
+  assert.equal((await call('GET',path,null,f.a.token))[1].state,'completed');
+  // 사람이 자막을 고치면 지금처럼 새 계획이 필요하다
+  await call('PATCH',`${f.path}/captions/short-test/1`,{generation:1,expectedVersion:0,text:'사람이 고친 자막'},f.a.token);
+  assert.equal((await call('GET',path,null,f.a.token))[0],409);
+ }finally{shortEnvOff();}
+});
+
 test('90일 전 여행의 새 영상과 이전 48시간 기한을 가진 영상은 보존하고 철회하면 삭제합니다(T90)', async()=> {
  shortEnv();
  try {
