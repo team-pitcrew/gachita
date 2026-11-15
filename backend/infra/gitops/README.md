@@ -33,7 +33,7 @@ backend/infra/gitops/
 
 - 클러스터 안에서는 쿠버네티스 DNS 이름으로 찾습니다: API는 `gachita-api.gachita.svc.cluster.local`, Postgres는 `db-rw.gachita-db.svc.cluster.local:5432`(데이터베이스 `trips`, `profiles`). API의 DB 주소는 External Secrets가 두 역할의 비밀 번호로 이 이름을 넣어 만듭니다.
 - 펼 때마다 바뀌는 값은 Git에 두지 않습니다: ALB 컨트롤러는 VPC를 이름 태그(`Name=gachita-dev`)로, 인증서를 리스너의 호스트 이름으로, 서브넷을 태그로 찾습니다. 계정 번호(역할 ARN, 버킷 이름)는 계정마다 한 번 채운 값입니다.
-- 밖에서 들어오는 길은 Cloudflare → ALB(`gachita-dev`, Cloudflare 대역만 443) → 노드의 NodePort → API 하나입니다. NodePort는 포트 규칙이 `gachita/gachita-api`에만 허용합니다.
+- 밖에서 들어오는 길은 Cloudflare DNS(프록시 없음, T174) → ALB(`gachita-dev`, 모든 주소의 443, ACM 인증서) → 노드의 NodePort → API 하나입니다. 프록시를 끄면서 엣지의 요청 수 제한과 원본 가리기는 이 호스트에 걸리지 않습니다. NodePort는 포트 규칙이 `gachita/gachita-api`에만 허용합니다.
 
 ## 새 판 내보내기
 

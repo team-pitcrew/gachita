@@ -23,7 +23,9 @@ resource "cloudflare_dns_record" "service" {
   name    = var.service_host
   type    = "CNAME"
   content = data.aws_lb.cluster[0].dns_name
-  proxied = true
-  ttl     = 1 # 프록시 레코드는 자동
+  # DNS만(T174, 11/15). 프록시를 켜면 한국 요청이 Cloudflare LAX 엣지를 돌아 서울 원본으로 온다(TLS 0.5~1초, 3.5 MB 내려받기 43~130초).
+  # 끄면 ALB가 직접 받는다: 엣지의 요청 수 제한(persist/의 ruleset)과 원본 가리기가 이 호스트에는 걸리지 않는다. 되돌리려면 true·ttl 1.
+  proxied = false
+  ttl     = 60
   comment = "gachita: managed by terraform (backend/infra/terraform/edge.tf)"
 }
