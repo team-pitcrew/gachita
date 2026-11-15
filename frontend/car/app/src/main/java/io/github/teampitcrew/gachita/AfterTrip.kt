@@ -1,8 +1,10 @@
 package io.github.teampitcrew.gachita
 
 import android.content.Context
+import android.graphics.BitmapFactory
 import android.util.Log
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -17,6 +19,9 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -143,6 +148,13 @@ internal fun afterBars(ats: List<Long>, origin: Long, end: Long, count: Int = 56
 
 /** 장면 하나의 진행: 장면 남김 0.1 → 소리 준비 0.25 → 녹화 0.25~0.85 → 보관 0.9 → 완성 1(폰과 같음). */
 internal enum class Phase { WAIT, MOMENT, VOICE, RENDER, SAVE, DONE, FAILED }
+/** 표지 PNG 바이트를 그림으로(T166). 못 읽으면 null(표지는 캐릭터로). */
+internal fun coverImage(png: ByteArray?): ImageBitmap? = png?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }?.asImageBitmap()
+
+/** 표지 오른쪽 아래(시안 C32 '▶ 0:32'). 아직 만드는 장면은 같은 자리에 진행을 적는다(T166). */
+internal fun posterFoot(phase: Phase, render: Float, seconds: Double): String =
+    if (phase == Phase.DONE) seconds.toLong().let { "▶ ${it / 60}:${two(it % 60)}" } else "만드는 중 ${(phaseProgress(phase, render) * 100).toInt()}%"
+
 internal fun phaseProgress(p: Phase, render: Float = 0f): Float = when (p) {
     Phase.WAIT, Phase.MOMENT -> 0f; Phase.VOICE -> .1f; Phase.RENDER -> .25f + .6f * render.coerceIn(0f, 1f); Phase.SAVE -> .9f; Phase.DONE -> 1f; Phase.FAILED -> 0f
 }
@@ -156,6 +168,7 @@ internal class AfterItem(val pick: AfterPick) {
     var momentId: String? = null
     var seconds by mutableStateOf(0.0)
     var cast by mutableStateOf<List<Int>>(emptyList()) // 만든 영상의 캐릭터 그림(shortSceneCast와 같은 둘) — 완성 표지 '목소리의 주인공'
+    var cover by mutableStateOf<ImageBitmap?>(null) // 서버 일꾼이 먼저 만든 표지 그림(T166). 있으면 C32 표지 바탕
     var error by mutableStateOf("")
 }
 
@@ -288,7 +301,10 @@ internal object AfterRuns {
                         try { job = api.shortJob(run.code, token, accepted.getString("id")); break }
                         catch (e: Exception) { if (!retryJobPoll(e, ++tries)) throw e; delay(5000) }
                     }
+                    // 표지 그림(T166): 일꾼이 영상보다 먼저 올린다. 생기면 한 번 받아 C32 표지 바탕으로(못 받으면 다음 조회에 다시)
+                    if (item.cover == null && job.has("thumbnailUrl")) item.cover = coverImage(runCatching { api.shortThumbnail(run.code, token, accepted.getString("id")) }.getOrNull())
                 }
+                if (item.cover == null && job.has("thumbnailUrl")) item.cover = coverImage(runCatching { api.shortThumbnail(run.code, token, accepted.getString("id")) }.getOrNull())
                 if (job.optString("state") != "completed") throw AfterStopped("쇼츠를 만들지 못했어요(${job.optString("errorCode").ifBlank { job.optString("state") }})")
                 item.render = 1f; item.phase = Phase.DONE
                 return
@@ -595,42 +611,44 @@ private val PosterLine = CarText.Title.copy(lineHeight = 55.sp)
 private val PosterCaption = CarText.Label.copy(fontWeight = FontWeight.Normal, fontSize = 16.25.sp, lineHeight = 22.5.sp)
 
 /**
- * C32 '완성 장면'(폭 400, 간격 16): 표지 'Archive / galleryCar' 400×550(여백 30, 간격 20, 모서리 25, 종이 tint-2부터 차례로) — '날짜  여행 제목' · 대사 줄 ·
- * 여백 · '목소리의 주인공'(만든 영상의 캐릭터 140 둘, 간격 15) · 설명 · '가치타'와 '▶ 길이' — 그 아래 장면 제목(Headline 32). 누르면 그 장면의 플레이어(C37·player3).
+ * C32 '완성 장면'(폭 400, 간격 16): 표지 'Archive / galleryCar' 400×550(여백 30, 간격 20, 모서리 25, 종이 tint-2부터 차례로) — '날짜  여행 제목' · 대사 두 줄 ·
+ * 여백 · '목소리의 주인공'(캐릭터 140 둘, 간격 15) · 설명 · '가치타'와 '▶ 길이' — 그 아래 장면 제목(Headline 32). 누르면 그 장면의 플레이어(C37·player3).
  * 설명 줄(시안 '서준의 한마디에 모두 웃음')은 서버에 장면 설명이 없어 콘텐츠 기록 표지(Contents.kt coverOf)와 같은 규칙: 말한 사람이 있으면 '{이름}의 한마디', 없으면 여행 제목.
- * 아직 만드는 장면(C31에서 일찍 넘어옴)과 만들지 못한 장면(시안 밖 상태)은 어두운 표지에 진행이나 까닭을 적는다.
+ * 아직 만드는 장면(C31에서 일찍 넘어옴, 서버 일꾼은 한 편에 10분 안팎)도 같은 종이 표지이고, 오른쪽 아래에 진행만 적는다(T166 — 어두운 카드에 대사가 넘치던 것을 시안대로).
+ * 서버 일꾼이 먼저 만든 표지 그림(T166, 위·아래가 빈 종이)이 있으면 표지 바탕으로 깔고 캐릭터 줄은 뺀다(그림에 캐릭터가 있다). 만들지 못한 장면(시안 밖 상태)만 어두운 표지에 까닭을 적는다.
  */
 @Composable
 private fun DoneScene(item: AfterItem, index: Int, trip: Trip, names: Map<String, String>, onOpen: () -> Unit) {
     val c = MaterialTheme.colorScheme
     val ok = item.phase == Phase.DONE
+    val failed = item.phase == Phase.FAILED
     val p = item.pick
-    val ink = if (ok) CarPaper.Ink else c.onSurface
-    val ink2 = if (ok) CarPaper.Ink2 else c.onSurfaceVariant
+    val ink = if (failed) c.onSurface else CarPaper.Ink
+    val ink2 = if (failed) c.onSurfaceVariant else CarPaper.Ink2
+    val cover = item.cover.takeIf { !failed }
     Column(Modifier.width(400.dp).then(if (ok) Modifier.clickable(onClick = onOpen) else Modifier), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        Surface(Modifier.fillMaxWidth().height(550.dp), RoundedCornerShape(25.dp), color = if (ok) CarPaper.Tints[(index + 1) % CarPaper.Tints.size] else c.surface) {
-            Column(Modifier.padding(30.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
-                Text("${SimpleDateFormat("M.d", Locale.KOREA).format(Date(p.at))}  ${trip.title.ifBlank { "함께 탄 여행" }}", style = PosterSmall, color = ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(p.line.ifEmpty { p.title }, style = PosterLine, color = ink, maxLines = 4, overflow = TextOverflow.Ellipsis)
-                Spacer(Modifier.weight(1f))
-                if (ok) {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(15.dp, Alignment.CenterHorizontally)) {
-                        item.cast.take(2).forEach { CharAvatar(it, 140.dp) }
+        Surface(Modifier.fillMaxWidth().height(550.dp), RoundedCornerShape(25.dp), color = if (failed) c.surface else CarPaper.Tints[(index + 1) % CarPaper.Tints.size]) {
+            Box {
+                if (cover != null) Image(cover, null, Modifier.matchParentSize(), contentScale = ContentScale.Crop)
+                Column(Modifier.padding(30.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
+                    Text("${SimpleDateFormat("M.d", Locale.KOREA).format(Date(p.at))}  ${trip.title.ifBlank { "함께 탄 여행" }}", style = PosterSmall, color = ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(p.line.ifEmpty { p.title }, style = PosterLine, color = ink, maxLines = 2, overflow = TextOverflow.Ellipsis) // 시안 대사 두 줄
+                    Spacer(Modifier.weight(1f))
+                    if (failed) {
+                        Text("만들지 못했어요", style = CarText.Headline, color = ink)
+                        Text(item.error, style = CarText.Label, color = ink2, maxLines = 4, overflow = TextOverflow.Ellipsis)
+                    } else {
+                        if (cover == null) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(15.dp, Alignment.CenterHorizontally)) {
+                            item.cast.take(2).forEach { CharAvatar(it, 140.dp) }
+                        }
+                        Text(p.speakerId?.let { names[it] }?.takeIf { it.isNotBlank() }?.let { "${it}의 한마디" } ?: trip.title.ifBlank { "함께 탄 여행" },
+                            Modifier.fillMaxWidth(), style = PosterCaption, color = ink2, textAlign = TextAlign.Center, maxLines = 1)
+                        Row(Modifier.fillMaxWidth()) {
+                            Text("가치타", style = PosterSmall, color = ink2)
+                            Spacer(Modifier.weight(1f))
+                            Text(posterFoot(item.phase, item.render, item.seconds), style = PosterSmall, color = ink)
+                        }
                     }
-                    Text(p.speakerId?.let { names[it] }?.takeIf { it.isNotBlank() }?.let { "${it}의 한마디" } ?: trip.title.ifBlank { "함께 탄 여행" },
-                        Modifier.fillMaxWidth(), style = PosterCaption, color = ink2, textAlign = TextAlign.Center, maxLines = 1)
-                    Row(Modifier.fillMaxWidth()) {
-                        Text("가치타", style = PosterSmall, color = ink2)
-                        Spacer(Modifier.weight(1f))
-                        val s = item.seconds.toLong()
-                        Text("▶ ${s / 60}:${two(s % 60)}", style = PosterSmall, color = ink)
-                    }
-                } else if (item.phase == Phase.FAILED) {
-                    Text("만들지 못했어요", style = CarText.Headline, color = ink)
-                    Text(item.error, style = CarText.Label, color = ink2, maxLines = 4, overflow = TextOverflow.Ellipsis)
-                } else {
-                    Text("만드는 중", style = CarText.Headline, color = ink)
-                    Text("${(phaseProgress(item.phase, item.render) * 100).toInt()}%", style = CarText.Label, color = ink2)
                 }
             }
         }
