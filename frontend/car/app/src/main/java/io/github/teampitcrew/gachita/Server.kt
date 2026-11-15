@@ -226,7 +226,8 @@ class Server(base: String, private val open: (URL) -> HttpURLConnection = { it.o
      * deadlineMs를 주면 호출 전체(연결·보내기·받기)의 마감이다. connect·readTimeout은 단계마다 따로 걸리고, 본문이 조금씩 오면
      * readTimeout이 매번 다시 시작해 끝없이 기다릴 수 있다. 마감에 연결을 끊으면 막힌 읽기가 바로 예외로 풀린다.
      */
-    private fun call(method: String, path: String, body: Any?, token: String? = null, timeoutMs: Int = 5000, deadlineMs: Int? = null, type: String? = null): String? {
+    // 기본 12초: 운영 경로(Cloudflare 먼 거점)는 평소 1–2초, 가끔 5초를 넘는다. 5초였을 때 주행 화면에 '서버에 닿지 않아요'가 자주 떴다(오너 11/15)
+    private fun call(method: String, path: String, body: Any?, token: String? = null, timeoutMs: Int = 12_000, deadlineMs: Int? = null, type: String? = null): String? {
         val c = open(URL(base + path))
         val expire = deadlineMs?.let { DEADLINES.schedule({ c.disconnect() }, it.toLong(), TimeUnit.MILLISECONDS) }
         try {

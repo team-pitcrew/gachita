@@ -1,5 +1,10 @@
 package io.github.teampitcrew.gachita
 
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.viewinterop.AndroidView
+import android.view.TextureView
+import android.view.Surface
+import android.graphics.SurfaceTexture
 import android.media.MediaPlayer
 import androidx.annotation.DrawableRes
 import androidx.compose.foundation.Canvas
@@ -420,7 +425,7 @@ internal fun ContentsRecord(base: String, code: String, token: String?, canRead:
                 when {
                     !loaded -> {}
                     none -> Text(empty.ifBlank { "아직 생성한 콘텐츠가 없어요.\n여행을 마친 뒤 대화에서 장면을 골라 보세요." }, style = CarText.Headline, color = c.onSurfaceVariant)
-                    page == ContentsPage.PLAYER && item != null -> PlayerBody(item, t!!, contentTint(items.indexOf(item)), position, playing, busy, ::toggle)
+                    page == ContentsPage.PLAYER && item != null -> PlayerBody(item, t!!, contentTint(items.indexOf(item)), position, playing, busy, player, ::toggle)
                     page == ContentsPage.EXPORT && item != null -> ExportBody(item, t!!, contentTint(items.indexOf(item)))
                     page == ContentsPage.DETAIL -> MapWithList(t!!, items, link = false, onOpen = ::open)
                     else -> Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(28.dp)) {
@@ -515,12 +520,28 @@ private fun Timeline(trip: ContentTrip, items: List<ContentItem>, members: Int, 
 
 /** C37 플레이어 본문(가운데, 간격 64): 표지 playerCar 360×640(누르면 재생) · '이 장면의 대화'(620, 간격 28): '○○의 한마디', 따옴표 줄(Title 40), '09:32  동해고속도로', 재생 위치(620×4, line), 재생 글 단추. */
 @Composable
-private fun PlayerBody(item: ContentItem, trip: ContentTrip, tint: Int, position: Double, playing: Boolean, busy: Boolean, onToggle: () -> Unit) {
+private fun PlayerBody(item: ContentItem, trip: ContentTrip, tint: Int, position: Double, playing: Boolean, busy: Boolean, player: MediaPlayer?, onToggle: () -> Unit) {
     val c = MaterialTheme.colorScheme
     // 재생 전에는 장면을 남긴 순간의 줄(시안 '미리보기'), 재생을 시작한 뒤에는 지금 위치의 줄.
     val said = if (position > 0 || playing) contentLineAt(item, position) else contentQuote(item)
     Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(64.dp, Alignment.CenterHorizontally), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.clickable(enabled = !busy, onClick = onToggle)) { ContentCover(coverOf(item, trip), tint, 360.dp, 640.dp) }
+        Box(Modifier.clickable(enabled = !busy, onClick = onToggle)) {
+            ContentCover(coverOf(item, trip), tint, 360.dp, 640.dp)
+            // 재생을 시작하면 표지 자리에 쇼츠 영상을 그린다(오너 11/15: 누르면 쇼츠가 보이게). 소리만 있는 파일(영상 폭 0)은 표지 그대로.
+            if (player != null && player.videoWidth > 0) AndroidView(
+                factory = { ctx ->
+                    TextureView(ctx).apply {
+                        surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                            override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) { runCatching { player.setSurface(Surface(st)) } }
+                            override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {}
+                            override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean { runCatching { player.setSurface(null) }; return true }
+                            override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
+                        }
+                    }
+                },
+                modifier = Modifier.size(360.dp, 640.dp).clip(RoundedCornerShape(22.5.dp)), // 표지와 같은 모서리(25 × 360/400)
+            )
+        }
         Column(Modifier.width(620.dp), verticalArrangement = Arrangement.spacedBy(28.dp)) {
             Text(said?.name?.takeIf { it.isNotBlank() }?.let { "${it}의 한마디" } ?: "이 장면의 한마디", style = CarText.Label, color = c.onSurfaceVariant)
             Text("“${said?.text ?: item.title}”", style = CarText.Title, color = c.onSurface)
