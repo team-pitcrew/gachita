@@ -351,7 +351,13 @@ class MainActivity : ComponentActivity() {
                                 family -> FamilyFlow(server, profileToken ?: account, onClose = { familyOpen = false },
                                     onStart = ::startGroupTrip, jump = familyJump, onJumped = { familyJump = null },
                                     // 가족 화면 위 탭(C14·C15·C16·C16 guestInvite·C16L·C43): 대화 기록 → C44, 콘텐츠 기록 → C33. 둘 다 여행 단위라 여행이 없으면 그 자리에
-                                    onTab = { i -> if (t != null) { familyOpen = false; closeBoarding(); afterStart = null; destination = if (i == 1) Destination.CONVERSATION else Destination.SHORTS } })
+                                    // '함께 타는 중'은 진행 중인 여행이 있으면 C17, 없으면 가족 흐름의 C16 groups 그대로
+                                    onTab = { i ->
+                                        if (t != null && (i != 0 || tripAlive())) {
+                                            familyOpen = false; closeBoarding(); afterStart = null
+                                            destination = when (i) { 0 -> Destination.RIDE; 1 -> Destination.CONVERSATION; else -> Destination.SHORTS }
+                                        }
+                                    })
                                 t != null -> TripScreen(t)
                                 carStatus.restricted -> OnboardingScreen(onboarding, driving = true) {} // 주행 중 여행이 없으면 시작 화면(C01)만, 단추는 잠근다(T11)
                                 else -> OnboardingScreen(onboarding) { familyOpen = true } // C08 '가족 그룹 만들기' → 가족 흐름(F2)
@@ -1129,10 +1135,17 @@ class MainActivity : ComponentActivity() {
         boarding = BoardingState(BoardingPage.PEOPLE)
     }
 
-    /** '함께 타는 중'(탭·C33 '우리 가족 N명'): 주행 중이면 C17, 주차 중이면 시안대로 C16 groups(가족 흐름). */
+    /**
+     * '함께 타는 중'(탭·C33 '우리 가족 N명'·가족 화면 탭): 진행 중인 여행이 있거나 주행 중이면 C17(■·녹화 재개가 있는 곳), 여행이 없거나 끝났고
+     * 주차 중이면 C16 groups(가족 흐름). 주차 중 C17로 돌아갈 길이 없던 것을 고쳤다(흐름점검-1115).
+     */
     private fun goRide() {
-        if (!carStatus.restricted && f4Mock !in MOCK_DRIVING) { familyJump = FamilyJump.GROUPS; familyOpen = true } else destination = Destination.RIDE
+        if (tripAlive() || carStatus.restricted || f4Mock in MOCK_DRIVING) { familyOpen = false; destination = Destination.RIDE }
+        else { familyJump = FamilyJump.GROUPS; familyOpen = true }
     }
+
+    /** 끝나지 않은 여행이 있다(■·녹화 재개가 있는 C17로 돌아갈 곳). 주차 중이어도 이때 '함께 타는 중'은 C16 groups가 아니라 C17. */
+    private fun tripAlive() = f4Mock != null || s.trip?.let { it.status != "ended" } == true
 
     private fun closeBoarding() {
         revokeInvite()
@@ -1337,7 +1350,7 @@ class MainActivity : ComponentActivity() {
                 TripHeader(shell, listening = s.recording && Live.mic == Mic.ON && !muted && handoff.state == Handoff.State.OFF)
                 TripTabs(Destination.entries.map { it.label }, destination.ordinal, { parked || it != Destination.SHORTS.ordinal },
                     height = if (shell == Shell.TALK) 80.dp else 76.dp, style = if (shell == Shell.TALK) TalkTabText else CarText.Label, onSelect = { i ->
-                        // 시안 탭 행선: 함께 타는 중 → C17(주차 중이면 C16 groups), 대화 기록 → C44, 콘텐츠 기록 → C33(같은 탭을 다시 눌러도 C33)
+                        // 시안 탭 행선: 함께 타는 중 → C17(여행이 없거나 끝났고 주차 중이면 C16 groups), 대화 기록 → C44, 콘텐츠 기록 → C33(같은 탭을 다시 눌러도 C33)
                         val tab = Destination.entries[i]
                         closeBoarding()
                         if (tab == Destination.RIDE) goRide() else { afterStart = null; destination = tab }
@@ -1579,7 +1592,7 @@ class MainActivity : ComponentActivity() {
             ContentsRecord(url, t.code, scope?.token,
                 canRead = { appVisible && !isDestroyed && s.online && !carStatus.restricted && scope != null && contentScope() == scope && server == url && handoff.state == Handoff.State.OFF },
                 canPlay = { appVisible && !isDestroyed && !carStatus.restricted && handoff.state == Handoff.State.OFF },
-                onRide = ::goRide, // C33 '우리 가족 N명' → 함께 타는 중(주차 중이면 C16 groups)
+                onRide = ::goRide, // C33 '우리 가족 N명' → 함께 타는 중(진행 중인 여행이 없고 주차 중이면 C16 groups)
                 onActiveChange = ::shortStudioActiveChanged, members = t.people.size, modifier = modifier)
         }
     }
