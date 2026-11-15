@@ -4,11 +4,15 @@ import { createHash } from "node:crypto";
 // v1(차량 Todos.kt와 같음): '마트에서 … 사자'처럼 장소 뒤 '에서'와 권유·의무형 끝.
 // v2(T141, v2 도착 브리핑): '하나로마트 가면 …', '숙소 가서 …'도 장소로 읽고, 끝에 '요'와 '급해'를 받고,
 // 분류(first·buy·remember·bring)·물건(이름·수량)·요청한 사람·제목을 더한다. v1이 뽑던 문장의 장소·글은 그대로라 id가 같다.
+// v3(T167, D# 실흐름): 장소 없이 의무형으로 끝나는 말도, 같은 여행의 바로 앞 30초 안(그 말 포함)에 여행 장소(내비 목적지·경유지)가
+// 나왔으면 그 장소의 할 일로 본다 — '정자동 카페거리 가까워요?' 뒤의 '…주차할 공간도 생각하셔야 돼요'. v2가 뽑던 문장은 그대로(id·method 같음).
 const AT = /([가-힣A-Za-z0-9]{1,10})에서(?:는|도)?\s*/g;
 const GO = /(?:^|\s)([가-힣A-Za-z0-9]{1,10}?)(?:에)?\s+(?:가면|가서|도착하면)\s+/g;
 const END = /(자|야지|야 ?[돼되해]요?|급해요?)$/;
 const NOT_VERB = new Set(["피자", "과자", "의자", "모자", "상자", "여자", "남자", "부자"]);
-export const TODO_METHOD = "place-rules-v2";
+export const TODO_METHOD = "place-rules-v3";
+export const TODO_METHOD_V2 = "place-rules-v2"; // v2 규칙으로 뽑은 항목의 method(차와 함께 쓰는 todo-vectors.json)
+const CONTEXT_MS = 30_000;
 
 // 장소와 그 뒤의 글(rest). v1의 '에서'가 있으면 그것만 본다 — v1이 뽑던 문장은 장소가 바뀌지 않게.
 function placeOf(text) {
@@ -21,6 +25,40 @@ export function todoOf(value) {
   const found = placeOf(text);
   if (!found || !END.test(text) || NOT_VERB.has(text.split(" ").at(-1))) return null;
   return { place: found.place, text };
+}
+
+// ---- 문맥 할 일(v3) ----
+// 발화 속 장소 언급. 띄어쓰기·문장부호를 빼고, 낱말 끝 행정동 '동'(세 글자 이상)을 뗀 뒤 비교한다:
+// 이름 전체가 들어 있거나('정자동 카페거리' ↔ '정자 카페거리'), 이름의 세 글자 이상 낱말이 들어 있으면('카페거리') 같은 장소다.
+const spokenWords = (s) => String(s).split(/\s+/).map((w) => w.replace(/[^가-힣A-Za-z0-9]/g, "")).filter(Boolean).map((w) => (w.length >= 3 && w.endsWith("동") ? w.slice(0, -1) : w));
+export function mentions(text, name) {
+  const said = spokenWords(text).join(""), words = spokenWords(name);
+  const whole = words.join("");
+  return (whole.length >= 2 && said.includes(whole)) || words.some((w) => w.length >= 3 && said.includes(w));
+}
+// 장소 없이 의무형으로 끝나는 말 → 앞 30초 안에 가장 최근에 나온 여행 장소의 할 일. 장소는 띄어쓰기를 뺀 이름(차는 내비 이름에 포함되는지로 맞춘다).
+function contextTodo(line, text, recent, names) {
+  if (!names.length || !Number.isFinite(line.at) || placeOf(text) || !END.test(text) || NOT_VERB.has(text.split(" ").at(-1))) return null;
+  const said = recent.filter((l) => l.at <= line.at && line.at - l.at <= CONTEXT_MS).sort((a, b) => b.at - a.at);
+  for (const l of said) {
+    const name = names.find((n) => mentions(l.displayText, n));
+    if (name) return { place: name.replace(/\s/g, ""), text, context: true };
+  }
+  return null;
+}
+// 문맥 할 일의 제목·물건: 대화체라 마지막 구절만(쉼표·'근데'·'…할 게' 뒤), 앞말('제가' 등)을 떼고 높임 '하셔'를 '하기'로.
+const LEAD = new Set(["제가", "저는", "저도", "내가", "나는", "나도", "우리", "우리가", "저희", "저희가", "그럼", "그러면", "근데", "그런데", "아", "어", "음", "뭐"]);
+function clauseWords(text) {
+  const words = text.split(/,|\s(?:근데|그런데|그리고|그럼)\s|\s게\s/).at(-1).replace(END, "").trim().split(/\s+/).filter(Boolean);
+  while (words.length > 1 && LEAD.has(words[0])) words.shift();
+  return words;
+}
+function contextAction(text) {
+  const words = clauseWords(text);
+  const last = words.at(-1) ?? "";
+  const verb = /하(?:셔|세요|시)$/.test(last) ? last.replace(/하(?:셔|세요|시)$/, "하기") : STEM[last] ?? (last.length >= 3 && last.endsWith("해") ? last.slice(0, -1) : last);
+  const name = clean(words.slice(0, -1));
+  return { title: [...words.slice(0, -1).map(bare), verb].filter(Boolean).join(" "), items: name ? [{ name, qty: null }] : [] };
 }
 
 // ---- 행동 항목(v2) ----
@@ -101,6 +139,8 @@ function subjectOf(rest) {
 
 // 할 일 하나의 행동 항목. sources의 확인된 화자를 요청한 사람으로(중복 없이, 처음 말한 순서).
 export function actionOf(todo) {
+  const requested = [...new Set((todo.sources ?? []).map((s) => s.participantId).filter(Boolean))];
+  if (todo.context) return { category: FIRST.test(todo.text) ? "first" : "remember", ...contextAction(todo.text), requestedBy: requested, method: TODO_METHOD };
   const rest = placeOf(todo.text)?.rest ?? todo.text;
   const buy = BUY.exec(rest);
   const bring = [...rest.matchAll(BRING)].at(-1);
@@ -108,16 +148,19 @@ export function actionOf(todo) {
   const object = buy ? rest.slice(0, buy.index) : bring && bring.index > 0 ? rest.slice(0, bring.index) : null;
   const items = object !== null ? goodsOf(object) : subjectOf(rest);
   const requestedBy = [...new Set(todo.sources.map((s) => s.participantId).filter(Boolean))];
-  return { category, title: titleOf(rest), items, requestedBy, method: TODO_METHOD };
+  return { category, title: titleOf(rest), items, requestedBy, method: TODO_METHOD_V2 };
 }
 
 // 현재 살아 있는 발화만 입력받습니다. 교정본을 우선하되 원문·출처를 함께 돌려줍니다.
-export function deriveTodos(lines, states = []) {
+// places는 그 여행의 장소 이름(내비 목적지·경유지, v3 문맥 규칙). 없으면 v2와 같다.
+export function deriveTodos(lines, states = [], places = []) {
   const found = new Map(), saved = new Map(states.map((s) => [s.id, s]));
-  for (const line of lines) {
-    const displayText = line.displayText ?? line.editedText ?? line.asrText ?? line.text;
-    if (!line.text || typeof displayText !== "string") continue;
-    const todo = todoOf(displayText);
+  const names = [...new Set(places.filter((n) => typeof n === "string" && n.trim()))];
+  const said = lines.map((line) => ({ ...line, displayText: line.displayText ?? line.editedText ?? line.asrText ?? line.text }))
+    .filter((l) => l.text && typeof l.displayText === "string");
+  for (const line of said) {
+    const { displayText } = line;
+    const todo = todoOf(displayText) ?? contextTodo(line, displayText.trim().replace(/[.!? ]+$/, ""), said, names);
     if (!todo) continue;
     const id = createHash("sha256").update(JSON.stringify([todo.place, todo.text])).digest("hex").slice(0, 32);
     if (!found.has(id)) {
