@@ -170,6 +170,7 @@ class VoicePrints(dir: File, val trip: String, private val seal: Seal, now: Long
     private var threshold = 2.0 // 받은 값이 없으면 아무도 맞지 않는다
     private var floor = Double.NaN // 여백 규칙의 바닥과 여백(서버가 줄 때만, identify)
     private var margin = Double.NaN
+    private var always = true // 미확인 0%: 여백 규칙을 넘지 못해도 가장 가까운 사람으로 정한다(서버가 assign: "margin"을 주면 끔)
     private var prints = emptyMap<String, DoubleArray>()
     /** 사본을 받은 시각(파일에 함께 둔다). 0이면 다음 대조 전에 다시 받는다(등록함, 탑승자가 바뀜). */
     @Volatile var fetchedAt = 0L
@@ -195,6 +196,7 @@ class VoicePrints(dir: File, val trip: String, private val seal: Seal, now: Long
         }.filterValues { it.size == VOICE_DIMS }
         generation = o.getInt("generation"); threshold = o.getDouble("threshold")
         floor = o.optDouble("floor"); margin = o.optDouble("margin") // 옛 서버는 주지 않는다(NaN)
+        always = o.optString("assign") != "margin"
         savedAt = o.optLong("fetchedAt"); fetchedAt = savedAt
     }
 
@@ -271,9 +273,25 @@ class VoicePrints(dir: File, val trip: String, private val seal: Seal, now: Long
         val sims = all.mapNotNull { id -> prints[id]?.let { id to similarity(v, it) } }.sortedByDescending { it.second }
         val (best, sim) = sims.firstOrNull() ?: return Speaker(null, 0.0)
         val sure = if (sims.size == 1) sim >= threshold else sim >= floor && sim - sims[1].second >= margin
-        return Speaker(best.takeIf { sure && (row == null || it in row) }, Math.round(sim * 1000) / 1000.0)
+        if (sure && (row == null || best in row)) return Speaker(best, Math.round(sim * 1000) / 1000.0, basis = "margin")
+        if (!always) return Speaker(null, Math.round(sim * 1000) / 1000.0)
+        // 미확인 0%(오너 11/15): 등록한 사람이 있으면 늘 누군가로 정한다. 줄을 알면 그 줄에서, 모르거나 그 줄에 등록한 사람이 없으면 모두에서 가장 가까운 사람.
+        // 실제 차 안 목소리에서 이렇게 정한 이름의 3~4할은 틀린다(교정본 36줄 가운데 22줄 맞음) — 사람이 고칠 수 있고, 근거(basis)를 남긴다.
+        val (pick, near) = row?.let { r -> sims.firstOrNull { it.first in r } } ?: sims.first()
+        return Speaker(pick, Math.round(near * 1000) / 1000.0, basis = "nearest")
     }
+
+    /** 미확인 0% 규칙이 켜져 있고 견줄 등록값이 있는지. 켜져 있으면 값을 못 낸 짧은 말도 앞뒤 말의 사람을 물려받는다(inherit). */
+    val assignsAlways: Boolean @Synchronized get() = always && !floor.isNaN() && !margin.isNaN() && prints.isNotEmpty()
 }
+
+/**
+ * 값을 못 낸 발화(0.6초보다 짧음, 원음이 없음)의 말한 사람을 앞뒤 말에서 물려받는다: 같은 좌석 줄에서 시각이 가장 가까운 말의 사람,
+ * 그 줄에 아는 말이 없으면 줄과 무관하게 가장 가까운 말의 사람. known은 사람이 정해진 발화들. 아무것도 없으면 null.
+ */
+fun inherit(u: Utterance, known: List<Pair<Utterance, String>>): String? =
+    (known.filter { u.seatZone != null && it.first.seatZone == u.seatZone }.ifEmpty { known })
+        .minByOrNull { kotlin.math.abs(it.first.startedAt - u.startedAt) }?.second
 
 const val CONSENT_FRESH_MS = 5 * 60_000L // 끊긴 동안에는 마지막으로 동의를 확인한 뒤 이 시간까지만 차 안 대조를 잇는다(ADR-0007의 5분)
 
