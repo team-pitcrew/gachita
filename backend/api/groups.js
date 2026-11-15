@@ -130,7 +130,7 @@ const tooManyGroups = async (db, profileId) =>
 const ROUTES = { list: ["GET", "POST"], invites: ["POST"], children: ["POST"], seats: ["PUT"], member: ["PATCH", "DELETE"], voice: ["POST", "DELETE"] };
 
 // /api/groups… deps는 server.js의 도구(같은 검사·같은 지우기를 쓰려고).
-export async function groups(req, seg, b, { profileOf, text, bool, oneOf, obj, seats, enrollment, enrolled, deleteProfiles }) {
+export async function groups(req, seg, b, { profileOf, text, bool, oneOf, obj, seats, enrollment, enrolled, saveProfilePrint, deleteProfiles }) {
   const [id, sub, profileId, leaf] = seg;
   const route = !id
     ? "list"
@@ -291,13 +291,7 @@ export async function groups(req, seg, b, { profileOf, text, bool, oneOf, obj, s
   }
   const print = await enrollment(req);
   await allowed(); // 본문을 받는 사이 빠졌거나 동의가 꺼졌으면 저장하지 않는다
-  await profilesDb()
-    .query(
-      `INSERT INTO voice_prints (profile_id, vector, seconds) VALUES ($1, $2, $3)
-       ON CONFLICT (profile_id) DO UPDATE SET vector = $2, seconds = $3, updated_at = now()`,
-      [target, print.vector, print.seconds]
-    )
-    .catch((e) => (e?.code === "23503" ? fail(404, "그룹에 없는 구성원") : Promise.reject(e)));
+  await saveProfilePrint(target, print, "그룹에 없는 구성원"); // 1차 값 또는 둘째 값(강한 화자 값) — /profiles/me/voice와 같은 규칙
   return enrolled(print);
 }
 

@@ -6,7 +6,7 @@ const CACHE = "gachita";
 const TRIP = /^\/api\/trips\/[A-Z0-9]+$/;
 
 // 설치할 때 화면 파일을 받아 둔다. 첫 방문 뒤 바로 끊겨도(이 파일들은 워커가 켜지기 전에 읽혔다) 다시 열 수 있게.
-const SHELL = ["/", "/app.js", "/shared.js", "/media-controls.js", "/captions.js", "/shares.js", "/share-card.js", "/qrcode.js", "/records.js", "/conversations.js", "/todos.js", "/ride.js", "/short-film.js", "/short-studio.js", "/short-generation.js", "/short-library.js", "/short-scenes.js", "/boarding.js", "/vehicle-boarding.js", "/onboarding.js", "/voice-embed.js", "/voice-meter.js", "/groups.js", "/profile-menu.js", "/style.css", "/manifest.webmanifest", "/icon.svg", "/brand/mascot.svg", "/icons/gachita-32.png", "/icons/gachita-180.png", "/icons/gachita-192.png", "/icons/gachita-512.png", "/brief.js", "/contents.js", "/after-trip.js", "/maps/gangneung.jpg", "/brief-icons/1f6bb.svg", "/brief-icons/1f6d2.svg", "/brief-icons/1f969.svg", "/brief-icons/1f34a.svg", "/brief-icons/1f36c.svg", "/brief-icons/1f964.svg", "/brief-icons/1f9ca.svg", "/brief-icons/1f9f3.svg", "/brief-icons/trash.svg"];
+const SHELL = ["/", "/app.js", "/shared.js", "/media-controls.js", "/captions.js", "/shares.js", "/share-card.js", "/qrcode.js", "/records.js", "/conversations.js", "/todos.js", "/ride.js", "/short-film.js", "/short-studio.js", "/short-generation.js", "/short-library.js", "/short-scenes.js", "/boarding.js", "/vehicle-boarding.js", "/onboarding.js", "/voice-embed.js", "/voice-meter.js", "/wespeaker.js", "/wespeaker-worker.js", "/groups.js", "/profile-menu.js", "/style.css", "/manifest.webmanifest", "/icon.svg", "/brand/mascot.svg", "/icons/gachita-32.png", "/icons/gachita-180.png", "/icons/gachita-192.png", "/icons/gachita-512.png", "/brief.js", "/contents.js", "/after-trip.js", "/maps/gangneung.jpg", "/brief-icons/1f6bb.svg", "/brief-icons/1f6d2.svg", "/brief-icons/1f969.svg", "/brief-icons/1f34a.svg", "/brief-icons/1f36c.svg", "/brief-icons/1f964.svg", "/brief-icons/1f9ca.svg", "/brief-icons/1f9f3.svg", "/brief-icons/trash.svg"];
 
 addEventListener("install", (e) => e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => skipWaiting())));
 addEventListener("activate", (e) => e.waitUntil(clients.claim()));
@@ -17,6 +17,8 @@ addEventListener("fetch", (e) => {
   if (req.method !== "GET" || url.origin !== location.origin) return;
   if (url.pathname.startsWith("/api/") ? !trip : url.search) return;
   const key = url.origin + url.pathname;
+  // 화자 모델·실행기(wespeaker.js, 38 MB)는 판 번호가 붙은 주소라 한 번 받으면 캐시에서 준다(다시 받지 않음). 없는 것(404)은 두지 않는다.
+  if (/^\/(models|vendor)\//.test(url.pathname)) return e.respondWith(caches.match(key).then((hit) => hit ?? fetch(req).then((res) => (res.ok && e.waitUntil(caches.open(CACHE).then((c) => c.put(key, res.clone()))), res))));
   const save = (res) => {
     // 새 판은 갈아 끼우고, 서버가 지운 여행(404)은 이 폰에서도 지운다. 복사는 화면이 본문을 읽기 전에 떠 둔다.
     const copy = res.ok && res.clone();

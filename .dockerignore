@@ -22,6 +22,7 @@
 !backend/api/short-render.js
 !backend/api/trip-audio.js
 !backend/api/providers
+!backend/api/fetch-assets.mjs
 !backend/api/*.sql
 !frontend/web
 frontend/web/*.test.mjs

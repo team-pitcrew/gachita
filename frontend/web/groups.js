@@ -5,6 +5,7 @@ import { api, h, SEAT, SEATS, toast } from "./shared.js";
 import { CHARACTER_OPTIONS, characterImage, characterKey } from "./short-film.js";
 import { qrcode } from "./qrcode.js";
 import { startVoice, voiceBars, VOICE_SECONDS, WAVE_BARS } from "./voice-meter.js";
+import { warmStrong } from "./wespeaker.js";
 import { appBar } from "./ride.js";
 
 const PENDING = "gachita:group-pending"; // 프로필을 만들기 전에 연 초대 링크의 코드(이 탭에서만)
@@ -53,6 +54,9 @@ export function seatPick(members, picked, target) {
 }
 
 // 저장한 그룹에서 앉아 있다가 자리를 잃는 사람(저장·출발을 막는다).
+// 목소리를 아직 등록하지 않은 아이(보호자 동의가 켜진 아이만 — 동의가 꺼진 아이는 녹음할 수 없어 예외).
+export const childWithoutVoice = (g) => g?.members?.find((m) => m.role === "child" && !m.hasVoice && m.consent) ?? null;
+
 export function lostSeats(saved, edited) {
   const before = new Map(saved.map((m) => [m.profileId, m.seat ?? null]));
   return edited.filter((m) => before.get(m.profileId) && !m.seat);
@@ -154,7 +158,10 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
     s.dialog.scrollTop = 0;
   };
   const PARENT = { child: "member", childVoice: "member", seat: "group", guest: "groups", group: "groups", detail: "groups", assign: "detail", picker: "assign" };
-  const back = () => (s.view === "invite" ? go(s.inviteFrom) : PARENT[s.view] ? go(PARENT[s.view]) : close());
+  // 아이 프로필은 P11에서 먼저 만들어진다 — 목소리를 올리기(또는 보호자 동의가 꺼져 녹음할 수 없음) 전에는 P12·P42를 떠나지 않는다(시안에 건너뛰기 없음)
+  const stuck = () => s?.view === "childVoice" && !["saved", "blocked"].includes(s.voiceState);
+  const leave = () => { if (!stuck()) close(); };
+  const back = () => (stuck() ? null : s.view === "invite" ? go(s.inviteFrom) : PARENT[s.view] ? go(PARENT[s.view]) : close());
   async function ensureFamily() {
     if (family()) return family();
     const made = await call("POST", "/groups", { name: "우리 가족", kind: "family" });
@@ -165,7 +172,7 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
   // 화면 틀: 머리(앱과 같은 머리 줄: 마스코트 · 가치타 · 연결됨), 탭(P13 이후), 제목 묶음, 본문, 아래 단추.
   // 가치타를 누르면 대화 상자를 닫는다(앱 처음 화면). 시안에 없는 '‹'는 두지 않는다(11/15 오너 '시안이 기준') —
   // 돌아가는 길은 시안의 단추(그룹으로·좌석 배정으로·전체 그룹 …)와 가치타, 기기의 뒤로 가기(Esc → back())다.
-  const top = () => appBar({ online: navigator.onLine, onHome: close });
+  const top = () => appBar({ online: navigator.onLine, onHome: leave });
   // 탭: 대화 기록(P44)·콘텐츠 기록(P33)을 연다(전에는 창만 닫혔다). '함께 타는 중'은 진행 중 여행이 있으면 그 여행(P17) — app.js가 정한다.
   const tabs = () => h("nav", { className: "journey-tabs", "aria-label": "여행 메뉴" }, h("button", { type: "button", className: "selected", "aria-current": "page", onclick: () => onRide() }, "함께 타는 중"), button("대화 기록", () => { close(); onTalk(); }), button("콘텐츠 기록", () => { close(); onContents(); }));
   const page = (title, sub, body, actions, withTabs = false, aside = null) => [
@@ -327,6 +334,7 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
   // 이 폰에서 값(112차원)으로 바꿔 POST /groups/{id}/members/{profileId}/voice(JSON, #356·#364 계약)로 값만 올린다.
   // 보호자 동의가 꺼진 아이는 녹음하지 않는다(서버도 409). 서버 400(말소리 없음)은 다시 녹음하게 한다.
   async function record() {
+    warmStrong(); // 두 번째 값(wespeaker)의 모델을 녹음하는 동안 받아 둔다
     const kid = s.child;
     s.meter?.cancel();
     s.meter = null;
@@ -354,8 +362,10 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
     s.voiceState = "saving";
     paint();
     try {
-      const { value } = await meter.finish();
-      await call("POST", `/groups/${s.childGroup}/members/${s.child.profileId}/voice`, value);
+      const { value, strong } = await meter.finish();
+      const path = `/groups/${s.childGroup}/members/${s.child.profileId}/voice`;
+      await call("POST", path, value);
+      strong.then((v) => v && call("POST", path, v)).catch(() => {}); // 두 번째 값(wespeaker, T169)은 뒤에서, 서버가 아직 모르면 넘김
       if (!s) return;
       s.voiceState = "saved";
     } catch (e) {
@@ -600,7 +610,11 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
         const members = family()?.members ?? [];
         // 동승 그룹만 있는 계정(PITCREW 같은)도 내 동승 그룹으로(차의 C16 groups와 같음). 전에는 가족 추가(P09)로 갔다.
         s.view = (members.length > 1 && members.every((m) => m.seat)) || (!family() && s.groups.length) ? "groups" : "member";
+        // 목소리 없이 남은 아이(보호자 동의가 켜진 아이)는 그 아이의 P12부터 다시(차 C12와 같음)
+        const kid = childWithoutVoice(family());
+        if (kid) Object.assign(s, { child: kid, childGroup: family().id, view: "childVoice", voiceState: "", voiceNote: "" });
       });
+      if (s?.view === "childVoice") { paint(); record(); }
     },
     // 프로필 드롭다운(C17m)에서 바로 여는 곳: 전체 그룹(P16L) 또는 지금 그룹(가족이 먼저)의 좌석 배정(P16B).
     async openAt(view) {
