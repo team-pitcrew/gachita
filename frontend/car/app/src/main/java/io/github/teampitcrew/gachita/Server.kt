@@ -246,7 +246,7 @@ class Server(base: String, private val open: (URL) -> HttpURLConnection = { it.o
             val error = runCatching { JSONObject(text).getString("error") }.getOrNull()
             // 여행 경로에서 서버가 그 여행을 모른다고 할 때만 Gone(프록시의 404 쪽이나 '없는 참가자'로는 지우지 않음)
             if (code == 404 && error in TRIP_GONE && path.startsWith("/api/trips/")) throw Gone(path.split("/")[3])
-            if (code >= 400) throw ApiError(code, error ?: text)
+            if (code >= 400) throw ApiError(code, error ?: text, text)
             if (expire?.isDone == true) throw SocketTimeoutException("${deadlineMs}ms 마감") // 끊긴 연결에서 잘린 본문을 쓰지 않는다
             return text
         } catch (e: java.io.IOException) {
@@ -259,10 +259,20 @@ class Server(base: String, private val open: (URL) -> HttpURLConnection = { it.o
 }
 
 /** 서버가 거절함(4xx·5xx). 통신 자체가 안 된 것(IOException)과 구분해 '연결 끊김'으로 보지 않는다. */
-open class ApiError(val status: Int, message: String) : Exception("$status $message") {
+open class ApiError(val status: Int, message: String, private val body: String = "") : Exception("$status $message") {
     /** 502·503·504: 배포 중이거나 앞단(ALB·Cloudflare)이 잠깐 못 받았다. 거절이 아니고, 본문도 앞단의 것이다(T122). */
     val transient: Boolean get() = status in 502..504
+
+    /** 409 voice_required(T173): 목소리가 없어 막힌 구성원. 다른 거절이면 null. */
+    val voiceMissing: List<VoiceMissing>? get() = runCatching {
+        val o = JSONObject(body)
+        if (status != 409 || o.optString("reason") != "voice_required") return@runCatching null
+        val a = o.optJSONArray("missing") ?: JSONArray()
+        List(a.length()) { i -> a.getJSONObject(i).let { VoiceMissing(it.optString("profileId"), it.optString("name"), it.optBoolean("child")) } }
+    }.getOrNull()
 }
+
+data class VoiceMissing(val profileId: String, val name: String, val child: Boolean)
 
 /** 화면에 보일 실패 이유. 잠깐 못 받은 응답은 거절과 나누고 앞단 본문('error code: 502')을 붙이지 않는다(T122). */
 fun failureText(e: Throwable): String = when {

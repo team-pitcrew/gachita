@@ -357,7 +357,7 @@ class MainActivity : ComponentActivity() {
                                 onboarding.showing -> OnboardingScreen(onboarding, driving = carStatus.restricted) { familyOpen = true }
                                 // 프로필 메뉴의 '동승 그룹 변경'·'좌석 배정'도 가족 흐름(C16 groups·C16B)으로 연다. 주차 중에만
                                 family -> FamilyFlow(server, profileToken ?: account, onClose = { familyOpen = false },
-                                    onStart = ::startGroupTrip, jump = familyJump, onJumped = { familyJump = null },
+                                    onStart = ::startGroupTrip, jump = familyJump, onJumped = { familyJump = null }, onNeedVoice = ::needVoice,
                                     // 가족 화면 위 탭(C14·C15·C16·C16 guestInvite·C16L·C43): 대화 기록 → C44, 콘텐츠 기록 → C33. 둘 다 여행 단위라 여행이 없으면 그 자리에
                                     // '함께 타는 중'은 진행 중인 여행이 있으면 C17, 없으면 가족 흐름의 C16 groups 그대로
                                     onTab = { i ->
@@ -471,8 +471,27 @@ class MainActivity : ComponentActivity() {
                     s = Session(gear = s.gear, ours = mine.keys).withTrip(keep(got))
                     if (s.agreed) startRecording() // 모두 동의했으면 출발(주차 중)과 함께 기록 시작 — C17의 ●를 따로 누르지 않게(오너 지시, F5·F6 #514와 맞춤)
                 }
-                    .onFailure { s = s.copy(busy = false); error = "여행을 만들지 못했어요 · ${reason(it)}" }
+                    .onFailure { e ->
+                        s = s.copy(busy = false)
+                        (e as? ApiError)?.voiceMissing?.let { voiceFirst(it, token) } ?: run { error = "여행을 만들지 못했어요 · ${reason(e)}" }
+                    }
             }
+        }
+    }
+
+    /** 내 목소리가 없다(T173): 가족 흐름을 닫고 C06 목소리 등록으로. 등록을 마치면 온보딩이 닫혀 가족 흐름으로 돌아온다. */
+    private fun needVoice() { familyOpen = false; onboarding.reopen(OnboardStep.VOICE) }
+
+    /**
+     * 서버가 목소리 없는 구성원으로 출발을 막았다(409 voice_required, T173). 가족 화면은 보통 먼저 막지만(#561) 그 화면의 자료가 낡았을 때.
+     * 아이 → 가족 흐름 그룹 목록을 다시 읽어 다음 '출발'이 그 아이의 C12로 가게, 나 → C06, 다른 어른 → 폰에서 등록하라는 알림.
+     */
+    private fun voiceFirst(missing: List<VoiceMissing>, token: String) {
+        missing.firstOrNull { it.child }?.let { familyJump = FamilyJump.GROUPS; familyOpen = true; error = "${it.name}의 목소리를 먼저 등록해 주세요"; return }
+        val url = server
+        bg({ AccountApi(url).me(token).id }) { r ->
+            if (missing.any { it.profileId == r.getOrNull() }) needVoice()
+            else error = "${missing.joinToString(", ") { it.name }}님은 폰에서 목소리를 먼저 등록해 주세요"
         }
     }
 

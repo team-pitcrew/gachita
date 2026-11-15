@@ -110,19 +110,19 @@ class Onboarding(private val context: Context, private val prefs: SharedPreferen
     val showing: Boolean get() = !skipped && !finished
 
     /** 처음 화면의 '계정·목소리'에서 다시 연다. */
-    fun reopen() { skipped = false; finished = false; prefs.edit().putBoolean("onboardingSkipped", false).putBoolean("onboardingDone", false).apply(); step = null; start() }
+    fun reopen(at: OnboardStep? = null) { skipped = false; finished = false; prefs.edit().putBoolean("onboardingSkipped", false).putBoolean("onboardingDone", false).apply(); step = null; start(at) }
 
     /** 디버그 실행 인자 --ez onboarding false(시연·e2e 스크립트가 처음 화면을 가족 흐름으로 본다). */
     fun skipForDebug() { skipped = true; prefs.edit().putBoolean("onboardingSkipped", true).apply() }
 
     private fun finish() { stopRecording(); finished = true; prefs.edit().putBoolean("onboardingDone", true).apply() }
 
-    /** 단계를 정한다. 토큰이 있으면 서버에서 프로필을 읽어 빠진 단계부터. */
-    fun start() {
+    /** 단계를 정한다. 토큰이 있으면 서버에서 프로필을 읽어 빠진 단계부터. at: 동의를 마친 계정이면 그 단계로(목소리 먼저, T173 → C06). */
+    fun start(at: OnboardStep? = null) {
         if (step != null) return
         val t = token ?: run { step = OnboardStep.WELCOME; return }
         step = OnboardStep.WELCOME
-        work({ AccountApi(server()).me(t) }) { p -> adopt(p); step = firstOnboardStep(p, true) }
+        work({ AccountApi(server()).me(t) }) { p -> adopt(p); step = at?.takeIf { p.consent } ?: firstOnboardStep(p, true) }
     }
 
     fun go(next: OnboardStep) { note = ""; step = next }
