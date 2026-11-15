@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: 가치타 API
-  version: 0.21.0
+  version: 0.22.0
   summary: 여행 세션, 기기 프로필과 이메일 계정, 동승 연결, 부탁, 장면, 기록본, 화자 대조, 여행 전체 음성
   description: |
     웹앱(frontend/web)과 차량 앱(frontend/car)이 부르는 API입니다. 구현은 backend/api/server.js입니다.
@@ -2357,7 +2357,7 @@ paths:
       tags: [기록본]
       summary: 원발화가 연결된 장소별 할 일
       description: |
-        현재 세대의 살아 있는 전사에서 장소·권유/의무형 규칙으로 추출합니다(place-rules-v2, LLM 없음). v1(차량 Todos.kt와 같은 '…에서 …자')에 '…가면/가서 …'와 '요'·'급해' 끝을 더했고, 항목마다 분류(`category`)·제목(`title`)·물건(`items`)·요청한 사람(`requestedBy`)을 줍니다(T141, v2 도착 브리핑). v1이 뽑던 문장의 id는 그대로입니다.
+        현재 세대의 살아 있는 전사에서 장소·권유/의무형 규칙으로 추출합니다(place-rules-v3, LLM 없음). v3(T167)은 장소 없이 의무형으로 끝나는 말을 앞 30초 안에 나온 여행 장소(내비 경유지·목적지)의 할 일로 봅니다(docs/api/todos.md '문맥 할 일'). v1(차량 Todos.kt와 같은 '…에서 …자')에 '…가면/가서 …'와 '요'·'급해' 끝을 더했고, 항목마다 분류(`category`)·제목(`title`)·물건(`items`)·요청한 사람(`requestedBy`)을 줍니다(T141, v2 도착 브리핑). v1이 뽑던 문장의 id는 그대로입니다.
         수동 교정본 → 자동 교정본 → 원문 순으로 읽으며, 같은 장소·문장은 하나로 묶고 모든 원발화를 sources에 남깁니다.
         id는 장소·문장의 해시이므로 내용이 바뀌면 바뀝니다. 상태만 따로 저장하며 원문을 지우면 목록에서 사라집니다.
       security: [{ participantToken: [] }]
@@ -2455,7 +2455,7 @@ paths:
                   observedAt: { type: integer }
                   place: { type: object }
                   distanceMeters: { type: integer }
-                  method: { type: string, const: place-rules-v2 }
+                  method: { type: string, const: place-rules-v3 }
                   items: { type: array, items: { $ref: "#/components/schemas/Todo" } }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
@@ -2539,13 +2539,13 @@ components:
               name: { type: string }
               qty: { type: [string, "null"], description: "숫자+단위(g·kg·개·병·봉지·팩·캔·마리) 또는 한·두·세…+단위를 '600g'·'1봉지'·'2병'으로. 그 밖의 단위는 이름에 남기고 null" }
         requestedBy: { type: array, items: { type: string }, description: 출처 발화의 확인된 화자(participantId), 중복 없이 처음 말한 순서. 화자가 없으면 빈 배열 }
-        method: { type: string, const: place-rules-v2 }
+        method: { type: string, enum: [place-rules-v2, place-rules-v3], description: "v2 규칙으로 뽑은 항목은 v2, 문맥 규칙(T167)으로 뽑은 항목은 v3" }
     TodoList:
       type: object
       required: [generation, method, items]
       properties:
         generation: { type: integer }
-        method: { type: string, const: place-rules-v2 }
+        method: { type: string, const: place-rules-v3 }
         items: { type: array, items: { $ref: "#/components/schemas/Todo" } }
         arrival:
           description: 마지막으로 도착 판정(eligible=true)을 받은 장소(T119). 없거나 다시 출발했으면 null. 좌표는 없습니다. 클라이언트가 보낸 관측에 대한 판정이며 서버가 차량 센서를 확인했다는 뜻이 아닙니다.
@@ -2901,7 +2901,7 @@ components:
         generation: { type: integer }
         utterances: { type: array, items: { $ref: "#/components/schemas/Utterance" } }
         requests: { type: array, items: { $ref: "#/components/schemas/Request" } }
-        todos: { type: array, items: { $ref: "#/components/schemas/Todo" }, description: 실제 전사의 장소별 할 일과 사용자 상태(place-rules-v2) }
+        todos: { type: array, items: { $ref: "#/components/schemas/Todo" }, description: 실제 전사의 장소별 할 일과 사용자 상태(place-rules-v3) }
         places: { type: array, items: { $ref: "#/components/schemas/Place" }, description: "차가 남긴 장소, at 순서(T136). GET /places와 같음" }
     FeedItem:
       type: object

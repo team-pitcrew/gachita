@@ -321,7 +321,9 @@ class Outbox(dir: File, val trip: String, private val seal: Seal) {
 // ---- 말한 사람(T37): 좌석 구역 + 차 안의 목소리 대조(Voice.kt, ADR-0023) ----
 
 /** 발화 한 건의 말한 사람: 참가자 id(모르면 null), 대조 확신도, 사람이 화면에서 고쳤는지, 서버에 남겼는지(차가 찾은 사람과 사람이 고친 것 모두). */
-data class Speaker(val who: String?, val confidence: Double, val byPerson: Boolean = false, val sent: Boolean = true)
+data class Speaker(val who: String?, val confidence: Double, val byPerson: Boolean = false, val sent: Boolean = true, val basis: String = "")
+// basis는 차가 그 사람으로 정한 근거(화면에는 이름만 보인다): margin = 여백 규칙을 넘음, nearest = 넘지 못해 가장 가까운 사람으로,
+// inherit = 값을 못 낸 짧은 말이라 앞뒤 말의 사람을 물려받음. 사람이 고쳤거나 옛 기록이면 빈 글자.
 
 /**
  * 발화 순번별 말한 사람. speakers-<여행>.jsonl에 한 줄씩 덧붙이고(암호화, 뒤의 줄이 앞을 덮음) 앱을 다시 켜면 이어 읽는다.
@@ -342,7 +344,7 @@ class Speakers(dir: File, val trip: String, private val seal: Seal) {
                 when {
                     o.has("through") -> through = o.getLong("through")
                     o.has("gen") -> gen = o.getInt("gen")
-                    else -> map[o.getLong("seq")] = Speaker(o.optString("who").ifEmpty { null }, o.getDouble("confidence"), o.optBoolean("byPerson"), o.optBoolean("sent", true))
+                    else -> map[o.getLong("seq")] = Speaker(o.optString("who").ifEmpty { null }, o.getDouble("confidence"), o.optBoolean("byPerson"), o.optBoolean("sent", true), o.optString("basis"))
                 }
             }
         }
@@ -353,7 +355,7 @@ class Speakers(dir: File, val trip: String, private val seal: Seal) {
     @Synchronized fun set(seq: Long, s: Speaker) {
         if (map[seq]?.byPerson == true && !s.byPerson) return // 사람이 고친 것은 대조가 덮지 않는다
         map[seq] = s
-        put(JSONObject().put("seq", seq).put("who", s.who ?: "").put("confidence", s.confidence).put("byPerson", s.byPerson).put("sent", s.sent))
+        put(JSONObject().put("seq", seq).put("who", s.who ?: "").put("confidence", s.confidence).put("byPerson", s.byPerson).put("sent", s.sent).put("basis", s.basis))
     }
 
     /** 차가 찾았지만 아직 서버에 남기지 못한 것. 발화와 함께 다시 올린다. */

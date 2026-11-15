@@ -2049,6 +2049,21 @@ test('기본 영상과 공급자 생성은 같은 목록에서 출처와 파일 
  assert.equal(list.find(x=>x.id===id).result.url,`${f.path}/short-generations/${id}/file`);
 });
 
+test("문맥 할 일(v3, T167): 차가 남긴 내비 목적지가 앞 30초 안에 나오면 장소 없는 의무형도 그 장소의 할 일로 준다", async () => {
+  const [, trip] = await call("POST", "/api/trips", {}), t = `/api/trips/${trip.code}`;
+  const [, p] = await join(trip.code, "운전자", "ROW_1_LEFT");
+  assert.equal((await call("POST", `${t}/places`, { kind: "start", name: "신논현역" }, p.token))[0], 201);
+  assert.equal((await call("POST", `${t}/places`, { kind: "destination", name: "정자 카페거리" }, p.token))[0], 201);
+  const items = [
+    { seq: 1, at: trip.createdAt + 90_000, text: "정자동 카페거리 가까워요 집에서?" },
+    { seq: 2, at: trip.createdAt + 93_000, text: "어 뭐 그렇죠? 근데 하나 더 생각하셔야 될될 게 제가 주차할 공간도 생각하셔야 돼요" },
+  ];
+  assert.equal((await call("POST", `${t}/utterances`, { device: "car", generation: 1, items }, p.token))[0], 200);
+  const [, data] = await call("GET", `${t}/todos`, null, p.token);
+  assert.equal(data.method, "place-rules-v3");
+  assert.deepEqual(data.items.map((i) => [i.place, i.title, i.method]), [["정자카페거리", "주차할 공간 생각하기", "place-rules-v3"]]);
+});
+
 test("장소별 할 일은 실제 전사·교정본에서 묶고 완료·취소에 인증·세대·버전을 적용합니다(T103)", async () => {
   const [, trip] = await call("POST", "/api/trips", {}), t = `/api/trips/${trip.code}`;
   const [, p] = await join(trip.code, "운전자", "ROW_1_LEFT");
@@ -2056,7 +2071,7 @@ test("장소별 할 일은 실제 전사·교정본에서 묶고 완료·취소�
   const [, stranger] = await join(another.code, "다른 여행", "ROW_1_LEFT");
   assert.equal((await call("GET", `${t}/todos`))[0], 401);
   assert.equal((await call("GET", `${t}/todos`, null, stranger.token))[0], 401);
-  assert.deepEqual((await call("GET", `${t}/todos`, null, p.token))[1], { generation: 1, method: "place-rules-v2", items: [], arrival: null });
+  assert.deepEqual((await call("GET", `${t}/todos`, null, p.token))[1], { generation: 1, method: "place-rules-v3", items: [], arrival: null });
   const texts = ["마트에서 우유 사자", "숙소에서는 아이 가방부터 꺼내야지", "마트에서 우유 사자", "화장실 가고 싶어"];
   const items = texts.map((text, i) => ({ seq: i + 1, at: trip.createdAt + i * 1000, text }));
   assert.equal((await call("POST", `${t}/utterances`, { device: "web-source", generation: 1, items }, p.token))[0], 200);
@@ -2085,7 +2100,7 @@ test("장소별 할 일은 실제 전사·교정본에서 묶고 완료·취소�
   await call("PATCH", `${t}/participants/${p.id}`, { consent: false });
   assert.equal((await list())[0], 403);
   await call("PATCH", `${t}/participants/${p.id}`, { consent: true }, p.token);
-  assert.deepEqual((await list())[1], { generation: 2, method: "place-rules-v2", items: [], arrival: null });
+  assert.deepEqual((await list())[1], { generation: 2, method: "place-rules-v3", items: [], arrival: null });
   assert.equal((await tripsDb().query("SELECT count(*)::int AS n FROM todo_states WHERE trip_code=$1", [trip.code])).rows[0].n, 0);
   assert.equal((await call("PATCH", path, body, p.token))[0], 409);
 });
@@ -2121,7 +2136,7 @@ test("도착 브리핑은 현재 여행 주차·최신 위치·장소 범위를 
   const result = (await briefing())[1];
   assert.equal(result.eligible, true); assert.equal(result.items.length, 1);
   assert.equal(result.items[0].place, "마트"); assert.equal(result.distanceMeters, 0);
-  assert.equal(result.method, "place-rules-v2");
+  assert.equal(result.method, "place-rules-v3");
   assert.deepEqual([result.items[0].category, result.items[0].items, result.items[0].requestedBy], ["buy", [{ name: "우유", qty: null }], []], "도착 브리핑 항목에도 행동 항목 칸이 있습니다(T141)");
   assert.equal(result.source, "browser");
   const arrival = async () => (await call("GET", `${t}/todos`, null, p.token))[1].arrival;

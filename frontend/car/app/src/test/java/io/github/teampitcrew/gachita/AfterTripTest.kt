@@ -47,6 +47,14 @@ class AfterTripTest {
         assertEquals(1f, phaseProgress(Phase.DONE), 0f)
     }
 
+    /** C32 표지 오른쪽 아래: 완성이면 시안 '▶ 0:32', 아직 만드는 장면이면 같은 자리에 진행(T166). */
+    @Test fun posterFootShowsLengthOrProgress() {
+        assertEquals("▶ 0:32", posterFoot(Phase.DONE, 1f, 32.4))
+        assertEquals("▶ 1:05", posterFoot(Phase.DONE, 1f, 65.0))
+        assertEquals("만드는 중 55%", posterFoot(Phase.RENDER, .5f, 0.0))
+        assertEquals("만드는 중 0%", posterFoot(Phase.WAIT, 0f, 0.0))
+    }
+
     /** 폰과 같은 추천 장면을 내는지: 폰 벡터(frontend/web/scene-picks-vectors.json, #396)가 있을 때만. */
     @Test fun samePicksAsPhone() {
         val f = File("../../web/scene-picks-vectors.json")

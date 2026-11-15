@@ -98,6 +98,18 @@ class Server(base: String, private val open: (URL) -> HttpURLConnection = { it.o
     fun completedShortJob(code: String, token: String, id: String): JSONObject = shortJob(code, token, id).also { if (it.optString("state") != "completed") throw ApiError(409, "영상이 취소되었거나 아직 완성되지 않았어요") }
     fun createShortJob(code: String, token: String, body: JSONObject): JSONObject = JSONObject(call("POST", "/api/trips/$code/short-generations", body, token)!!)
     fun cancelShortJob(code: String, token: String, id: String) { call("DELETE", "/api/trips/$code/short-generations/$id", null, token) }
+    /** 서버 쇼츠의 표지 그림(T166, PNG 800×1100). 일꾼이 아직 올리지 않았으면(404) null. 참가자 토큰은 머리말로만. */
+    fun shortThumbnail(code: String, token: String, id: String): ByteArray? {
+        val c = open(URL("$base/api/trips/$code/short-generations/$id/thumbnail"))
+        try {
+            c.connectTimeout = 5000; c.readTimeout = 10_000
+            c.setRequestProperty("Authorization", "Bearer $token")
+            val status = c.responseCode
+            if (status == 404) return null
+            if (status >= 400) throw ApiError(status, c.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty())
+            return c.inputStream.use { it.readBytes() }
+        } finally { c.disconnect() }
+    }
 
     /** 영상 만들기·콘텐츠 재생용 파일 받기. 장면 클립 주소는 shortClipAddress로 제한합니다. 끝까지 받지 못하면 파일을 지웁니다. */
     fun downloadShort(url: String, token: String, file: File, cancelled: () -> Boolean, connection: (HttpURLConnection?) -> Unit,

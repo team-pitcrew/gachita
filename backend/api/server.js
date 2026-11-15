@@ -1450,7 +1450,8 @@ async function handle(trip, { req, m, sub, id, leaf, b, query, profile }, client
   };
   const todos = async (all) => {
     const { rows } = await client.query("SELECT id, status, version FROM todo_states WHERE trip_code=$1 AND generation=$2", [trip.code, trip.generation ?? 1]);
-    return deriveTodos(all, rows);
+    // v3 문맥 규칙(T167)의 여행 장소: 차가 남긴 내비 경유지·도착·목적지 이름(출발지는 뺌)
+    return deriveTodos(all, rows, (trip.places ?? []).filter((p) => p.kind !== "start").map((p) => p.name));
   };
 
   if (sub === "todos" || sub === "arrival-briefing") {
