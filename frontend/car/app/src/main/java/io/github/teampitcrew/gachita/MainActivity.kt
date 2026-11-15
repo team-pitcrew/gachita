@@ -1646,7 +1646,7 @@ class MainActivity : ComponentActivity() {
             // 주행 중에는 C17에 지금까지 나온 줄까지만, 여행을 마치면 팩 전체. 실제 받아쓰기는 섞지 않는다
             val shown = if (t.status == "ended") pack.lines.size else Demo.heard(t.code)
             TranscriptScreen(t, remember(pack, t.createdAt, shown) { pack.transcript(t).take(shown) }, remember(pack, t.createdAt) { pack.tripPlaces(t) }, false, "", canPick = !carStatus.restricted,
-                onPick = { closeBoarding(); afterStart = AfterStep.SELECT; destination = Destination.SHORTS }, modifier = modifier, me = pack.driver)
+                onPick = { closeBoarding(); afterStart = AfterStep.SELECT; destination = Destination.SHORTS }, modifier = modifier, me = pack.people.firstOrNull { it.name == (onboarding.profile?.name ?: onboarding.name).trim() }?.id ?: pack.driver) // '(나)': 차에 로그인한 계정과 이름이 같은 사람, 없으면 운전석
             return
         }
         val scope = contentScope()

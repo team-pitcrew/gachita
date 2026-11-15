@@ -72,6 +72,8 @@ const val VOICE_SECONDS = 15
 const val MIN_VOICE_SECONDS = 5 // '녹음 완료'가 눌리는 최소 길이. 서버는 1~20초를 받는다
 // 시안 C06·C07 파형(2005:2647) 막대 64개의 높이(dp, 칸 높이 126). 녹음 중의 실제 소리 막대도 이 범위(가장 낮은 10 ~ 가장 높은 103.6)로 그린다.
 private val BARS = listOf(33.4f, 64f, 94.6f, 29.8f, 60.4f, 91f, 26.2f, 56.8f, 87.4f, 22.6f, 53.2f, 83.8f, 19f, 49.6f, 80.2f, 15.4f, 46f, 76.6f, 11.8f, 42.4f, 73f, 103.6f, 38.8f, 69.4f, 100f, 35.2f, 65.8f, 96.4f, 31.6f, 62.2f, 92.8f, 28f, 58.6f, 89.2f, 24.4f, 55f, 85.6f, 20.8f, 51.4f, 82f, 17.2f, 47.8f, 78.4f, 13.6f, 44.2f, 74.8f, 10f, 40.6f, 71.2f, 101.8f, 37f, 67.6f, 98.2f, 33.4f, 64f, 94.6f, 29.8f, 60.4f, 91f, 26.2f, 56.8f, 87.4f, 22.6f, 53.2f)
+/** 목소리 등록 시간축의 막대 수(본인 C06·C07, 구성원 C12·C42가 같은 파형을 쓴다). */
+internal val VOICE_BARS get() = BARS.size
 private const val BAR_MIN = 10f
 private const val BAR_MAX = 103.6f
 // 시안 C04의 캐릭터 순서(안경·힐링·캡모자·기본)와 나머지. 값은 서버 character(웹과 같은 이름).
@@ -425,7 +427,7 @@ private fun ArchivePreview() {
  * 녹음 전은 시안 모양(모두 accent). 녹음 중·뒤는 지난 칸·지금 칸이 실제 소리 크기(VoiceMeter), 앞으로 칸은 시안 높이의 line 막대.
  */
 @Composable
-private fun VoiceTimeline(rec: Boolean, heard: Double, levels: DoubleArray) {
+internal fun VoiceTimeline(rec: Boolean, heard: Double, levels: DoubleArray) {
     val c = MaterialTheme.colorScheme
     val s = minOf(heard, VOICE_SECONDS.toDouble())
     Surface(Modifier.fillMaxWidth(), CarShape.Card, color = c.surface) {

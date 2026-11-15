@@ -337,6 +337,8 @@ fun FamilyFlow(
     var voiceLevels by remember { mutableStateOf(DoubleArray(0)) } // 막대 칸마다 실제 들어온 소리 크기(VoiceMeter)
     var voiceState by remember { mutableStateOf("") } // recording · saving · saved · failed · blocked
     var voiceTry by remember { mutableStateOf(0) } // '다시 녹음'
+    var voiceFor by remember { mutableStateOf<String?>(null) } // '녹음 시작'을 누른 구성원(본인 등록 C06처럼 누르기 전에는 녹음하지 않는다)
+    var voiceRec by remember { mutableStateOf<VoiceRecorder?>(null) }
     var seats by remember { mutableStateOf<List<GroupMember>>(emptyList()) }
     var pick by remember { mutableStateOf<SeatPick?>(null) }
     var guestName by remember { mutableStateOf("") }
@@ -437,8 +439,8 @@ fun FamilyFlow(
     }
     // 아이 목소리 15초(C12·C42): 차 마이크로 15초(막대는 실제 소리 크기, VoiceMeter.kt) → Voice.kt embed → 값만
     // POST /groups/{id}/members/{profileId}/voice(보호자 토큰). 보호자 동의가 꺼진 아이는 녹음하지 않는다. 400(말소리 없음)은 다시 녹음.
-    val mic = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { if (it) voiceTry++ else { voiceState = "failed"; note = "마이크 권한이 없어 녹음할 수 없어요" } }
-    DisposableEffect(view, child, voiceTry) {
+    val mic = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { if (it) { voiceFor = child?.profileId; voiceTry++ } else { voiceState = "failed"; note = "마이크 권한이 없어 녹음할 수 없어요" } }
+    DisposableEffect(view, child, voiceTry, voiceFor) {
         var rec: VoiceRecorder? = null
         val kid = child
         val gid = family()?.id
@@ -446,10 +448,11 @@ fun FamilyFlow(
             voiceSec = 0; voiceLevels = DoubleArray(0)
             when {
                 !kid.consent -> { voiceState = "blocked"; note = "보호자 동의가 꺼져 있어 아이 목소리를 녹음하지 않아요" }
+                voiceFor != kid.profileId -> voiceState = "" // 본인 등록과 같은 절차: 읽을 문장을 보이고 '녹음 시작'을 기다린다
                 ctx.checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED -> mic.launch(Manifest.permission.RECORD_AUDIO)
                 else -> {
                     voiceState = "recording"
-                    val meter = VoiceMeter(CHILD_WAVE_BARS)
+                    val meter = VoiceMeter(VOICE_BARS)
                     rec = VoiceRecorder({ sec, level -> meter.add(sec, level); val snap = meter.snapshot(); scope.launch { voiceSec = minOf(15, sec.toInt()); voiceLevels = snap } }) { pcm, failed ->
                         scope.launch {
                             if (failed != null) { voiceState = "failed"; note = failed; return@launch }
@@ -463,11 +466,11 @@ fun FamilyFlow(
                             }.onSuccess { voiceState = "saved" }
                                 .onFailure { voiceState = "failed"; note = if (it is ApiError && it.status == 400) "말소리가 없어 등록할 수 없음" else failureText(it) }
                         }
-                    }.also { it.start() }
+                    }.also { it.start(); voiceRec = it }
                 }
             }
         }
-        onDispose { rec?.cancel() } // 화면을 떠나면 마이크를 놓고 모은 소리를 버린다
+        onDispose { rec?.cancel(); voiceRec = null } // 화면을 떠나면 마이크를 놓고 모은 소리를 버린다
     }
 
     val g = current()
@@ -509,8 +512,15 @@ fun FamilyFlow(
                 }
                 FamilyView.CHILD_VOICE -> when (voiceState) {
                     "saved", "blocked" -> CarButton("가족 그룹에 저장", Modifier.weight(1f), enabled = !busy) { act { load(); childName = ""; voiceState = ""; afterChildSaved() } }
-                    "failed" -> CarButton("다시 녹음", Modifier.weight(1f), enabled = !busy) { note = ""; voiceTry++ }
-                    else -> CarButton(if (voiceState == "saving") "등록 중" else "녹음 중", Modifier.weight(1f), enabled = false) {}
+                    "failed" -> CarButton("다시 녹음", Modifier.weight(1f), enabled = !busy) { note = ""; voiceFor = child?.profileId; voiceTry++ }
+                    "recording" -> { // 본인 등록 C07과 같게: 보조 440 + 큰 단추
+                        CarButton("다시 녹음", Modifier.width(440.dp), CarButtonKind.Secondary, enabled = !busy) { note = ""; voiceTry++ }
+                        CarButton("녹음 완료", Modifier.weight(1f), enabled = !busy && voiceSec >= MIN_VOICE_SECONDS) { voiceRec?.finishNow() }
+                    }
+                    "saving" -> CarButton("등록 중", Modifier.weight(1f), enabled = false) {}
+                    else -> CarButton("녹음 시작", Modifier.weight(1f), enabled = !busy && child != null) { // 본인 등록 C06과 같게
+                        if (ctx.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) { voiceFor = child?.profileId; voiceTry++ } else mic.launch(Manifest.permission.RECORD_AUDIO)
+                    }
                 }
                 FamilyView.GROUP -> {
                     CarButton("새 동승 그룹", Modifier.width(440.dp), CarButtonKind.Secondary, enabled = !busy) { guestName = ""; view = FamilyView.GUEST }
@@ -582,17 +592,14 @@ fun FamilyFlow(
                 val name = child?.name ?: childName.ifBlank { "아이" }
                 TitleBlock("${name}의 목소리 등록", childLine(name))
                 Body(side = side.takeIf { kidCount <= 1 }) {
-                    Surface(Modifier.fillMaxWidth(), CarShape.Card, color = c.surface) {
-                        Column(Modifier.padding(28.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
-                            Text("아이 목소리  $voiceSec / 15초", style = CarText.Label, color = c.onSurfaceVariant)
-                            // 지난 칸·지금 칸은 실제 들어온 소리 크기, 앞으로 칸은 낮은 막대(10).
-                            Waveform(voiceLevels, if (voiceState == "recording") minOf(CHILD_WAVE_BARS, voiceSec * CHILD_WAVE_BARS / 15) else if (voiceLevels.isEmpty()) -1 else CHILD_WAVE_BARS)
-                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text("00:${voiceSec.toString().padStart(2, '0')}", style = CarText.Label, color = c.onSurfaceVariant)
-                                Text("00:15", style = CarText.Label, color = c.onSurfaceVariant)
-                            }
-                        }
+                    // 본인 등록(C06·C07)과 같은 절차와 파형: 읽을 문장 → 녹음 시작 → 시간축 파형(오너 11/15)
+                    val rec = voiceState in setOf("recording", "saving", "saved")
+                    if (voiceState != "saved") {
+                        if (rec) InfoCard("“함께 타는 순간을 오래 기억하고 싶어.”", "평소 말하는 목소리로 이어 읽어 주세요.", soft = true)
+                        else InfoCard("“안녕, 나는 ${callName(name)}.", "우리 가족과 함께 여행하는 시간이 좋아. 오늘은 바다를 보러 가고, 맛있는 것도 먹을 거야.”", soft = true)
                     }
+                    VoiceTimeline(rec, if (voiceState == "recording") voiceSec.toDouble() else if (rec) VOICE_SECONDS.toDouble() else 0.0, voiceLevels)
+                    if (!rec) Text("등록한 목소리로 차량에서 발화자를 구분해요.", style = CarText.Label, color = c.onSurfaceVariant)
                     if (voiceState == "saved") {
                         val members = fam?.members.orEmpty()
                         InfoCard("${name}의 프로필 준비 완료", if (seatsAfterChild(members)) "우리 가족 ${members.size}명의 프로필이 모두 준비됐어요." else "다음 아이도 같은 방법으로 추가할 수 있어요.",
