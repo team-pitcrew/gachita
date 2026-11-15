@@ -115,7 +115,7 @@ internal fun TranscriptScreen(
                     is Said.Ask -> Bubble(item.line, trip.people.find { it.id == item.line.participantId }, me)
                 }
             }
-            if (lines.isEmpty() && !loading) Text("아직 대화 기록이 없어요. 모두 동의한 뒤 함께 타는 중에서 기록을 시작해 주세요.", color = c.onSurfaceVariant, style = CarText.Body)
+            if (lines.isEmpty() && !loading) Text("아직 받아 적은 말이 없어요", color = c.onSurfaceVariant, style = CarText.Body)
         }
         if (status.isNotEmpty()) Text(status, color = c.onSurfaceVariant, style = CarText.Label, maxLines = 2)
         // 하단 작업(시안 112 높이, accent)

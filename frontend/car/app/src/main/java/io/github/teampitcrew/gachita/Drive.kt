@@ -404,10 +404,11 @@ internal data class HeardRow(val meta: String, val text: String, val character: 
  * ink-2 · the words 28 on one line.
  */
 @Composable
-internal fun HeardCard(title: String, rows: List<HeardRow>, dim: Boolean, modifier: Modifier) {
+internal fun HeardCard(title: String, rows: List<HeardRow>, dim: Boolean, modifier: Modifier, onTitle: (() -> Unit)? = null) {
     val roomy = true
     val c = MaterialTheme.colorScheme
-    Surface(modifier, CarShape.Card, color = c.surface) {
+    // onTitle: 제목 자리의 안내(동의 대기)를 누르면 그 일을 하는 화면으로(시안에 새 단추를 두지 않고 카드 자체를 누른다)
+    Surface(modifier.then(if (onTitle != null) Modifier.clip(CarShape.Card).clickable(onClick = onTitle) else Modifier), CarShape.Card, color = c.surface) {
         Column(Modifier.then(if (dim) Modifier.alpha(0.6f) else Modifier)
             .padding(start = if (roomy) 46.dp else 24.dp, end = if (roomy) 46.dp else 24.dp, top = if (roomy) 46.dp else 16.dp, bottom = 16.dp),
             verticalArrangement = Arrangement.spacedBy(if (roomy) 14.dp else 12.dp)) {

@@ -150,7 +150,8 @@ class MainActivity : ComponentActivity() {
     private var transcriptPlaces by mutableStateOf(emptyList<TripPlace>()) // 기록본에 실린 여행 장소(A3). 없으면 머리에 시각만
     private var afterStart by mutableStateOf<AfterStep?>(null) // 여행 마무리·장면 고르기(C22–C32, F5). null이면 콘텐츠 기록은 쇼츠 화면
     private var wrapWhenParked = false // 주행 중 ■로 여행을 마쳤다 — 주차하면 C22
-    private var menuGroup by mutableStateOf<String?>(null) // 프로필 메뉴 그룹 칸의 이름(가족 그룹, GET /api/groups)
+    private var starting = false // 그룹 여행을 만드는 중(출발 두 번 막기)
+    private var menuFamily by mutableStateOf<CarGroup?>(null) // 프로필 메뉴 그룹 칸: 가족 그룹(이름·구성원), GET /api/groups
     private var autoFailed = "" // 자동 시작이 실패한 여행·세대·판. 서버 여행이 바뀔 때만 다시 시도해 실패가 되풀이되지 않게
     private var departing = false // 주행 알림(PATCH driving)이 통신 줄에 있음
     private var transcriptLoading by mutableStateOf(false)
@@ -346,7 +347,8 @@ class MainActivity : ComponentActivity() {
                             val family = !carStatus.restricted && signedIn && (familyOpen || t == null && !onboarding.showing)
                             when {
                                 // 로그아웃(2220:5864) → C01: 여행이 남아 있어도 계정이 없으면 시작 화면부터
-                                !signedIn && onboarding.showing -> OnboardingScreen(onboarding, driving = carStatus.restricted) { familyOpen = true }
+                                // 가입·로그인 직후(C02 → C03–C08)에도 여행 화면보다 시작 흐름이 먼저(흐름점검 53)
+                                onboarding.showing -> OnboardingScreen(onboarding, driving = carStatus.restricted) { familyOpen = true }
                                 // 프로필 메뉴의 '동승 그룹 변경'·'좌석 배정'도 가족 흐름(C16 groups·C16B)으로 연다. 주차 중에만
                                 family -> FamilyFlow(server, profileToken ?: account, onClose = { familyOpen = false },
                                     onStart = ::startGroupTrip, jump = familyJump, onJumped = { familyJump = null },
@@ -362,7 +364,7 @@ class MainActivity : ComponentActivity() {
                                 carStatus.restricted -> OnboardingScreen(onboarding, driving = true) {} // 주행 중 여행이 없으면 시작 화면(C01)만, 단추는 잠근다(T11)
                                 else -> OnboardingScreen(onboarding) { familyOpen = true } // C08 '가족 그룹 만들기' → 가족 흐름(F2)
                             }
-                            if (t == null) CarToast(error)
+                            CarToast(error) // 가족 흐름 '출발' 실패(옛 여행이 남은 차에서도 보이게, 흐름점검 59)
                             LaunchedEffect(error) { if (error.isNotEmpty()) { kotlinx.coroutines.delay(5_000); error = "" } }
                             if (profileMenu) MenuOverlay(t)
                             if (logoutAsk) LogoutConfirm(onCancel = { logoutAsk = false }, onLogout = { logoutAsk = false; familyOpen = false; logout() })
@@ -435,20 +437,29 @@ class MainActivity : ComponentActivity() {
     /** '이 가족과 출발'(C13): 그룹의 저장된 자리·각자 동의로 여행을 만들고, 이 차가 맡을 참가자 토큰(나와 내 아이)을 받는다(T133). */
     private fun startGroupTrip(groupId: String) {
         val token = profileToken ?: onboarding.token ?: return
+        if (starting) return // 빠르게 두 번 눌러도 여행은 하나(흐름점검 57)
+        // 끝나지 않은 여행이 있으면 새 여행으로 덮지 않고 그 여행의 C17로 돌아간다(앞 여행의 발화·클립·전체 음성이 끊기지 않게, 흐름점검 92)
+        if (tripAlive() && f4Mock == null) { familyOpen = false; closeBoarding(); afterStart = null; destination = Destination.RIDE; return }
+        starting = true
         val url = server
         s = s.copy(busy = true); error = ""
-        bg({
-            val api = Server(url)
-            val (code, mine) = api.groupTrip(token, groupId, TITLE)
-            api.trip(code)!! to mine
-        }) { r ->
-            r.onSuccess { (got, mine) ->
-                tokens = mine
-                prefs.edit().putString("tokens", Live.seal(this).line(JSONObject(mine).toString())).commit() // 다시 받을 수 없는 값이라 디스크에 쓰고 돌아온다
-                familyOpen = false
-                s = Session(gear = s.gear, ours = mine.keys).withTrip(keep(got))
+        car.destination { dest, _ ->
+            bg({
+                val api = Server(url)
+                val g = runCatching { api.groups(token) }.getOrNull()?.firstOrNull { it.id == groupId }
+                val (code, mine) = api.groupTrip(token, groupId, tripTitle(dest?.name, g, TITLE))
+                api.trip(code)!! to mine
+            }) { r ->
+                starting = false
+                r.onSuccess { (got, mine) ->
+                    newTrip() // 앞 여행의 화면 상태(콘텐츠 기록 탭·여행 마무리 단계·자막)를 지우고 C17에서 시작
+                    tokens = mine
+                    prefs.edit().putString("tokens", Live.seal(this).line(JSONObject(mine).toString())).commit() // 다시 받을 수 없는 값이라 디스크에 쓰고 돌아온다
+                    familyOpen = false; afterStart = null; wrapWhenParked = false
+                    s = Session(gear = s.gear, ours = mine.keys).withTrip(keep(got))
+                }
+                    .onFailure { s = s.copy(busy = false); error = "여행을 만들지 못했어요 · ${reason(it)}" }
             }
-                .onFailure { s = s.copy(busy = false); error = "여행을 만들지 못했어요 · ${reason(it)}" }
         }
     }
 
@@ -473,7 +484,12 @@ class MainActivity : ComponentActivity() {
             r.onSuccess { got ->
                 if (s.trip?.code != t.code) return@onSuccess // 그사이 삭제된 여행이나 새 여행: 늦게 온 응답으로 되살리지 않는다
                 val wasWithdrawing = s.offPending
+                val wasEnded = s.trip?.status == "ended"
                 s = (if (got == null) s.copy(online = true) else s.withTrip(keep(got))).polled()
+                // 폰(운전석)의 '여행 끝내기'로 끝난 여행: 차도 여행 마무리(C22)로. 주행 중이면 주차하는 대로(흐름점검 102)
+                if (!wasEnded && s.trip?.status == "ended" && f4Mock == null) {
+                    if (!carStatus.restricted) { closeBoarding(); afterStart = AfterStep.UPLOAD; destination = Destination.SHORTS } else wrapWhenParked = true
+                }
                 if (wasWithdrawing && !s.offPending) s = s.copy(note = "동의를 철회했어요. 다시 녹음하려면 각자의 동의가 필요해요")
                 consentSeenAt = System.currentTimeMillis()
                 upload(t, resync, prune) // 받은 여행의 동의 세대를 보관함에 반영한(철회면 글을 지운) 뒤에만 올린다
@@ -1173,12 +1189,13 @@ class MainActivity : ComponentActivity() {
 
     private fun invitePassengers() {
         val trip = s.trip ?: return
-        if (carStatus.restricted || s.gear != "P" || s.busy || !s.online || boarding.issuing || freeSeats(trip, carStatus.seats).isEmpty()) return
+        if (carStatus.restricted || s.gear != "P" || s.busy || !s.online || boarding.issuing) return // 빈자리가 없어도 구성원이 다시 연결해 동의한다
         val driver = trip.people.firstOrNull { it.seat == Seat.ROW_1_LEFT.name && it.id in tokens } ?: return
         revokeInvite()
         val request = BoardingRequest(BoardingInviteAttempt(boardingRequest, trip.code, server, driver.id), tokens.getValue(driver.id))
         boardingCall = request
-        boarding = BoardingState(BoardingPage.QR, issuing = true, joinedBefore = trip.people.map { it.id }.toSet())
+        boarding = BoardingState(BoardingPage.QR, issuing = true, joinedBefore = trip.people.map { it.id }.toSet(),
+            agreedBefore = trip.people.filter { it.consent }.map { it.id }.toSet())
         main.removeCallbacks(tick); main.post(tick)
         boardingIo.execute {
             val api = Server(request.attempt.server)
@@ -1308,6 +1325,8 @@ class MainActivity : ComponentActivity() {
         BackHandler(boarding.page != BoardingPage.HIDDEN) {
             if (boarding.page == BoardingPage.PEOPLE) closeBoarding() else openBoarding()
         }
+        // 기기 뒤로: 대화 기록·콘텐츠 기록에서는 함께 타는 중으로(앱이 뒤로 빠지지 않게, 흐름점검 61·83)
+        BackHandler(boarding.page == BoardingPage.HIDDEN && !profileMenu && destination != Destination.RIDE) { afterStart = null; destination = Destination.RIDE }
         val mockDriving = f4Mock in MOCK_DRIVING // mock: 주행 시연은 주행 중 모양, 시연 여행은 서버에 없어 머리 줄은 '연결됨'으로 둔다
         val parked = !carStatus.restricted && !mockDriving
         val scope = contentScope()
@@ -1377,13 +1396,14 @@ class MainActivity : ComponentActivity() {
      */
     @Composable
     private fun BoxScope.MenuOverlay(t: Trip?) {
-        val people = t?.people.orEmpty()
+        // 그룹 칸의 인원·얼굴: 여행 중이면 이 여행의 일행, 아니면 가족 그룹 구성원('👤0'이 되지 않게, 흐름점검 79)
+        val people = t?.people ?: menuFamily?.members.orEmpty().map { Person(it.profileId, it.name, it.seat.orEmpty(), it.consent, true, it.character) }
         val token = profileToken ?: account
         val url = server
         // 그룹 칸은 여행 제목이 아니라 그룹 이름(시안 '우리 가족'). 가족 그룹 이름을 한 번 읽는다
-        LaunchedEffect(token, url) { if (token != null && menuGroup == null) bg({ Server(url).groups(token) }) { r -> r.onSuccess { gs -> menuGroup = gs.firstOrNull { it.kind == "family" }?.name } } }
+        LaunchedEffect(token, url) { if (token != null && menuFamily == null) bg({ Server(url).groups(token) }) { r -> r.onSuccess { gs -> menuFamily = gs.firstOrNull { it.kind == "family" } } } }
         ProfileMenu(
-            name = onboarding.name.ifBlank { mePerson(people)?.name.orEmpty() }.ifBlank { "내 프로필" }, face = menuFace, group = menuGroup ?: "우리 가족",
+            name = onboarding.name.ifBlank { mePerson(people)?.name.orEmpty() }.ifBlank { "내 프로필" }, face = menuFace, group = menuFamily?.name ?: "우리 가족",
             people = people, driving = carStatus.restricted || f4Mock in MOCK_DRIVING,
             // 좁은 창 2200:5852 위 92·오른쪽 37, 넓은 창 2257:5780 위 120·오른쪽 45(= 머리 줄 아래, 여백 + 5)
             top = menuShell.padV + menuShell.head, end = menuShell.padH + 5.dp,
@@ -1407,7 +1427,9 @@ class MainActivity : ComponentActivity() {
      */
     private fun logout() {
         prefs.edit().remove("account").apply()
-        profileToken = null; menuGroup = null; familyOpen = false
+        profileToken = null; menuFamily = null; familyOpen = false
+        // 계정이 없는 차는 녹음하지 않는다(화면 밖에서 이어 녹음하지 않게, 흐름점검 52). 여행·동의는 계정과 따로라 그대로 둔다
+        if (s.recording) { s = s.copy(started = false); syncCapture() }
         onboarding.reopen()
     }
 
@@ -1465,10 +1487,12 @@ class MainActivity : ComponentActivity() {
         }
         LaunchedEffect(t.code, Live.recent.isEmpty()) { if (mock == null && Live.recent.isEmpty() && transcript.isEmpty()) loadTranscript() }
         // 제목: 받아 적는 중 '방금 받아 적은 말 N건'(C17), 멈춤·마친 여행 '멈추기 전 마지막 대화'(C17p)
+        // 동의 대기(주차 중): 제목 자리 안내를 누르면 참석 QR(C16 guestInvite '동승자 초대하기')로 — 각자 휴대폰에서 참여·동의한다(흐름점검 49·74·90)
+        val invite = mock == null && parked && !recording && !ended && !s.agreed && !s.offPending && t.people.any { !it.consent }
         val title = when {
             note.isNotBlank() -> note
             paused && recording || ended -> "멈추기 전 마지막 대화"
-            hold != null -> hold
+            hold != null -> if (invite) "$hold · 동승자 초대하기 ›" else hold
             else -> "방금 받아 적은 말 ${if (mock != null) 42 else Live.count}건"
         }
         RideLayout(
@@ -1476,7 +1500,8 @@ class MainActivity : ComponentActivity() {
                 when {
                     o != null -> OfferCard(o, m)
                     nearAsks != null -> NearCard(nearRows(nearAsks), m)
-                    else -> HeardCard(title, rows, dim = paused && (recording || ended), modifier = m)
+                    else -> HeardCard(title, rows, dim = paused && (recording || ended), modifier = m,
+                        onTitle = if (invite) ({ openBoarding(); invitePassengers() }) else null)
                 }
             },
             seats = { SeatCard(t.people, carStatus, if (mock != null) F4Mock.talking(mock) else talking?.let { u -> sp?.get(u.seq)?.who }) },
@@ -1508,9 +1533,11 @@ class MainActivity : ComponentActivity() {
      */
     private fun stopTrip() {
         if (f4Mock != null) { f4Mock = null; return } // mock: 시연은 화면만 넘긴다
-        val scope = contentScope() ?: return
+        val code = s.trip?.code ?: return
+        // 동의한 차 참가자 토큰이 없으면(차 계정 본인 미동의 등) 이 차의 다른 참가자 토큰으로. 그마저 없으면 까닭을 남긴다(흐름점검 103)
+        val token = contentScope()?.token ?: tokens.values.firstOrNull() ?: run { s = s.copy(note = "이 차에 연결된 참가자가 없어 여행을 마치지 못했어요"); return }
         val url = server
-        bg({ Server(url).endTrip(scope.code, scope.token) }) { r ->
+        bg({ Server(url).endTrip(code, token) }) { r ->
             r.onSuccess { got ->
                 s = s.withTrip(keep(got))
                 if (!carStatus.restricted) { closeBoarding(); afterStart = AfterStep.UPLOAD; destination = Destination.SHORTS } else wrapWhenParked = true
