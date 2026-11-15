@@ -21,6 +21,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -61,7 +62,7 @@ import java.util.Locale
 
 internal data class ContentPerson(val id: String, val name: String, val character: String, val seat: String? = null)
 internal data class ContentLine(val at: Long, val participantId: String?, val name: String?, val text: String)
-internal data class ContentPlace(val kind: String, val name: String, val at: Long)
+internal data class ContentPlace(val kind: String, val name: String, val at: Long, val lat: Double? = null, val lng: Double? = null)
 internal data class ContentItem(val id: String, val title: String, val seconds: Double, val at: Long, val from: Long?, val lat: Double?, val lng: Double?,
     val place: String?, val kind: String, val cast: List<ContentPerson>, val lines: List<ContentLine>, val url: String, val momentId: String? = null)
 
@@ -88,7 +89,7 @@ internal fun parseContentTrip(json: JSONObject): ContentTrip {
     val points = json.optJSONArray("route")?.let { a -> (0 until a.length()).map { a.getJSONArray(it) } }.orEmpty()
     val route = points.map { it.getDouble(0) to it.getDouble(1) }
     val routeAt = points.map { it.optLong(2, -1) }.takeIf { at -> at.none { it < 0 } }.orEmpty() // [lat, lng, at] — 시각이 없는 옛 서버면 비움
-    val places = json.optJSONArray("places").list { ContentPlace(it.optString("kind"), it.optString("name"), it.optLong("at")) }.filter { it.name.isNotBlank() }.sortedBy { it.at }
+    val places = json.optJSONArray("places").list { ContentPlace(it.optString("kind"), it.optString("name"), it.optLong("at"), it.num("lat"), it.num("lng")) }.filter { it.name.isNotBlank() }.sortedBy { it.at }
     return ContentTrip(json.getString("code"), json.optString("title"), json.optLong("createdAt"), members,
         places,
         route,
@@ -172,11 +173,26 @@ internal fun contentTwoLines(title: String): String {
 /** 표지 바탕의 tint 차례(시안 'Archive / galleryCar / 1·2·3' = 장면 1·2·3이 tint-2·tint-1·tint-3, 넷째부터 tint-4·5). 장면 순서로 돈다. */
 internal fun contentTint(index: Int): Int = listOf(1, 0, 2, 3, 4)[Math.floorMod(index, 5)]
 
-/** 지도 위 장면 액자 자리: 장면 좌표, 없으면 장면 시각에 가장 가까운 경로 점(경로 [lat, lng, at]). 둘 다 없으면 null. */
+/**
+ * 지도 위 장면 액자 자리: 장면 좌표, 없으면 장면 시각에 가장 가까운 경로 점(경로 [lat, lng, at]).
+ * 둘 다 없으면 출발→도착 직선 위 시각 비율 자리(추정 — 지도에는 점선으로 그린 그 선 위). 끝점도 없으면 null.
+ */
 internal fun contentSpot(item: ContentItem, trip: ContentTrip): Pair<Double, Double>? {
     if (item.lat != null && item.lng != null) return item.lat to item.lng
-    val i = trip.routeAt.indices.minByOrNull { kotlin.math.abs(trip.routeAt[it] - item.at) } ?: return null
-    return trip.route.getOrNull(i)
+    trip.routeAt.indices.minByOrNull { kotlin.math.abs(trip.routeAt[it] - item.at) }?.let { i -> trip.route.getOrNull(i)?.let { return it } }
+    val (a, b) = contentEnds(trip)
+    if (a == null) return null
+    if (b == null || b.at <= a.at) return a.lat!! to a.lng!!
+    val f = ((item.at - a.at).toDouble() / (b.at - a.at)).coerceIn(0.0, 1.0)
+    return a.lat!! + (b.lat!! - a.lat) * f to a.lng!! + (b.lng!! - a.lng) * f
+}
+
+/** 지도 끝점(장소 기록의 좌표): 좌표 있는 첫 출발(없으면 첫 장소)과 좌표 있는 마지막 도착·목적지·곧 도착(없으면 마지막 장소). 하나뿐이면 끝은 null. */
+internal fun contentEnds(trip: ContentTrip): Pair<ContentPlace?, ContentPlace?> {
+    val known = trip.places.filter { it.lat != null && it.lng != null }
+    val start = known.firstOrNull { it.kind == "start" } ?: known.firstOrNull()
+    val end = known.lastOrNull { it.kind in setOf("arrived", "destination", "approaching") } ?: known.lastOrNull()
+    return start to end?.takeIf { it !== start }
 }
 
 /**
@@ -192,9 +208,9 @@ internal val BUNDLED_MAPS = listOf(
     BundledMap(R.drawable.content_map_gangnam_bundang, "서울 강남–성남 분당 지도", 126.8619, 127.2739, 37.5549, 37.3259),
 )
 
-/** 기록 좌표의 절반 이상이 안에 드는 번들 지도. 없으면 null(도식 지도). */
+/** 기록 좌표의 절반 이상이 안에 드는 번들 지도. 좌표가 하나도 없으면 시연 지역(강남–분당) 지도 — 빈 판을 보이지 않는다. 좌표가 모두 밖이면 null(도식 지도). */
 internal fun contentBundledMap(points: List<Pair<Double, Double>>): BundledMap? =
-    if (points.isEmpty()) null else BUNDLED_MAPS.firstOrNull { m -> points.count { (lat, lng) -> m.has(lat, lng) } * 2 >= points.size }
+    if (points.isEmpty()) BUNDLED_MAPS.first { it.res == R.drawable.content_map_gangnam_bundang } else BUNDLED_MAPS.firstOrNull { m -> points.count { (lat, lng) -> m.has(lat, lng) } * 2 >= points.size }
 
 /** 번들 지도를 w×h 상자에 가운데 맞춰 채울 때(Crop, 시안 object-cover) 경위도 → 상자 좌표. */
 internal fun contentOsmProjector(m: BundledMap, w: Float, h: Float): (Pair<Double, Double>) -> Offset {
@@ -572,7 +588,9 @@ private fun MapBox(trip: ContentTrip, items: List<ContentItem>, modifier: Modifi
         val density = LocalDensity.current
         val w = with(density) { maxWidth.toPx() }; val h = with(density) { maxHeight.toPx() }
         val spots = items.mapNotNull { x -> contentSpot(x, trip)?.let { x to it } }
-        val points = trip.route + spots.map { it.second }
+        val (start, finish) = contentEnds(trip)
+        val ends = listOfNotNull(start, finish)
+        val points = trip.route + spots.map { it.second } + ends.map { it.lat!! to it.lng!! }
         val real = contentBundledMap(points)
         val project = if (real != null) contentOsmProjector(real, w, h) else contentProjector(points, w, h, with(density) { 120.dp.toPx() })
         if (real != null) Image(painterResource(real.res), real.label, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
@@ -582,7 +600,23 @@ private fun MapBox(trip: ContentTrip, items: List<ContentItem>, modifier: Modifi
                 drawPath(path, MapInk.Halo, style = Stroke(12.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
                 drawPath(path, MapInk.Route, style = Stroke(6.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
             }
+            if (project != null) {
+                // 받은 경로가 없으면 출발→도착을 점선(추정, 길을 지어내지 않음)으로 잇는다
+                if (trip.route.size < 2 && start != null && finish != null) {
+                    val p0 = project(start.lat!! to start.lng!!); val p1 = project(finish.lat!! to finish.lng!!)
+                    drawLine(MapInk.Halo, p0, p1, 10.dp.toPx(), StrokeCap.Round)
+                    drawLine(MapInk.Route, p0, p1, 5.dp.toPx(), StrokeCap.Round, PathEffect.dashPathEffect(floatArrayOf(14.dp.toPx(), 10.dp.toPx())))
+                }
+                ends.forEach { e -> val o = project(e.lat!! to e.lng!!); drawCircle(MapInk.Halo, 12.dp.toPx(), o); drawCircle(MapInk.Route, 8.dp.toPx(), o) }
+            }
         }
+        // 출발·도착 이름(시안 밖: 경로를 받지 못한 여행도 어디서 어디로 갔는지 보이게). 흰 바탕 작은 글
+        project?.let { pr -> ends.forEach { e ->
+            val o = pr(e.lat!! to e.lng!!)
+            Text(e.name, Modifier.offset(with(density) { (o.x + 14.dp.toPx()).coerceIn(0f, maxOf(0f, w - 160.dp.toPx())).toDp() }, with(density) { (o.y - 14.dp.toPx()).coerceIn(0f, maxOf(0f, h - 28.dp.toPx())).toDp() })
+                .background(MapInk.Halo, RoundedCornerShape(8.dp)).padding(horizontal = 8.dp, vertical = 2.dp),
+                style = TextStyle(fontFamily = Pretendard, fontSize = 18.sp, lineHeight = 24.sp), color = MapInk.Credit, maxLines = 1)
+        } }
         project?.let { pr -> spots.forEach { (x, spot) ->
             val o = pr(spot)
             val dx = with(density) { (o.x - 44.dp.toPx()).coerceIn(0f, (w - 88.dp.toPx()).coerceAtLeast(0f)).toDp() }

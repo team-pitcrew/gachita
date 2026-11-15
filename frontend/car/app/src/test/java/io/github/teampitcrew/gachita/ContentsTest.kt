@@ -95,7 +95,7 @@ class ContentsTest {
         // 신논현 → 정자 카페거리(시연 여행)는 강남–분당 지도
         assertEquals(R.drawable.content_map_gangnam_bundang, contentBundledMap(listOf(37.5045 to 127.0250, 37.4020 to 127.1080, 37.3648 to 127.1060))?.res)
         assertNull(contentBundledMap(listOf(35.1 to 129.0, 35.2 to 129.1))) // 부산은 도식
-        assertNull(contentBundledMap(emptyList()))
+        assertEquals(R.drawable.content_map_gangnam_bundang, contentBundledMap(emptyList())?.res) // 좌표가 없어도 빈 판이 아니라 시연 지역 지도
         val m = gangneung!!
         val p = contentOsmProjector(m, 1080f, 660f)
         val nw = p(m.north to m.west); val se = p(m.south to m.east)
@@ -114,5 +114,24 @@ class ContentsTest {
         assertNull(contentSpot(item, trip.copy(routeAt = emptyList())))
         // 시각 없는 옛 경로([lat, lng])는 시각 목록을 비운다.
         assertEquals(emptyList<Long>(), parseContentTrip(JSONObject("""{"code":"AB","route":[[37.7,128.8]],"contents":[]}""")).routeAt)
+    }
+
+    @Test
+    fun `without route the pin sits on the start-to-arrival line by time`() {
+        // 시연 조건: 경로(발화 좌표)가 없고 장소 기록만 좌표가 있음 — 신논현 출발 1000, 정자 카페거리 도착 9000
+        val trip = parseContentTrip(JSONObject("""{"code":"AB","title":"t","createdAt":1,"members":[],"route":[],"contents":[],"places":[
+            {"kind":"start","name":"신논현","at":1000,"lat":37.5045,"lng":127.0244},{"kind":"stop","name":"휴게소","at":3000},
+            {"kind":"arrived","name":"정자 카페거리","at":9000,"lat":37.3666,"lng":127.1078}]}"""))
+        val (a, b) = contentEnds(trip)
+        assertEquals("신논현", a?.name); assertEquals("정자 카페거리", b?.name)
+        val item = ContentItem("x", "제목", 30.0, 5000, null, null, null, null, "device", emptyList(), emptyList(), "/u")
+        val spot = contentSpot(item, trip)!!
+        assertEquals((37.5045 + 37.3666) / 2, spot.first, 1e-9); assertEquals((127.0244 + 127.1078) / 2, spot.second, 1e-9)
+        assertEquals(37.5045 to 127.0244, contentSpot(item.copy(at = 0), trip)) // 출발 전은 출발 자리
+        assertEquals(R.drawable.content_map_gangnam_bundang, contentBundledMap(listOf(a!!.lat!! to a.lng!!, b!!.lat!! to b.lng!!, spot))?.res)
+        // 좌표 있는 장소가 하나뿐이면 끝은 없고 액자는 그 자리
+        val one = trip.copy(places = trip.places.take(1))
+        assertNull(contentEnds(one).second); assertEquals(37.5045 to 127.0244, contentSpot(item, one))
+        assertNull(contentSpot(item, trip.copy(places = emptyList())))
     }
 }
