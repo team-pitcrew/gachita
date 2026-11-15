@@ -1009,6 +1009,7 @@ ARRIVAL_SEED = os.environ.get("DEMO_ARRIVAL_SEED", f"{DEST[2]} 도착하면 주�
 
 
 def seed_arrival_todo(code):
+    st["arrival_seeded"] = False  # 같은 폴더로 다시 돌릴 때 지난 값이 남지 않게
     tok = st.get("trip", {}).get("mom")
     if not ARRIVAL_SEED or not tok: return
     who = list(PEOPLE)[1]; p = trip_people(code)[who]
