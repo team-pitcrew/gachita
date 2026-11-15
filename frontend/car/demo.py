@@ -866,8 +866,8 @@ def after_steps(code):
         if FLOW == "pitcrew" and tap("구간 편집", "범위 편집", "구간 조정", timeout=3): note("scene.edit", note="구간 편집 화면(F5)")  # 앱에 생기면 누름
         step(28, ["선택한 2개 생성", "선택한 "], seeded=SEED); tap("선택한 2개 생성", "선택한 ", exact=False)
         step(29, ["콘텐츠를 만들어요", "콘텐츠 생성 중"])
-        # PITCREW 쇼츠는 일꾼(Agent SDK + 스킬)이 한 번에 한 편, 30초 장면 하나에 약 10분(백엔드 보고) → 기본 900초. 녹화에서는 그 대기를 뺀다
-        make_s = int(os.environ.get("DEMO_MAKE_S", "120" if FLOW == "family" else "900"))
+        # PITCREW 쇼츠는 일꾼(Agent SDK + 스킬)이 한 번에 한 편, 30초 장면 하나에 약 8–15분(그림 칸 하나 1.5–2분, 일꾼 세션) → 기본 1200초. 녹화에서는 그 대기를 뺀다
+        make_s = int(os.environ.get("DEMO_MAKE_S", "120" if FLOW == "family" else "1200"))
         if FLOW == "pitcrew": rec_pause(); wait(["순간이 완성됐어요"], make_s / SLOW); rec_part(4)  # 기다린 뒤 새 녹화 묶음(30–35)
         step(30, ["순간이 완성됐어요"], 15 if FLOW == "pitcrew" else make_s); made = tap("콘텐츠 기록 보기")
     else:
