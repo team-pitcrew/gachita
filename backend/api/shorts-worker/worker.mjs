@@ -37,13 +37,11 @@ export const SEAT_PLACE = {
 const UNKNOWN_SEAT = "등록 좌석 없음 — 운전석이 아닌 빈 자리";
 
 export function material({ plan, template }) {
-  // 성명(김민준)이면 대화에서 부르는 이름(민준)도 바꾼다: 프로필이 성명일 때 '민준님' 같은 호칭이 그대로 나가던 것을 막는다.
-  // ponytail: 한글 3~4자 이름의 성 한 글자를 뗀 것만 본다(복성·별명은 그대로 나갈 수 있음). 긴 것부터 바꾼다.
-  const names = plan.cast
-    .filter((c) => c.participantId && c.name)
-    .flatMap((c) => [[c.name, c.slot], ...(/^[가-힣]{3,4}$/.test(c.name) ? [[c.name.slice(1), c.slot]] : [])])
-    .sort((a, b) => b[0].length - a[0].length);
-  const scrub = (text) => names.reduce((t, [name, slot]) => t.replaceAll(name, `캐릭터${slot + 1}`), String(text ?? ""));
+  const scrub = (text) =>
+    plan.cast.reduce(
+      (t, c) => (c.participantId && c.name ? t.replaceAll(c.name, `캐릭터${c.slot + 1}`) : t),
+      String(text ?? ""),
+    );
   return {
     template: { name: template.name, direction: template.direction },
     title: scrub(plan.title),
