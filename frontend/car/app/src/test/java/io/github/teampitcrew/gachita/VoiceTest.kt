@@ -39,6 +39,12 @@ class VoiceTest {
         assertTrue(cases.size >= 6)
         for (c in cases) assertArrayEquals(c.getString("name"), vector(c), embed(pcmSamples(pcm(c)))!!, fixture.getDouble("tolerance"))
         assertNull("한 프레임보다 짧으면 값을 내지 않음", embed(FloatArray(400)))
+        assertNull("디지털 무음뿐이면 값을 내지 않음", embed(FloatArray(160_000)))
+        // 디지털 무음이 섞여도 같은 값(에뮬레이터 주입의 앞뒤·사이, 등록 때 원음 자리에 채운 무음). 서버 시험과 같은 신호
+        val voice = cases.take(3).flatMap { pcmSamples(pcm(it)).asList() }.toFloatArray()
+        val padded = FloatArray(voice.size + 32_000)
+        voice.copyInto(padded, 8_000, 0, 48_000); voice.copyInto(padded, 8_000 + 48_000 + 16_000, 48_000)
+        assertTrue(similarity(embed(padded)!!, embed(voice)!!) > 0.99)
         assertEquals(1.0, similarity(vector(cases[0]), vector(cases[0])), 1e-12)
     }
 
