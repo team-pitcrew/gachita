@@ -443,7 +443,7 @@ class MainActivity : ComponentActivity() {
         starting = true
         val url = server
         s = s.copy(busy = true); error = ""
-        car.destination { dest, _ ->
+        car.destinationNamed { dest -> // destination()은 이름을 늘 '목적지'로 채워 제목에 못 쓴다 — 내비 이름, 없으면 이 앱이 보낸 곳 이름
             bg({
                 val api = Server(url)
                 val g = runCatching { api.groups(token) }.getOrNull()?.firstOrNull { it.id == groupId }
