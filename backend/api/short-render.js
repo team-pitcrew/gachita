@@ -15,11 +15,29 @@ const time = (s) => {
   const c = Math.round(Math.max(0, s) * 100);
   return `${Math.floor(c / 360000)}:${String(Math.floor(c / 6000) % 60).padStart(2, "0")}:${String(Math.floor(c / 100) % 60).padStart(2, "0")}.${String(c % 100).padStart(2, "0")}`;
 };
+// 낱말 경계에서 줄을 바꾼다(한 줄 max자). 글자 수로만 자르면 '우|리도'처럼 낱말이 갈리고 '.'만 남은 자막이 생겼다(T158).
+// 한 낱말이 max보다 길 때만 그 낱말을 글자 수로 자른다(띄어쓰기 없는 긴 글도 모두 남김).
 function wrap(text, max = 20) {
-  const chars = [...safe(text)];
   const lines = [];
-  for (let i = 0; i < chars.length; i += max)
-    lines.push(chars.slice(i, i + max).join(""));
+  let line = "";
+  const size = (t) => [...t].length;
+  for (const word of safe(text).split(/\s+/).filter(Boolean)) {
+    let rest = [...word];
+    while (rest.length > max) {
+      if (line) lines.push(line);
+      lines.push(rest.slice(0, max).join(""));
+      rest = rest.slice(max);
+      line = "";
+    }
+    const w = rest.join("");
+    if (!w) continue;
+    if (line && size(line) + 1 + size(w) > max) {
+      lines.push(line);
+      line = "";
+    }
+    line = line ? `${line} ${w}` : w;
+  }
+  if (line) lines.push(line);
   return lines;
 }
 export function subtitles(plan) {
