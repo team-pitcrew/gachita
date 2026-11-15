@@ -866,7 +866,10 @@ def after_steps(code):
         if FLOW == "pitcrew" and tap("구간 편집", "범위 편집", "구간 조정", timeout=3): note("scene.edit", note="구간 편집 화면(F5)")  # 앱에 생기면 누름
         step(28, ["선택한 2개 생성", "선택한 "], seeded=SEED); tap("선택한 2개 생성", "선택한 ", exact=False)
         step(29, ["콘텐츠를 만들어요", "콘텐츠 생성 중"])
-        step(30, ["순간이 완성됐어요"], int(os.environ.get("DEMO_MAKE_S", "120" if FLOW == "family" else "300"))); made = tap("콘텐츠 기록 보기")  # PITCREW는 일꾼(Agent SDK) 쇼츠라 넉넉히
+        # PITCREW 쇼츠는 일꾼(Agent SDK + 스킬)이 한 번에 한 편, 30초 장면 하나에 약 10분(백엔드 보고) → 기본 900초. 녹화에서는 그 대기를 뺀다
+        make_s = int(os.environ.get("DEMO_MAKE_S", "120" if FLOW == "family" else "900"))
+        if FLOW == "pitcrew": rec_pause(); wait(["순간이 완성됐어요"], make_s / SLOW); rec_part(4)  # 기다린 뒤 새 녹화 묶음(30–35)
+        step(30, ["순간이 완성됐어요"], 15 if FLOW == "pitcrew" else make_s); made = tap("콘텐츠 기록 보기")
     else:
         for n in (28, 29, 30): mark(n, "없음", "27 장면 고르기 화면이 없어 건너뜀 — " + flow_state("F5"))
     if not VOICE and st.get("trip", {}).get("mom"):  # 시드: 콘텐츠 기록 31–35의 장면·영상을 서버에 넣는다
@@ -970,8 +973,15 @@ def drive_pitcrew(code):
 
 
 # ---- 녹화(선택) --------------------------------------------------------------------------------------------
+def rec_pause():
+    """녹화를 잠시 멈춘다(쇼츠 일꾼 대기처럼 화면이 그대로인 긴 구간을 녹화에서 뺌). 다음 rec_part가 새 묶음을 시작한다."""
+    global part
+    if os.environ.get("DEMO_RECORD") == "1" and part: subprocess.run(ADB + ["emu", "screenrecord", "stop"], capture_output=True); time.sleep(2)
+    part = 0
+
+
 def rec_part(n):
-    """DEMO_RECORD=1이면 묶음(1 전체 01–16, 2 좁은 창 17–24, 3 전체 25–35)마다 에뮬레이터 화면을 녹화한다. 넣은 대사는 나중에 섞는다."""
+    """DEMO_RECORD=1이면 묶음(1 전체 01–16, 2 좁은 창 17–24, 3 전체 25–29, PITCREW는 4 = 쇼츠 생성 뒤 30–35)마다 에뮬레이터 화면을 녹화한다. 넣은 대사는 나중에 섞는다."""
     global part
     if os.environ.get("DEMO_RECORD") == "1":
         if part: subprocess.run(ADB + ["emu", "screenrecord", "stop"], capture_output=True); time.sleep(2)
@@ -982,7 +992,7 @@ def rec_part(n):
 
 def mix():
     """녹화 묶음에 넣은 대사를 넣은 시각대로 섞는다(에뮬레이터 녹화에는 가상 마이크 소리가 들어가지 않음). 표시: 에뮬레이터 실행 화면 · 합성 음성."""
-    for n in (1, 2, 3):
+    for n in (1, 2, 3, 4):
         src = OUT / f"part-{n}.webm"; t0 = next((c["at_ms"] for c in clips if c["part"] == n and c["clip"] is None), None)
         if not src.exists() or t0 is None: continue
         mine = [c for c in clips if c["part"] == n and c["clip"]]
