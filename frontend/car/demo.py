@@ -1119,7 +1119,7 @@ def main(apk):
             if only(8): from_family = pitcrew_group_steps()
             else:
                 for role, who in zip(CREW[1:], list(PEOPLE)[1:]): ready_profile(role, who)
-                pitcrew_group(); open_family(); tap("함께 타는 중", timeout=6); tap(GROUP, timeout=8); from_family = tap("이 그룹과 출발", timeout=10)
+                pitcrew_group(); open_groups(); tap(GROUP, timeout=8); from_family = tap("이 그룹과 출발", timeout=10)
         elif only(8): from_family = family_steps()
         else: seed(); open_family(); from_family = tap("이 가족과 출발", timeout=10)
         code = start_trip(from_family)  # 여행이 없으면 17–35는 '실행 안 함'으로 남는다
