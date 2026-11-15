@@ -18,7 +18,7 @@ import { asrReady, contextOf, retranscribe, toWav, transcribe } from "./provider
 import { clipStore } from "./providers/clips.js";
 import { googleIdentity, googlePublicConfig } from "./providers/google.js";
 import { cues, momentSpan, suggest } from "./scenes.js";
-import { checkVector, DIMS, embed, EMBEDDER, matchThreshold, similarity, wavMono } from "./providers/voice.js";
+import { checkVector, DIMS, embed, EMBEDDER, matchFloor, matchMargin, matchThreshold, similarity, wavMono } from "./providers/voice.js";
 import { accountConsents, accounts, CONSENT_VERSION } from "./accounts.js";
 import { groupForTrip, groupInvites, groups, shareGroup } from "./groups.js";
 import { rideLinks, redeemRideLink } from "./ride-links.js";
@@ -667,7 +667,7 @@ async function voicePrints(code, req) {
       const here = new Set(after.participants.filter((p) => p.consent).map((p) => p.id));
       const items = prints.filter(([p, v]) => here.has(p.id) && v.vector.length === DIMS)
         .map(([p, v]) => ({ participantId: p.id, vector: v.vector, seconds: v.seconds, source: v.source }));
-      return [200, { generation: after.generation ?? 1, embedder: EMBEDDER, dims: DIMS, threshold: matchThreshold(), items }, "private, no-store"];
+      return [200, { generation: after.generation ?? 1, embedder: EMBEDDER, dims: DIMS, threshold: matchThreshold(), floor: matchFloor(), margin: matchMargin(), items }, "private, no-store"];
     }
     trip = after;
   }
