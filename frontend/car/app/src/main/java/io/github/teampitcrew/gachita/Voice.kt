@@ -168,6 +168,8 @@ class VoicePrints(dir: File, val trip: String, private val seal: Seal, now: Long
     private val file = File(dir, "voiceprints-$trip.json")
     private var generation = 0
     private var threshold = 2.0 // 받은 값이 없으면 아무도 맞지 않는다
+    private var floor = Double.NaN // 여백 규칙의 바닥과 여백(서버가 줄 때만, identify)
+    private var margin = Double.NaN
     private var prints = emptyMap<String, DoubleArray>()
     /** 사본을 받은 시각(파일에 함께 둔다). 0이면 다음 대조 전에 다시 받는다(등록함, 탑승자가 바뀜). */
     @Volatile var fetchedAt = 0L
@@ -192,6 +194,7 @@ class VoicePrints(dir: File, val trip: String, private val seal: Seal, now: Long
             p.getString("participantId") to p.getJSONArray("vector").let { v -> DoubleArray(v.length()) { i -> v.getDouble(i) } }
         }.filterValues { it.size == VOICE_DIMS }
         generation = o.getInt("generation"); threshold = o.getDouble("threshold")
+        floor = o.optDouble("floor"); margin = o.optDouble("margin") // 옛 서버는 주지 않는다(NaN)
         savedAt = o.optLong("fetchedAt"); fetchedAt = savedAt
     }
 
@@ -242,7 +245,7 @@ class VoicePrints(dir: File, val trip: String, private val seal: Seal, now: Long
     }
 
     private fun clear() {
-        prints = emptyMap(); generation = 0; threshold = 2.0; fetchedAt = 0; savedAt = 0
+        prints = emptyMap(); generation = 0; threshold = 2.0; floor = Double.NaN; margin = Double.NaN; fetchedAt = 0; savedAt = 0
         file.delete()
     }
 
@@ -252,6 +255,23 @@ class VoicePrints(dir: File, val trip: String, private val seal: Seal, now: Long
         for (id in candidates) { val s = similarity(v, prints[id] ?: continue); if (s > bestSim) { bestSim = s; best = id } }
         if (best == null) return Speaker(null, 0.0)
         return Speaker(best.takeIf { bestSim >= threshold }, Math.round(bestSim * 1000) / 1000.0)
+    }
+
+    /**
+     * 발화 한 건의 말한 사람을 정한다. all은 녹음에 동의한 탑승자, row는 발화의 좌석 줄에 앉은 사람(줄을 모르면 null).
+     * 여백 규칙(서버가 floor·margin을 줄 때): 절대 기준 하나로는 실제 목소리가 잘 갈리지 않는다 — 유사도가 전체로 낮은 소리는 누구와도
+     * 기준을 못 넘고, 높은 소리는 두 사람이 함께 넘어 틀린다. 그래서 후보 전체에서 가장 비슷한 사람이 바닥 이상이고 **두 번째 사람보다
+     * 여백 이상 앞설 때만** 붙인다. 그 사람이 발화의 줄과 다른 줄에 앉았으면 붙이지 않는다(줄로 먼저 좁히면 다른 줄의 비슷한 사람을
+     * 못 봐서 틀림이 늘었다). 후보가 한 명뿐이면 견줄 사람이 없으니 절대 기준을 쓴다.
+     * 실제 차 안 목소리 조각 118개(11/15): 절대 기준 0.85 → 맞힘 55·틀림 14·모름 49, 이 규칙(0.6·0.06) → 69·12·37.
+     * 옛 서버(값을 주지 않음)에서는 전처럼 줄에서 먼저 찾고 없으면 모두에서 절대 기준으로 찾는다.
+     */
+    @Synchronized fun identify(v: DoubleArray, all: Collection<String>, row: Collection<String>?): Speaker {
+        if (floor.isNaN() || margin.isNaN()) return row?.let { match(v, it) }?.takeIf { it.who != null } ?: match(v, all)
+        val sims = all.mapNotNull { id -> prints[id]?.let { id to similarity(v, it) } }.sortedByDescending { it.second }
+        val (best, sim) = sims.firstOrNull() ?: return Speaker(null, 0.0)
+        val sure = if (sims.size == 1) sim >= threshold else sim >= floor && sim - sims[1].second >= margin
+        return Speaker(best.takeIf { sure && (row == null || it in row) }, Math.round(sim * 1000) / 1000.0)
     }
 }
 
