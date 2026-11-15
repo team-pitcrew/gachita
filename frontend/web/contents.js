@@ -262,17 +262,9 @@ export function createContents({ getProfileToken, getTrip, getParticipant, getPa
   function player(s) {
     const { item, trip } = find(s, s.selected) ?? {};
     if (!item) return [];
-    const t = s.video?.currentTime ?? 0;
-    const said = lineAt(item, t);
-    const total = Number(item.seconds) || s.video?.duration || 0;
-    const seek = h("input", { type: "range", min: 0, max: String(Math.max(total, 1)), step: "0.1", value: String(t), className: "content-seek", "aria-label": "재생 위치",
-      oninput: (e) => { if (s.video) { s.video.currentTime = Number(e.target.value); paint(s); } } });
-    const play = button(`${s.video && !s.video.paused ? "❚❚" : "▶"}  ${clock(t)} / ${clock(total)}`, () => toggle(s), "content-play");
-    play.setAttribute("aria-label", s.video && !s.video.paused ? "일시정지" : "재생");
-    // 시안 P37: 큰 표지(250×444) 하나 — 표지의 큰 글이 지금 들리는 말. 아래에 재생·위치(시안에는 글만 있는 조작).
+    // 고르면 실제 영상이 그 자리에서 바로 재생된다(브라우저 기본 조작). 받는 동안에는 표지를 보인다.
     return [h("section", { className: "content-player" },
-      poster(item, trip, all(s).findIndex((x) => x.item.id === item.id), { tall: true, line: said ? said.text : item.title }),
-      play, seek,
+      s.loading || !s.video.src ? poster(item, trip, all(s).findIndex((x) => x.item.id === item.id), { tall: true }) : s.video,
       s.loading && h("p", { className: "meta", role: "status" }, "영상을 불러오고 있어요"),
       s.error && h("p", { className: "meta", role: "status" }, s.error))];
   }
@@ -319,10 +311,6 @@ export function createContents({ getProfileToken, getTrip, getParticipant, getPa
     } catch (e) { if (state === s && e.name !== "AbortError") s.error = e.message; }
     finally { if (state === s) { s.loading = false; paint(s); } }
   }
-  function toggle(s) {
-    if (!s.video.src) return load(s).then(() => state === s && s.video.src && s.video.play().catch((e) => toast(e.message)));
-    if (s.video.paused) s.video.play().catch((e) => toast(e.message)); else s.video.pause();
-  }
   async function saveFile(s) {
     if (s.busy) return;
     s.busy = true; s.error = ""; paint(s);
@@ -343,7 +331,8 @@ export function createContents({ getProfileToken, getTrip, getParticipant, getPa
   function open(s, id) {
     if (s.selected !== id) { s.video.pause(); s.video.removeAttribute("src"); s.file = null; s.fileId = null; s.saved = false; s.error = ""; }
     go(s, "player", { selected: id });
-    if (!s.video.src) load(s);
+    // ponytail: 파일을 받은 뒤 재생하므로 iOS가 자동 재생을 막으면 영상의 재생 단추를 한 번 누른다
+    if (!s.video.src) load(s).then(() => state === s && s.video.src && s.video.play().catch(() => {}));
   }
 
   // ---- 그리기 ----
@@ -391,8 +380,7 @@ export function createContents({ getProfileToken, getTrip, getParticipant, getPa
 
   async function show({ view = "gallery", selected } = {}) {
     close();
-    const video = h("video", { playsInline: true, preload: "auto", hidden: true });
-    // 영상은 화면에 붙이지 않은 video로 재생한다(시안은 영상 대신 캐릭터와 자막 줄을 그린다). 소리는 그대로 난다.
+    const video = h("video", { playsInline: true, preload: "auto", controls: true, className: "content-video" });
     const s = state = { view, selected, trips: [], ready: false, controller: new AbortController(), video };
     // 연 채로 있는 동안 차·폰이 새 영상을 마치면 보이게 다시 읽는다(목록 화면에서만, 15초마다, 화면을 볼 때만).
     const again = setInterval(async () => {
@@ -402,7 +390,6 @@ export function createContents({ getProfileToken, getTrip, getParticipant, getPa
     }, 15000);
     s.controller.signal.addEventListener("abort", () => clearInterval(again));
     s.request = (method, path, body, token) => api(method, path, body, token, s.controller.signal);
-    video.ontimeupdate = video.onplay = video.onpause = video.onended = () => paint(s);
     paint(s);
     dialog.showModal();
     try { s.trips = await read(s); }

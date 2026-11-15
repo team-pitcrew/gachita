@@ -21,7 +21,7 @@ export function transcriptLines(data) {
     .sort((a, b) => a.at - b.at || a.seq - b.seq || String(a.device).localeCompare(String(b.device)));
 }
 
-export function createConversations({ getTrip, getParticipant, getToken, request, avatar, isOnline = () => true, onHome, onShorts, onScenes, onRide = () => {} }) {
+export function createConversations({ getTrip, getParticipant, getToken, request, avatar, isOnline = () => true, onHome, onShorts, onScenes, onRide = () => {}, listRooms, onPick = () => {} }) {
   const dialog = h("dialog", { className: "conversations-dialog", "aria-labelledby": "conversation-title" });
   document.body.append(dialog);
   let state = null;
@@ -50,7 +50,7 @@ export function createConversations({ getTrip, getParticipant, getToken, request
   };
   // 화면을 다시 그릴 때마다 부른다: 권한이 바뀌면 닫고, 연결 상태가 바뀌면 머리를 다시 그린다.
   const sync = () => {
-    if (!state) return;
+    if (!state || state.rooms) return;
     if (!state.unavailable) { const reason = invalid(state); if (reason) return unavailable(reason); }
     if (isOnline() !== state.online) paint(state);
   };
@@ -76,8 +76,41 @@ export function createConversations({ getTrip, getParticipant, getToken, request
     );
   };
 
+  // 대화 목록(단체 채팅방 목록처럼): 계정으로 탄 여행마다 한 줄 — 얼굴, 여행 이름, 일행, 마지막으로 남은 말, 날짜. 누르면 그 여행의 대화가 열린다.
+  function paintRooms(s) {
+    const day = (at) => Number.isFinite(at) ? new Date(at).toLocaleDateString("ko-KR", { month: "numeric", day: "numeric" }) : "";
+    const row = (t) => {
+      const last = (t.contents ?? []).flatMap((c) => c.lines ?? []).filter((l) => l?.text).sort((a, b) => a.at - b.at).at(-1);
+      const b = button("", () => { close(); onPick(t.code); }, "room-row");
+      b.append(h("span", { className: "message-face", "aria-hidden": "true" }, avatar(t.members?.[0] ?? {})),
+        h("span", { className: "room-text" }, h("strong", {}, t.title || "함께 탄 여행", h("small", {}, ` ${t.members?.length ?? ""}`)),
+          h("small", {}, last?.text || (t.members ?? []).map((m) => m.name).filter(Boolean).join(", ") || "대화 보기")),
+        h("span", { className: "message-time" }, day(t.startedAt ?? t.createdAt ?? t.places?.[0]?.at)));
+      return b;
+    };
+    const items = (s.items ?? []).filter((t) => t.me?.consent !== false);
+    dialog.replaceChildren(
+      appBar({ online: isOnline(), onHome: () => { close(); onHome?.(); } }),
+      journeyTabs("talk", { ride: () => { close(); onRide(); }, contents: () => { close(); onShorts(); } }),
+      h("div", { className: "conversation-body" },
+        h("div", { className: "conversation-title" }, h("h1", { id: "conversation-title" }, "대화 기록")),
+        s.error ? bodyStatus(s.error) : !s.ready ? bodyStatus("대화 목록을 불러오고 있어요") : !items.length ? bodyStatus("아직 대화 기록이 없어요. 차에 연결해 함께 타면 여기에 모여요.")
+          : h("div", { className: "room-list" }, items.map(row))),
+      h("footer", { className: "conversation-bottom" }),
+    );
+  }
+  async function rooms() {
+    close();
+    const s = state = { rooms: true };
+    paintRooms(s);
+    dialog.showModal();
+    try { s.items = await listRooms(); s.ready = true; } catch { s.error = "대화 목록을 불러오지 못했어요."; }
+    if (state === s) paintRooms(s);
+  }
+
   function paint(s) {
     if (state !== s) return;
+    if (s.rooms) return paintRooms(s);
     s.online = isOnline();
     const previous = dialog.querySelector(".conversation-body");
     const oldTop = previous?.scrollTop ?? 0;
@@ -97,7 +130,7 @@ export function createConversations({ getTrip, getParticipant, getToken, request
     const range = !s.unavailable && s.lines.length ? dateRange(s.lines[0].at, s.lines.at(-1).at) : "";
     // 제목은 여행 이름, 부제는 날짜와 시간(시안 P44 '강릉 가족 여행 / 11월 14일 09:20–10:28'). 탭이 이미 '대화 기록'이다.
     const scroll = h("div", { className: "conversation-body" },
-      h("div", { className: "conversation-title" }, h("h1", { id: "conversation-title" }, s.title || "대화 기록"), range && h("p", { className: "sub" }, range.replace(" / ", "  "))),
+      h("div", { className: "conversation-title" }, listRooms && button("‹ 대화 목록", rooms, "plain room-back"), h("h1", { id: "conversation-title" }, s.title || "대화 기록"), range && h("p", { className: "sub" }, range.replace(" / ", "  "))),
       body,
     );
     const ready = !s.unavailable && s.ready && s.lines.length > 0;
@@ -166,5 +199,5 @@ export function createConversations({ getTrip, getParticipant, getToken, request
     if (reason) unavailable(reason);
     else { s.loading = false; load(s); }
   }
-  return { open, close, sync };
+  return { open, close, sync, rooms };
 }

@@ -113,6 +113,8 @@ const records = createRecords({
 });
 
 const conversations = createConversations({
+  listRooms: async () => (await mine("GET", "/profiles/me/trips")).items,
+  onPick: (pick) => openConversations(pick),
   getTrip: () => trip,
   getParticipant: () => trip?.participants.find((p) => p.id === myId()),
   getToken: myToken,
@@ -155,7 +157,7 @@ const scenes = createScenePicker({ getTrip: () => trip, getParticipant: () => tr
 const afterTrip = createAfterTrip({ getTrip: () => trip, getParticipant: () => trip?.participants.find((p) => p.id === myId()), getToken: myToken,
   request: (method, path, body, signal) => asMe(trip.participants.find((p) => p.id === myId()), (c, token) => api(method, `/trips/${c}${path}`, body, token, signal)),
   remember: store, avatar: (person) => personAvatar(person), getPlaces: () => places.items(), isOnline: () => !offline, onHome: () => { location.hash = ""; },
-  onTalk: () => conversations.open(), onRide: () => goRide(),
+  onTalk: () => openConversations(), onRide: () => goRide(),
   // P32 장면 칸·'콘텐츠 기록 보기'는 그 장면의 재생 화면(P37)으로: after-trip은 'asset:여행코드:영상id'를 넘긴다
   onContents: (picked) => contents.open(picked ? { view: "player", selected: picked.split(":")[2] } : undefined) });
 // 여행을 끝낸 직후(종료)에 이 폰에서 한 번, 그리고 멈춘 만들기가 남아 있으면 이 페이지에서 한 번 마무리 화면을 연다.
@@ -297,6 +299,7 @@ function logout() {
 // 기록에 동의한 가장 최근 여행(끝난 여행 포함, GET /profiles/me/trips). 이 폰이 들어간 적 없는 여행이면 그 여행을 열어 refresh의 claim()이
 // 프로필로 다시 참가해 이 폰의 참가자 토큰을 받고, render가 대화 기록을 연다(conversationPending). 동의하지 않은 여행은 서버가 읽기를 막는다.
 async function openConversations(pick) {
+  if (!pick && store("profile")) return conversations.rooms(); // 탭으로 들어오면 채팅방 목록부터(로그인한 계정의 여행들)
   if (trip && trip.code === code() && (!pick || pick === trip.code)) return conversations.open();
   const target = pick || store("trip") || active?.code || (store("profile") && (await mine("GET", "/profiles/me/trips").catch(() => null))?.items.find((t) => t.me?.consent)?.code);
   if (!target) return toast("아직 대화 기록이 없어요. 차에 연결해 함께 타면 여기에 모여요.");
@@ -815,7 +818,7 @@ function tripView(me) {
 
   return [
     appBar({ online: !offline, onHome: () => { location.hash = ""; } }),
-    journeyTabs("ride", { talk: () => conversations.open(), contents: openContents }),
+    journeyTabs("ride", { talk: () => openConversations(), contents: openContents }),
     h("div", { className: "ride-title" }, h("h1", {}, heading.title), heading.sub && h("p", { className: "sub" }, heading.sub)),
     ...now,
     // 시안(P17–P21) 밖의 기능 카드(할 일·챙길 부탁·내 자리·쇼츠·자막·공유)는 뺐다(11/15 오너 '시안에 맞춰 수렴'). 남긴 것은
