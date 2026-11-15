@@ -718,8 +718,7 @@ class MainActivity : ComponentActivity() {
             box.ackedAfter(first.seq - 21).filter { it.seq < first.seq }.forEach { p -> sp[p.seq]?.who?.let { known += p to it } }
         } }
         val voiceless = ArrayList<Utterance>()
-        val store = Strong.prints(this)
-        val strong = if (store.size > 0) Wespeaker.of(this) else null // 이 차에서 등록한 사람이 없으면 모델을 올리지 않는다
+        val strong = if (vp.hasStrong) Wespeaker.of(this) else null // 둘째 값을 가진 탑승자가 없으면 모델을 올리지 않는다
         for (u in items) {
             val to = u.endedAt - 500 // 최종 결과는 말 끝 0.6초 뒤에 온다(11/13): 끝의 무음을 덜어 목소리만
             val from = maxOf(u.startedAt + LEAD_MS / 2, to - 9_900) // 서버 대조와 같은 구간(0.5~10초)
@@ -729,8 +728,8 @@ class MainActivity : ComponentActivity() {
             val v = samples?.let { embed(it) }
             if (v == null) { voiceless += u; continue } // 원음이 없거나 짧음: 아래에서 앞뒤 말의 사람을 물려받는다
             val row = u.seatZone?.let { z -> seated.filter { it.seat.startsWith("ROW_${z + 1}_") } }
-            // 등록한 탑승자 모두가 이 차의 강한 화자 값을 가졌으면 그것으로(StrongVoice.kt), 아니면 1차 임베더의 여백 규칙으로(Voice.kt)
-            val r = strong?.embed(samples!!)?.let { w -> store.identify(w, seated.associate { it.id to it.profileId }, row?.map(Person::id), vp.ids()) }
+            // 등록한 탑승자 모두가 둘째 값(강한 화자 값)을 가졌으면 그것으로(StrongVoice.kt), 아니면 1차 임베더의 여백 규칙으로(Voice.kt)
+            val r = strong?.embed(samples!!)?.let { w -> vp.identifyStrong(w, seated.map(Person::id), row?.map(Person::id)) }
                 ?: vp.identify(v, seated.map(Person::id), row?.map(Person::id))
             sp.set(u.seq, r.copy(sent = r.who == null)); sp.done(u.seq) // 찾았으면 서버에 남길 때까지 sent = false
             r.who?.let { known += u to it }
@@ -1479,7 +1478,6 @@ class MainActivity : ComponentActivity() {
      */
     private fun logout() {
         prefs.edit().remove("account").apply()
-        Strong.clear(this) // 이 차에 둔 강한 화자 값(등록한 사람들의 목소리 값)도 지운다
         profileToken = null; menuFamily = null; familyOpen = false
         // 계정이 없는 차는 녹음하지 않는다(화면 밖에서 이어 녹음하지 않게, 흐름점검 52). 여행·동의는 계정과 따로라 그대로 둔다
         if (s.recording) { s = s.copy(started = false); syncCapture() }

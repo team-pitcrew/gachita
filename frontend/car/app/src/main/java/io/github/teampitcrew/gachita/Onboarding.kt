@@ -1,5 +1,6 @@
 package io.github.teampitcrew.gachita
 
+import android.util.Log
 import android.Manifest
 import android.content.ActivityNotFoundException
 import android.view.View
@@ -241,7 +242,9 @@ class Onboarding(private val context: Context, private val prefs: SharedPreferen
         work({
             val v = embed(pcmSamples(bytes)) ?: throw ApiError(400, "소리가 너무 짧아요")
             AccountApi(url).voice(t, v, bytes.size / 2.0 / RATE)
-            AccountApi(url).me(t).also { p -> runCatching { Strong.enroll(context, p.id, bytes) } } // 강한 화자 값은 차 안에만(StrongVoice.kt)
+            // 둘째 값(강한 화자 값)도 올린다(StrongVoice.kt). 못 만들거나 못 올려도 등록은 된 것이다(1차 값으로 대조)
+            runCatching { strongBody(context, bytes)?.let { AccountApi(url).strongVoice(t, it) } }.onFailure { Log.w("GachitaVoice", "둘째 값을 올리지 못함", it) }
+            AccountApi(url).me(t)
         }) { p -> pcm = null; adopt(p); go(OnboardStep.DONE) }
     }
 

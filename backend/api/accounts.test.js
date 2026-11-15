@@ -7,6 +7,7 @@ import { migrate, server } from "./server.js";
 import { hashPassword, verifyPassword } from "./accounts.js";
 import { endStores, profilesDb } from "./db.js";
 import { captureLog } from "./log.js";
+import { withVoice } from "./voice-fixture.js";
 
 let base, adminUrl, names;
 const logs = [];
@@ -174,11 +175,13 @@ test("계정 동의(지금 판)는 본인이 자기 토큰으로 들어가는 �
   const consented = async (email, version) => {
     const { data } = await signup(email);
     await call("PATCH", "/profiles/me", { consent: true, ...(version ? { consentVersion: version } : {}) }, data.token);
+    await withVoice(base, data.token); // 프로필로 참가하려면 목소리 먼저(T173)
     return data;
   };
   const yes = await consented("join-yes@example.com");
   const old = await consented("join-old@example.com", "2026-01-01");
   const no = (await signup("join-no@example.com")).data;
+  await withVoice(base, no.token);
   const trip = (await call("POST", "/trips", {})).data;
   const t = `/trips/${trip.code}`;
   // (가) 프로필 토큰으로 참가: 동의를 보내지 않으면 계정 동의, 다른 판이거나 꺼져 있으면 지금처럼 기본값(false)

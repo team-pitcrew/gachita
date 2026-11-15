@@ -2,6 +2,7 @@
 // 확장 API 여정. 기존 e2e.mjs는 그대로 두고, T38/T43/T75/T76 배포를 확인할 때 별도로 실행한다.
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 
@@ -58,6 +59,9 @@ export async function runJourney(base, { asr, storage, clip = wave(210, 25), wai
     await step("프로필·여행·서로 다른 참가자", async () => {
       await request("GET", "/healthz", 200);
       for (const name of ["E2E 지우", "E2E 하늘"]) profiles.push((await request("POST", "/api/profiles", 201, { body: { name, consentDefault: false } })).json);
+      // 프로필은 목소리까지 등록해야 여행에 들어간다(T173). 값은 서버·차가 함께 쓰는 시험 벡터의 첫 값
+      const voice = { embedder: "logmel-pitch-1", vector: JSON.parse(readFileSync(new URL("../../backend/api/voice-vectors.json", import.meta.url), "utf8")).cases[0].vector, seconds: 7 };
+      for (const p of profiles) await request("POST", "/api/profiles/me/voice", 200, { token: p.token, body: voice });
       trip = (await request("POST", "/api/trips", 201, { body: { title: "E2E 확장 여정" } })).json;
       t = `/api/trips/${trip.code}`; generation = trip.generation;
       for (let i = 0; i < 2; i++) riders.push((await request("POST", `${t}/participants`, 201, { token: profiles[i].token, body: { seat: i ? "ROW_2_LEFT" : "ROW_1_LEFT", consent: false } })).json);

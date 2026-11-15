@@ -1,7 +1,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { tripsDb } from "./db.js";
 import { withActiveProfile } from "./profile-lifecycle.js";
-import { accountConsents } from "./accounts.js";
+import { accountConsents, requireVoice } from "./accounts.js";
 
 const fail = (status, error) => { throw { status, error }; };
 const hash = (value) => createHash("sha256").update(value).digest();
@@ -71,6 +71,7 @@ export async function boardingInvites(req, path, body, { profileOf, withTrip, se
     const again = trip.participants.find((p) => p.profileId === me.id);
     if (!again && trip.participants.some((p) => p.seat === body.seat)) fail(409, "다른 사람이 먼저 선택한 자리예요");
     const token = randomBytes(32).toString("base64url");
+    if (!again) requireVoice(me); // 차량 QR로 새로 들어오려면 목소리 먼저(T173). 이미 참가자면 그대로
     const participant = again ?? { id: randomUUID().slice(0, 8), profileId: me.id, name: me.name, character: me.character, seat: body.seat, consent: accountConsents(me) };
     if (again) participant.olderTokenHashes = [...(participant.olderTokenHashes ?? []), participant.tokenHash].slice(-4);
     else {

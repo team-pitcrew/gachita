@@ -1,4 +1,4 @@
-import { api, h, SEAT } from './shared.js';
+import { api, h, needsVoice, SEAT } from './shared.js';
 import { appBar, meEnd } from './ride.js';
 import { characterImage } from './short-film.js';
 
@@ -16,7 +16,7 @@ export function boardingToken(url, origin) {
 // 받침에 맞춘 '와/과'(한글이 아니면 '와').
 const withJosa = (word) => { const c = word.charCodeAt(word.length - 1) - 0xac00; return `${word}${c >= 0 && c < 11172 && c % 28 ? '과' : '와'}`; };
 
-export function createBoarding({ getProfile, getToken, consentText, consentOffMessage, onLinked, onDecision, onLeave, onProfile }) {
+export function createBoarding({ getProfile, getToken, consentText, consentOffMessage, onLinked, onDecision, onLeave, onProfile, onVoice = () => {} }) {
   let state;
   const PENDING = 'gachita:boarding-pending';
   const savedJoin = () => { try { const saved = JSON.parse(sessionStorage.getItem(PENDING) || 'null'); return saved?.profileId === getProfile()?.id ? saved : null; } catch { return null; } };
@@ -83,6 +83,8 @@ export function createBoarding({ getProfile, getToken, consentText, consentOffMe
       onLinked(joined); s.joined = joined; sessionStorage.removeItem(PENDING); forgetInvite();
       await connection(s);
     } catch (e) {
+      // 목소리 없이 차량 QR로 새로 들어오려 하면(409 voice_required, T173) 이 창을 닫고 목소리 등록(P06)으로. QR은 등록한 뒤 다시 스캔한다.
+      if (valid(s) && needsVoice(e)) { sessionStorage.removeItem(PENDING); close(true); return onVoice(); }
       if (valid(s)) {
         if (e.status === 409) { s.recovering = false; sessionStorage.removeItem(PENDING); }
         s.error = e.status === 409 ? '그 자리에 다른 동승자가 먼저 참여했거나 여행 상태가 바뀌었어요. 빈자리를 다시 확인해 주세요.' : e.status === 410 ? 'QR이 만료됐어요. 차의 새 QR을 스캔하면 이미 참여한 자리를 다시 연결할 수 있어요.' : e.message;
