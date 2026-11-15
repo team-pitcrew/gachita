@@ -12,7 +12,7 @@ export const templates = [
     minSeconds: 15,
     maxSeconds: 45,
     direction:
-      "Warm hand-drawn 2D sitcom frames inside a modern car. Confident thick charcoal outlines, the supplied white rounded characters exactly as drawn, soft cel shading, warm mint upholstery, sunset through the windows. Dashboard-facing group shot with every supplied character in their seat; clear eye-lines and readable expressions. No photorealism, no human faces.",
+      "Warm hand-drawn 2D sitcom frames inside a modern car. Confident thick charcoal outlines, the supplied white rounded characters exactly as drawn, soft cel shading, warm mint upholstery, sunset through the windows. Camera at the dashboard looking back at the passengers; every supplied character stays in their registered seat in every frame; clear eye-lines and readable expressions. No photorealism, no human faces.",
   },
   {
     id: "travel-postcard-v1",

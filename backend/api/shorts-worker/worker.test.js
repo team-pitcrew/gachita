@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { material, kenBurns, inside, make, prompt, MOTIONS, cover, coverPrompt, api } from "./worker.mjs";
+import { material, kenBurns, inside, make, prompt, MOTIONS, cover, coverPrompt, api, seatBlock, SEAT_PLACE } from "./worker.mjs";
 
 const job = {
   template: { name: "차 안 대화극", direction: "Warm hand-drawn 2D sitcom frames. no human faces." },
@@ -101,4 +101,22 @@ test("서버가 잠깐 다시 뜨는 동안의 연결 실패는 다시 보내고
   calls = 0;
   await assert.rejects(api("/claim", { method: "POST", tries: 1, fetcher: async () => { calls++; throw new TypeError("fetch failed"); }, wait: 0 }), (e) => e.code === "api_unreachable");
   assert.equal(calls, 1);
+});
+
+test("그룹 프로필의 좌석을 모든 칸의 지침에 고정합니다(운전석·좌우·운전대)", () => {
+  const four = { ...job, plan: { ...job.plan, cast: [
+    { slot: 0, participantId: "p1", name: "서준", character: "cap", seat: "ROW_2_LEFT" },
+    { slot: 1, participantId: "p2", name: "아빠", character: "glasses", seat: "ROW_1_LEFT" },
+    { slot: 2, participantId: "p3", name: "엄마", character: "healing", seat: "ROW_1_RIGHT" },
+    { slot: 3, participantId: null, name: "화자 미확인", character: "basic-small", seat: null },
+  ] } };
+  const m = material(four);
+  assert.deepEqual(m.cast.map((c) => c.seat), [SEAT_PLACE.ROW_2_LEFT, SEAT_PLACE.ROW_1_LEFT, SEAT_PLACE.ROW_1_RIGHT, "등록 좌석 없음 — 운전석이 아닌 빈 자리"]);
+  const block = seatBlock(m.cast);
+  assert.match(block, /캐릭터2\(cast-2\.png\): 운전석 — 앞줄, 그림 오른쪽/);
+  assert.match(block, /운전대는 운전석 캐릭터만/);
+  assert.match(prompt(4, m.cast), /좌석표 줄을 칸마다 그대로 다시 적음/);
+  assert.match(prompt(4, m.cast), /캐릭터1\(cast-1\.png\): 운전석 뒷자리 — 뒷줄, 그림 오른쪽/);
+  assert.doesNotMatch(JSON.stringify(m), /서준|아빠|엄마/, "좌석을 넣어도 이름은 보내지 않습니다");
+  assert.match(seatBlock(material(job).cast), /운전석은 비워 두고 아무도 운전대를 잡지 않습니다/, "운전석 주인이 출연하지 않으면 아무도 운전하지 않음");
 });
