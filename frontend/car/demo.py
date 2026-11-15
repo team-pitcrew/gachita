@@ -2,9 +2,10 @@
 차 에뮬레이터 + 폰 역할(API) + 로컬 서버로 순서대로 띄우고, 단계마다 화면 글로 떴는지 보고 캡처한다.
 
 기본 흐름은 D# 실흐름 PITCREW(T159, 오너 11/15): 어른 4명 그룹 'PITCREW', 출발 신논현 → 목적지 정자 카페거리, 실제 차 안 영상에서
-뽑은 목소리(사람마다 등록 클립 + 주행 대사 두 덩이)를 넣고, 여행 뒤 '우리 어디로 갈까요?' 구간을 골라 쇼츠로 만든다.
-  - 입력(저장소 밖, 개인 목소리): DEMO_INPUTS 폴더의 enroll-화자1..4.wav(14초 이하)·drive-a.wav·drive-b.wav(16 kHz 2채널, 왼쪽 = 앞줄),
-    timeline.json(선택). 이름은 DEMO_NAMES(화자1..4 순서, 기본 지환,민준,지민,상현), 좌석은 DEMO_SEATS(같은 순서). 화자1이 차에서 가입한다.
+뽑은 목소리(사람마다 등록 클립 + 주행 대화 30초 구간 넷)를 넣고, 여행 뒤 '우리 어디로 갈까요?' 구간을 골라 쇼츠로 만든다.
+  - 입력(저장소 밖, 개인 목소리, 16 kHz 2채널, 왼쪽 = 앞줄): DEMO_INPUTS = 화자 식별 세션의 derived 폴더
+    (enroll/enroll-speakerN-front|rear.wav, inputs/talk-route|cafe|where|arrive.wav). 점검용 옛 배치(enroll-화자N.wav·drive-a/b.wav)도 읽는다.
+    이름은 DEMO_NAMES(기본 지환,민준,지민,상현), 좌석은 DEMO_SEATS, 각 이름이 몇 번 화자인지는 DEMO_SPEAKERS(기본 1,2,3,4). 첫 사람이 차에서 가입한다.
   - 순정 내비는 GPS를 옮겨도 판교에 머문다(11/13·11/15 확인) — 출발 '신논현'은 서버 장소 기록(지도 선)으로만 보이고, 내비는 목적지
     '정자 카페거리'로 안내한다. 도착(250 m 판정)은 주차 직전에 GPS를 목적지로 옮겨(adb emu geo fix) 만든다.
   - 옛 가족 흐름(아이 둘·하나로마트·강릉 숙소·시드)은 DEMO_FLOW=family.
@@ -574,7 +575,9 @@ def onboarding():
         tap("녹음 시작"); time.sleep(1)
         t = threading.Thread(target=lambda: said.append(say("enroll-아빠")), daemon=True); t.start()
         time.sleep(9)  # 시안 C07은 '녹음 중 10 / 15초' — 누른 직후엔 화면이 아직 C06이라 놓쳤다(run3). 약 10초 뒤에 찍는다
-        step(6, ["목소리를 듣고 있어요", "녹음 중"], 4)  # 15초 녹음 중에만 있는 글
+        e2e.shot("06-15초녹음")  # 파형이 움직이는 동안 화면 트리(uiautomator)를 못 읽을 때가 있어(gap1) 글을 읽기 전에 먼저 찍는다
+        if not step(6, ["목소리를 듣고 있어요", "녹음 중"], 3):  # 15초 녹음 중에만 있는 글
+            results[6].update(result="보임", shot="06-15초녹음.png", note="화면 트리를 못 읽어(파형이 움직임) 캡처만 남김 — 캡처로 확인")
         t.join(30)  # 다 넣은 뒤에 멈춘다(녹음이 닫힌 채 넣으면 에뮬레이터가 멈춘 적이 있음)
         wait(["15 / 15초"], 25); tap("녹음 완료")  # 15초 녹음이 닫힐 때까지(시안 C07 글 '녹음 중  15 / 15초')
     step(7, ["목소리 등록 완료"], 20)
@@ -637,7 +640,8 @@ def group_screens():
 # 스크립트가 누르거나 기다리는 차 화면 글. --check가 앱 소스에 그대로 있는지 본다(에뮬레이터 없이 화면 글이 바뀐 것을 잡음).
 TAPS = {"Onboarding.kt": ["가치타 시작하기", "가입하고 계속", "동의하고 계속", "목소리 등록하기", "녹음 시작", "녹음 완료", "가족 그룹 만들기"],
         "Family.kt": ["새 동승 그룹", "그룹 이름", "그룹 저장", "계속", "아이 프로필 만들기", "참여 확인", "동의하고 목소리 등록", "가족 그룹에 저장", "이 가족과 출발", "내 동승 그룹", "+ 새 그룹 만들기", "초대 코드, QR 또는 링크로 함께할 사람을 초대해 주세요.", "동승자 초대하기", "초대 코드와 링크를 만들었어요", "그룹으로 돌아가기", "전체 그룹 보기", "우리 가족 보기", "오늘 함께 탈 가족과 좌석을 확인해 주세요.", "좌석 배정", "좌석을 누르고 앉을 사람을 선택해 주세요.", "빈자리", "누가 앉나요?", "좌석 배정으로", "그룹으로", "이 그룹과 출발", "우리 가족 추가", "코드 복사", "까지 준비됐어요"],
-        "Drive.kt": ["일시정지", "녹화 재개", "방금 받아 적은 말", "멈추기 전 마지막 대화", "정차하면 자세히"],
+        "Drive.kt": ["일시정지", "녹화 재개", "방금 받아 적은 말", "멈추기 전 마지막 대화", "정차하면 자세히", "프로필 메뉴 열기"],
+        "MainActivity.kt": ['"우리 가족"'],  # 프로필 메뉴의 그룹 칸(가족 그룹이 없을 때 이름)
         "Arrival.kt": ["먼저 할 일과 살 것을 모았어요", "잊지 말고 살 것", "계속"],
         "AfterTrip.kt": ["오늘의 주행을 기록했어요", "남기고 싶은 순간을 골라요", "장면을 선택해 주세요", "콘텐츠를 만들어요", "콘텐츠 생성 중", "순간이 완성됐어요", "콘텐츠 기록 보기"],
         "Contents.kt": ["차량과 폰에서 이어보기", "갤러리", "타임라인", "지도", "주행 지도 자세히 보기 →", "이 장면 보기", "영상 내보내기", "영상이 준비됐어요", "콘텐츠 기록으로"]}
@@ -890,22 +894,34 @@ def after_steps(code):
 
 
 # ---- D# 실흐름 PITCREW 단계(T159) -------------------------------------------------------------------------------
-# DEMO_INPUTS의 실제 녹음 → OUT/inputs 이름(옛 흐름 함수가 쓰는 이름: 화자1 = enroll-아빠, 화자2 = enroll-엄마)
-INPUT_NAMES = {"enroll-화자1": "enroll-아빠", "enroll-화자2": "enroll-엄마", "enroll-화자3": "enroll-화자3", "enroll-화자4": "enroll-화자4",
-               "drive-a": "drive-a", "drive-b": "drive-b"}
+# 단계별로 넣을 차 안 대화. 화자 식별 세션의 배치(talk-*: 영상 IMG_6626의 30초 구간)가 있으면 그것, 없으면 옛 이름(drive-a/b, 점검용 합성)
+TALKS_REAL = {17: ["talk-route"], 19: ["talk-cafe", "talk-where"], 20: ["talk-arrive"]}  # 경로 95–125초 / 카페 516–546·'우리 어디로 갈까요?' 578–608 / 도착 1258–1284
+TALKS_OLD = {17: ["drive-a"], 19: ["drive-b"], 20: []}
+
+
+def talks():
+    return TALKS_REAL if (OUT / "inputs" / "talk-route.wav").exists() else TALKS_OLD
 
 
 def pitcrew_inputs():
-    """DEMO_INPUTS의 실제 녹음을 OUT/inputs로 옮겨 둔다(같은 이름의 .json이 없으면 supplied = 실제 녹음). 없거나 형식이 틀리면 멈춘다 — 합성음으로 대신하지 않는다."""
+    """DEMO_INPUTS의 실제 녹음을 OUT/inputs로 옮겨 둔다(같은 이름의 .json이 없으면 supplied = 실제 녹음). 없거나 형식이 틀리면 멈춘다 — 합성음으로 대신하지 않는다.
+    두 배치를 읽는다. 화자 식별 세션의 배치: enroll/enroll-speakerN-front|rear.wav(앞줄이면 front, 뒷줄이면 rear) + inputs/talk-*.wav.
+    옛 배치(점검용 합성): enroll-화자N.wav + drive-a/b.wav. NAMES[i]가 몇 번 화자인지는 DEMO_SPEAKERS(기본 1,2,3,4 — 오너가 들어 보고 정함)."""
     src, dst = pathlib.Path(os.environ.get("DEMO_INPUTS", OUT / "inputs")), OUT / "inputs"
     dst.mkdir(parents=True, exist_ok=True)
-    missing = [f"{a}.wav" for a in INPUT_NAMES if not (src / f"{a}.wav").exists()]
-    if missing: raise SystemExit(f"{src}에 실제 녹음이 없습니다: {', '.join(missing)} (화자 식별 세션이 영상에서 뽑음)")
-    for a, b in INPUT_NAMES.items():
-        if (src / f"{a}.wav").resolve() != (dst / f"{b}.wav").resolve(): shutil.copyfile(src / f"{a}.wav", dst / f"{b}.wav")
+    spk = (os.environ.get("DEMO_SPEAKERS") or "1,2,3,4").split(",")
+    if (src / "enroll").is_dir():
+        pairs = [(src / "enroll" / f"enroll-speaker{n}-{'front' if seat.startswith('ROW_1') else 'rear'}.wav", f"enroll-{who}") for n, seat, who in zip(spk, SEATS, PEOPLE)]
+        pairs += [(src / "inputs" / f"{t}.wav", t) for ts in TALKS_REAL.values() for t in ts]
+    else:
+        pairs = [(src / f"enroll-화자{n}.wav", f"enroll-{who}") for n, who in zip(spk, PEOPLE)] + [(src / f"{t}.wav", t) for t in ("drive-a", "drive-b")]
+    missing = [str(a) for a, _ in pairs if not a.exists()]
+    if missing: raise SystemExit(f"실제 녹음이 없습니다: {', '.join(missing)} (화자 식별 세션이 영상에서 뽑음)")
+    for a, b in pairs:
+        if a.resolve() != (dst / f"{b}.wav").resolve(): shutil.copyfile(a, dst / f"{b}.wav")
         (dst / f"{b}.json").unlink(missing_ok=True); supplied(b)  # 16 kHz 2채널 16비트인지(아니면 SystemExit)
     if (src / "timeline.json").exists() and src != dst: shutil.copyfile(src / "timeline.json", dst / "timeline.json")
-    note("pitcrew.inputs", src=str(src), names=NAMES)
+    note("pitcrew.inputs", src=str(src), names=NAMES, speakers=spk, files=[a.name for a, _ in pairs])
 
 
 def pitcrew_group(code=None):
@@ -926,11 +942,19 @@ def pitcrew_group(code=None):
     return g
 
 
+def open_groups():
+    """전체 그룹 목록(C16 groups). 가족 그룹이 없으면 가족 화면이 '우리 가족 추가'(C09, 위 탭 없음)로 열리므로
+    머리 줄 프로필 메뉴의 그룹 칸('동승 그룹 변경' = 앱의 onGroup)으로 간다. 가족 그룹이 있으면 위 탭 '함께 타는 중'."""
+    open_family()
+    if tap("함께 타는 중", timeout=4): return True
+    return tap("프로필 메뉴 열기", timeout=4) and tap("우리 가족", timeout=4)  # 메뉴의 그룹 칸 글은 가족 그룹 이름(없으면 '우리 가족')
+
+
 def pitcrew_group_steps():
     """08–16(F2): 차에서 새 동승 그룹 'PITCREW'(C15) → 초대 화면(코드·QR·링크) → 화자2–4가 그 코드로 폰처럼 참여(API) → 좌석 → '이 그룹과 출발'.
     차 화면이 없으면 같은 것을 API로(대체)."""
     for role, who in zip(CREW[1:], list(PEOPLE)[1:]): ready_profile(role, who)  # 폰 가입·동의·이름·목소리 값(등록 클립)
-    open_family(); tap("함께 타는 중", timeout=6)  # 주차 중 '함께 타는 중' = 전체 그룹 목록(C16 groups)
+    open_groups()
     code = None
     if tap("+ 새 그룹 만들기", timeout=8) and wait(["새 동승 그룹", "그룹 이름"], 10):
         typed = type_into(0, GROUP)  # 영문이라 adb input text로 들어감
@@ -943,14 +967,14 @@ def pitcrew_group_steps():
         for n in (8, 9): mark(n, "없음", "전체 그룹 목록의 '+ 새 그룹 만들기'가 없음 — " + flow_state("F2"))
     pitcrew_group(code)
     mark("Q1", "폰 역할", f"{', '.join(NAMES[1:])}의 폰 요청(GET·POST /group-invites)을 스크립트가 보냄(초대 코드 {code or '새로 만듦'})")
-    open_family(); tap("함께 타는 중", timeout=6); tap(GROUP, timeout=8)  # 그룹 화면은 열 때 읽는다 → 목록 → PITCREW 상세
+    open_groups(); tap(GROUP, timeout=8)  # 그룹 화면은 열 때 읽는다 → 목록 → PITCREW 상세(C16A)
     step(10, [NAMES[3], "이 그룹과 출발"], note_="4명·좌석(좌석은 API로 맞춤)")
     step(16, ["이 그룹과 출발"])
     return tap("이 그룹과 출발", timeout=8)
 
 
 def drive_pitcrew(code):
-    """17–21 순정 내비 옆 좁은 창(F3·F4): 실제 차 안 대화 두 덩이(drive-a → 일시정지·재개 → drive-b, '우리 어디로 갈까요?' 포함),
+    """17–21 순정 내비 옆 좁은 창(F3·F4): 실제 차 안 대화(talks(): 경로 → 일시정지·재개 → 카페·'우리 어디로 갈까요?' → 도착 전에 도착 대화),
     목적지 정자 카페거리 도착 전·도착 브리핑. 출발 '신논현'은 서버 장소 기록으로(내비는 판교에 머묾)."""
     rec_part(2)
     tok = st.get("trip", {}).get("mom")
@@ -958,14 +982,16 @@ def drive_pitcrew(code):
     launch("--es", "route", f"{DEST[0]},{DEST[1]},{DEST[2]}")  # 남은 시간 기준은 앱 기본 300초 — 판교에서 약 8분이라 아직 '도착 전'이 아님
     if not split(): note("split.fail")
     drive(); tap("함께 타는 중", timeout=3); wait(["방금 받아 적은 말"], 15)
-    say("drive-a")
-    step(17, ["방금 받아 적은 말"], 30, "실제 차 안 대화 앞 덩이(drive-a)")
+    T = talks()
+    for t in T[17]: say(t)
+    step(17, ["방금 받아 적은 말"], 30, f"실제 차 안 대화 {', '.join(T[17])}")
     tap("일시정지"); step(18, ["멈추기 전 마지막 대화"])
     tap("녹화 재개"); step(19, ["방금 받아 적은 말"], 8)
-    say("drive-b")
+    for t in T[19]: say(t)
     launch("--es", "route", f"{DEST[0]},{DEST[1]},{DEST[2]}", "--ei", "approachSeconds", os.environ.get("DEMO_APPROACH_S", "1200"))  # 이제 '도착 전'
     split(); tap("함께 타는 중", timeout=3)
     step(20, ["정차하면 자세히", "도착까지"], 25, f"내비 목적지 {DEST[2]}(판교에서, 디버그 approachSeconds)")
+    for t in T[20]: say(t)
     adb("emu", "geo", "fix", str(DEST[1]), str(DEST[0])); time.sleep(3)  # 도착 판정(250 m)용 GPS. 내비 화면은 판교에 머문다
     park(); step(21, [f"{DEST[2]} 도착", "도착", "먼저 할 일"], 25)
     tap("계속", timeout=6)  # 최종 목적지 브리핑 '계속' → 여행 마무리(C22)
