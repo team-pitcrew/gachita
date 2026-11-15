@@ -19,7 +19,7 @@ const origin = 'https://gachita.test';
 const opaque = 'opaque_boarding_invitation_12345';
 function fixture(t) {
   const storage=new Map();
-  const body = new Element('body'), timers = [], calls = [], joined = [], decisions = [], left = [];
+  const body = new Element('body'), timers = [], calls = [], joined = [], decisions = [], left = [], voiced = [];
   const descriptors = new Map(['document','location','history','sessionStorage'].map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
   globalThis.sessionStorage={getItem:(key)=>storage.get(key)??null,setItem:(key,value)=>storage.set(key,value),removeItem:(key)=>storage.delete(key)};
   globalThis.document = { body, hidden:false, createElement:(tag)=>new Element(tag),createElementNS:(ns,tag)=>new Element(tag) };
@@ -43,10 +43,10 @@ function fixture(t) {
     if(path.includes('/boarding-invites/'))return Response.json(preview);
     return Response.json(trip);
   });
-  const boarding=createBoarding({getProfile:()=>profile,getToken:()=>'profile-token',consentText:['동의 안내'],consentOffMessage:'동의를 끌까요?',onLinked:(v)=>joined.push(v),onDecision:(v)=>decisions.push(v),onLeave:(v)=>left.push(v)});
+  const boarding=createBoarding({getProfile:()=>profile,getToken:()=>'profile-token',consentText:['동의 안내'],consentOffMessage:'동의를 끌까요?',onLinked:(v)=>joined.push(v),onDecision:(v)=>decisions.push(v),onLeave:(v)=>left.push(v),onVoice:()=>voiced.push(1)});
   const car=createVehicleBoarding({getTrip:()=>trip,getToken:()=>'driver-token',getOrigin:()=>origin});
   t.after(()=>{boarding.close();trip.status='ended';car.sync();for(const[key,descriptor]of descriptors){if(descriptor)Object.defineProperty(globalThis,key,descriptor);else delete globalThis[key];}});
-  return {boarding,car,body,profile,participant,trip,preview,invite,data,calls,joined,decisions,left,now:(v)=>{now=v;},tick:async()=>{for(const fn of timers)fn();await new Promise(setImmediate);},
+  return {boarding,car,body,profile,participant,trip,preview,invite,data,calls,joined,decisions,left,voiced,now:(v)=>{now=v;},tick:async()=>{for(const fn of timers)fn();await new Promise(setImmediate);},
     button:(label)=>elements(body).find((el)=>el.tag==='button'&&content(el)===label),
     choose:(seat)=>elements(body).find((el)=>el.tag==='input'&&el.value===seat).onchange(),
     qr:()=>elements(body).find((el)=>el.attrs['data-payload']),
@@ -109,4 +109,11 @@ test('연결 완료 화면도 다른 기기에서 바뀐 동의를 다시 반영
   const f=fixture(t);await f.boarding.open();f.choose('ROW_2_LEFT');await f.button('이 자리로 함께 타기').onclick();await f.button('동의하고 기록 참여').onclick();
   const changed={...f.participant,consent:false};f.boarding.openConsent({...f.trip,participants:[changed]},changed,'phone-only-token');
   assert.ok(content(f.body).includes('시작됐어요'));assert.ok(!content(f.body).includes('기록 동의 완료'));
+});
+
+test('목소리 없이 차량 QR로 들어오면(409 voice_required) 창을 닫고 목소리 등록으로 보낸다',async(t)=>{
+  const f=fixture(t);await f.boarding.open();f.choose('ROW_2_LEFT');
+  f.data.respond=(path,o)=>o.method==='POST'?Response.json({error:'목소리를 먼저 등록해 주세요',type:'conflict',reason:'voice_required'},{status:409}):null;
+  await f.button('이 자리로 함께 타기').onclick();
+  assert.equal(f.voiced.length,1);assert.equal(f.joined.length,0);assert.equal(f.body.children.length,0,'창을 닫음');
 });

@@ -21,6 +21,9 @@ export const REQ = {
 
 // API 부르기. token이 있으면 Authorization: Bearer로 보낸다(프로필 토큰이나 참가자 토큰). Blob 본문(사진)은 그대로 보낸다.
 // 실패하면 Error에 status를 붙여 던진다. 서버에 닿지 않았으면 status 0.
+// 서버의 '목소리 먼저'(T173): 목소리 없는 프로필이 그룹·여행에 새로 들어가려 하면 409 voice_required.
+export const needsVoice = (e) => e?.status === 409 && e.reason === "voice_required";
+
 export async function api(method, path, body, token, signal) {
   const headers = {};
   if (token) headers.authorization = `Bearer ${token}`;
@@ -33,7 +36,8 @@ export async function api(method, path, body, token, signal) {
   }
   if (res.status === 304 || res.status === 204) return null;
   const data = await res.json().catch(() => ({})); // 앞단(ALB 등)의 HTML 오류 쪽은 JSON이 아니다
-  if (!res.ok) throw Object.assign(new Error(data.error ?? `서버가 잠시 답하지 못했어요(${res.status}). 잠시 뒤 다시 해 주세요.`), { status: res.status });
+  // reason·missing: 서버가 문장 대신 가르라고 주는 칸(예: 409 voice_required와 목소리 없는 구성원 목록, T173)
+  if (!res.ok) throw Object.assign(new Error(data.error ?? `서버가 잠시 답하지 못했어요(${res.status}). 잠시 뒤 다시 해 주세요.`), { status: res.status, reason: data.reason, missing: data.missing });
   return data;
 }
 

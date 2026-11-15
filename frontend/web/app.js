@@ -174,7 +174,14 @@ function offerAfterTrip(me, kind) {
   store(`${trip.code}:after-offered`, `${scope}:${trip.status}`);
   afterTrip.open();
 }
-const boarding = createBoarding({ getProfile: () => profile, getToken: () => store("profile"), consentText: CONSENT, consentOffMessage: OFF_WIPES,
+// 서버의 '목소리 먼저'(409 voice_required, T173): 내 목소리가 없어 그룹·여행에 새로 들어가지 못하면 목소리 등록(P06)으로 보낸다.
+function toVoice() {
+  closeOverlays();
+  onboarding.open("voice");
+  if (location.hash === "#start") render(); else location.hash = "start";
+  toast("목소리를 먼저 등록해 주세요. 등록한 뒤 다시 해 주세요.");
+}
+const boarding = createBoarding({ getProfile: () => profile, getToken: () => store("profile"), consentText: CONSENT, consentOffMessage: OFF_WIPES, onVoice: () => toVoice(),
   onProfile: () => { location.hash = "me"; },
   onLinked: ({ code, participant, token }) => { store(code, participant.id); store(`${code}:token`, token); store(`${code}:asked`, null); store("trip", code); },
   onDecision: ({ code }) => { store(`${code}:asked`, "1"); reading = false; },
@@ -213,6 +220,7 @@ const groups = createGroups({
   onTalk: () => openConversations(),
   onContents: () => openContents(),
   onRide: () => { if (liveCode()) { groups.close(); goRide(); } },
+  onVoice: () => toVoice(),
 });
 groups.remember();
 // 목소리 전 프로필(accountReady 아님)이면 온보딩의 빠진 단계를 열고 true. 이미 #start면 주소가 안 바뀌어 직접 그린다.

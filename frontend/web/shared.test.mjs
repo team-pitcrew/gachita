@@ -1,7 +1,7 @@
 // shared.js의 api()가 토큰 머리말과 실패를 약속대로 다루는지 본다. 실행: 저장소 루트에서 make check
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { api } from "./shared.js";
+import { api, needsVoice } from "./shared.js";
 
 const answer = (status, body) => async (url, init) => ((answer.last = { url, init }), new Response(body === undefined ? null : JSON.stringify(body), { status }));
 
@@ -42,4 +42,15 @@ test("화면이 닫히면 진행 중인 읽기 요청도 취소할 수 있다", 
   const pending = api("GET", "/profiles/me/feed", null, "test-token", controller.signal);
   controller.abort();
   await assert.rejects(pending, { status: 0 });
+});
+
+test("거절의 reason·missing을 오류에 싣고, '목소리 먼저'(409 voice_required)를 가린다", async (t) => {
+  const missing = [{ profileId: "kid", name: "하은", child: true }];
+  t.mock.method(globalThis, "fetch", async () => Response.json({ error: "하은님의 목소리가 없어요", type: "conflict", reason: "voice_required", missing }, { status: 409 }));
+  const e = await api("POST", "/trips", { groupId: "g" }, "t").catch((x) => x);
+  assert.equal(e.status, 409);
+  assert.equal(e.reason, "voice_required");
+  assert.deepEqual(e.missing, missing);
+  assert.equal(needsVoice(e), true);
+  assert.equal(needsVoice({ status: 409, reason: "seat_taken" }), false, "다른 409는 아님");
 });
