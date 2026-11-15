@@ -17,8 +17,9 @@ addEventListener("fetch", (e) => {
   if (req.method !== "GET" || url.origin !== location.origin) return;
   if (url.pathname.startsWith("/api/") ? !trip : url.search) return;
   const key = url.origin + url.pathname;
-  // 화자 모델·실행기(wespeaker.js, 38 MB)는 판 번호가 붙은 주소라 한 번 받으면 캐시에서 준다(다시 받지 않음). 없는 것(404)은 두지 않는다.
-  if (/^\/(models|vendor)\//.test(url.pathname)) return e.respondWith(caches.match(key).then((hit) => hit ?? fetch(req).then((res) => (res.ok && e.waitUntil(caches.open(CACHE).then((c) => c.put(key, res.clone()))), res))));
+  // 화자 모델·실행기(wespeaker.js, 38 MB)는 가로채지 않는다: 서버가 판 번호 붙은 주소를 1년 고정(immutable)으로 주니 브라우저 캐시가 맡는다.
+  // 여기서 받으면 같은 38 MB를 캐시 저장소에 한 벌 더 둔다.
+  if (/^\/(models|vendor)\//.test(url.pathname)) return;
   const save = (res) => {
     // 새 판은 갈아 끼우고, 서버가 지운 여행(404)은 이 폰에서도 지운다. 복사는 화면이 본문을 읽기 전에 떠 둔다.
     const copy = res.ok && res.clone();

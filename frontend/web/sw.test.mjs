@@ -62,3 +62,11 @@ test("app.js가 들여오는 화면 모듈은 모두 설치 때 받아 둔다(�
   }
   assert.deepEqual([...seen].filter((p) => !shell.has(p)), []);
 });
+
+test("화자 모델·실행기(/models/, /vendor/)는 가로채지 않고 캐시 저장소에도 두지 않는다(브라우저 캐시가 맡음)", async () => {
+  let fetched = 0;
+  const app = worker(async () => (fetched++, new Response("x")));
+  for (const path of ["/models/wespeaker-resnet34-v1.onnx", "/vendor/ort/1.27.0/ort-wasm-simd-threaded.wasm"]) assert.equal(await app.request(path), undefined, path);
+  assert.equal(fetched, 0);
+  assert.equal(app.stored.size, 0);
+});
