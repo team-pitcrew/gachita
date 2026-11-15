@@ -692,17 +692,29 @@ class MainActivity : ComponentActivity() {
     private fun match(t: Trip, items: List<Utterance>, sp: Speakers, vp: VoicePrints) {
         val files = RawFile.of(filesDir, t.code)
         val seated = t.people.filter { it.consent } // 동의하지 않은 사람의 이름은 붙이지 않는다
+        // 사람이 정해진 말(이번 차례와 바로 앞의 것): 값을 못 낸 짧은 말이 물려받는다
+        val known = ArrayList<Pair<Utterance, String>>()
+        Live.box?.takeIf { it.trip == t.code }?.let { box -> items.firstOrNull()?.let { first ->
+            box.ackedAfter(first.seq - 21).filter { it.seq < first.seq }.forEach { p -> sp[p.seq]?.who?.let { known += p to it } }
+        } }
+        val voiceless = ArrayList<Utterance>()
         for (u in items) {
             val to = u.endedAt - 500 // 최종 결과는 말 끝 0.6초 뒤에 온다(11/13): 끝의 무음을 덜어 목소리만
             val from = maxOf(u.startedAt + LEAD_MS / 2, to - 9_900) // 서버 대조와 같은 구간(0.5~10초)
             if (!clipsAllowed) return // 그사이 동의를 껐으면(철회) 원음을 더 읽지 않는다
             val pcm = if (to - from < 600) null else clipFile(files, from..to)?.let { runCatching { it.cut(Live.seal(this), from, to) }.getOrNull() }
             val v = pcm?.takeIf { it.size >= RATE }?.let { embed(pcmSamples(it)) }
-            if (v == null) { sp.done(u.seq); continue } // 원음이 없거나 짧음: 다시 하지 않음
+            if (v == null) { voiceless += u; continue } // 원음이 없거나 짧음: 아래에서 앞뒤 말의 사람을 물려받는다
             val row = u.seatZone?.let { z -> seated.filter { it.seat.startsWith("ROW_${z + 1}_") } }
             val r = vp.identify(v, seated.map(Person::id), row?.map(Person::id)) // 여백 규칙(Voice.kt)
             sp.set(u.seq, r.copy(sent = r.who == null)); sp.done(u.seq) // 찾았으면 서버에 남길 때까지 sent = false
-            Log.i("GachitaCapture", "말한 사람 ${u.seq} 구역 ${u.seatZone ?: "모름"} ${if (r.who != null) "찾음" else "모름"} ${r.confidence}") // 이름·글자는 남기지 않는다
+            r.who?.let { known += u to it }
+            Log.i("GachitaCapture", "말한 사람 ${u.seq} 구역 ${u.seatZone ?: "모름"} ${if (r.who != null) "찾음" else "모름"} ${r.confidence} ${r.basis}") // 이름·글자는 남기지 않는다
+        }
+        for (u in voiceless) {
+            val who = if (vp.assignsAlways) inherit(u, known)?.takeIf { id -> seated.any { it.id == id } } else null
+            sp.set(u.seq, Speaker(who, 0.0, sent = who == null, basis = if (who != null) "inherit" else "")); sp.done(u.seq)
+            Log.i("GachitaCapture", "말한 사람 ${u.seq} 구역 ${u.seatZone ?: "모름"} ${if (who != null) "물려받음" else "모름"}")
         }
     }
 

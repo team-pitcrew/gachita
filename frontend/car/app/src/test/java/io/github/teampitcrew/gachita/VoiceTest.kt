@@ -48,8 +48,8 @@ class VoiceTest {
         assertEquals(1.0, similarity(vector(cases[0]), vector(cases[0])), 1e-12)
     }
 
-    private fun prints(g: Int, vararg who: Pair<String, DoubleArray>, embedder: String = EMBEDDER, rule: Boolean = false) = JSONObject().put("generation", g).put("embedder", embedder)
-        .apply { if (rule) put("floor", 0.6).put("margin", 0.06) }
+    private fun prints(g: Int, vararg who: Pair<String, DoubleArray>, embedder: String = EMBEDDER, rule: Boolean = false, assign: String? = null) = JSONObject().put("generation", g).put("embedder", embedder)
+        .apply { if (rule) put("floor", 0.6).put("margin", 0.06); assign?.let { put("assign", it) } }
         .put("dims", VOICE_DIMS).put("threshold", 0.9).put("items", org.json.JSONArray(who.map { (id, v) -> JSONObject().put("participantId", id).put("vector", org.json.JSONArray(v)).put("seconds", 7) }))
 
     @Test fun `받은 대조 값으로 서버와 같은 기준으로 가린다`() {
@@ -200,10 +200,10 @@ class VoiceTest {
         assertTrue(vp.refresh(3_000, 3) { prints(3, "dad" to low) }); assertEquals("dad", vp.match(low, listOf("dad")).who)
     }
 
-    @Test fun `여백 규칙으로 말한 사람을 정한다`() {
+    @Test fun `여백 규칙으로 말한 사람을 정한다(서버가 늘 정하기를 끈 경우)`() {
         val (low, mid, high, low2) = cases.map(::vector)
         val vp = VoicePrints(tmp.root, "ABC123", TEST_SEAL)
-        vp.put(prints(1, "dad" to low, "kid" to high, rule = true))
+        vp.put(prints(1, "dad" to low, "kid" to high, rule = true, assign = "margin"))
         val all = listOf("dad", "kid")
         assertEquals("dad", vp.identify(low2, all, null).who) // 0.995 대 −0.16: 뚜렷이 앞섬
         assertEquals("dad", vp.identify(low2, all, listOf("dad")).who)
@@ -211,7 +211,7 @@ class VoiceTest {
         assertNull("바닥(0.6)에 못 미침", vp.identify(mid, all, null).who) // kid 0.50
 
         // 두 사람이 모두 가깝다: 절대 기준으로는 붙였겠지만(1.0 ≥ 0.9) 두 번째와의 차가 0.005라 붙이지 않는다
-        vp.put(prints(1, "dad" to low, "uncle" to low2, rule = true))
+        vp.put(prints(1, "dad" to low, "uncle" to low2, rule = true, assign = "margin"))
         assertNull(vp.identify(low, listOf("dad", "uncle"), null).who)
         assertEquals("dad", vp.match(low, listOf("dad", "uncle")).who)
 
@@ -225,5 +225,38 @@ class VoiceTest {
         assertEquals("dad", vp.identify(low2, all, listOf("kid")).who)
         vp.put(prints(1, "dad" to low, "uncle" to low2))
         assertEquals("dad", vp.identify(low, listOf("dad", "uncle"), null).who)
+    }
+
+    @Test fun `등록한 사람이 있으면 늘 누군가로 정하고 근거를 남긴다(미확인 0퍼센트)`() {
+        val (low, mid, high, low2) = cases.map(::vector)
+        val vp = VoicePrints(tmp.root, "ABC123", TEST_SEAL)
+        assertFalse(vp.assignsAlways) // 받은 값이 없으면 꺼져 있다
+        vp.put(prints(1, "dad" to low, "kid" to high, "uncle" to low2, rule = true))
+        assertTrue(vp.assignsAlways)
+        val all = listOf("dad", "kid", "uncle")
+        assertEquals(Pair("kid", "margin"), vp.identify(high, all, null).let { it.who to it.basis }) // 뚜렷이 앞섬
+        // 여백을 넘지 못함(dad 1.0, uncle 0.995): 그래도 가장 가까운 사람으로
+        assertEquals(Pair("dad", "nearest"), vp.identify(low, all, null).let { it.who to it.basis })
+        // 줄을 알면 그 줄 안에서 가장 가까운 사람(전체에서는 dad가 더 가깝다)
+        assertEquals(Pair("uncle", "nearest"), vp.identify(low, all, listOf("uncle", "kid")).let { it.who to it.basis })
+        // 바닥에 못 미쳐도(kid 0.50) 정한다
+        assertEquals(Pair("kid", "nearest"), vp.identify(mid, all, null).let { it.who to it.basis })
+        // 그 줄에 등록한 사람이 없으면 모두에서
+        assertEquals("kid", vp.identify(high, all, listOf("mom")).who)
+        // 등록한 사람이 아무도 없으면 정하지 않는다
+        assertNull(vp.identify(low, listOf("mom"), null).who)
+
+        // 값을 못 낸 짧은 말: 같은 줄에서 시각이 가장 가까운 말의 사람, 그 줄에 없으면 줄과 무관하게
+        fun utt(seq: Long, at: Long, zone: Int?) = Utterance(seq, "ABC123", at, at + 400, "네", 0, 400, 1, seatZone = zone)
+        val known = listOf(utt(1, 1_000, 0) to "dad", utt(2, 5_000, 1) to "kid", utt(3, 9_000, 0) to "uncle")
+        assertEquals("uncle", inherit(utt(4, 8_000, 0), known))
+        assertEquals("kid", inherit(utt(4, 8_000, 1), known))
+        assertEquals("uncle", inherit(utt(4, 8_000, null), known)) // 줄을 모르면 가장 가까운 말
+        assertNull(inherit(utt(4, 8_000, 0), emptyList()))
+
+        // 근거는 다시 켜도 남는다
+        val sp = Speakers(tmp.root, "ABC123", TEST_SEAL)
+        sp.set(1, Speaker("dad", 0.7, sent = false, basis = "nearest"))
+        assertEquals("nearest", Speakers(tmp.root, "ABC123", TEST_SEAL)[1]!!.basis)
     }
 }
