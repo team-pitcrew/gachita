@@ -250,7 +250,7 @@ const contents = createContents({
   isOnline: () => !offline,
   onHome: () => { location.hash = ""; },
   onRide: () => goRide(),
-  onTalk: () => openConversations(),
+  onTalk: (pick) => openConversations(pick),
 });
 const openContents = () => contents.open();
 // 지금 갈 수 있는 진행 중 여행: 보고 있는 여행(끝나지 않음), 없으면 처음 화면이 읽어 둔 진행 중 여행.
@@ -293,12 +293,16 @@ function logout() {
   else refresh(true);
   toast("로그아웃했어요.");
 }
-const openConversations = () => {
-  if (trip && trip.code === code()) return conversations.open();
-  const last = store("trip") || active?.code;
-  if (last) { conversationPending = true; location.hash = last; }
-  else toast("아직 대화 기록이 없어요. 차에 연결해 함께 타면 여기에 모여요.");
-};
+// 대화 기록(P44) 열기. pick은 갤러리가 보고 있던 여행. 없으면 이 폰이 마지막에 들어간 여행, 진행 중 여행, 그것도 없으면 계정으로 탄 여행 가운데
+// 기록에 동의한 가장 최근 여행(끝난 여행 포함, GET /profiles/me/trips). 이 폰이 들어간 적 없는 여행이면 그 여행을 열어 refresh의 claim()이
+// 프로필로 다시 참가해 이 폰의 참가자 토큰을 받고, render가 대화 기록을 연다(conversationPending). 동의하지 않은 여행은 서버가 읽기를 막는다.
+async function openConversations(pick) {
+  if (trip && trip.code === code() && (!pick || pick === trip.code)) return conversations.open();
+  const target = pick || store("trip") || active?.code || (store("profile") && (await mine("GET", "/profiles/me/trips").catch(() => null))?.items.find((t) => t.me?.consent)?.code);
+  if (!target) return toast("아직 대화 기록이 없어요. 차에 연결해 함께 타면 여기에 모여요.");
+  conversationPending = true;
+  if (code() === target) refresh(true); else location.hash = target;
+}
 
 // 프로필 다시 읽기. 지워졌거나 모르는 토큰이면 이 폰에서도 잊는다.
 function loadProfile() {
