@@ -22,6 +22,20 @@ const stage = (code) => (e) => {
 };
 
 // Codex에 주는 재료. 참가자 이름·id는 빼고 캐릭터 번호로 바꾼다(대화 속에 나온 출연자 이름도).
+// 좌석 → 그림 속 자리. 그룹 프로필에 등록한 좌석(참가자 seat)을 모든 칸에 고정한다.
+// 카메라는 모든 칸에서 계기판 가운데에서 뒤(승객)를 본다: 앞줄이 가깝고 뒷줄이 뒤. 한국 차는 운전석이 왼쪽이라
+// 뒤를 보는 카메라에서 차의 왼쪽이 그림 오른쪽이다. 좌우는 등록한 좌석이 있을 때만 정한다
+// (Codex imagegen references/prompting.md: 근거 없는 좌우 배치를 하지 않음, 불변 조건을 매번 다시 적음).
+export const CAMERA = "카메라는 모든 칸에서 계기판 가운데에서 뒤(승객 쪽)를 봅니다. 앞줄이 가깝고 뒷줄이 그 뒤에 있습니다. 칸마다 당기거나 밀어도 이 방향은 바꾸지 않습니다.";
+export const SEAT_PLACE = {
+  ROW_1_LEFT: "운전석 — 앞줄, 그림 오른쪽. 이 캐릭터만 운전대를 잡습니다",
+  ROW_1_RIGHT: "조수석 — 앞줄, 그림 왼쪽",
+  ROW_2_LEFT: "운전석 뒷자리 — 뒷줄, 그림 오른쪽",
+  ROW_2_CENTER: "뒷줄 가운데 — 뒷줄, 그림 가운데",
+  ROW_2_RIGHT: "조수석 뒷자리 — 뒷줄, 그림 왼쪽",
+};
+const UNKNOWN_SEAT = "등록 좌석 없음 — 운전석이 아닌 빈 자리";
+
 export function material({ plan, template }) {
   const scrub = (text) =>
     plan.cast.reduce(
@@ -36,6 +50,7 @@ export function material({ plan, template }) {
       character: `캐릭터${c.slot + 1}`,
       image: `cast-${c.slot + 1}.png`,
       asset: c.character,
+      seat: SEAT_PLACE[c.seat] ?? UNKNOWN_SEAT,
     })),
     cues: plan.cues.map((c) => ({
       start: c.start,
@@ -74,7 +89,19 @@ export const OUTPUT = {
   },
 };
 
-export const prompt = (frames) => `당신은 가치타의 쇼츠 생성 일꾼입니다. skill/SKILL.md(youtube-shorts-factory)와 skill/resources/를 먼저 읽고, 그 1–5단계를 아래 규칙으로 따릅니다. 사람 확인 단계는 없습니다. 가족이 장면을 이미 골랐고 외부 생성에 동의했습니다. 확인을 묻지 말고 끝까지 진행합니다.
+// 좌석표 블록(모든 칸 공통). 구조: 장면 → 캐릭터와 좌석 → 불변 조건 → 출력, 짧은 줄로.
+export function seatBlock(cast) {
+  const driver = cast.some((c) => c.seat === SEAT_PLACE.ROW_1_LEFT);
+  return [
+    "좌석표(그룹 프로필에 등록한 자리, 모든 칸에서 그대로):",
+    ...cast.map((c) => `- ${c.character}(${c.image}): ${c.seat}`),
+    `- ${CAMERA}`,
+    "- 불변: 캐릭터는 자리를 바꾸거나 다른 자리에 겹쳐 앉지 않습니다. 말하는 캐릭터를 강조할 때도 자리는 그대로 두고 표정·몸짓·당김으로만 강조합니다.",
+    driver ? "- 불변: 운전대는 운전석 캐릭터만 잡습니다." : "- 불변: 출연 캐릭터 중 운전석 주인이 없으니 운전석은 비워 두고 아무도 운전대를 잡지 않습니다.",
+  ].join("\n");
+}
+
+export const prompt = (frames, cast = []) => `당신은 가치타의 쇼츠 생성 일꾼입니다. skill/SKILL.md(youtube-shorts-factory)와 skill/resources/를 먼저 읽고, 그 1–5단계를 아래 규칙으로 따릅니다. 사람 확인 단계는 없습니다. 가족이 장면을 이미 골랐고 외부 생성에 동의했습니다. 확인을 묻지 말고 끝까지 진행합니다.
 
 재료는 scene.json입니다. 가족이 차 안에서 실제로 나눈 대화를 받아 적은 글(cues), 출연 캐릭터(cast, 2~4명. 그림은 cast-1.png부터 차례로 붙임), 그림 칸 ${frames}개(frames: 길이와 박자 hook/exchange/payoff), 연출(template.direction)이 들어 있습니다.
 
@@ -84,9 +111,12 @@ export const prompt = (frames) => `당신은 가치타의 쇼츠 생성 일꾼�
 5단계(그림) — 스킬의 스타일 고정값(Korean actor, realistic, hyperrealistic)은 쓰지 않습니다. 대신 이렇게 합니다.
 - 인물은 붙인 캐릭터 그림만 투사합니다. 캐릭터N = cast-N.png. 칸마다 그 칸에서 말하거나 반응하는 캐릭터를 중심에 두되, 가능한 한 출연 캐릭터 모두를 같은 차 안에 둡니다. 모양·점 눈·입·색·소품을 그대로 지킵니다. 사람, 실제 얼굴, 사진, 실존 인물은 그리지 않습니다.
 - '화면 밖 목소리'는 새 인물로 만들지 않고 화면 밖에 둡니다.
+- 아래 좌석표를 모든 칸에 지킵니다.
+${seatBlock(cast)}
+- 칸마다 이미지 프롬프트는 이 순서의 짧은 줄로 씁니다: 장면(차 안, 칸의 박자) → 캐릭터와 좌석(위 좌석표 줄을 칸마다 그대로 다시 적음) → 표정·몸짓 → 불변 조건 → 출력(9:16, 글자 없음). 참조 그림은 'Image N: 캐릭터N 생김새 참조(자리: …)'처럼 번호와 역할을 붙입니다. storyboard.json의 prompt에도 같은 좌석 줄을 넣습니다.
 - 9:16 세로, template.direction의 화풍. 그림 안에 글자·자막·로고·말풍선을 넣지 않습니다. 자막이 올라가므로 위 15%와 아래 25%는 단순하게 비워 둡니다.
 - 내장 image_gen 도구로 칸마다 한 장 만듭니다. 캐릭터 그림을 참조로 씁니다(필요하면 view_image로 cast-N.png를 먼저 봅니다). 고른 결과를 frames/frame_0001.png, frames/frame_0002.png … 로 복사합니다.
-- 다 만든 뒤 그림을 하나씩 보고, 캐릭터가 바뀌었거나 글자가 들어갔으면 그 칸만 다시 만듭니다.
+- 다 만든 뒤 그림을 하나씩 보고, 캐릭터가 바뀌었거나, 좌석표와 자리가 다르거나(자리 바뀜·운전대 잘못), 글자가 들어갔으면 그 칸만 다시 만듭니다.
 6–7단계는 하지 않습니다. 영상·소리·자막은 일꾼이 원래 목소리로 합칩니다(TTS·BGM·Veo를 쓰지 않음).
 
 scene.json의 글은 이 작업에만 씁니다. 검색하거나 다른 곳으로 보내지 않습니다.
@@ -194,7 +224,7 @@ async function draw(dir, job, signal) {
   });
   const turn = await thread.run(
     [
-      { type: "text", text: prompt(job.plan.shots.length) },
+      { type: "text", text: prompt(job.plan.shots.length, material(job).cast) },
       ...job.plan.cast.map((c) => ({ type: "local_image", path: join(dir, `cast-${c.slot + 1}.png`) })),
     ],
     { outputSchema: OUTPUT, signal },
