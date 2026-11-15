@@ -680,7 +680,7 @@ function home() {
     ),
     h("p", { className: "home-footer" }, "우리의 목소리로 남기는 여행"),
     // 도착 브리핑 그림(brief-icons/)의 라이선스 고지(CC-BY 4.0)와 콘텐츠 지도 바탕(OpenStreetMap, ODbL) 출처
-    h("p", { className: "home-footer license" }, "도착 브리핑 그림 Twemoji © Twitter, Inc. 외 · CC-BY 4.0 / 지도 © OpenStreetMap contributors"),
+    h("p", { className: "home-footer license" }, "도착 브리핑 그림 Twemoji © Twitter, Inc. 외 · CC-BY 4.0 / 지도 © OpenStreetMap contributors / 화자 모델 WeSpeaker(VoxCeleb) · CC BY 4.0, ONNX Runtime · MIT"),
   ];
 }
 
