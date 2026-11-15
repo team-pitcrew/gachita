@@ -21,7 +21,7 @@ export function transcriptLines(data) {
     .sort((a, b) => a.at - b.at || a.seq - b.seq || String(a.device).localeCompare(String(b.device)));
 }
 
-export function createConversations({ getTrip, getParticipant, getToken, request, avatar, isOnline = () => true, onHome, onShorts, onScenes }) {
+export function createConversations({ getTrip, getParticipant, getToken, request, avatar, isOnline = () => true, onHome, onShorts, onScenes, onRide = () => {} }) {
   const dialog = h("dialog", { className: "conversations-dialog", "aria-labelledby": "conversation-title" });
   document.body.append(dialog);
   let state = null;
@@ -103,11 +103,12 @@ export function createConversations({ getTrip, getParticipant, getToken, request
     const ready = !s.unavailable && s.ready && s.lines.length > 0;
     dialog.replaceChildren(
       appBar({ online: isOnline(), onHome: () => { close(); onHome?.(); } }),
-      journeyTabs("talk", { ride: close, contents: () => { close(); onShorts(); } }),
+      journeyTabs("talk", { ride: () => { close(); onRide(); }, contents: () => { close(); onShorts(); } }),
       scroll,
       h("footer", { className: "conversation-bottom" },
         s.unavailable ? h("span", { className: "meta" }, "기록은 화면에 남기지 않았어요") : !ready && h("span", { className: "meta" }, "차에서 받아 적은 대화예요"),
-        ready && onScenes && button("추천 장면 고르기", () => { close(); onScenes(); }, "primary"),
+        // 장면은 주차한 뒤에 고른다(전체 음성이 올라간 뒤). 주행 중에는 눌러도 갈 곳이 없어 두지 않는다.
+        ready && onScenes && ["parked", "ended"].includes(getTrip()?.status) && button("추천 장면 고르기", () => { close(); onScenes(); }, "primary"),
       ),
     );
     // 처음에는 위(제목·날짜)부터 보이고, 이미 글을 보던 사람이 끝에 있었으면 새 말을 따라 내려간다.
