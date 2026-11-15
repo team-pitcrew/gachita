@@ -333,3 +333,17 @@ class Car(ctx: Context, private val onChange: (CarStatus) -> Unit) {
         }
     }
 }
+
+/** "위도,경도;위도,경도;…" → 점 목록(읽지 못한 점은 뺌). 디버그 시연 경로(--es path). */
+internal fun parsePath(s: String?): List<Pair<Double, Double>> = s.orEmpty().split(';').mapNotNull { p ->
+    val (a, b) = p.split(',').takeIf { it.size == 2 } ?: return@mapNotNull null
+    a.trim().toDoubleOrNull()?.let { la -> b.trim().toDoubleOrNull()?.let { la to it } }
+}
+
+/** 점들을 구간마다 같은 시간으로 나눠 f(0~1)만큼 간 자리. 점이 둘 이상이어야 한다. */
+internal fun alongPath(pts: List<Pair<Double, Double>>, f: Double): Pair<Double, Double> {
+    val x = f.coerceIn(0.0, 1.0) * (pts.size - 1)
+    val i = minOf(x.toInt(), pts.size - 2); val t = x - i
+    val (a, b) = pts[i] to pts[i + 1]
+    return a.first + (b.first - a.first) * t to a.second + (b.second - a.second) * t
+}
