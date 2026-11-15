@@ -199,6 +199,8 @@ test("내 여행: 내 프로필이 참가한 여행만 최신 순으로, 구성�
      VALUES ($1, $2, $3, 1, $4, 'g-1', 'r', $5, $7, 'completed'), ($6, $2, $3, 1, $4, 'g-2', 'r', $5, $7, 'failed')`,
     [genId, first.code, a.id, plain.id, planned.data, randomUUID(), `${first.code}/${plain.id}.wav`]
   );
+  // 일꾼이 먼저 올린 표지 그림(T166): 키가 object_keys에 있으면 콘텐츠에 주소가 실린다
+  await tripsDb().query("UPDATE short_generations SET object_keys = jsonb_build_array('shorts/' || id::text || '/thumbnail.png') WHERE id = $1", [genId]);
   await call("PATCH", `/trips/${first.code}`, { status: "ended" });
 
   // 둘째 여행: 나는 동의하지 않음 → 경로·콘텐츠는 비움
@@ -233,8 +235,8 @@ test("내 여행: 내 프로필이 참가한 여행만 최신 순으로, 구성�
 
   // 콘텐츠: 완료된 것만, 장면의 제목·좌표·그때의 장소, 시각순
   assert.deepEqual(trip.contents.map(({ lines, cast, ...c }) => c), [
-    { id: genId, momentId: plain.id, title: "가족 바다 여행", seconds: planned.data.seconds, at: t0 + 10_000, from: t0 - 10_000, to: t0 + 20_000, lat: null, lng: null, place: "집", kind: "generated", url: `/api/trips/${first.code}/short-generations/${genId}/file` },
-    { id: assetId, momentId: moment.id, title: "파도 소리", seconds: 12.5, at: t0 + 40_000, from: t0 + 20_000, to: t0 + 50_000, lat: 38.19, lng: 128.6, place: "속초 해수욕장", kind: "device", url: `/api/trips/${first.code}/short-assets/${assetId}/file` },
+    { id: genId, momentId: plain.id, title: "가족 바다 여행", seconds: planned.data.seconds, at: t0 + 10_000, from: t0 - 10_000, to: t0 + 20_000, lat: null, lng: null, place: "집", kind: "generated", url: `/api/trips/${first.code}/short-generations/${genId}/file`, thumbnailUrl: `/api/trips/${first.code}/short-generations/${genId}/thumbnail` },
+    { id: assetId, momentId: moment.id, title: "파도 소리", seconds: 12.5, at: t0 + 40_000, from: t0 + 20_000, to: t0 + 50_000, lat: 38.19, lng: 128.6, place: "속초 해수욕장", kind: "device", url: `/api/trips/${first.code}/short-assets/${assetId}/file`, thumbnailUrl: null },
   ]);
   // 장면 구간의 자막 줄은 30줄까지, 말한 사람을 모르면 이름 없이(지어내지 않음)
   assert.deepEqual(trip.contents.map((c) => [c.lines.length, c.lines[0].text, c.lines[0].name, c.cast]), [[30, "말 0", null, []], [30, "말 200", null, []]]);

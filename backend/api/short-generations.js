@@ -11,6 +11,10 @@ import { log } from "./log.js";
 const fail = (status, error) => {
   throw { status, error };
 };
+// 표지 그림(T166): 일꾼이 영상보다 먼저 만들어 올린다. 키가 정해져 있어 object_keys에 들어 있으면 있는 것이고, 취소·철회 정리(cleanup)가 영상과 함께 지운다.
+export const thumbnailKey = (id) => `shorts/${id}/thumbnail.png`;
+const THUMBNAIL_MAX_BYTES = 3_000_000;
+const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 // ponytail: 임대 60분 고정. Codex xhigh 한 편이 이보다 길어지면 심장박동(연장) 경로를 더한다.
 const LEASE = "60 minutes";
 const workerToken = () => process.env.SHORTS_WORKER_TOKEN ?? "";
@@ -41,6 +45,7 @@ export const generationView = (r) => ({
   createdAt: r.created_at,
   expiresAt: r.expires_at,
   ...(r.error_code ? { errorCode: r.error_code } : {}),
+  ...(r.object_keys?.includes(thumbnailKey(r.id)) ? { thumbnailUrl: `/api/trips/${r.trip_code}/short-generations/${r.id}/thumbnail` } : {}),
   ...(r.state === "completed"
     ? {
         result: {
@@ -121,7 +126,7 @@ export function shortGenerations(ctx, overrides = {}) {
       });
     }
     if (id && !uuid(id)) fail(404, "없는 생성 작업");
-    if (leaf && leaf !== "file") fail(404, "없는 생성 경로");
+    if (leaf && leaf !== "file" && leaf !== "thumbnail") fail(404, "없는 생성 경로");
     const methods = !id ? ["GET", "POST"] : leaf ? ["GET"] : ["GET", "DELETE"];
     if (!methods.includes(req.method)) fail(405, "지원하지 않는 요청 방식이에요");
     let response = await ctx.withTrip(
@@ -237,11 +242,21 @@ export function shortGenerations(ctx, overrides = {}) {
             fail(409, "제작 후 원음·자막·캐릭터가 바뀌었어요");
         }
         if (!leaf) return [200, view(row)];
+        // 표지 그림은 만드는 중에도 준다(C31→C32 '만드는 중' 표지). 동의·원본 검사는 위에서 영상과 같게 했다.
+        if (leaf === "thumbnail") {
+          if (!row.object_keys.includes(thumbnailKey(row.id))) fail(404, "아직 표지 그림이 없어요");
+          return { thumbnail: row };
+        }
         if (row.state !== "completed" || !row.result_key)
           fail(409, "아직 완성된 영상이 없어요");
         return { row };
       },
     );
+    if (response.thumbnail) {
+      const png = await media().get(thumbnailKey(response.thumbnail.id));
+      if (!png) fail(404, "아직 표지 그림이 없어요");
+      return [200, png, "image/png"];
+    }
     if (!response.row) return response;
     const row = response.row;
     const data = await media().get(row.result_key);
@@ -297,7 +312,7 @@ export function shortGenerations(ctx, overrides = {}) {
     // 경로·방식을 먼저 가리고(404·405) 그다음 토큰을 본다.
     const claim = seg[0] === "claim" && seg.length === 1;
     const leaf = seg[0] === "jobs" && seg.length === 3 ? seg[2] : null;
-    const method = claim ? "POST" : new Map([["audio", "GET"], ["fail", "POST"], ["result", "PUT"]]).get(leaf);
+    const method = claim ? "POST" : new Map([["audio", "GET"], ["fail", "POST"], ["result", "PUT"], ["thumbnail", "PUT"]]).get(leaf);
     if (!method) fail(404, "없는 일꾼 경로");
     if (req.method !== method) fail(405, `${method}만 가능해요`);
     authorize(req);
@@ -328,6 +343,7 @@ export function shortGenerations(ctx, overrides = {}) {
           template: { id: t.id, name: t.name, direction: t.direction },
           plan: row.plan,
           audio: `/api/short-worker/jobs/${row.id}/audio`,
+          thumbnail: `/api/short-worker/jobs/${row.id}/thumbnail`,
           result: `/api/short-worker/jobs/${row.id}/result`,
         },
       ];
@@ -337,6 +353,32 @@ export function shortGenerations(ctx, overrides = {}) {
       const wav = await sourceAudio(row.source_key);
       if (!wav) fail(410, "장면 원음이 없어요");
       return [200, wav, "audio/wav"];
+    }
+    if (leaf === "thumbnail") {
+      // 표지 그림(T166): 영상보다 먼저 올린다. PNG만, 3MB까지. 다시 올리면 덮는다.
+      if (String(req.headers["content-type"] ?? "").split(";")[0].trim() !== "image/png") fail(400, "image/png 파일을 보내 주세요");
+      const chunks = [];
+      let bytes = 0;
+      for await (const chunk of req) {
+        bytes += chunk.length;
+        if (bytes > THUMBNAIL_MAX_BYTES) fail(413, "표지 그림은 3MB까지 받아요");
+        chunks.push(chunk);
+      }
+      const png = Buffer.concat(chunks);
+      if (!png.subarray(0, 8).equals(PNG)) fail(400, "PNG가 아니에요");
+      await valid(row).catch(async (e) => {
+        if ([403, 404, 409, 410].includes(e.status)) await cancel(row.id);
+        throw e;
+      });
+      const key = thumbnailKey(row.id);
+      // 키를 먼저 적어 둔다(결과 영상과 같음). 올리는 사이 취소돼도 정리 작업이 지운다.
+      await db().query(
+        "UPDATE short_generations SET object_keys=object_keys || to_jsonb($2::text),updated_at=now() WHERE id=$1 AND NOT object_keys ? $2",
+        [row.id, key],
+      );
+      await media().put(key, png, "image/png");
+      log("info", "short_job_thumbnail", { id: row.id, bytes: png.length });
+      return [200, { id: row.id, thumbnailUrl: `/api/trips/${row.trip_code}/short-generations/${row.id}/thumbnail` }];
     }
     if (leaf === "fail") {
       const code = /^[a-z0-9_]{1,40}$/.test(body?.errorCode ?? "")

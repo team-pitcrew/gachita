@@ -51,8 +51,9 @@
 
 | 요청 | 응답 |
 |---|---|
-| `POST /api/short-worker/claim` | 대기 중 가장 오래된 작업을 60분 임대해 200 `{id, leaseUntil, template:{id,name,direction}, plan, audio, result}`. 없거나 꺼져 있으면 204. 내주기 전에 동의·원본을 다시 보고, 바뀌었으면 취소하고 204 |
+| `POST /api/short-worker/claim` | 대기 중 가장 오래된 작업을 60분 임대해 200 `{id, leaseUntil, template:{id,name,direction}, plan, audio, thumbnail, result}`(thumbnail은 T166). 없거나 꺼져 있으면 204. 내주기 전에 동의·원본을 다시 보고, 바뀌었으면 취소하고 204 |
 | `GET /api/short-worker/jobs/{id}/audio` | 장면 원음 WAV. 임대 중인 작업만(아니면 410) |
+| `PUT /api/short-worker/jobs/{id}/thumbnail` | 표지 그림(T166). 본문은 `image/png`(3 MB까지, PNG 서명 검사). 임대 중인 작업만. 동의·원본을 다시 보고 S3 `shorts/{id}/thumbnail.png`에 둡니다(다시 올리면 덮음). 키를 `object_keys`에 먼저 적어 취소·철회 정리가 영상과 함께 지웁니다. 200 `{id, thumbnailUrl}` |
 | `PUT /api/short-worker/jobs/{id}/result` | 본문은 `video/mp4` 바이트(최대 64 MB). 기본 영상과 같은 ffprobe 검사(9:16, 영상·소리 하나씩, 장면 길이와 1초 안) 뒤 동의·원본을 다시 보고 S3 `shorts/{id}/final.mp4`에 둡니다. 200은 `completed`. 그사이 철회·자료 변경이면 작업을 취소하고 403/409/410 |
 | `POST /api/short-worker/jobs/{id}/fail` | `{ "errorCode": "ffmpeg_failed" }`(영소문자·숫자·`_`). `failed`, `errorCode: worker_<값>` |
 

@@ -113,6 +113,74 @@ export function inside(dir, file) {
   return path;
 }
 
+// ---- 표지 그림(T166): 영상보다 먼저 한 장 만들어 올린다. 차·폰의 C32 '만드는 중'·완성 표지와 콘텐츠 기록 갤러리가 쓴다. ----
+// 시안 C32 표지(reference/cover-*.png, 'Archive / galleryCar' 400×550)처럼 파스텔 종이 위에 출연 캐릭터. 글자는 앱이 위에 얹으므로 그림에는 넣지 않는다.
+export const COVER = {
+  type: "object",
+  additionalProperties: false,
+  required: ["file"],
+  properties: { file: { type: "string" } },
+};
+
+export const coverPrompt = (count) => `당신은 가치타 쇼츠의 표지 그림을 만듭니다. 그림 한 장만 만들고 끝냅니다(영상·스토리보드는 만들지 않습니다).
+
+참고: reference-1.png·reference-2.png는 앱 시안의 쇼츠 표지입니다. 이 화풍(부드러운 파스텔 종이 바탕, 굵은 먹선의 둥근 흰 캐릭터, 평면 채색)을 따릅니다. 시안의 글자(날짜·대사·설명·'가치타'·길이)는 따라 그리지 않습니다.
+재료: scene.json(장면 제목과 대사 요약, 출연 캐릭터 ${count}명). 캐릭터N = cast-N.png. 모양·점 눈·입·색·소품을 그대로 지킵니다. 사람·실제 얼굴·사진·실존 장소는 넣지 않습니다.
+
+- 세로 8:11(예: 1024×1408 또는 가장 가까운 세로 크기) 한 장. 내장 image_gen으로 만들고 cover.png로 저장합니다.
+- 바탕은 한 가지 파스텔 종이색(크림·연분홍·연하늘·연민트 가운데 장면 분위기에 맞는 것)으로 단순하게.
+- 위 42%와 아래 18%는 아무것도 없는 바탕으로 비웁니다(앱이 날짜·대사, 설명·길이를 얹음). 캐릭터는 가운데 띠(42%~82%)에 크게, 출연 캐릭터 모두를 나란히 둡니다. 장면의 감정(웃음·놀람·협상 등)을 표정·몸짓으로만 보입니다.
+- 그림 안에 글자·숫자·자막·로고·말풍선·UI를 넣지 않습니다.
+- 다 만든 뒤 cover.png를 보고, 캐릭터가 바뀌었거나 글자가 들어갔거나 위·아래가 비지 않았으면 다시 만듭니다.
+
+scene.json의 글은 이 작업에만 씁니다. 검색하거나 다른 곳으로 보내지 않습니다. 마지막 답은 지정한 JSON {file}입니다.`;
+
+async function drawCoverCodex(dir, job, signal) {
+  const { Codex } = await import("@openai/codex-sdk");
+  const thread = new Codex().startThread({
+    model: "gpt-6-astra",
+    modelReasoningEffort: "low", // 그림 한 장이라 빠르게(T157 시험: 추론 low로 38초)
+    sandboxMode: "workspace-write",
+    approvalPolicy: "never",
+    workingDirectory: dir,
+    skipGitRepoCheck: true,
+    networkAccessEnabled: false,
+  });
+  const turn = await thread.run(
+    [
+      { type: "text", text: coverPrompt(job.plan.cast.length) },
+      ...[1, 2].map((n) => ({ type: "local_image", path: join(dir, `reference-${n}.png`) })),
+      ...job.plan.cast.map((c) => ({ type: "local_image", path: join(dir, `cast-${c.slot + 1}.png`) })),
+    ],
+    { outputSchema: COVER, signal },
+  );
+  return JSON.parse(turn.finalResponse);
+}
+
+// 표지 PNG(800×1100, 표지 400×550의 두 배). 에이전트가 고른 그림을 가운데 맞춰 자른다.
+export async function cover(job, { drawCover = drawCoverCodex, signal } = {}) {
+  const dir = await mkdtemp(join(tmpdir(), "gachita-cover-"));
+  try {
+    await castInto(dir, job);
+    for (const n of [1, 2]) await cp(here(`reference/cover-${n}.png`), join(dir, `reference-${n}.png`));
+    await writeFile(join(dir, "scene.json"), JSON.stringify((({ title, cast, cues }) => ({ title, cast, cues }))(material(job)), null, 2));
+    const out = await drawCover(dir, job, signal).catch(stage("cover_codex_failed"));
+    const file = inside(dir, out.file);
+    await exec(ff, ["-v", "error", "-nostdin", "-y", "-i", file, "-vf", "scale=800:1100:force_original_aspect_ratio=increase,crop=800:1100,setsar=1", "-frames:v", "1", join(dir, "cover-out.png")], { timeout: 60_000, signal }).catch(stage("cover_ffmpeg_failed"));
+    return await readFile(join(dir, "cover-out.png"));
+  } finally {
+    if (!process.env.SHORTS_KEEP) await rm(dir, { recursive: true, force: true });
+  }
+}
+
+// 출연 캐릭터 그림을 cast-N.png로(이름 대신 번호). 앱에 든 그림만.
+async function castInto(dir, job) {
+  for (const c of job.plan.cast) {
+    if (!/^[a-z]+(-small)?$/.test(c.character)) throw Object.assign(Error("bad character"), { code: "cast" });
+    await cp(here(`../../../frontend/web/chars/${c.character}.png`), join(dir, `cast-${c.slot + 1}.png`));
+  }
+}
+
 async function draw(dir, job, signal) {
   const { Codex } = await import("@openai/codex-sdk");
   const thread = new Codex().startThread({
@@ -138,10 +206,7 @@ export async function make(job, wav, { drawFrames = draw, signal } = {}) {
   const dir = await mkdtemp(join(tmpdir(), "gachita-short-"));
   try {
     await cp(here("skill"), join(dir, "skill"), { recursive: true });
-    for (const c of job.plan.cast) {
-      if (!/^[a-z]+(-small)?$/.test(c.character)) throw Object.assign(Error("bad character"), { code: "cast" });
-      await cp(here(`../../../frontend/web/chars/${c.character}.png`), join(dir, `cast-${c.slot + 1}.png`));
-    }
+    await castInto(dir, job);
     await writeFile(join(dir, "scene.json"), JSON.stringify(material(job), null, 2));
     await mkdir(join(dir, "frames"));
     await cp(CACHE, join(dir, "reference-analysis.md")).catch(() => {});
@@ -186,6 +251,17 @@ async function once() {
   // 임대(서버 60분)보다 조금 먼저 스스로 멈춘다.
   const signal = AbortSignal.timeout(Math.max(60_000, new Date(job.leaseUntil).getTime() - Date.now() - 120_000));
   try {
+    // 표지 그림을 먼저(T166). 못 만들어도 영상은 만든다 — 앱 표지는 캐릭터로 그린다.
+    if (job.thumbnail) {
+      const at = Date.now();
+      try {
+        const png = await cover(job, { signal: AbortSignal.any([signal, AbortSignal.timeout(6 * 60_000)]) });
+        await api(job.thumbnail, { method: "PUT", body: png, type: "image/png" });
+        log("thumbnail", { id: job.id, bytes: png.length, ms: Date.now() - at });
+      } catch (e) {
+        log("thumbnail_failed", { id: job.id, code: e.code ?? "cover_failed", message: String(e.message).slice(0, 200), ms: Date.now() - at });
+      }
+    }
     const wav = await api(job.audio);
     const { video, usage, adaptation } = await make(job, wav, { signal });
     await api(job.result, { method: "PUT", body: video, type: "video/mp4" });

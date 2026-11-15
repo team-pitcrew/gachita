@@ -95,7 +95,7 @@ export function classify(e) {
 // 로그의 경로 틀: 정한 낱말이 아닌 마디(여행 코드, id, 초대 코드)는 :p로 가린다. 웹 파일은 /(web) 하나로.
 const ROUTE_WORDS = new Set(["api", "config", "trips", "participants", "requests", "moments", "utterances", "transcript", "transcriptions", "captions", "voice-match", "voice-prints", "recordings", "scene-suggestions", "shortform", "short-templates", "short-plans", "short-generations", "file", "profiles", "me", "links", "google", "feed", "tokens", "photo", "voice", "groups", "members", "invites", "j"]);
 for (const word of ["todos", "arrival-briefing"]) ROUTE_WORDS.add(word);
-for (const word of ["short-assets", "source", "short-worker", "claim", "jobs", "audio", "result", "fail"]) ROUTE_WORDS.add(word);
+for (const word of ["short-assets", "source", "short-worker", "claim", "jobs", "audio", "result", "fail", "thumbnail"]) ROUTE_WORDS.add(word);
 ROUTE_WORDS.add("places");
 ROUTE_WORDS.add("contents");
 ROUTE_WORDS.add("rest-stops");
