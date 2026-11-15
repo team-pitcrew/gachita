@@ -25,7 +25,7 @@ android {
  defaultConfig { applicationId 'io.github.teampitcrew.gachita'; minSdk 29; targetSdk 34; versionCode 1; versionName '0.1.0' }
  // sherpa-onnx의 네이티브 라이브러리는 arm64(차, Apple 실리콘 에뮬레이터)만 넣는다: JNI가 쓰는 libsherpa-onnx-jni와 libonnxruntime 둘, 약 27 MB.
  // 다른 ABI(인텔 에뮬레이터 등)에서는 라이브러리를 못 올려 1차 임베더만 쓴다(StrongVoice.kt가 실패를 받아 넘긴다) — 앱은 그대로 깔리고 돈다.
- packaging { jniLibs { excludes += ['**/libsherpa-onnx-c-api.so', '**/libsherpa-onnx-cxx-api.so',
+ packaging { jniLibs { useLegacyPackaging = true; excludes += ['**/libsherpa-onnx-c-api.so', '**/libsherpa-onnx-cxx-api.so',
   '**/x86/libonnxruntime.so', '**/x86/libsherpa-onnx-jni.so', '**/x86_64/libonnxruntime.so', '**/x86_64/libsherpa-onnx-jni.so',
   '**/armeabi-v7a/libonnxruntime.so', '**/armeabi-v7a/libsherpa-onnx-jni.so'] } }
  compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
