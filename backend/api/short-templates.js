@@ -12,7 +12,7 @@ export const templates = [
     minSeconds: 15,
     maxSeconds: 45,
     direction:
-      "Warm hand-drawn 2D sitcom frames inside a modern car. Confident thick charcoal outlines, the supplied white rounded characters exactly as drawn, soft cel shading, warm mint upholstery, sunset through the windows. Dashboard-facing two-shot; clear eye-lines and readable expressions. No photorealism, no human faces.",
+      "Warm hand-drawn 2D sitcom frames inside a modern car. Confident thick charcoal outlines, the supplied white rounded characters exactly as drawn, soft cel shading, warm mint upholstery, sunset through the windows. Dashboard-facing group shot with every supplied character in their seat; clear eye-lines and readable expressions. No photorealism, no human faces.",
   },
   {
     id: "travel-postcard-v1",
@@ -23,7 +23,7 @@ export const templates = [
     minSeconds: 15,
     maxSeconds: 45,
     direction:
-      "Beautifully illustrated travel postcard frames. The supplied rounded white characters in a car, warm watercolor landscape through the windows, paper grain, sunlit sage and cream palette. Characters remain large and expressive; no map labels, real landmarks, addresses, or location text. No photorealism, no human faces.",
+      "Beautifully illustrated travel postcard frames. All supplied rounded white characters together in a car, warm watercolor landscape through the windows, paper grain, sunlit sage and cream palette. Characters remain large and expressive; no map labels, real landmarks, addresses, or location text. No photorealism, no human faces.",
   },
 ];
 export const characters = new Set(
@@ -75,8 +75,9 @@ export function planShort(source, options = {}) {
     .sort((a, b) => b[1] - a[1])
     .map(([id]) => source.cast.find((c) => c.participantId === id))
     .filter(Boolean)
-    .slice(0, 2);
-  const cast = [0, 1].map((i) => {
+    .slice(0, 4);
+  // 많이 말한 순서로 네 명까지 캐릭터로 나온다(가족 넷). 화자 대조가 없으면 이름 없는 기본 캐릭터 둘.
+  const cast = Array.from({ length: Math.max(2, selected.length) }, (_, i) => {
     const c = selected[i];
     return {
       slot: i,
