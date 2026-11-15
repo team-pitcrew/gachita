@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { material, kenBurns, inside, make, prompt, MOTIONS, cover, coverPrompt } from "./worker.mjs";
+import { material, kenBurns, inside, make, prompt, MOTIONS, cover, coverPrompt, api } from "./worker.mjs";
 
 const job = {
   template: { name: "차 안 대화극", direction: "Warm hand-drawn 2D sitcom frames. no human faces." },
@@ -87,4 +87,18 @@ test("표지 그림(T166): 시안 표지·캐릭터 그림을 주고, 고른 그
   assert.deepEqual(given.filter((f) => f !== "cover.png"), ["cast-1.png", "cast-2.png", "reference-1.png", "reference-2.png", "scene.json"]);
   assert.match(coverPrompt(2), /글자·숫자·자막·로고·말풍선·UI를 넣지 않습니다/);
   await assert.rejects(cover(job, { drawCover: async () => ({ file: "../escape.png" }) }), (e) => e.code === "frame_path");
+});
+
+test("서버가 잠깐 다시 뜨는 동안의 연결 실패는 다시 보내고, 서버의 거절은 바로 끝냅니다", async () => {
+  process.env.GACHITA_API ??= "http://127.0.0.1:1";
+  let calls = 0;
+  const flaky = async () => { if (++calls < 3) throw new TypeError("fetch failed"); return new Response(JSON.stringify({ ok: true }), { headers: { "content-type": "application/json" } }); };
+  assert.deepEqual(await api("/x", { method: "PUT", body: Buffer.from("v"), fetcher: flaky, wait: 0 }), { ok: true });
+  assert.equal(calls, 3);
+  calls = 0;
+  await assert.rejects(api("/x", { fetcher: async () => { calls++; return new Response("", { status: 410 }); }, wait: 0 }), (e) => e.status === 410);
+  assert.equal(calls, 1);
+  calls = 0;
+  await assert.rejects(api("/claim", { method: "POST", tries: 1, fetcher: async () => { calls++; throw new TypeError("fetch failed"); }, wait: 0 }), (e) => e.code === "api_unreachable");
+  assert.equal(calls, 1);
 });
