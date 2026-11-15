@@ -7,7 +7,7 @@
     (enroll-<이름>.wav, talk-route|cafe|where|arrive-seat.wav). 화자 번호 배치(derived/)와 점검용 옛 배치(enroll-화자N.wav·drive-a/b.wav)도 읽는다.
     이름은 DEMO_NAMES(기본 정민,지민,지환,민준), 좌석은 DEMO_SEATS(기본 운전석·조수석·뒤 왼쪽·뒤 오른쪽), 각 이름이 몇 번 화자인지는 DEMO_SPEAKERS(기본 2,1,4,3 — 11/15 중앙 잠정 확정). 첫 사람이 차에서 가입한다.
   - 순정 내비는 GPS를 옮겨도 판교에 머문다(11/13·11/15 확인) — 출발 '신논현'은 서버 장소 기록(지도 선)으로만 보이고, 내비는 목적지
-    '정자 카페거리'로 안내한다. 도착(250 m 판정)은 주차 직전에 GPS를 목적지로 옮겨(adb emu geo fix) 만든다.
+    '정자 카페거리'로 안내한다. 도착 판정의 지금 위치도 내비 값이라, 도착(20·21)은 이름 '정자 카페거리'를 내비 위치 200 m 옆에 둔 목적지로 만든다.
   - 옛 가족 흐름(아이 둘·하나로마트·강릉 숙소·시드)은 DEMO_FLOW=family.
   - 녹화(DEMO_RECORD=1)는 에뮬레이터 화면·소리(앱 재생음) + 넣은 대사를 넣은 시각대로 섞는다. 에뮬레이터는 -grpc <포트> -grpc-use-token
     -audio none -read-only로 띄운다(가상 마이크 넣기는 gRPC, 호스트 마이크·스피커는 안 씀).
@@ -993,14 +993,17 @@ def drive_pitcrew(code):
     tap("일시정지"); step(18, ["멈추기 전 마지막 대화"])
     tap("녹화 재개"); step(19, ["방금 받아 적은 말"], 8)
     for t in T[19]: say(t)
-    launch("--es", "route", f"{DEST[0]},{DEST[1]},{DEST[2]}", "--ei", "approachSeconds", os.environ.get("DEMO_APPROACH_S", "1200"))  # 이제 '도착 전'
+    # 내비는 판교에 머물고(도착 판정의 '지금 위치'도 내비 값 — Car.here) GPS를 옮겨도 닿지 않는다(gap2: outside_place).
+    # 그래서 도착(20·21)은 가족 흐름의 1분 경로처럼 목적지 이름 '정자 카페거리'를 내비 위치 남쪽 NEAR_M에 둔다 — mock: 좌표만, 이름·대화·브리핑은 실제 흐름
+    here = navi_here(); end = near(here, -NEAR_M, 0)
+    launch("--es", "route", f"{end[0]},{end[1]},{DEST[2]}", "--ei", "approachSeconds", APPROACH_S)
     split(); tap("함께 타는 중", timeout=3)
-    step(20, ["정차하면 자세히", "도착까지"], 25, f"내비 목적지 {DEST[2]}(판교에서, 디버그 approachSeconds)")
+    step(20, ["정차하면 자세히"], 25, f"목적지 이름 {DEST[2]}, 좌표는 내비 위치 {here}에서 남쪽 {NEAR_M:.0f} m(내비가 판교에 머물러 정자까지 못 감)")
     for t in T[20]: say(t)
-    adb("emu", "geo", "fix", str(DEST[1]), str(DEST[0])); time.sleep(3)  # 도착 판정(250 m)용 GPS. 내비 화면은 판교에 머문다
-    park(); step(21, [f"{DEST[2]} 도착", "도착", "먼저 할 일"], 25)
-    tap("계속", timeout=6)  # 최종 목적지 브리핑 '계속' → 여행 마무리(C22)
-    adb("emu", "geo", "fix", str(HERE[1]), str(HERE[0]))  # 다음 사람을 위해 GPS를 판교로 되돌림
+    park(); step(21, [f"{DEST[2]} 도착", "먼저 할 일과 살 것을 모았어요"], 25)
+    if not tap("계속", timeout=6):  # 최종 목적지 브리핑 '계속' → 여행 마무리(C22). 없으면 폰의 '여행 끝내기'와 같은 요청으로 마친다
+        tok = st.get("trip", {}).get("mom")
+        if tok: api("PATCH", f"/trips/{code}", {"status": "ended"}, tok); note("trip.ended.by", who="폰 역할(API)")
 
 
 # ---- 녹화(선택) --------------------------------------------------------------------------------------------
