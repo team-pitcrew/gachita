@@ -2557,12 +2557,12 @@ components:
         cast:
           type: array
           minItems: 2
-          maxItems: 2
+          maxItems: 4
           items:
             type: object
             required: [slot, participantId, name, character, seat]
             properties:
-              slot: { type: integer, enum: [0, 1] }
+              slot: { type: integer, enum: [0, 1, 2, 3] }
               participantId: { type: [string, 'null'] }
               name: { type: string }
               character: { type: string }
@@ -2580,7 +2580,7 @@ components:
               seq: { type: integer }
               editVersion: { type: integer }
               participantId: { type: [string, 'null'] }
-              slot: { type: [integer, 'null'], enum: [0, 1, null] }
+              slot: { type: [integer, 'null'], enum: [0, 1, 2, 3, null] }
         shots:
           type: array
           items:

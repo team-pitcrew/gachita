@@ -76,13 +76,13 @@ export const OUTPUT = {
 
 export const prompt = (frames) => `당신은 가치타의 쇼츠 생성 일꾼입니다. skill/SKILL.md(youtube-shorts-factory)와 skill/resources/를 먼저 읽고, 그 1–5단계를 아래 규칙으로 따릅니다. 사람 확인 단계는 없습니다. 가족이 장면을 이미 골랐고 외부 생성에 동의했습니다. 확인을 묻지 말고 끝까지 진행합니다.
 
-재료는 scene.json입니다. 가족이 차 안에서 실제로 나눈 대화를 받아 적은 글(cues), 출연 캐릭터(cast, 그림은 cast-1.png·cast-2.png로 붙임), 그림 칸 ${frames}개(frames: 길이와 박자 hook/exchange/payoff), 연출(template.direction)이 들어 있습니다.
+재료는 scene.json입니다. 가족이 차 안에서 실제로 나눈 대화를 받아 적은 글(cues), 출연 캐릭터(cast, 2~4명. 그림은 cast-1.png부터 차례로 붙임), 그림 칸 ${frames}개(frames: 길이와 박자 hook/exchange/payoff), 연출(template.direction)이 들어 있습니다.
 
 1–2단계(레퍼런스 ${REFERENCE}): reference-analysis.md가 이미 있으면 그대로 씁니다. 없으면 자막을 추출해(python3의 youtube_transcript_api 또는 yt-dlp) 7축 포렌식 분석을 reference-analysis.md에 씁니다. 자막 원문은 파일로 남기지 않습니다. 네트워크는 이 레퍼런스에만 씁니다.
 3단계(각색): 레퍼런스의 감정 공식(Hook → 긴장 → 반전·Payoff)을 우리 장면에 옮깁니다. 대사는 바꾸지 않습니다(자막은 원래 말 그대로 일꾼이 붙입니다). 인물·장소·소품·Payoff 장치를 30% 이상 바꾸고 각색 체크리스트를 adaptation.md에 씁니다.
 4단계(Story JSON): storyboard.json을 schema_version "2.0"으로 씁니다. scenes는 frames와 같은 수·순서(frame 1..${frames}), video_duration은 그 칸의 seconds, video_engine은 모두 "ken_burns"(유료 엔진 금지), camera_motion은 ${MOTIONS.join("·")} 중 하나입니다.
 5단계(그림) — 스킬의 스타일 고정값(Korean actor, realistic, hyperrealistic)은 쓰지 않습니다. 대신 이렇게 합니다.
-- 인물은 붙인 캐릭터 그림만 투사합니다. 캐릭터N = cast-N.png. 모양·점 눈·입·색·소품을 그대로 지킵니다. 사람, 실제 얼굴, 사진, 실존 인물은 그리지 않습니다.
+- 인물은 붙인 캐릭터 그림만 투사합니다. 캐릭터N = cast-N.png. 칸마다 그 칸에서 말하거나 반응하는 캐릭터를 중심에 두되, 가능한 한 출연 캐릭터 모두를 같은 차 안에 둡니다. 모양·점 눈·입·색·소품을 그대로 지킵니다. 사람, 실제 얼굴, 사진, 실존 인물은 그리지 않습니다.
 - '화면 밖 목소리'는 새 인물로 만들지 않고 화면 밖에 둡니다.
 - 9:16 세로, template.direction의 화풍. 그림 안에 글자·자막·로고·말풍선을 넣지 않습니다. 자막이 올라가므로 위 15%와 아래 25%는 단순하게 비워 둡니다.
 - 내장 image_gen 도구로 칸마다 한 장 만듭니다. 캐릭터 그림을 참조로 씁니다(필요하면 view_image로 cast-N.png를 먼저 봅니다). 고른 결과를 frames/frame_0001.png, frames/frame_0002.png … 로 복사합니다.
