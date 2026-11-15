@@ -221,6 +221,22 @@ export function similarity(a, b) {
 // 확신 기준. 초안 값 — 지환 시험 음성의 정확도 표로 조정한다(ADR-0019).
 export const matchThreshold = () => Number(process.env.VOICE_MATCH_THRESHOLD ?? 0.9);
 
+// 둘째 값(강한 화자 값): 학습된 화자 모델로 기기가 계산한 값. 1차 임베더는 실제 목소리에서 같은 성별의 어른을 잘 가르지 못해
+// (11/15, 시연 원천의 교정본 36줄에서 22줄), 차와 폰이 같은 공개 모델(wespeaker resnet34, sherpa-onnx와 같은 특징 추출)로 값을 하나 더 만들어 올린다.
+// 서버는 계산하지 않는다 — 모델도 소리도 없다(ADR-0023). 받아서 1차 값과 같은 줄에 두고(지우는 규칙이 같음) 조회 때 함께 준다.
+// 이름에 모델과 판을 넣는다: 모델이나 특징 추출이 바뀌면 이름을 올려 옛 값과 섞이지 않게.
+export const STRONG_EMBEDDER = "wespeaker-resnet34-v1";
+export const STRONG_DIMS = 256;
+export function checkStrong(v) {
+  const bad = (msg) => {
+    throw { status: 400, error: `vector: ${msg}` };
+  };
+  if (!Array.isArray(v) || v.length !== STRONG_DIMS) bad(`수 ${STRONG_DIMS}개`);
+  if (!v.every((x) => typeof x === "number" && Number.isFinite(x))) bad("유한한 수만");
+  if (!v.some((x) => x !== 0)) bad("모두 0인 값은 등록할 수 없음");
+  return v;
+}
+
 // 기기에서 하는 판정(차 안 대조)의 여백 규칙. 절대 기준 하나로는 실제 목소리가 잘 갈리지 않는다: 유사도가 전체로 낮게 나오는 소리는
 // 누구와도 기준을 못 넘고, 높게 나오는 소리는 두 사람이 함께 넘어 틀린다. 그래서 후보가 둘 이상이면
 // '가장 비슷한 사람이 바닥(floor) 이상이고 두 번째 사람보다 여백(margin) 이상 앞설 때'만 붙인다. 후보가 한 명이면 위의 절대 기준을 쓴다.
