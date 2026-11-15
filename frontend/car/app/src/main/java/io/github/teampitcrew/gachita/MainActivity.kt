@@ -669,9 +669,8 @@ class MainActivity : ComponentActivity() {
             val pcm = if (to - from < 600) null else clipFile(files, from..to)?.let { runCatching { it.cut(Live.seal(this), from, to) }.getOrNull() }
             val v = pcm?.takeIf { it.size >= RATE }?.let { embed(pcmSamples(it)) }
             if (v == null) { sp.done(u.seq); continue } // 원음이 없거나 짧음: 다시 하지 않음
-            // 구역이 틀렸을 수 있어(앞뒤 사람이 이어 말함) 그 줄에서 못 찾으면 줄 없이 한 번 더
             val row = u.seatZone?.let { z -> seated.filter { it.seat.startsWith("ROW_${z + 1}_") } }
-            val r = (row?.let { vp.match(v, it.map(Person::id)) }?.takeIf { it.who != null } ?: vp.match(v, seated.map(Person::id)))
+            val r = vp.identify(v, seated.map(Person::id), row?.map(Person::id)) // 여백 규칙(Voice.kt)
             sp.set(u.seq, r.copy(sent = r.who == null)); sp.done(u.seq) // 찾았으면 서버에 남길 때까지 sent = false
             Log.i("GachitaCapture", "말한 사람 ${u.seq} 구역 ${u.seatZone ?: "모름"} ${if (r.who != null) "찾음" else "모름"} ${r.confidence}") // 이름·글자는 남기지 않는다
         }
