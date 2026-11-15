@@ -99,8 +99,9 @@ GROUP = "PITCREW"
 NAMES = (os.environ.get("DEMO_NAMES") or "정민,지민,지환,민준").split(",")
 SEATS = (os.environ.get("DEMO_SEATS") or "ROW_1_LEFT,ROW_1_RIGHT,ROW_2_LEFT,ROW_2_RIGHT").split(",")
 CREW = ("dad", "mom", "crew3", "crew4")  # 상태 파일의 자리. 화자1 = 차에서 가입하는 운전자(옛 흐름의 'dad' 자리를 그대로 씀)
-START = (37.5045, 127.0244, "신논현")  # 출발(오너). 내비는 판교에 머물러 서버 장소 기록으로만 보인다
-DEST = (37.3666, 127.1078, "정자 카페거리")  # 목적지(오너). 내비 경로·도착 판정(GPS를 옮김)
+START = (37.5045, 127.0244, "신논현")
+PATH_POINTS = os.environ.get("DEMO_PATH", "37.5045,127.0244;37.4844,127.0343;37.4470,127.0590;37.4003,127.1035;37.3666,127.1078")  # 신논현 → 정자(F5·F6 #534)  # 출발(오너). 내비는 판교에 머물러 서버 장소 기록으로만 보인다
+DEST = (37.3666, 127.1078, "정자 카페거리")  # 목적지(오너). 17–19의 내비 경로. 도착(20·21)은 이 이름을 내비 위치 옆에 둠(drive_pitcrew)
 SCENE_TALK = "talk-where"  # 고를 장면 '우리 어디로 갈까요?'(원본 영상 578–608초). 제목일 뿐 그 말이 받아 적히지는 않아(gap2) 넣은 시간대의 줄로 장면을 고른다
 if FLOW == "pitcrew":  # 사람: 부르는 이름은 옛 흐름 함수(account·ready_profile·voice_wav)와 같은 열쇠를 쓰고 프로필 이름만 화자 이름으로
     PEOPLE = {"아빠": ("아빠", "glasses", SEATS[0], NAMES[0]), "엄마": ("엄마", "healing", SEATS[1], NAMES[1]),
@@ -919,6 +920,10 @@ TALKS_REAL = {17: ["talk-route", "talk-cafe"], 19: ["talk-where"], 20: ["talk-ar
 TALKS_OLD = {17: ["drive-a"], 19: ["drive-b"], 20: []}
 
 
+def wave_seconds(path):
+    with wave.open(str(path)) as w: return w.getnframes() / w.getframerate()
+
+
 def talks():
     return TALKS_REAL if (OUT / "inputs" / "talk-route.wav").exists() else TALKS_OLD
 
@@ -1020,10 +1025,11 @@ def drive_pitcrew(code):
     rec_part(2)
     tok = st.get("trip", {}).get("mom")
     if tok: api("POST", f"/trips/{code}/places", {"kind": "start", "name": START[2], "lat": START[0], "lng": START[1], "at": int(time.time() * 1000)}, tok)
-    launch("--es", "route", f"{DEST[0]},{DEST[1]},{DEST[2]}")  # 남은 시간 기준은 앱 기본 300초 — 판교에서 약 8분이라 아직 '도착 전'이 아님
+    # 발화 위치를 신논현→정자 길 위로(F5·F6 #534 디버그 인자, 내비가 판교에 머물러 쇼츠가 한 점에 겹치는 것을 막음 — mock: 위치만). 옛 APK는 무시한다
+    T = talks(); secs = sum(wave_seconds(OUT / "inputs" / f"{t}.wav") for ts in T.values() for t in ts) + float(os.environ.get("DEMO_PAUSE_S", "30"))
+    launch("--es", "route", f"{DEST[0]},{DEST[1]},{DEST[2]}", "--es", "path", PATH_POINTS, "--ei", "pathSeconds", str(int(secs)))  # 남은 시간 기준은 앱 기본 300초 — 판교에서 약 8분이라 아직 '도착 전'이 아님
     if not split(): note("split.fail")
     drive(); tap("함께 타는 중", timeout=3); wait(["방금 받아 적은 말"], 15)
-    T = talks()
     for t in T[17]: say(t)
     step(17, ["방금 받아 적은 말"], 30, f"실제 차 안 대화 {', '.join(T[17])}")
     tap("일시정지"); step(18, ["멈추기 전 마지막 대화"])
