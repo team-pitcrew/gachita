@@ -76,8 +76,8 @@ export function shortGenerations(ctx, overrides = {}) {
     )
       fail(403, "모든 동승자의 녹음 동의가 필요해요");
   };
-  async function plan(trip, client, body) {
-    const source = await ctx.composition(trip, client);
+  async function plan(trip, client, body, composition) {
+    const source = composition ?? (await ctx.composition(trip, client));
     const p = planShort(source, body);
     const { rows } = await client.query(
       "SELECT object_key FROM recordings WHERE trip_code=$1 AND moment_id=$2 AND generation=$3 AND deleted_at IS NULL",
@@ -459,5 +459,17 @@ export function shortGenerations(ctx, overrides = {}) {
     timer.unref();
     return () => clearInterval(timer);
   }
-  return { request, worker, tick, start, valid };
+  // 이 영상이 지금 원본과 같은가(갤러리 목록, T162). valid와 같은 비교를 잠금 없이 한다.
+  async function fresh(trip, id, composition) {
+    const row = (await db().query("SELECT plan, source_key FROM short_generations WHERE id=$1", [id])).rows[0];
+    if (!row) return false;
+    try {
+      const current = await plan(trip, db(), row.plan, composition);
+      return current.plan.planHash === row.plan.planHash && current.sourceKey === row.source_key;
+    } catch (e) {
+      if ([400, 404, 409].includes(e.status)) return false;
+      throw e;
+    }
+  }
+  return { request, worker, tick, start, valid, fresh };
 }

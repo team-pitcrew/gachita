@@ -371,7 +371,7 @@ async function profiles(req, seg, b) {
   if (seg[1] === "trips" && !seg[2]) {
     // 내 여행과 콘텐츠 목록(T131, places.js): 콘텐츠 기록 화면(갤러리·타임라인·지도)이 읽는다.
     if (m !== "GET") fail(405, "GET만 됨");
-    return myTrips((await profileOf(req)) ?? fail(401, "프로필 토큰이 필요함"));
+    return myTrips((await profileOf(req)) ?? fail(401, "프로필 토큰이 필요함"), freshMedia);
   }
   if (seg[1] === "moments" && !seg[2]) {
     // 한 여행의 내 앨범 장면(T81 공유 후보). 피드와 달리 발화와 섞지도 100개로 자르지도 않는다 — 여행당 장면은 500개가 상한이다.
@@ -1259,7 +1259,7 @@ async function handle(trip, { req, m, sub, id, leaf, b, query, profile }, client
     // 콘텐츠 기록(F6): 프로필 토큰이 없는 기기(차)가 이 여행 하나를 /profiles/me/trips 항목과 같은 모양으로 읽는다(places.js).
     if (id) fail(404, "없는 경로");
     if (m !== "GET") fail(405, "GET만 됨");
-    return tripContents(trip, participantOf(req, trip));
+    return tripContents(trip, participantOf(req, trip), freshMedia);
   }
 
   if (sub === "moments" && m === "POST" && !id) {
@@ -1553,6 +1553,15 @@ async function composition(trip, client, all) {
 export const shortServiceContext = { withTrip, participantOf, composition };
 const shortService = shortGenerations(shortServiceContext);
 const shortAssetService = shortAssets(shortServiceContext);
+// 콘텐츠 기록(places.js)에 둘 영상: 지금 원본과 같은 것만(T162). 원본은 여행마다 한 번 읽는다.
+// ponytail: 영상마다 해시를 다시 센다. 여행 하나에 영상이 수백 개가 되면 원본 해시를 장면마다 캐시한다.
+async function freshMedia(trip, rows) {
+  if (!rows.length) return new Set();
+  const current = await composition(trip, tripsDb());
+  const ok = new Set();
+  for (const r of rows) if (await (r.kind === "device" ? shortAssetService : shortService).fresh(trip, r.id, current)) ok.add(r.id);
+  return ok;
+}
 const tripAudioService = tripAudio({ withTrip, participantOf, sweepClips, queueRetranscribe });
 
 // 확장자 없는 주소는 화면이다: 그 폴더의 index.html(/demo), 없으면 웹앱 첫 화면 — Google 로그인 콜백처럼 웹앱이 주소를 읽는다.

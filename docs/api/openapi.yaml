@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: 가치타 API
-  version: 0.18.0
+  version: 0.19.0
   summary: 여행 세션, 기기 프로필과 이메일 계정, 동승 연결, 부탁, 장면, 기록본, 화자 대조, 여행 전체 음성
   description: |
     웹앱(frontend/web)과 차량 앱(frontend/car)이 부르는 API입니다. 구현은 backend/api/server.js입니다.
@@ -1624,7 +1624,7 @@ paths:
     post:
       tags: [그룹]
       summary: 그룹 만들기
-      description: 만든 사람이 대표(owner)입니다. 가족(`family`)이면 대표 자리를 운전석(`ROW_1_LEFT`)에 두고, 동승(`guest`)이면 자리 없이 시작합니다. 한 사람은 그룹 20개까지 속합니다(넘으면 409).
+      description: 만든 사람이 대표(owner)입니다. 가족·동승 모두 대표 자리를 운전석(`ROW_1_LEFT`)에 둡니다(T162). 한 사람은 그룹 20개까지 속합니다(넘으면 409).
       security: [{ profileToken: [] }]
       requestBody:
         required: true
@@ -1682,7 +1682,8 @@ paths:
       tags: [그룹]
       summary: 초대 코드로 들어가기
       description: |
-        프로필 토큰으로 성인 구성원(`adult`)이 되어 그룹을 돌려줍니다. 이미 구성원이면 그대로 200입니다. 코드는 24시간 동안 여러 사람이 씁니다(그룹은 10명까지, 넘으면 409).
+        프로필 토큰으로 성인 구성원(`adult`)이 되어 그룹을 돌려줍니다. 이미 구성원이면 그대로 200입니다(자리도 그대로). 코드는 24시간 동안 여러 사람이 씁니다(그룹은 10명까지, 넘으면 409).
+        새로 들어온 사람은 조수석 → 뒤 왼쪽 → 뒤 오른쪽 차례로 빈자리에 앉습니다(T162). 운전석·뒤 가운데는 고르지 않고, 다 차 있으면 자리 없이(`seat: null`) 들어갑니다.
         구성원의 `consent`는 그 사람의 계정 동의(지금 문구 판)를 따라갑니다. 꺼져 있으면 `consent: false`로 들어가고 화면이 동의(`PATCH /profiles/me`)를 받습니다.
         틀린 코드 시도는 프로필마다 10분에 10번, 프로세스마다 60번까지입니다(넘으면 429, 맞는 코드도 잠시 막힘).
       security: [{ profileToken: [] }]
@@ -1701,6 +1702,7 @@ paths:
       description: |
         계정 없는 아이 프로필을 만들어 그룹에 넣습니다(role `child`). 만든 사람(대표나 성인)이 보호자(`guardianId`)이고, 아이의 동의는 보호자 동의(`guardianConsent`)입니다.
         아이에게는 토큰이 없습니다. 여행 참가자 토큰은 그룹으로 여행을 만들 때 보호자 기기가 받습니다. 그룹은 10명까지(넘으면 409).
+        아이는 뒤 왼쪽 → 뒤 오른쪽 → 조수석 차례로 빈자리에 앉습니다(T162). 다 차 있으면 자리 없이 들어갑니다.
       security: [{ profileToken: [] }]
       requestBody:
         required: true
@@ -2221,7 +2223,7 @@ paths:
       summary: 전체 음성 올리기 시작
       description: |
         올리기 전에 전체 크기·길이·첫 표본의 시각을 알립니다. 같은 값으로 다시 부르면 받은 조각을 그대로 두고, 이미 다 올린 것과 같으면 `ready`를 그대로 줍니다(재시도 안전). 값이 다르면 새로 올리기를 열고 받던 조각을 버립니다(다 올린 앞의 것은 새것을 다 올릴 때까지 남음).
-        그 여행의 발화를 올린 기기(참가자)만, 녹음에 모두 동의한 동안, 지금 동의 세대로만 받습니다. 옛 세대·지운 전체 음성·다른 기기가 올리는 중이면 `409`(차는 버림), 동의하지 않은 탑승자가 있으면 `403`(나중에 다시), 합치는 중이면 `429`(잠시 뒤 다시). 8시간(921,600,000 B)을 넘으면 `413`.
+        그 여행의 발화를 올린 기기(참가자)만, 녹음에 모두 동의한 동안, 지금 동의 세대로만 받습니다. 받아 적은 말이 하나도 없는 여행은 내비 장소를 올린 참가자(차)나 운전석 참가자가 올립니다(T162). 옛 세대·지운 전체 음성·다른 기기가 올리는 중이면 `409`(차는 버림), 동의하지 않은 탑승자가 있으면 `403`(나중에 다시), 합치는 중이면 `429`(잠시 뒤 다시). 8시간(921,600,000 B)을 넘으면 `413`.
       security: [{ participantToken: [] }]
       requestBody:
         required: true
@@ -2908,7 +2910,7 @@ components:
         by: { type: string, description: 남긴 참가자 id }
     MyTrip:
       type: object
-      required: [code, title, status, createdAt, startedAt, endedAt, groupName, members, places, route, contents]
+      required: [code, title, status, createdAt, startedAt, endedAt, groupName, groupId, recording, me, members, places, route, contents]
       properties:
         code: { type: string }
         title: { type: string }
@@ -2917,6 +2919,16 @@ components:
         startedAt: { type: [integer, "null"], description: 처음 주행을 시작한 시각. 그 전·옛 여행은 null }
         endedAt: { type: [integer, "null"], description: 여행을 끝낸 시각 }
         groupName: { type: [string, "null"], description: 그룹으로 만든 여행일 때 그 그룹 이름 }
+        groupId: { type: [string, "null"], description: "그룹으로 만든 여행일 때 그 그룹 id(T162). 폰이 내 그룹의 진행 중 여행을 찾는다" }
+        recording: { type: boolean, description: 지금 기록 중인지(T162) }
+        me:
+          type: object
+          description: "이 여행에서의 나(T162). 참가자 토큰은 싣지 않는다 — 토큰이 없는 폰은 프로필 토큰으로 POST /trips/{code}/participants를 불러 받는다"
+          required: [participantId, seat, consent]
+          properties:
+            participantId: { type: string }
+            seat: { $ref: "#/components/schemas/Seat" }
+            consent: { type: boolean, description: 이 여행에서의 녹음 동의 }
         members:
           type: array
           items:
@@ -2935,6 +2947,7 @@ components:
           items: { type: array, prefixItems: [{ type: number }, { type: number }, { type: integer }], minItems: 3, maxItems: 3, description: "[lat, lng, at]" }
         contents:
           type: array
+          description: 보관·생성을 마친 영상 가운데 지금 원본(원음·자막·화자)과 같은 것만(T162). 원본이 바뀐 영상은 파일이 409라 싣지 않는다
           items:
             type: object
             required: [id, momentId, title, seconds, at, from, to, lat, lng, place, kind, cast, lines, url]

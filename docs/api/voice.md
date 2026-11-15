@@ -53,7 +53,7 @@
 | `POST /recordings` | 이 여행의 유효한 참가 + 녹음 동의 + 탑승자 모두 동의 + 이 여행의 장면 클립만(T76) |
 | `GET /recordings/:id` | 이 여행의 참가자 + 녹음 동의(기록본과 같음, T76) |
 | `DELETE /recordings/:id` | 이 여행의 참가자(원음 삭제 요청, 동의 여부 무관, T76) |
-| `PUT /audio/parts/:n`, `POST /audio/start`, `POST /audio/complete` | 그 여행의 발화를 올린 기기의 참가자(기기 주인) + 탑승자 모두 녹음에 동의 + 지금 동의 세대(ADR-0024) |
+| `PUT /audio/parts/:n`, `POST /audio/start`, `POST /audio/complete` | 그 여행의 발화를 올린 기기의 참가자(기기 주인) + 탑승자 모두 녹음에 동의 + 지금 동의 세대(ADR-0024). 받아 적은 말이 하나도 없는 여행은 내비 장소를 올린 참가자(차)나 운전석 참가자가 기기 주인을 대신한다(T162 — 아니면 차가 403을 '나중에 다시'로 보고 C22가 0%에서 멈췄음) |
 | `GET /audio` | 이 여행의 참가자(진행률만, 동의 여부 무관) |
 | `DELETE /audio` | 이 여행의 참가자(전체 음성 지우기, 동의 여부 무관) |
 
