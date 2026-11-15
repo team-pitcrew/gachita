@@ -1,5 +1,6 @@
 package io.github.teampitcrew.gachita
 
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.foundation.layout.size
@@ -182,7 +183,7 @@ fun InfoCard(
     onClick: (() -> Unit)? = null,
 ) {
     val c = MaterialTheme.colorScheme
-    Surface(modifier.clip(CarShape.Card).then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier), CarShape.Card,
+    Surface(modifier.clip(CarShape.Card).then(if (onClick != null) Modifier.clickable(role = Role.Button, onClick = onClick) else Modifier), CarShape.Card, // 누르는 카드는 단추로 읽히고 누름 물결이 보인다
         color = if (soft) c.primaryContainer else c.surface) {
         Row(Modifier.padding(26.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(24.dp)) {
             if (photo != null) Image(photo.asImageBitmap(), null, Modifier.size(92.dp).clip(CarShape.Face), contentScale = ContentScale.Crop)
