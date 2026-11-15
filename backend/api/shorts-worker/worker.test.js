@@ -120,3 +120,17 @@ test("그룹 프로필의 좌석을 모든 칸의 지침에 고정합니다(운�
   assert.doesNotMatch(JSON.stringify(m), /서준|아빠|엄마/, "좌석을 넣어도 이름은 보내지 않습니다");
   assert.match(seatBlock(material(job).cast), /운전석은 비워 두고 아무도 운전대를 잡지 않습니다/, "운전석 주인이 출연하지 않으면 아무도 운전하지 않음");
 });
+test("앞단의 502–504는 다시 보내고, 다시 보낸 끝의 거절에는 시도 횟수를 남깁니다", async () => {
+  process.env.GACHITA_API ??= "http://127.0.0.1:1";
+  let calls = 0;
+  const deploy = async () => (++calls < 3 ? new Response("", { status: 503 }) : new Response(JSON.stringify({ ok: true }), { headers: { "content-type": "application/json" } }));
+  assert.deepEqual(await api("/x", { method: "PUT", body: Buffer.from("v"), fetcher: deploy, wait: 0 }), { ok: true });
+  assert.equal(calls, 3);
+  calls = 0;
+  await assert.rejects(api("/x", { fetcher: async () => { calls++; return new Response("", { status: 502 }); }, tries: 2, wait: 0 }), (e) => e.status === 502 && e.attempts === 2);
+  assert.equal(calls, 2);
+  calls = 0;
+  const lost = async () => (++calls === 1 ? new Response("", { status: 504 }) : new Response("", { status: 410 }));
+  await assert.rejects(api("/x", { method: "PUT", fetcher: lost, wait: 0 }), (e) => e.status === 410 && e.attempts === 2, "응답만 잃고 이미 받아들여진 경우를 가릴 수 있다");
+});
+
