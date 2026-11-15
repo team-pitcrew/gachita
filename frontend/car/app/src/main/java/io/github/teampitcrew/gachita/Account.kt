@@ -37,7 +37,8 @@ enum class OnboardStep { WELCOME, SIGNUP, LOGIN, CONSENT, PROFILE, PHOTO, VOICE,
  */
 fun missingStep(p: AccountProfile): OnboardStep? = when {
     !(p.consent && p.consentVersion == CONSENT_VERSION) -> OnboardStep.CONSENT
-    p.name.isBlank() || p.email?.let { p.name == provisionalName(it) } == true || p.character.isBlank() -> OnboardStep.PROFILE
+    // 가입 때는 캐릭터가 비어 있고 C04 저장이 늘 캐릭터를 넣는다. 이름이 이메일 앞부분과 같아도(mango@…에 'mango') 저장했으면 넘어간다
+    p.name.isBlank() || p.character.isBlank() -> OnboardStep.PROFILE
     !p.hasVoice -> OnboardStep.VOICE
     else -> null
 }

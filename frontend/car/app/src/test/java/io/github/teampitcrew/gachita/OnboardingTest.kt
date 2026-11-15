@@ -30,7 +30,8 @@ class OnboardingTest {
         assertNull(missingStep(done)) // DB에 있는 계정: 온보딩을 다시 받지 않고 가족·그룹 화면으로
         assertEquals(OnboardStep.CONSENT, missingStep(done.copy(consentVersion = "2026-11-01"))) // 옛 판에 동의
         assertEquals(OnboardStep.CONSENT, missingStep(done.copy(consent = false)))
-        assertEquals(OnboardStep.PROFILE, missingStep(done.copy(name = "minjun"))) // 이메일 앞부분은 이름이 아님
+        assertNull(missingStep(done.copy(name = "minjun"))) // 이메일 앞부분과 같은 이름도 C04에서 저장했으면(캐릭터 있음) 다시 묻지 않는다
+        assertEquals(OnboardStep.PROFILE, missingStep(done.copy(name = "minjun", character = ""))) // 가입 직후(캐릭터 없음)
         assertEquals(OnboardStep.PROFILE, missingStep(done.copy(character = "")))
         assertEquals(OnboardStep.VOICE, missingStep(done.copy(hasVoice = false)))
     }
