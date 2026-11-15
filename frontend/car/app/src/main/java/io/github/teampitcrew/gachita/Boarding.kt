@@ -31,6 +31,7 @@ internal data class BoardingState(
     val invite: BoardingInvite? = null,
     val issuing: Boolean = false,
     val joinedBefore: Set<String> = emptySet(),
+    val agreedBefore: Set<String> = emptySet(), // QR을 열 때 이미 동의한 사람: 그 뒤 휴대폰에서 동의한 구성원도 '참여 완료'에 센다
 )
 internal sealed interface BoardingAction {
     data object Close : BoardingAction
@@ -65,7 +66,8 @@ internal fun BoardingPanel(
     val c = MaterialTheme.colorScheme
     val members = trip.people.map { GroupMember(it.id, it.name, it.character, false, it.consent, "", it.seat.takeIf { s -> s.isNotBlank() }) }
     val canMove = !session.busy && session.online && session.gear == "P"
-    val canInvite = canMove && freeSeats(trip, seats).isNotEmpty() && trip.status in setOf("boarding", "parked") &&
+    // 빈자리가 없어도 연다: 이미 탄 구성원이 휴대폰으로 다시 연결해 녹음에 동의한다(흐름점검 95)
+    val canInvite = canMove && trip.status in setOf("boarding", "parked") &&
         trip.people.any { it.seat == Seat.ROW_1_LEFT.name && it.id in session.ours }
     Column(modifier, verticalArrangement = Arrangement.spacedBy(Shell.PARKED.gap)) {
         when (state.page) {
@@ -126,7 +128,7 @@ private fun BoardingQr(state: BoardingState, session: Session, onAction: (Boardi
     }
     LaunchedEffect(toast) { if (toast.isNotEmpty()) { delay(2500); toast = "" } }
     val invite = state.invite?.takeIf { it.secondsLeft(now) > 0 }
-    val joined = session.trip?.people.orEmpty().filter { it.id !in state.joinedBefore }
+    val joined = session.trip?.people.orEmpty().filter { it.id !in state.joinedBefore || it.consent && it.id !in state.agreedBefore }
     val title = session.trip?.title?.ifBlank { "함께하는 여행" } ?: "함께하는 여행"
     fun copy(text: String) {
         (ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("가치타 참석 링크", text))

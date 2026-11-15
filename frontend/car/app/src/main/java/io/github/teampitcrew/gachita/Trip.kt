@@ -177,8 +177,10 @@ data class Session(
     /** 서버에서 받은 최신 여행을 반영한다. 서버도 모두 꺼짐이면 끄기 대기를 푼다. */
     fun withTrip(t: Trip): Session {
         val pending = offPending && t.people.any { it.consent && (withdrawn.isEmpty() || it.id in withdrawn) }
+        // 폰 '기록 중지'(P17–P21): 주행 중인데 서버 기록이 켜짐 → 꺼짐이면 차도 멈춘다. 주차하면 서버가 기록을 끄는 것(status가 바뀜)과 가른다
+        val phoneStopped = trip?.recording == true && !t.recording && trip.status == "driving" && t.status == "driving"
         return copy(trip = t, online = true, offPending = pending, withdrawn = if (pending) withdrawn else emptySet(),
-            started = started && trip?.generation == t.generation && t.status != "ended").settle() // 끝난 여행은 녹음하지 않는다(기록·동의는 그대로)
+            started = started && !phoneStopped && trip?.generation == t.generation && t.status != "ended").settle() // 끝난 여행은 녹음하지 않는다(기록·동의는 그대로)
     }
 
     fun withGear(g: String?) = copy(gear = g).settle()
@@ -201,4 +203,15 @@ data class Session(
         fun restore(tripJson: String?, offPending: Boolean, started: Boolean, ours: Set<String> = emptySet(), withdrawn: Set<String> = emptySet()) =
             Session(trip = tripJson?.let { runCatching { parseTrip(it) }.getOrNull() }, online = false, offPending = offPending, started = started, ours = ours, withdrawn = withdrawn).settle()
     }
+}
+
+/**
+ * 여행 제목 '{지역} {무리} 여행'(시안 꼴 '강릉 가족 여행', 날짜는 화면이 따로 붙인다): 지역 = 내비 목적지 이름의 첫 낱말, 무리 = 그룹 이름
+ * (기본 이름 '우리 가족'이면 '가족'). 이번 시연은 '정자 PITCREW 여행'. 목적지도 그룹도 모르면 fallback.
+ * ponytail: 지역은 목적지 이름 첫 낱말. 좌표로 시·군·동을 얻는 길(역지오코딩)이 생기면 바꾼다. 만든 뒤 제목을 바꾸는 서버 길은 아직 없다.
+ */
+internal fun tripTitle(destination: String?, group: CarGroup?, fallback: String): String {
+    val region = destination?.trim()?.split(Regex("\\s+"))?.firstOrNull()?.takeIf { it.isNotBlank() }
+    val who = group?.name?.let { if (it == "우리 가족") "가족" else it }?.takeIf { it.isNotBlank() }
+    return listOfNotNull(region, who).takeIf { it.isNotEmpty() }?.joinToString(" ", postfix = " 여행") ?: fallback
 }
