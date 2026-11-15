@@ -47,6 +47,17 @@ const invalid = (error) => {
 };
 const round = (n) => Math.round(n * 1000) / 1000;
 
+// 사람과 캐릭터의 짝은 고정값이다(오너 11/15): 프로필 캐릭터가 있으면 그것, 없으면 그 사람 이름에서 늘 같은
+// 캐릭터를 고른다(말한 순서·장면·여행과 무관). 이름 없는 자리만 기본 캐릭터.
+// ponytail: 이름 해시라 프로필 캐릭터가 없는 두 사람이 같은 캐릭터가 될 수 있다(1/20). 겹치면 프로필에서 고르게 안내.
+const roster = [...characters];
+export const fixedCharacter = (c) =>
+  characters.has(c?.character)
+    ? c.character
+    : c?.name
+      ? roster[[...createHash("sha256").update(c.name).digest()].reduce((n, b) => (n * 31 + b) % roster.length, 0)]
+      : null;
+
 export function planShort(source, options = {}) {
   const template =
     templates.find((t) => t.id === (options.templateId ?? templates[0].id)) ??
@@ -84,11 +95,7 @@ export function planShort(source, options = {}) {
       slot: i,
       participantId: c?.participantId ?? null,
       name: c?.name ?? "화자 미확인",
-      character: characters.has(c?.character)
-        ? c.character
-        : i
-          ? "basic-small"
-          : "basic",
+      character: fixedCharacter(c) ?? (i ? "basic-small" : "basic"),
       seat: c?.seat ?? null,
     };
   });
