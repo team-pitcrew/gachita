@@ -5,7 +5,7 @@
 뽑은 목소리(사람마다 등록 클립 + 주행 대화 30초 구간 넷)를 넣고, 여행 뒤 '우리 어디로 갈까요?' 구간을 골라 쇼츠로 만든다.
   - 입력(저장소 밖, 개인 목소리, 16 kHz 2채널, 왼쪽 = 앞줄): DEMO_INPUTS = 화자 식별 세션의 derived 폴더
     (enroll/enroll-speakerN-front|rear.wav, inputs/talk-route|cafe|where|arrive.wav). 점검용 옛 배치(enroll-화자N.wav·drive-a/b.wav)도 읽는다.
-    이름은 DEMO_NAMES(기본 지환,민준,지민,상현), 좌석은 DEMO_SEATS, 각 이름이 몇 번 화자인지는 DEMO_SPEAKERS(기본 1,2,3,4). 첫 사람이 차에서 가입한다.
+    이름은 DEMO_NAMES(기본 정민,지민,지환,민준), 좌석은 DEMO_SEATS(기본 운전석·조수석·뒤 왼쪽·뒤 오른쪽), 각 이름이 몇 번 화자인지는 DEMO_SPEAKERS(기본 2,1,4,3 — 11/15 중앙 잠정 확정). 첫 사람이 차에서 가입한다.
   - 순정 내비는 GPS를 옮겨도 판교에 머문다(11/13·11/15 확인) — 출발 '신논현'은 서버 장소 기록(지도 선)으로만 보이고, 내비는 목적지
     '정자 카페거리'로 안내한다. 도착(250 m 판정)은 주차 직전에 GPS를 목적지로 옮겨(adb emu geo fix) 만든다.
   - 옛 가족 흐름(아이 둘·하나로마트·강릉 숙소·시드)은 DEMO_FLOW=family.
@@ -94,9 +94,9 @@ FAR_LODGE = (37.7519, 128.8761)  # 강릉 경포 쪽(멀어서 '곧 도착'이 �
 # ---- D# 실흐름 PITCREW(T159) --------------------------------------------------------------------------------------
 FLOW = os.environ.get("DEMO_FLOW", "pitcrew")  # pitcrew(기본) | family(옛 35단계 시안 흐름)
 GROUP = "PITCREW"
-# 구성원 이름(오너 11/15: 지환·민준·지민·상현). 화자1..4(영상에서 뽑은 클립 번호)와 이름의 짝, 좌석은 화자 식별 세션이 추정하고 오너가 확인하면
-# DEMO_NAMES(화자1..4 순서)·DEMO_SEATS(같은 순서, ROW_1_LEFT=운전석)로 바꾼다. 화자1이 차에서 가입하는 사람(운전석이 아니어도 됨).
-NAMES = (os.environ.get("DEMO_NAMES") or "지환,민준,지민,상현").split(",")
+# 구성원(11/15 중앙: 운전석 정민·조수석 지민·뒤 왼쪽 지환·뒤 오른쪽 민준, 차에서 가입하는 사람은 첫째 = 운전석 정민).
+# DEMO_NAMES·DEMO_SEATS(같은 순서, ROW_1_LEFT=운전석), 각 이름의 영상 화자 번호는 DEMO_SPEAKERS(잠정 화자2=정민·1=지민·4=지환·3=민준).
+NAMES = (os.environ.get("DEMO_NAMES") or "정민,지민,지환,민준").split(",")
 SEATS = (os.environ.get("DEMO_SEATS") or "ROW_1_LEFT,ROW_1_RIGHT,ROW_2_LEFT,ROW_2_RIGHT").split(",")
 CREW = ("dad", "mom", "crew3", "crew4")  # 상태 파일의 자리. 화자1 = 차에서 가입하는 운전자(옛 흐름의 'dad' 자리를 그대로 씀)
 START = (37.5045, 127.0244, "신논현")  # 출발(오너). 내비는 판교에 머물러 서버 장소 기록으로만 보인다
@@ -909,7 +909,7 @@ def pitcrew_inputs():
     옛 배치(점검용 합성): enroll-화자N.wav + drive-a/b.wav. NAMES[i]가 몇 번 화자인지는 DEMO_SPEAKERS(기본 1,2,3,4 — 오너가 들어 보고 정함)."""
     src, dst = pathlib.Path(os.environ.get("DEMO_INPUTS", OUT / "inputs")), OUT / "inputs"
     dst.mkdir(parents=True, exist_ok=True)
-    spk = (os.environ.get("DEMO_SPEAKERS") or "1,2,3,4").split(",")
+    spk = (os.environ.get("DEMO_SPEAKERS") or "2,1,4,3").split(",")
     if (src / "enroll").is_dir():
         pairs = [(src / "enroll" / f"enroll-speaker{n}-{'front' if seat.startswith('ROW_1') else 'rear'}.wav", f"enroll-{who}") for n, seat, who in zip(spk, SEATS, PEOPLE)]
         pairs += [(src / "inputs" / f"{t}.wav", t) for ts in TALKS_REAL.values() for t in ts]
