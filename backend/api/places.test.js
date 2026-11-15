@@ -245,6 +245,31 @@ test("내 여행: 내 프로필이 참가한 여행만 최신 순으로, 구성�
   assert.deepEqual([after.route, after.contents], [[], []]);
 });
 
+test("?status=active는 끝나지 않은 여행만 같은 모양으로, 장소·경로·콘텐츠는 셈하지 않고 빈 목록으로 준다(T165)", async () => {
+  const me = await profile("민준");
+  const done = await newTrip("어제 여행");
+  await join(done.code, me, "ROW_1_LEFT");
+  await call("PATCH", `/trips/${done.code}`, { status: "ended" });
+  const now = await newTrip("정자 PITCREW 여행");
+  const b = await join(now.code, me, "ROW_1_LEFT");
+  await call("POST", `/trips/${now.code}/places`, { kind: "start", name: "신논현역" }, b.token);
+  await call("PATCH", `/trips/${now.code}`, { status: "driving" });
+  assert.equal((await call("POST", `/trips/${now.code}/utterances`, { device: "car", generation: 1, items: [{ seq: 1, at: now.createdAt + 1000, text: "출발", lat: 37.5, lng: 127 }] }, b.token)).status, 200);
+
+  const full = (await call("GET", "/profiles/me/trips", undefined, me.token)).data.items;
+  assert.deepEqual(full.map((t) => t.code), [now.code, done.code]);
+  const { status, data } = await call("GET", "/profiles/me/trips?status=active", undefined, me.token);
+  assert.equal(status, 200);
+  assert.deepEqual(data.items.map((t) => t.code), [now.code], "끝난 여행은 빠짐");
+  const [light] = data.items;
+  assert.deepEqual(Object.keys(light).sort(), Object.keys(full[0]).sort(), "모양은 같다");
+  assert.deepEqual([light.places, light.route, light.contents], [[], [], []], "장소·경로·콘텐츠는 셈하지 않음");
+  assert.deepEqual([light.status, light.recording, light.me, light.members.length], ["driving", true, { participantId: b.id, seat: "ROW_1_LEFT", consent: true }, 1]);
+  assert.ok(full[0].places.length && full[0].route.length, "전체 목록에는 그대로");
+  assert.equal((await call("GET", "/profiles/me/trips?status=ended", undefined, me.token)).status, 400);
+  assert.equal((await call("GET", "/profiles/me/trips?status=active")).status, 401);
+});
+
 test("내 여행은 50개까지", async () => {
   const me = await profile("자주 타는 사람");
   for (let i = 0; i < 52; i++) await join((await newTrip(`여행 ${i}`)).code, me, "ROW_1_LEFT");

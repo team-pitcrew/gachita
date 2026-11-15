@@ -371,7 +371,11 @@ async function profiles(req, seg, b) {
   if (seg[1] === "trips" && !seg[2]) {
     // 내 여행과 콘텐츠 목록(T131, places.js): 콘텐츠 기록 화면(갤러리·타임라인·지도)이 읽는다.
     if (m !== "GET") fail(405, "GET만 됨");
-    return myTrips((await profileOf(req)) ?? fail(401, "프로필 토큰이 필요함"), freshMedia);
+    const me = (await profileOf(req)) ?? fail(401, "프로필 토큰이 필요함");
+    // ?status=active(T165): 끝나지 않은 여행만, 경로·장소·콘텐츠는 셈하지 않고 빈 목록으로. 폰 처음 화면이 진행 중 여행을 6초마다 찾는다.
+    const status = new URL(req.url, "http://localhost").searchParams.get("status");
+    if (status !== null && status !== "active") fail(400, "status: active만 됨");
+    return myTrips(me, freshMedia, { active: status === "active" });
   }
   if (seg[1] === "moments" && !seg[2]) {
     // 한 여행의 내 앨범 장면(T81 공유 후보). 피드와 달리 발화와 섞지도 100개로 자르지도 않는다 — 여행당 장면은 500개가 상한이다.
