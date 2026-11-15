@@ -41,26 +41,27 @@ const placeAt = (places, at) => places.findLast((p) => p.at <= at)?.name ?? null
 
 // GET /profiles/me/trips: 내 프로필이 참가한 여행을 최신 순으로. 여행을 가로질러 두 저장소를 읽는다.
 // ponytail: 참가자 검색은 문서 포함(@>)이라 여행 표를 훑는다. 여행이 수만 개가 되면 참가자 표나 GIN 색인으로.
-export async function myTrips(me) {
+export async function myTrips(me, fresh) {
   const { rows } = await tripsDb().query(
     "SELECT doc FROM trips WHERE doc->'participants' @> $1::jsonb ORDER BY created_at DESC, code LIMIT $2",
     [JSON.stringify([{ profileId: me.id }]), MAX_TRIPS]
   );
   const trips = rows.map((r) => r.doc);
-  return [200, { items: await tripItems(trips, (t) => t.participants.find((p) => p.profileId === me.id)?.consent) }];
+  return [200, { items: await tripItems(trips, (t) => t.participants.find((p) => p.profileId === me.id), fresh) }];
 }
 
 // GET /trips/{code}/contents(F6): 프로필 토큰이 없는 기기(차)가 지금 여행 하나의 콘텐츠 기록을 /profiles/me/trips 항목과 같은 모양으로 읽는다.
 // 기록본과 같이 녹음에 동의한 참가자 토큰만(아니면 403). 영상 파일은 지금처럼 전원 동의 규칙(short-assets.md).
-export async function tripContents(trip, caller) {
+export async function tripContents(trip, caller, fresh) {
   if (!caller.consent) fail(403, "녹음에 동의한 참가자만 볼 수 있음");
-  return [200, (await tripItems([trip], () => true))[0]];
+  return [200, (await tripItems([trip], () => caller, fresh))[0]];
 }
 
-// 여행들을 콘텐츠 기록 항목으로. open(trip)이 참이면(그 여행에서 읽는 사람이 녹음에 동의) 장소·경로·콘텐츠를 채운다 —
+// 여행들을 콘텐츠 기록 항목으로. viewerOf(trip)는 읽는 사람의 참가자다. 그 참가자가 녹음에 동의했으면 장소·경로·콘텐츠를 채운다 —
 // 기록본과 같은 규칙이고, 아니면 빈 목록이다(T136: 장소도 동의한 참가자만).
-async function tripItems(trips, consented) {
-  const open = trips.filter(consented);
+// fresh(trip, rows)는 그 여행의 영상 가운데 지금 원본(원음·자막·화자)과 같은 것의 id를 준다(server.js). 없으면 거르지 않는다.
+async function tripItems(trips, viewerOf, fresh) {
+  const open = trips.filter((t) => viewerOf(t)?.consent);
   const codes = open.map((t) => t.code);
   const generations = open.map((t) => t.generation ?? 1);
 
@@ -81,7 +82,7 @@ async function tripItems(trips, consented) {
       )
     : { rows: [] };
   // 콘텐츠: 서버에 보관을 마친 기본 영상(기기에서 만든 것)과 생성을 마친 영상. 지금 동의 세대의 것만.
-  const { rows: media } = codes.length
+  const { rows: done } = codes.length
     ? await tripsDb().query(
         `WITH g AS (SELECT * FROM unnest($1::text[], $2::int[]) AS g(code, gen))
          SELECT a.id, a.trip_code, a.moment_id, (a.media->>'seconds')::float AS seconds, a.created_at, 'device' AS kind
@@ -92,6 +93,9 @@ async function tripItems(trips, consented) {
         [codes, generations]
       )
     : { rows: [] };
+  // 갤러리에는 지금 받을 수 있는 영상만 둔다(T162): 원음·자막·화자가 바뀐 영상은 파일이 409라, 목록에 두면 눌러도 열리지 않았다.
+  const kept = fresh ? new Set((await Promise.all(open.map((t) => fresh(t, done.filter((r) => r.trip_code === t.code))))).flatMap((ids) => [...ids])) : null;
+  const media = kept ? done.filter((r) => kept.has(r.id)) : done;
   // 장면 구간(momentSpan)의 발화: 갤러리 타일의 캐릭터(말한 사람)와 플레이어 자막 줄(F6). 지금 동의 세대의 것만, 장면마다 MAX_LINES줄.
   const byCode = new Map(open.map((t) => [t.code, t]));
   const spans = [...new Map(media.map((r) => [`${r.trip_code}:${r.moment_id}`, r])).values()]
@@ -169,6 +173,11 @@ async function tripItems(trips, consented) {
       startedAt: trip.startedAt ?? null,
       endedAt: trip.endedAt ?? null,
       groupName: trip.groupName ?? null,
+      // 폰이 그룹 여행이 시작된 것을 알고 이어 타게(T162): 어느 그룹의 여행인지, 지금 기록 중인지, 나는 이 여행의 누구인지.
+      // 참가자 토큰은 싣지 않는다 — 폰은 프로필 토큰으로 POST /trips/{code}/participants를 불러 받는다.
+      groupId: trip.groupId ?? null,
+      recording: Boolean(trip.recording),
+      me: (({ id, seat, consent }) => ({ participantId: id, seat, consent: Boolean(consent) }))(viewerOf(trip)),
       members,
       places,
       route,

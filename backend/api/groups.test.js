@@ -66,14 +66,14 @@ const voice = (g, profileId, who, body = { embedder: "logmel-pitch-1", vector, s
   call("POST", `/groups/${g.id}/members/${profileId}/voice`, JSON.stringify(body), who.token);
 const memberOf = (g, id) => g.members.find((m) => m.profileId === id);
 
-test("그룹 만들기: 가족은 대표를 운전석에, 동승은 자리 없이. 내 그룹만 보인다", async () => {
+test("그룹 만들기: 가족·동승 모두 대표를 운전석에. 내 그룹만 보인다", async () => {
   const dad = await person("아빠");
   const stranger = await person("남");
   const fam = await family(dad);
   assert.deepEqual([fam.name, fam.kind, fam.ownerId, fam.invite], ["우리 가족", "family", dad.id, null]);
   assert.deepEqual(fam.members, [{ profileId: dad.id, name: "아빠", character: "bunny", hasPhoto: false, hasVoice: false, consent: true, role: "owner", seat: "ROW_1_LEFT", pending: false }]);
   const crew = await family(dad, "출근 동승", "guest");
-  assert.deepEqual([crew.kind, crew.members[0].seat], ["guest", null]);
+  assert.deepEqual([crew.kind, crew.members[0].seat], ["guest", "ROW_1_LEFT"], "동승 그룹도 만든 사람이 운전석(차 참석 QR, T162)");
   assert.deepEqual((await call("GET", "/groups", undefined, dad.token)).data.items.map((g) => g.id), [fam.id, crew.id]);
   assert.deepEqual((await call("GET", "/groups", undefined, stranger.token)).data, { items: [] }, "남의 그룹은 보이지 않음");
 
@@ -108,7 +108,7 @@ test("초대 코드: 모양·24시간·그룹당 하나, 미리보기, 성인으
   assert.equal((await joinGroup(made.data.code)).status, 401, "들어가려면 프로필 토큰");
   const joined = await joinGroup(made.data.code, mom);
   assert.equal(joined.status, 200);
-  assert.deepEqual(memberOf(joined.data, mom.id), { profileId: mom.id, name: "엄마", character: "bunny", hasPhoto: false, hasVoice: false, consent: true, role: "adult", seat: null, pending: false });
+  assert.deepEqual(memberOf(joined.data, mom.id), { profileId: mom.id, name: "엄마", character: "bunny", hasPhoto: false, hasVoice: false, consent: true, role: "adult", seat: "ROW_1_RIGHT", pending: false });
   assert.deepEqual(joined.data.invite, made.data, "구성원은 지금 초대 코드·주소를 본다");
   const again = await joinGroup(made.data.code, mom);
   assert.equal(again.status, 200);
@@ -173,7 +173,7 @@ test("아이 프로필: 만든 사람이 보호자, 목소리는 보호자만·�
   const fam = await family(dad);
   await joinGroup(await invite(fam, dad), mom);
   const kid = await child(fam, dad, "서아");
-  assert.deepEqual(kid, { profileId: kid.profileId, name: "서아", character: "cat", hasPhoto: false, hasVoice: false, consent: true, role: "child", seat: null, pending: false, guardianId: dad.id });
+  assert.deepEqual(kid, { profileId: kid.profileId, name: "서아", character: "cat", hasPhoto: false, hasVoice: false, consent: true, role: "child", seat: "ROW_2_LEFT", pending: false, guardianId: dad.id });
   const baby = await child(fam, mom, "도윤", false);
   assert.deepEqual([baby.guardianId, baby.consent], [mom.id, false], "성인도 아이를 만들고 그 보호자가 된다");
   const { rows } = await profilesDb().query("SELECT managed_by, token_hash, consent_version FROM profiles WHERE id = $1", [kid.profileId]);
@@ -230,6 +230,38 @@ test("자리: 한 번에 맞바꾸고, 같은 자리에 둘이면 409(동시에 
   await assert.rejects(profilesDb().query("UPDATE group_members SET seat = 'ROW_1_LEFT' WHERE group_id = $1", [fam.id]), (e) => e.code === "23505");
 });
 
+test("들어온 사람은 빈자리에 앉는다: 성인은 조수석부터, 아이는 뒷자리부터. 운전석·뒤 가운데는 고르지 않음(T162)", async () => {
+  const dad = await person("아빠");
+  const [mom, aunt, uncle] = await Promise.all(["엄마", "이모", "삼촌"].map((n) => person(n)));
+  const fam = await family(dad);
+  const code = await invite(fam, dad);
+  const seatOf = async (id) => memberOf((await call("GET", "/groups", undefined, dad.token)).data.items[0], id).seat;
+  await joinGroup(code, mom);
+  assert.equal(await seatOf(mom.id), "ROW_1_RIGHT", "초대로 들어온 성인은 조수석");
+  const kid = await child(fam, dad, "서준");
+  assert.equal(kid.seat, "ROW_2_LEFT", "아이는 뒤 왼쪽부터");
+  assert.equal((await child(fam, mom, "하은")).seat, "ROW_2_RIGHT");
+  await joinGroup(code, aunt);
+  assert.equal(await seatOf(aunt.id), null, "남은 자리가 운전석·뒤 가운데뿐이면 자리 없이(좌석 배정에서 앉힘)");
+  await joinGroup(code, mom);
+  assert.equal(await seatOf(mom.id), "ROW_1_RIGHT", "다시 들어와도 자리는 그대로");
+
+  // 동시에 들어와도 같은 자리를 받지 않는다(그룹 줄을 잠근 채 고름)
+  const crew = await family(dad, "동승", "guest");
+  const trip = await invite(crew, dad);
+  await Promise.all([joinGroup(trip, uncle), joinGroup(trip, aunt)]);
+  const seats = (await call("GET", "/groups", undefined, dad.token)).data.items.find((g) => g.id === crew.id).members.map((m) => m.seat).sort();
+  assert.deepEqual(seats, ["ROW_1_LEFT", "ROW_1_RIGHT", "ROW_2_LEFT"]);
+  const made = await call("POST", "/trips", { groupId: crew.id }, dad.token);
+  assert.deepEqual([made.status, made.data.participants.length], [201, 3], "출발하면 셋 다 탄다");
+  // 구성원 폰은 내 여행 목록에서 이 그룹의 진행 중 여행과 내 자리를 찾아 프로필로 다시 참가한다
+  const mine = (await call("GET", "/profiles/me/trips", undefined, uncle.token)).data.items[0];
+  const me = made.data.participants.find((p) => p.profileId === uncle.id);
+  assert.deepEqual([mine.code, mine.status, mine.groupId, mine.recording, mine.me], [made.data.code, "boarding", crew.id, false, { participantId: me.id, seat: me.seat, consent: true }]);
+  const rejoin = await call("POST", `/trips/${mine.code}/participants`, undefined, uncle.token);
+  assert.deepEqual([rejoin.status, rejoin.data.id, rejoin.data.seat], [200, me.id, me.seat]);
+});
+
 test("그룹으로 여행 만들기: 저장된 자리, 각자 계정 동의, 모든 참가자에 profileId, 토큰은 나와 내 아이 몫", async () => {
   const dad = await person("아빠");
   const mom = await person("엄마", { version: "2026-01-01" }); // 옛 문구 판에 동의함 → 여행에서는 꺼진 채
@@ -240,7 +272,7 @@ test("그룹으로 여행 만들기: 저장된 자리, 각자 계정 동의, 모
   const kid = await child(fam, dad, "서아");
   const momsKid = await child(fam, mom, "도윤");
   assert.equal((await voice(fam, kid.profileId, dad)).status, 200);
-  await call("PUT", `/groups/${fam.id}/seats`, { seats: { [mom.id]: "ROW_1_RIGHT", [kid.profileId]: "ROW_2_LEFT", [momsKid.profileId]: "ROW_2_RIGHT" } }, dad.token);
+  await call("PUT", `/groups/${fam.id}/seats`, { seats: { [aunt.id]: null, [mom.id]: "ROW_1_RIGHT", [kid.profileId]: "ROW_2_LEFT", [momsKid.profileId]: "ROW_2_RIGHT" } }, dad.token);
 
   assert.equal((await call("POST", "/trips", { groupId: fam.id })).status, 401);
   assert.equal((await call("POST", "/trips", { groupId: 3 }, dad.token)).status, 400);
@@ -275,6 +307,7 @@ test("그룹으로 여행 만들기: 저장된 자리, 각자 계정 동의, 모
 
   // 자리가 정해진 구성원이 없으면 409
   const empty = await family(dad, "빈 동승", "guest");
+  assert.equal((await call("PUT", `/groups/${empty.id}/seats`, { seats: { [dad.id]: null } }, dad.token)).status, 200, "동승 그룹도 대표가 운전석이라 먼저 비움");
   assert.equal((await call("POST", "/trips", { groupId: empty.id }, dad.token)).status, 409);
   // 그룹 없이 만드는 여행은 그대로
   assert.deepEqual((await call("POST", "/trips", {})).data.participants, []);

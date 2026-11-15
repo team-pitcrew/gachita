@@ -128,8 +128,14 @@ export function tripAudio({ withTrip, participantOf, sweepClips, queueRetranscri
     if (!caller.consent) fail(403, "녹음에 동의한 참가자만 올릴 수 있음");
     if (!everyoneConsents(trip)) fail(403, "동의하지 않은 탑승자가 있어 올릴 수 없음");
     // 녹음한 그 기기: 발화 올리기의 기기 주인(utterance_acks.participant_id)만. 폰 참가자가 아무 소리나 '여행 음성'으로 올리지 못하게.
-    const { rows } = await client.query("SELECT 1 FROM utterance_acks WHERE trip_code = $1 AND participant_id = $2 LIMIT 1", [trip.code, caller.id]);
-    if (!rows[0]) fail(403, "이 여행의 발화를 올린 기기만 전체 음성을 올릴 수 있음");
+    // 받아 적은 말이 하나도 없는 여행(T162)은 그 기기를 발화로 알 수 없다 — 그때는 내비 장소를 올린 기기(차만 올림, places.md)와
+    // 운전석 참가자를 차로 본다. 아니면 차가 403을 '나중에 다시'로 보고 C22가 0%에서 멈췄다.
+    const { rows } = await client.query(
+      "SELECT bool_or(participant_id = $2) AS mine, count(*)::int AS n FROM utterance_acks WHERE trip_code = $1",
+      [trip.code, caller.id]
+    );
+    const silentCar = rows[0].n === 0 && ((trip.places ?? []).some((p) => p.by === caller.id) || caller.seat === "ROW_1_LEFT");
+    if (!rows[0].mine && !silentCar) fail(403, "이 여행의 발화를 올린 기기만 전체 음성을 올릴 수 있음");
     const r = await rowOf(client, trip.code);
     if (r?.deleted_at) fail(409, "지운 전체 음성은 다시 받지 않음");
     if (r?.upload_id && r.participant_id !== caller.id) fail(409, "다른 기기가 올리는 중");
