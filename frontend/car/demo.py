@@ -101,7 +101,7 @@ SEATS = (os.environ.get("DEMO_SEATS") or "ROW_1_LEFT,ROW_1_RIGHT,ROW_2_LEFT,ROW_
 CREW = ("dad", "mom", "crew3", "crew4")  # 상태 파일의 자리. 화자1 = 차에서 가입하는 운전자(옛 흐름의 'dad' 자리를 그대로 씀)
 START = (37.5045, 127.0244, "신논현")  # 출발(오너). 내비는 판교에 머물러 서버 장소 기록으로만 보인다
 DEST = (37.3666, 127.1078, "정자 카페거리")  # 목적지(오너). 내비 경로·도착 판정(GPS를 옮김)
-SCENE_WORDS = ("어디로", "갈까")  # 고를 장면 '우리 어디로 갈까요?'(원본 영상 578–608초)
+SCENE_TALK = "talk-where"  # 고를 장면 '우리 어디로 갈까요?'(원본 영상 578–608초). 제목일 뿐 그 말이 받아 적히지는 않아(gap2) 넣은 시간대의 줄로 장면을 고른다
 if FLOW == "pitcrew":  # 사람: 부르는 이름은 옛 흐름 함수(account·ready_profile·voice_wav)와 같은 열쇠를 쓰고 프로필 이름만 화자 이름으로
     PEOPLE = {"아빠": ("아빠", "glasses", SEATS[0], NAMES[0]), "엄마": ("엄마", "healing", SEATS[1], NAMES[1]),
               "화자3": ("아들", "cap", SEATS[2], NAMES[2]), "화자4": ("딸", "basic-small", SEATS[3], NAMES[3])}
@@ -851,6 +851,14 @@ def near(here, north_m, east_m):
     return round(here[0] + north_m / 111_320, 6), round(here[1] + east_m / (111_320 * math.cos(math.radians(here[0]))), 6)
 
 
+def scene_keys(code):
+    """SCENE_TALK을 넣은 시간대(st.scene_ms, 끝 5초 여유)에 받아 적힌 줄의 앞 6자. 장면 행 제목은 그 장면의 가장 힘 있는 줄이라 이것으로 행을 찾는다."""
+    w, tok = st.get("scene_ms"), st.get("trip", {}).get("mom")
+    if not w or not tok: return []
+    items = api("GET", f"/trips/{code}/utterances", token=tok)["items"]
+    return [k for u in items if w[0] <= u["at"] <= w[1] + 5000 for k in [(u.get("displayText") or u.get("text") or "").strip()[:6]] if len(k) >= 4]
+
+
 def after_steps(code):
     """25–35 전체 화면(F5·F3·F6)."""
     rec_part(3)
@@ -864,7 +872,10 @@ def after_steps(code):
     made = False
     if step(27, ["남기고 싶은 순간을 골라요", "장면을 선택해 주세요"], note_="추천 장면은 차가 시드 기록본에서 고름" if SEED else "", seeded=SEED):
         picks = [n for n in ui() if re.match(r"^[☐☑]\s*\d\.\s", n[0])]  # 시안 행 글 '☐ 1. 제목'
-        if FLOW == "pitcrew": want = ([n for n in picks if any(w in n[0] for w in SCENE_WORDS)] or picks)[:1]  # '우리 어디로 갈까요?' 장면 하나
+        if FLOW == "pitcrew":  # '우리 어디로 갈까요?' 장면 하나: 그 클립을 넣은 동안 받아 적힌 줄(앞 6자)이 제목에 든 행. 없으면 첫 행
+            keys = scene_keys(code)
+            want = ([n for n in picks if any(k in n[0] for k in keys)] or picks)[:1]
+            note("scene.pick", keys=keys, rows=[n[0] for n in picks], picked=[n[0] for n in want])
         else: want = [n for n in picks if re.match(r"^[☐☑]\s*[13]\.\s", n[0])]  # 시안: 1번과 3번
         for n in want:
             x1, y1, x2, y2 = n[4]; adb("shell", "input", "tap", str((x1 + x2) // 2), str((y1 + y2) // 2)); time.sleep(1)
@@ -896,7 +907,8 @@ def after_steps(code):
 
 # ---- D# 실흐름 PITCREW 단계(T159) -------------------------------------------------------------------------------
 # 단계별로 넣을 차 안 대화. 화자 식별 세션의 배치(talk-*: 영상 IMG_6626의 30초 구간)가 있으면 그것, 없으면 옛 이름(drive-a/b, 점검용 합성)
-TALKS_REAL = {17: ["talk-route"], 19: ["talk-cafe", "talk-where"], 20: ["talk-arrive"]}  # 경로 95–125초 / 카페 516–546·'우리 어디로 갈까요?' 578–608 / 도착 1258–1284
+# 경로 95–125초·카페 516–546 / '우리 어디로 갈까요?' 578–608 / 도착 1258–1284. 장면 후보는 30초 창이라(Scenes.kt) 578–608을 일시정지 뒤에 따로 넣는다(gap2: 카페와 이어 넣으니 두 대화가 섞인 장면)
+TALKS_REAL = {17: ["talk-route", "talk-cafe"], 19: ["talk-where"], 20: ["talk-arrive"]}
 TALKS_OLD = {17: ["drive-a"], 19: ["drive-b"], 20: []}
 
 
@@ -991,8 +1003,11 @@ def drive_pitcrew(code):
     for t in T[17]: say(t)
     step(17, ["방금 받아 적은 말"], 30, f"실제 차 안 대화 {', '.join(T[17])}")
     tap("일시정지"); step(18, ["멈추기 전 마지막 대화"])
+    time.sleep(float(os.environ.get("DEMO_PAUSE_S", "30")))  # 멈춘 동안은 받아 적지 않는다 → 앞 대화와 30초 넘게 떨어져 다음 대화가 제 장면이 된다(녹화에서는 자름)
     tap("녹화 재개"); step(19, ["방금 받아 적은 말"], 8)
-    for t in T[19]: say(t)
+    for t in T[19]:
+        t0 = int(time.time() * 1000); say(t)
+        if t == SCENE_TALK: st["scene_ms"] = [t0, int(time.time() * 1000)]; save()
     # 내비는 판교에 머물고(도착 판정의 '지금 위치'도 내비 값 — Car.here) GPS를 옮겨도 닿지 않는다(gap2: outside_place).
     # 그래서 도착(20·21)은 가족 흐름의 1분 경로처럼 목적지 이름 '정자 카페거리'를 내비 위치 남쪽 NEAR_M에 둔다 — mock: 좌표만, 이름·대화·브리핑은 실제 흐름
     here = navi_here(); end = near(here, -NEAR_M, 0)
