@@ -238,6 +238,28 @@ internal object AfterRuns {
 
     fun cancel() { run?.job?.cancel() }
 
+    /**
+     * mock: 시연 팩(DemoPack.kt)의 장면은 이미 만든 쇼츠가 있다. 서버에 아무것도 보내지 않고 만드는 모양만 [totalMs] 동안 보인 뒤
+     * 팩의 표지·길이로 완성한다. 장면 id가 콘텐츠 기록의 쇼츠 id(momentId)다.
+     */
+    fun play(run: AfterRun, pack: DemoPack, totalMs: Long = 5000) {
+        this.run = run
+        run.job = scope.launch {
+            val each = totalMs / maxOf(1, run.items.size)
+            for (item in run.items) {
+                val scene = pack.scenes.getOrNull(item.pick.number - 1)
+                if (scene == null) { item.phase = Phase.FAILED; continue }
+                item.momentId = scene.id; item.seconds = scene.seconds
+                item.cast = run.people.mapNotNull { p -> ShortCharacter.entries.firstOrNull { it.key == p.character }?.drawable }
+                item.phase = Phase.VOICE; delay(each / 5)
+                item.phase = Phase.RENDER
+                for (i in 1..8) { item.render = i / 8f; delay(each * 4 / 5 / 8) }
+                item.cover = Demo.covers[scene.id]
+                item.phase = Phase.DONE
+            }
+        }
+    }
+
     private suspend fun makeOne(context: Context, base: String, token: String, run: AfterRun, item: AfterItem, allowed: () -> Boolean, ready: () -> Boolean) {
         val api = Server(base); val shared = SharedShortApi(base)
         val job = currentCoroutineContext()[Job] // 기다림·다시 보냄 중에도 사람이 멈추면 바로 끝나게(gate는 렌더 콜백 안에서도 불려 suspend가 아님)
@@ -359,22 +381,24 @@ internal enum class AfterStep { UPLOAD, SELECT, MAKE, DONE }
  * onContents: 콘텐츠 기록(쇼츠 보관함)으로. 시작 화면은 step(대화 기록의 '추천 장면 고르기'는 SELECT).
  */
 @Composable
-internal fun AfterTrip(trip: Trip, lines: List<AfterLine>, base: String, token: String?, start: AfterStep, allowed: () -> Boolean, ready: () -> Boolean, onContents: () -> Unit, modifier: Modifier = Modifier) {
+internal fun AfterTrip(trip: Trip, lines: List<AfterLine>, base: String, token: String?, start: AfterStep, allowed: () -> Boolean, ready: () -> Boolean, onContents: () -> Unit, modifier: Modifier = Modifier,
+    demo: DemoPack? = null) { // mock: 시연 팩이 있으면 추천 장면·만들기·무리 이름을 팩에서(DemoPack.kt). trip·lines도 팩의 값으로 받는다
     val context = LocalContext.current
     val c = MaterialTheme.colorScheme
     val names = remember(trip.people) { trip.people.associate { it.id to it.name } }
     val byKey = remember(lines) { lines.associateBy { it.key } }
-    val picks = remember(lines, trip.moments) {
-        afterPicks(suggestScenes(lines.map { SceneLine(it.key, it.at, it.zone, it.lat, it.lng) }, trip.moments), byKey, names)
+    val picks = remember(lines, trip.moments, demo) {
+        demo?.picks(trip) ?: afterPicks(suggestScenes(lines.map { SceneLine(it.key, it.at, it.zone, it.lat, it.lng) }, trip.moments), byKey, names)
     }
-    val origin = lines.firstOrNull()?.at ?: trip.createdAt
-    val end = maxOf(lines.lastOrNull()?.at ?: origin, picks.maxOfOrNull { it.to } ?: origin)
-    val wave = remember(lines) { afterBars(lines.map { it.at }, origin, end, 64) } // C22·C31 파형 막대 64개
-    val fine = remember(lines) { afterBars(lines.map { it.at }, origin, end, 120) } // C23–C30 파형 막대 120개
-    val place by produceState<String?>(null, trip.code) { value = withContext(Dispatchers.IO) { parkedPlace(context, trip.code) } }
+    val origin = demo?.range(trip)?.first ?: lines.firstOrNull()?.at ?: trip.createdAt
+    val end = demo?.range(trip)?.second ?: maxOf(lines.lastOrNull()?.at ?: origin, picks.maxOfOrNull { it.to } ?: origin)
+    val spoken = remember(lines, demo) { demo?.waveAt(trip) ?: lines.map { it.at } }
+    val wave = remember(spoken) { afterBars(spoken, origin, end, 64) } // C22·C31 파형 막대 64개
+    val fine = remember(spoken) { afterBars(spoken, origin, end, 120) } // C23–C30 파형 막대 120개
+    val place by produceState<String?>(null, trip.code, demo) { value = demo?.arrival ?: withContext(Dispatchers.IO) { parkedPlace(context, trip.code) } }
     // 무리 이름(동승 그룹이면 PITCREW): 차가 받는 여행 문서에는 그룹을 싣지 않아(server.js tripView) 콘텐츠 기록 응답에서 한 번 읽는다. 못 읽으면 '우리 가족'.
-    val crew by produceState("우리 가족", trip.code, token) {
-        if (token != null) runCatching { withContext(Dispatchers.IO) { parseContentTrip(org.json.JSONObject(Server(base).contents(trip.code, token))).crew } }.onSuccess { value = it }
+    val crew by produceState(demo?.group ?: "우리 가족", trip.code, token) {
+        if (demo == null && token != null) runCatching { withContext(Dispatchers.IO) { parseContentTrip(org.json.JSONObject(Server(base).contents(trip.code, token))).crew } }.onSuccess { value = it }
     }
     val running = AfterRuns.run?.takeIf { it.code == trip.code && it.generation == trip.generation }
     var step by remember(trip.code, trip.generation) { mutableStateOf(if (running != null) AfterStep.MAKE else start) }
@@ -389,9 +413,11 @@ internal fun AfterTrip(trip: Trip, lines: List<AfterLine>, base: String, token: 
         val cand = SceneCandidate(inside.firstOrNull()?.at ?: from, from, to, "", 0, inside.map { SceneLine(it.key, it.at, it.zone, it.lat, it.lng) }, here?.lat, here?.lng)
         return afterPicks(listOf(cand), byKey, names).first().copy(number = n)
     }
-    val shown = picks.map { p -> ranges[p.number]?.let { (f, t) -> repick(p.number, f, t) } ?: p } +
+    // mock: 시연 팩의 장면은 구간만 바뀌고 제목·대사는 그대로다. 직접 고른 구간은 만들 쇼츠가 없어 두지 않는다
+    val shown = if (demo != null) picks.map { p -> ranges[p.number]?.let { (f, t) -> p.copy(from = f, to = t) } ?: p }
+        else picks.map { p -> ranges[p.number]?.let { (f, t) -> repick(p.number, f, t) } ?: p } +
         listOfNotNull(ranges[picks.size + 1]?.let { (f, t) -> repick(picks.size + 1, f, t) })
-    fun place(t: Long) { val n = picks.size + 1; ranges[n] = afterPlace(t, origin, end); if (n !in chosen) chosen.add(n) }
+    fun place(t: Long) { if (demo != null) return; val n = picks.size + 1; ranges[n] = afterPlace(t, origin, end); if (n !in chosen) chosen.add(n) }
     fun nudge(n: Int, start: Boolean, d: Long) {
         val (f, t) = ranges[n] ?: picks.firstOrNull { it.number == n }?.let { it.from to it.to } ?: return
         ranges[n] = afterNudge(f, t, start, d, origin, end)
@@ -410,7 +436,8 @@ internal fun AfterTrip(trip: Trip, lines: List<AfterLine>, base: String, token: 
     fun openScene(moment: String?) { ContentLink.moment = moment; open() }
     // C22: 전체 음성을 다 올렸거나(또는 올릴 것이 없으면) 5초 뒤 추천 장면으로(시안 C22 '5초 뒤 → C23'). 올리는 중에는 기다린다.
     LaunchedEffect(step, audio) {
-        if (step == AfterStep.UPLOAD && audio in setOf(AudioState.READY, AudioState.EXPIRED, AudioState.NONE, AudioState.STOPPED)) { delay(5000); step = AfterStep.SELECT }
+        // mock: 시연 팩이면 전체 음성 올리기가 서버에서 막혀도(시연 서버에 그 여행이 없을 수 있음) 5초 뒤 넘어간다
+        if (step == AfterStep.UPLOAD && (demo != null || audio in setOf(AudioState.READY, AudioState.EXPIRED, AudioState.NONE, AudioState.STOPPED))) { delay(5000); step = AfterStep.SELECT }
     }
 
     Column(modifier, verticalArrangement = Arrangement.spacedBy(24.dp)) {
@@ -470,8 +497,10 @@ internal fun AfterTrip(trip: Trip, lines: List<AfterLine>, base: String, token: 
         when (step) {
             AfterStep.UPLOAD -> CarButton("추천 장면 보기") { step = AfterStep.SELECT }
             AfterStep.SELECT -> if (shown.isEmpty()) CarButton("콘텐츠 기록 보기", onClick = ::open)
-            else CarButton(if (n == 0) "장면을 선택해 주세요" else "선택한 ${n}개 생성", enabled = n > 0 && token != null) {
-                if (token != null && n > 0) {
+            else CarButton(if (n == 0) "장면을 선택해 주세요" else "선택한 ${n}개 생성", enabled = n > 0 && (token != null || demo != null)) {
+                if (demo != null && n > 0) {
+                    AfterRuns.play(AfterRun(trip.code, trip.generation, shown.filter { it.number in chosen }.map(::AfterItem), trip.people), demo); step = AfterStep.MAKE
+                } else if (token != null && n > 0) {
                     val run = AfterRun(trip.code, trip.generation, shown.filter { it.number in chosen }.map(::AfterItem), trip.people)
                     AfterRuns.start(context, base, token, run, allowed, ready); step = AfterStep.MAKE
                 }

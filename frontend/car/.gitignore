@@ -12,3 +12,5 @@ app/libs/*.aar
 app/libs/*.part
 app/src/main/assets/wespeaker.onnx
 app/src/main/assets/*.part
+# 시연 팩(demo_pack.py가 채움): 실제 대화·목소리가 든 영상이라 저장소에 넣지 않는다. 있으면 디버그 빌드에만 들어간다(DemoPack.kt)
+app/src/debug/assets/demo/
