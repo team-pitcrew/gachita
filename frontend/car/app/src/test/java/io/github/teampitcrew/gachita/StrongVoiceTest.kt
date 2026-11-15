@@ -7,47 +7,55 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
-import java.io.File
+import org.json.JSONObject
 
-/** 차 안의 강한 화자 값(StrongVoice.kt): 보관·삭제와 판정 규칙. 모델 자체(JNI)는 단위 시험이 닿지 않아 에뮬레이터에서 본다. */
+/** 둘째 값(강한 화자 값, StrongVoice.kt): 서버에서 받은 값의 보관과 판정 규칙, 올리는 본문. 모델 자체(JNI)는 단위 시험이 닿지 않아 에뮬레이터에서 본다. */
 class StrongVoiceTest {
     @get:Rule val tmp = TemporaryFolder()
 
-    private fun v(vararg x: Float) = floatArrayOf(*x)
-    private val dad = v(1f, 0f, 0f); private val mom = v(0.9f, 0.4f, 0f); private val kid = v(0f, 1f, 0f); private val sis = v(0f, 0.9f, 0.4f)
-    // 참가자 id → 프로필 id. 손님(guest)은 프로필이 없다
-    private val people = mapOf("p1" to "dad", "p2" to "mom", "p3" to "kid", "p4" to "sis", "p5" to null)
+    private fun wide(vararg x: Float) = FloatArray(STRONG_DIMS).also { x.copyInto(it) }
+    private val dad = wide(1f, 0f, 0f); private val mom = wide(0.9f, 0.4f, 0f); private val kid = wide(0f, 1f, 0f); private val sis = wide(0f, 0.9f, 0.4f)
+    private val one = org.json.JSONArray(DoubleArray(VOICE_DIMS) { 1.0 })
     private val front = listOf("p1", "p2"); private val rear = listOf("p3", "p4", "p5")
+    private val all = front + rear // p5는 등록하지 않은 손님
 
-    @Test fun `등록자 모두가 값을 가졌을 때 줄 안에서 가장 가까운 사람으로 정한다`() {
-        val sp = StrongPrints(tmp.root, TEST_SEAL)
-        val enrolled = listOf("p1", "p2", "p3", "p4")
-        assertNull("값이 하나도 없으면 1차 임베더로", sp.identify(dad, people, null, enrolled))
-        sp.put("dad", dad); sp.put("mom", mom); sp.put("kid", kid)
-        assertNull("등록자 가운데 값이 없는 사람(폰에서 등록)이 있으면 1차 임베더로", sp.identify(dad, people, front, enrolled))
-        sp.put("sis", sis)
-        val near = v(0.95f, 0.3f, 0f) // dad 0.954, mom 0.999: 둘 다 가깝지만 늘 가장 가까운 사람으로(미확인 0%)
-        assertEquals(Pair("p2", "strong"), sp.identify(near, people, front, enrolled)!!.let { it.who to it.basis })
-        assertEquals("줄을 알면 그 줄에서: 전체에서는 엄마가 더 가깝다", "p3", sp.identify(near, people, rear, enrolled)!!.who)
-        assertEquals("줄을 모르면 모두에서", "p2", sp.identify(near, people, null, enrolled)!!.who)
-        assertEquals("그 줄에 등록자가 없으면 모두에서", "p2", sp.identify(near, people, listOf("p5"), enrolled)!!.who)
-        // 등록하지 않은 사람(서버 대조 값 없음)과 손님은 후보가 아니다
-        assertEquals("p1", sp.identify(kid, people, null, listOf("p1"))!!.who)
-        assertNull(sp.identify(kid, people, null, listOf("p5")))
-        assertNull(sp.identify(kid, people, null, emptyList()))
+    private fun prints(vararg who: Pair<String, FloatArray?>, name: String? = STRONG_EMBEDDER) = JSONObject().put("generation", 1).put("embedder", EMBEDDER).put("dims", VOICE_DIMS)
+        .put("threshold", 0.9).put("floor", 0.6).put("margin", 0.06).apply { name?.let { put("strongEmbedder", it) } }
+        .put("items", org.json.JSONArray(who.map { (id, s) -> JSONObject().put("participantId", id).put("vector", one).put("seconds", 7).apply { s?.let { put("strong", org.json.JSONArray(it.map(Float::toDouble))) } } }))
+
+    @Test fun `등록자 모두가 둘째 값을 가졌을 때 줄 안에서 가장 가까운 사람으로 정한다`() {
+        val vp = VoicePrints(tmp.root, "ABC123", TEST_SEAL)
+        assertNull("받은 값이 없으면 1차 임베더로", vp.identifyStrong(dad, all, null)); assertFalse(vp.hasStrong)
+        vp.put(prints("p1" to dad, "p2" to mom, "p3" to kid, "p4" to null))
+        assertTrue(vp.hasStrong)
+        assertNull("등록자 가운데 둘째 값이 없는 사람이 있으면 1차 임베더로", vp.identifyStrong(dad, all, front))
+        assertEquals("그 사람이 후보가 아니면(동의하지 않음) 남은 등록자끼리", "p1", vp.identifyStrong(dad, listOf("p1", "p2", "p3"), null)!!.who)
+        vp.put(prints("p1" to dad, "p2" to mom, "p3" to kid, "p4" to sis))
+        val near = wide(0.95f, 0.3f, 0f) // dad 0.954, mom 0.999: 둘 다 가깝지만 늘 가장 가까운 사람으로(미확인 0%)
+        assertEquals(Pair("p2", "strong"), vp.identifyStrong(near, all, front)!!.let { it.who to it.basis })
+        assertEquals("줄을 알면 그 줄에서: 전체에서는 엄마가 더 가깝다", "p3", vp.identifyStrong(near, all, rear)!!.who)
+        assertEquals("줄을 모르면 모두에서", "p2", vp.identifyStrong(near, all, null)!!.who)
+        assertEquals("그 줄에 등록자가 없으면 모두에서", "p2", vp.identifyStrong(near, all, listOf("p5"))!!.who)
+        assertNull("등록자가 없으면 정하지 않는다", vp.identifyStrong(kid, listOf("p5"), null))
+        // 앱을 다시 켜도 사본에서 되살린다. 철회로 사본을 지우면 둘째 값도 사라진다
+        val again = VoicePrints(tmp.root, "ABC123", TEST_SEAL)
+        assertEquals("p4", again.identifyStrong(sis, all, null)!!.who)
+        again.see(2); assertFalse(again.hasStrong); assertNull(again.identifyStrong(sis, all, null))
     }
 
-    @Test fun `값은 암호화해 두고 다시 등록하면 바꾸며 로그아웃하면 지운다`() {
-        val file = File(tmp.root, "voice-strong.json")
-        StrongPrints(tmp.root, TEST_SEAL).put("dad", dad)
-        assertFalse("평문으로 두지 않음", file.readText().contains("dad"))
-        val again = StrongPrints(tmp.root, TEST_SEAL) // 앱을 다시 켜도 남는다(프로필 등록과 수명이 같다)
-        assertEquals("p1", again.identify(dad, people, null, listOf("p1"))!!.who)
-        again.put("dad", kid) // 다시 등록
-        assertEquals(1, again.size); assertTrue(again.identify(kid, people, null, listOf("p1"))!!.confidence > 0.99)
-        again.clear()
-        assertFalse(file.exists()); assertEquals(0, StrongPrints(tmp.root, TEST_SEAL).size)
-        assertFalse("여행 파일이 아니라 dropTrip이 건드리지 않는다", tripFiles(tmp.root, "ABC123").any { it.name == "voice-strong.json" })
+    @Test fun `모델 이름이 다르거나 길이가 다른 둘째 값은 쓰지 않는다`() {
+        val vp = VoicePrints(tmp.root, "ABC123", TEST_SEAL)
+        vp.put(prints("p1" to dad, "p2" to mom, name = "wespeaker-resnet34-v2")); assertFalse(vp.hasStrong)
+        vp.put(prints("p1" to dad, "p2" to mom, name = null)); assertFalse("옛 서버(이름을 주지 않음)", vp.hasStrong)
+        vp.put(prints("p1" to dad, "p2" to floatArrayOf(1f, 0f)))
+        assertNull("길이가 다른 값은 없는 것으로 본다", vp.identifyStrong(dad, front, null))
+        assertEquals(2, vp.size) // 1차 값은 그대로라 1차 규칙으로 정한다
+    }
+
+    @Test fun `둘째 값을 올리는 본문`() {
+        val o = strongValue(dad, 14.0)
+        assertEquals(STRONG_EMBEDDER, o.getString("embedder")); assertEquals(STRONG_DIMS, o.getJSONArray("vector").length()); assertEquals(14.0, o.getDouble("seconds"), 0.0)
+        assertEquals("서버가 받는 범위로", 20.0, strongValue(dad, 31.0).getDouble("seconds"), 0.0)
     }
 
     @Test fun `디지털 무음을 뺀다`() {

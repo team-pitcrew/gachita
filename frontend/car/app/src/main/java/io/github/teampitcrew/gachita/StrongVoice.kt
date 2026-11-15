@@ -9,14 +9,17 @@ import org.json.JSONObject
 import java.io.File
 import kotlin.math.sqrt
 
-// 차 안에서만 쓰는 두 번째 목소리 값(오너 11/15: '차에 강한 모델 넣기'). 1차 임베더(Voice.kt, 로그멜·음높이 통계)는 실제 목소리에서
+// 목소리의 둘째 값(강한 화자 값, 오너 11/15: '차에 강한 모델 넣기'). 1차 임베더(Voice.kt, 로그멜·음높이 통계)는 실제 목소리에서
 // 같은 성별의 어른을 잘 가르지 못한다(시연 원천의 교정본 36줄: 늘 누군가로 정하면 22줄 맞음). 학습된 화자 모델(wespeaker resnet34,
 // VoxCeleb, 256차원)을 차 안에서 돌리면 같은 줄에서 27줄이 맞았다(맥에서 같은 모델로 잰 값).
 // - 실행기: sherpa-onnx 2.0.1(Apache-2.0)과 그 안의 ONNX Runtime. 모델 가중치는 wespeaker(CC BY 4.0). 둘 다 저장소에 넣지 않고 빌드 때 받는다(app/build.gradle).
-// - 서버 계약은 그대로다: 서버에 올리는 대조 값은 여전히 1차 임베더의 것(ADR-0023). 이 값은 차를 떠나지 않는다 —
-//   서버에 둘 칸도, 다른 기기와 맞출 시험 벡터도 없다. 등록 음성도 지금처럼 차를 떠나지 않는다.
-// - 그래서 이 차에서 등록한 사람만(계정 온보딩의 본인, 가족 추가의 아이) 이 값을 가진다. 후보 가운데 이 값이 없는 등록자(폰에서 등록)가 있으면 그 발화는 1차 임베더의 규칙으로 판정한다.
-// - 라이브러리나 모델을 올리지 못하면(다른 ABI, 메모리 부족) 앱은 그대로 돌고 1차 임베더만 쓴다.
+// - 값은 등록하는 기기가 계산해 서버에 올린다(1차 값과 같은 경로, embedder: STRONG_EMBEDDER). 서버는 계산하지 않고 맡아 두었다가
+//   대조 값 조회(GET /voice-prints)의 strong 칸으로 준다(ADR-0023). 폰에서 등록한 사람의 값도 그렇게 받는다. 등록 음성은 지금처럼 차를 떠나지 않는다.
+// - 판정(VoicePrints.identifyStrong): 등록한 탑승자 모두가 둘째 값을 가졌을 때만 이것으로, 한 명이라도 없으면 1차 임베더의 규칙으로.
+// - 라이브러리나 모델을 올리지 못하면(다른 ABI, 메모리 부족) 앱은 그대로 돌고 1차 임베더만 쓴다(둘째 값도 올리지 않는다).
+// - 같은 모델이라도 기기마다 값이 조금 다를 수 있다(연산 순서). 이름(STRONG_EMBEDDER)은 서버 providers/voice.js와 같아야 한다.
+const val STRONG_EMBEDDER = "wespeaker-resnet34-v1"
+const val STRONG_DIMS = 256
 
 /** 표본(16 kHz 모노, −1~1)을 화자 값으로. 값을 못 내면 null. */
 fun interface StrongEmbedder { fun embed(samples: FloatArray): FloatArray? }
@@ -45,6 +48,7 @@ object Wespeaker : StrongEmbedder {
     @Synchronized fun of(ctx: Context): StrongEmbedder? {
         if (!tried) {
             tried = true
+            File(ctx.filesDir, "voice-strong.json").delete() // 앞선 빌드(T169)가 차 안에만 두던 값: 이제 서버가 맡으니 지운다
             val t0 = System.currentTimeMillis()
             extractor = try {
                 SpeakerEmbeddingExtractor(ctx.applicationContext.assets, SpeakerEmbeddingExtractorConfig(MODEL, 2, false, "cpu"))
@@ -78,64 +82,13 @@ fun cosine(a: FloatArray, b: FloatArray): Double {
     return dot / (sqrt(na) * sqrt(nb)).let { if (it != 0.0) it else 1.0 }
 }
 
-/**
- * 이 차에서 등록한 사람의 강한 화자 값. 등록이 프로필 단위라(계정 온보딩, 가족 추가) 프로필 id로 둔다 — voice-strong.json 하나에 암호화해 둔다(Vault.kt).
- * 목소리에서 뽑은 값이라 민감정보다: 서버에 올리지 않고, 같은 프로필을 다시 등록하면 바꾸고, 로그아웃하면 모두 지운다. 앱 데이터를 지우면 함께 사라진다.
- * ponytail: 서버에서 그 프로필의 목소리 등록을 지워도(다른 기기) 이 차의 값은 로그아웃 전까지 남는다. 다만 판정은 서버 대조 값이 있는
- * 탑승자(enrolled)만 후보로 보므로, 등록을 지운 사람에게 이름이 붙지는 않는다.
- */
-class StrongPrints(dir: File, private val seal: Seal) {
-    private val file = File(dir, "voice-strong.json")
-    private val prints = HashMap<String, FloatArray>()
+/** 둘째 값을 올리는 본문(1차 값의 voiceValue와 같은 경로). seconds는 서버가 받는 범위(0.5~20초)로 맞춘다. */
+fun strongValue(v: FloatArray, seconds: Double): JSONObject =
+    JSONObject().put("embedder", STRONG_EMBEDDER).put("vector", JSONArray().apply { v.forEach { put(it.toDouble()) } }).put("seconds", seconds.coerceIn(0.5, 20.0))
 
-    init {
-        runCatching {
-            val p = JSONObject(seal.unline(file.readText()))
-            for (id in p.keys()) prints[id] = p.getJSONArray(id).let { a -> FloatArray(a.length()) { a.getDouble(it).toFloat() } }
-        }
-    }
-
-    val size: Int @Synchronized get() = prints.size
-
-    /** 등록: 그 프로필의 값을 넣고 파일을 바꾼다. */
-    @Synchronized fun put(profileId: String, v: FloatArray) {
-        prints[profileId] = v
-        val o = JSONObject().apply { prints.forEach { (k, x) -> put(k, JSONArray().apply { x.forEach { put(it.toDouble()) } }) } }
-        val tmp = File(file.path + ".tmp"); tmp.writeText(seal.line(o.toString())); tmp.renameTo(file)
-    }
-
-    /** 로그아웃: 모두 지운다. */
-    @Synchronized fun clear() { prints.clear(); file.delete() }
-
-    /**
-     * 강한 값으로 말한 사람을 정한다. people은 녹음에 동의한 탑승자의 (참가자 id → 프로필 id, 손님이면 null), row는 발화의 좌석 줄에 앉은 참가자 id,
-     * enrolled는 서버 대조 값이 있는(어디서든 등록한) 참가자 id다.
-     * 등록한 탑승자 모두가 이 값을 가졌을 때만 정한다 — 한 명이라도 없으면(폰에서 등록) 견줄 수 없으니 null을 돌려주고, 부르는 쪽이 1차 임베더로 정한다.
-     * 규칙: 그 줄에 앉은 등록자 가운데 가장 가까운 사람, 줄을 모르거나 그 줄에 등록자가 없으면 등록자 모두 가운데 가장 가까운 사람(미확인 0%).
-     */
-    @Synchronized fun identify(v: FloatArray, people: Map<String, String?>, row: Collection<String>?, enrolled: Collection<String>): Speaker? {
-        val who = enrolled.filter { it in people }
-        if (who.isEmpty() || who.any { people[it]?.let(prints::containsKey) != true }) return null
-        val sims = who.map { id -> id to cosine(v, prints.getValue(people.getValue(id)!!)) }.sortedByDescending { it.second }
-        val (best, sim) = row?.let { r -> sims.firstOrNull { it.first in r } } ?: sims.first()
-        return Speaker(best, Math.round(sim * 1000) / 1000.0, basis = "strong")
-    }
-}
-
-/** 강한 화자 값의 보관함과 등록. 화면(온보딩, 가족 추가)과 대조 스레드가 같이 쓴다. */
-object Strong {
-    @Volatile private var store: StrongPrints? = null
-    fun prints(ctx: Context): StrongPrints = store ?: synchronized(this) { store ?: StrongPrints(ctx.filesDir, Live.seal(ctx)).also { store = it } }
-
-    /** 등록 음성(16비트 LE 모노 PCM)에서 강한 값을 만들어 그 프로필에 둔다. 서버 등록이 끝난 뒤, 통신 스레드에서 부른다. 못 만들면 두지 않는다(1차 임베더만 씀). */
-    fun enroll(ctx: Context, profileId: String, pcm: ByteArray) {
-        val v = Wespeaker.of(ctx)?.embed(pcmSamples(pcm)) ?: return
-        prints(ctx).put(profileId, v)
-        Log.i("GachitaVoice", "강한 화자 값 등록(차 안에만 둠)") // 이름·값은 남기지 않는다
-    }
-
-    fun clear(ctx: Context) = prints(ctx).clear()
-}
+/** 등록 음성(16비트 LE 모노 PCM)의 둘째 값 본문. 1차 값을 올린 뒤 통신 스레드에서 부른다. 모델을 못 올리거나 값을 못 내면 null(1차 값만 씀). */
+fun strongBody(ctx: Context, pcm: ByteArray): JSONObject? =
+    Wespeaker.of(ctx)?.embed(pcmSamples(pcm))?.takeIf { it.size == STRONG_DIMS }?.let { strongValue(it, pcm.size / 2.0 / RATE) }
 
 /**
  * 디버그 점검(adb … --ez voicecheck true): 이 기기에서 강한 화자 모델이 올라가고 값을 내는지 로그로 남긴다. 합성 신호 둘(음높이가 다른 톱니파)을 넣어
@@ -147,5 +100,8 @@ fun strongSelfCheck(ctx: Context): String {
     val t0 = System.currentTimeMillis()
     val a = e.embed(saw(133, 1)); val a2 = e.embed(saw(133, 7)); val b = e.embed(saw(53, 3))
     if (a == null || a2 == null || b == null) return "강한 화자 값을 내지 못함"
-    return "강한 화자 모델 점검: 차원 ${a.size}, 3초 소리 셋에 ${System.currentTimeMillis() - t0}ms, 같은 신호 ${"%.3f".format(cosine(a, a2))}, 다른 신호 ${"%.3f".format(cosine(a, b))}"
+    // 맥(sherpa-onnx 2.0.1, 같은 모델 파일)이 같은 합성 신호 saw(133, 1)에 낸 값(assets/voicecheck.json)과 견준다: 차와 다른 기기의 값이 서로 견줄 만한지
+    val ref = runCatching { JSONObject(ctx.assets.open("voicecheck.json").bufferedReader().readText()).getJSONArray("vector").let { j -> FloatArray(j.length()) { j.getDouble(it).toFloat() } } }.getOrNull()
+    val same = ref?.takeIf { it.size == a.size }?.let { r -> "맥의 값과 유사도 ${"%.9f".format(cosine(a, r))}, 원소 최대 차이 ${"%.2e".format(a.indices.maxOf { kotlin.math.abs(a[it] - r[it]) })}" } ?: "맥의 기준 값 없음"
+    return "강한 화자 모델 점검: 차원 ${a.size}, 3초 소리 셋에 ${System.currentTimeMillis() - t0}ms, 같은 신호 ${"%.3f".format(cosine(a, a2))}, 다른 신호 ${"%.3f".format(cosine(a, b))}, $same"
 }
