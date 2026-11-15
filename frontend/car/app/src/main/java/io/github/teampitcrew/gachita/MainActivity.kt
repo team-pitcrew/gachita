@@ -85,6 +85,10 @@ class MainActivity : ComponentActivity() {
     @Volatile private var clipsAllowed = false // 모두 동의했고 끄기 대기가 없음. 클립을 하나 올릴 때마다 본다
     private val main = Handler(Looper.getMainLooper())
     private lateinit var prefs: SharedPreferences
+    // 이 차에 로그인한 계정 토큰(prefs "account"). Onboarding.token은 prefs를 읽는 getter라 Compose가 바뀐 줄 모른다 — 가입·로그인·로그아웃이
+    // prefs를 바꾸면 이 상태가 따라가 오른쪽 위 얼굴·시작 화면·가족 흐름이 바로 다시 그려진다. (prefs는 리스너를 약하게 쥐니 필드로 둔다)
+    private var account by mutableStateOf<String?>(null)
+    private val accountWatch = SharedPreferences.OnSharedPreferenceChangeListener { _, key -> if (key == null || key == "account") account = onboarding.token }
     private lateinit var car: Car
     private lateinit var onboarding: Onboarding // 계정·온보딩 C01–C08(T142, Onboarding.kt)
 
@@ -278,6 +282,8 @@ class MainActivity : ComponentActivity() {
         server = prefs.getString("server", null) ?: DEFAULT_SERVER
         device = prefs.getString("device", null) ?: UUID.randomUUID().toString().also { prefs.edit().putString("device", it).apply() }
         onboarding = Onboarding(this, prefs) { server }
+        account = onboarding.token
+        prefs.registerOnSharedPreferenceChangeListener(accountWatch)
         if (debug && !intent.getBooleanExtra("onboarding", true)) onboarding.skipForDebug() // --ez onboarding false: 처음 화면을 가족 흐름(F2)으로 본다
         // 기본값은 무기한. --el keepMs를 명시한 디버그 빌드에서만 시간에 따른 정리를 시험한다.
         val now = System.currentTimeMillis()
@@ -327,7 +333,7 @@ class MainActivity : ComponentActivity() {
                     // mock: --es f4 …이면 저장된 여행 대신 시안의 '강릉 가족 여행'(F4Mock)을 띄운다(디버그 빌드)
                     val t = f4Mock?.let { Trip("F4DEMO", "강릉 가족 여행", "driving", F4Mock.people, 0, 1) } ?: s.trip
                     // 오른쪽 위 '내 얼굴'은 모든 화면에 하나(TripHeader). 로그인 뒤에는 프로필 메뉴, 로그인 전에는 기본 캐릭터 얼굴 → 로그인 / 계정 만들기(C02)
-                    val signedIn = (profileToken ?: onboarding.token) != null
+                    val signedIn = (profileToken ?: account) != null
                     val me = Me(if (signedIn) charDrawable(onboarding.character) else R.drawable.char_basic) { shell, face ->
                         if (signedIn) { menuShell = shell; menuFace = face; profileMenu = true }
                         else { familyOpen = false; if (!onboarding.showing) onboarding.reopen(); onboarding.go(OnboardStep.SIGNUP) }
@@ -342,7 +348,7 @@ class MainActivity : ComponentActivity() {
                                 // 로그아웃(2220:5864) → C01: 여행이 남아 있어도 계정이 없으면 시작 화면부터
                                 !signedIn && onboarding.showing -> OnboardingScreen(onboarding, driving = carStatus.restricted) { familyOpen = true }
                                 // 프로필 메뉴의 '동승 그룹 변경'·'좌석 배정'도 가족 흐름(C16 groups·C16B)으로 연다. 주차 중에만
-                                family -> FamilyFlow(server, profileToken ?: onboarding.token, onClose = { familyOpen = false },
+                                family -> FamilyFlow(server, profileToken ?: account, onClose = { familyOpen = false },
                                     onStart = ::startGroupTrip, jump = familyJump, onJumped = { familyJump = null },
                                     // 가족 화면 위 탭(C14·C15·C16·C16 guestInvite·C16L·C43): 대화 기록 → C44, 콘텐츠 기록 → C33. 둘 다 여행 단위라 여행이 없으면 그 자리에
                                     onTab = { i -> if (t != null) { familyOpen = false; closeBoarding(); afterStart = null; destination = if (i == 1) Destination.CONVERSATION else Destination.SHORTS } })
@@ -399,6 +405,7 @@ class MainActivity : ComponentActivity() {
     override fun onPause() { resumed = false; super.onPause() }
 
     override fun onDestroy() {
+        prefs.unregisterOnSharedPreferenceChangeListener(accountWatch)
         closeBoarding()
         onboarding.close()
         boardingIo.shutdown() // 발급 중 닫힌 요청은 같은 실행기에서 초대를 폐기하고 끝난다
@@ -1358,7 +1365,7 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun BoxScope.MenuOverlay(t: Trip?) {
         val people = t?.people.orEmpty()
-        val token = profileToken ?: onboarding.token
+        val token = profileToken ?: account
         val url = server
         // 그룹 칸은 여행 제목이 아니라 그룹 이름(시안 '우리 가족'). 가족 그룹 이름을 한 번 읽는다
         LaunchedEffect(token, url) { if (token != null && menuGroup == null) bg({ Server(url).groups(token) }) { r -> r.onSuccess { gs -> menuGroup = gs.firstOrNull { it.kind == "family" }?.name } } }
