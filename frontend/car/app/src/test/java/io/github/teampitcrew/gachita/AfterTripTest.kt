@@ -91,4 +91,12 @@ class AfterTripTest {
         assertEquals(.95f, serverShortProgress("generating", 3_600_000), 1e-6f)
         assertEquals(1f, serverShortProgress("completed", 0), 1e-6f)
     }
+
+    @Test fun serverJobPollRetriesOnlyNetworkHiccups() {
+        assertEquals(true, retryJobPoll(java.net.SocketTimeoutException("read timed out"), 1))
+        assertEquals(true, retryJobPoll(ApiError(503, "x"), 3) == ApiError(503, "x").transient)
+        assertEquals(false, retryJobPoll(ApiError(403, "동의"), 1)) // 동의 철회는 서버가 작업을 취소 — 바로 끝냄
+        assertEquals(false, retryJobPoll(ApiError(410, "x"), 1))
+        assertEquals(false, retryJobPoll(java.io.IOException("x"), 12)) // 1분 넘게 닿지 않으면 끝냄
+    }
 }

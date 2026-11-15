@@ -172,6 +172,9 @@ internal fun serverShortProgress(state: String, elapsedMs: Long): Float = when (
     else -> .05f
 }
 
+/** 서버가 맡은 생성 작업을 보다가 실패했을 때 다시 물을지: 통신 실패와 앞단의 잠깐 실패(502–504)만, 12번(약 1분)까지. 서버의 거절(403·409·410 등)은 그대로 끝낸다. */
+internal fun retryJobPoll(e: Throwable, tries: Int): Boolean = tries < 12 && (e is java.io.IOException || e is ApiError && e.transient)
+
 private class AfterSourceChanged : IllegalStateException("원음·자막·화자가 바뀌었어요. 다시 만들어 주세요")
 private class AfterStopped(message: String) : IllegalStateException(message)
 
@@ -259,7 +262,13 @@ internal object AfterRuns {
                 while (job.optString("state") !in setOf("completed", "failed", "canceled", "submission_unknown")) {
                     item.render = serverShortProgress(job.optString("state"), System.currentTimeMillis() - started)
                     delay(5000)
-                    job = net { api.shortJob(run.code, token, accepted.getString("id")) }
+                    // 서버가 맡은 뒤에는 이 화면을 떠나거나 앱이 가려져도 끝까지 본다(D# 점검: 9분 동안 콘텐츠 기록으로 넘어가면 allowed()가 거짓이 돼 끊겼음).
+                    // 동의·원음·자막이 바뀌면 서버가 작업을 취소해 조회가 403·409·410으로 끝난다. 사람이 멈추면 delay에서 취소된다.
+                    var tries = 0
+                    while (true) {
+                        try { job = api.shortJob(run.code, token, accepted.getString("id")); break }
+                        catch (e: Exception) { if (!retryJobPoll(e, ++tries)) throw e; delay(5000) }
+                    }
                 }
                 if (job.optString("state") != "completed") throw AfterStopped("쇼츠를 만들지 못했어요(${job.optString("errorCode").ifBlank { job.optString("state") }})")
                 item.render = 1f; item.phase = Phase.DONE
