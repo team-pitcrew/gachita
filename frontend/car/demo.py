@@ -859,6 +859,29 @@ def near(here, north_m, east_m):
     return round(here[0] + north_m / 111_320, 6), round(here[1] + east_m / (111_320 * math.cos(math.radians(here[0]))), 6)
 
 
+def hms(t):
+    return sum(int(x) * 60 ** i for i, x in enumerate(reversed(t.split(":"))))
+
+
+def edit_scene(row, extend_s):
+    """#532: 고른 장면의 끝 손잡이를 extend_s초만큼 끈다(음수면 줄임). 파형 자리는 화면 글로 셈 — '전체 HH:MM:SS'(여행 길이),
+    축 글 '00:00'(파형 왼쪽 끝)·마지막 축 글(오른쪽 끝, 그 아래 74px), 고른 행 바로 아래 'HH:MM:SS–HH:MM:SS'(장면 구간)."""
+    if not extend_s: return None
+    ns = ui()
+    total = next((hms(m.group(1)) for n in ns for m in [re.search(r"전체 (\d+:\d\d:\d\d)", n[0])] if m), None)
+    axis = sorted((n for n in ns if re.fullmatch(r"\d\d:\d\d", n[0])), key=lambda n: n[4][0])
+    below = sorted((n for n in ns if re.match(r"\d+:\d\d:\d\d–\d+:\d\d:\d\d", n[0]) and n[4][1] >= row[4][1]), key=lambda n: n[4][1])
+    if not (total and len(axis) >= 2 and below):
+        note("scene.edit.skip", why="파형 축·구간 글을 못 찾음"); return None
+    x0, x1 = axis[0][4][0], axis[-1][4][2]; y = (axis[0][4][1] + axis[0][4][3]) // 2 - 74
+    before = below[0][0].split(" /")[0]; to = hms(before.split("–")[1])
+    xa, xb = (x0 + (x1 - x0) * t / total for t in (to, min(total, to + extend_s)))
+    adb("shell", "input", "swipe", str(int(xa)), str(y), str(int(xb)), str(y), "1200"); time.sleep(1.5)
+    after = next((n[0].split(" /")[0] for n in ui() if re.match(r"\d+:\d\d:\d\d–", n[0]) and abs(n[4][1] - below[0][4][1]) < 20), None)
+    note("scene.edit", before=before, after=after, extend_s=extend_s)
+    return before, after
+
+
 def scene_keys(code):
     """SCENE_TALK을 넣은 시간대(st.scene_ms, 끝 5초 여유)에 받아 적힌 줄의 앞 6자. 장면 행 제목은 그 장면의 가장 힘 있는 줄이라 이것으로 행을 찾는다."""
     w, tok = st.get("scene_ms"), st.get("trip", {}).get("mom")
@@ -887,8 +910,8 @@ def after_steps(code):
         else: want = [n for n in picks if re.match(r"^[☐☑]\s*[13]\.\s", n[0])]  # 시안: 1번과 3번
         for n in want:
             x1, y1, x2, y2 = n[4]; adb("shell", "input", "tap", str((x1 + x2) // 2), str((y1 + y2) // 2)); time.sleep(1)
-        if FLOW == "pitcrew" and tap("구간 편집", "범위 편집", "구간 조정", timeout=3): note("scene.edit", note="구간 편집 화면(F5)")  # 앱에 생기면 누름
-        step(28, ["선택한 2개 생성", "선택한 "], seeded=SEED); tap("선택한 2개 생성", "선택한 ", exact=False)
+        edit = edit_scene(want[0], float(os.environ.get("DEMO_SCENE_EDIT_S", "3"))) if FLOW == "pitcrew" and want else None
+        step(28, ["선택한 2개 생성", "선택한 "], note_=f"파형에서 구간 끝을 끌어 {edit[0]} → {edit[1]}(#532)" if edit else "", seeded=SEED); tap("선택한 2개 생성", "선택한 ", exact=False)
         step(29, ["콘텐츠를 만들어요", "콘텐츠 생성 중"])
         # PITCREW 쇼츠는 일꾼(Agent SDK + 스킬)이 한 번에 한 편, 30초 장면 하나에 약 8–15분(그림 칸 하나 1.5–2분, 일꾼 세션) → 기본 1200초. 녹화에서는 그 대기를 뺀다
         make_s = int(os.environ.get("DEMO_MAKE_S", "120" if FLOW == "family" else "1200"))
