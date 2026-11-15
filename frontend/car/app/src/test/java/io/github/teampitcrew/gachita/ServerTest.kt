@@ -5,6 +5,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.ByteArrayOutputStream
@@ -118,6 +119,16 @@ class ServerTest {
         override fun getOutputStream() = sent
         override fun getInputStream() = answer.second.byteInputStream()
         override fun getErrorStream() = answer.second.byteInputStream()
+    }
+
+    /** 표지 그림(T166): 참가자 토큰을 머리말로만 보내고, 아직 없으면(404) null, 있으면 바이트 그대로. */
+    @Test fun `표지 그림은 머리말 토큰으로 받고 없으면 null`() {
+        val seen = mutableListOf<String>()
+        fun server(status: Int, body: String) = Server("http://test") { url -> Fake(url) { c -> seen += "${c.url.path} ${c.getRequestProperty("Authorization")}"; status to body } }
+        assertNull(server(404, """{"error":"아직 표지 그림이 없어요"}""").shortThumbnail("AB23CD", "tok", "j1"))
+        assertEquals("PNGDATA", String(server(200, "PNGDATA").shortThumbnail("AB23CD", "tok", "j1")!!))
+        assertEquals(listOf("/api/trips/AB23CD/short-generations/j1/thumbnail Bearer tok"), seen.distinct())
+        assertThrows(ApiError::class.java) { server(409, """{"error":"원본이 바뀜"}""").shortThumbnail("AB23CD", "tok", "j1") }
     }
 
     private fun trip(consent: Boolean) = """{"code":"AB23CD","title":"t","status":"boarding","recording":false,
