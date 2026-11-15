@@ -59,6 +59,7 @@ if "GACHITA_VC_URL" not in os.environ and sys.argv[1:2] not in (["--plan"], ["--
     _port = subprocess.run(_ADB + ["forward", "tcp:0", "tcp:8088"], capture_output=True, text=True).stdout.strip()
     if _port.isdigit(): os.environ["GACHITA_VC_URL"] = f"http://127.0.0.1:{_port}"
 import e2e, capture_e2e as cap  # noqa: E402  같은 폴더의 E2E 도구(adb, 화면 트리, 기어, 소리 넣기)
+import final_transcript  # noqa: E402  받아 적은 줄을 교정본(최종본)으로 잇기(오너 11/15)
 from e2e import ADB, PKG, OUT, adb, gear, check, note  # noqa: E402
 
 PORT = int(os.environ["GACHITA_PORT"])
@@ -891,8 +892,40 @@ def scene_keys(code):
     return [k for u in items if w[0] <= u["at"] <= w[1] + 5000 for k in [(u.get("displayText") or u.get("text") or "").strip()[:6]] if len(k) >= 4]
 
 
+def save_final_transcript(code):
+    """쇼츠를 만들기 전에 대화 기록을 교정본(최종본)으로 저장한다(final_transcript.py, 오너 11/15 '고친 최종본으로 저장').
+    교정본은 DEMO_INPUTS/timeline.json의 talks_seat(화자 식별 세션). 원문은 서버에 그대로 남고, 화면·쇼츠 자막은 최종본을 쓴다.
+    말한 사람은 그 기기로 올린 참가자(차 운전석 = dad)만 고칠 수 있어 dad 계정으로 다시 참가해 이 여행의 참가자 토큰을 받는다.
+    교정본이 없거나 받아 적은 묶음이 넣은 대화와 맞지 않으면 원문 그대로 두고 기록만 남긴다(시연은 계속)."""
+    tl = OUT / "inputs" / "timeline.json"
+    talks_seat = json.loads(tl.read_text()).get("talks_seat", {}) if FLOW == "pitcrew" and tl.exists() else {}
+    order = [t for ts in talks().values() for t in ts]
+    if not order or not all(t in talks_seat for t in order): return note("final.skip", why="교정본(talks_seat) 없음")
+    trip = api("GET", f"/trips/{code}")
+    dad = account("dad", "아빠") if "token" not in st.get("dad", {}) else st["dad"]
+    seat = next((p["seat"] for p in trip["participants"] if p.get("profileId") == dad["id"]), None)
+    if not seat: return note("final.skip", why="운전석 계정이 여행에 없음")
+    try: tok = api("POST", f"/trips/{code}/participants", {"seat": seat}, dad["token"])["token"]
+    except RuntimeError: dad = account("dad", "아빠"); tok = api("POST", f"/trips/{code}/participants", {"seat": seat}, dad["token"])["token"]
+    tr = api("GET", f"/trips/{code}/transcript", token=tok)
+    devices = [u["device"] for u in tr["utterances"]]
+    if not devices: return note("final.skip", why="받아 적은 줄 없음")
+    car = max(set(devices), key=devices.count)  # 차 기기: 줄이 가장 많은 기기(폰 시드 줄은 따로)
+    try: todo = final_transcript.plan(tr["utterances"], trip["participants"], [talks_seat[t]["lines"] for t in order], car)
+    except ValueError as e: return note("final.skip", why=str(e))
+    from urllib.parse import quote
+    for u, text, who in todo:
+        path = f"{quote(u['device'], safe='')}/{u['seq']}"
+        if text != u["displayText"]:
+            api("PATCH", f"/trips/{code}/captions/{path}", {"generation": tr["generation"], "expectedVersion": u.get("editVersion", 0), "text": text}, tok)
+        if who != u.get("participantId"):
+            api("PATCH", f"/trips/{code}/utterances/{path}", {"participantId": who}, tok)
+    note("final.saved", lines=len(todo), of=len(devices))
+
+
 def after_steps(code):
     """25–35 전체 화면(F5·F3·F6)."""
+    save_final_transcript(code)  # 쇼츠(29)를 만들기 전에 — 자막·화자가 바뀌면 서버가 옛 원본으로 만든 영상을 취소한다
     rec_part(3)
     if not unsplit(): note("unsplit.fail")
     if not seen("오늘의 주행을 기록했어요"):  # 24의 '계속'이 이미 C22를 열었으면 탭을 다시 누르지 않는다(누르면 afterStart가 풀려 C33으로 감)
