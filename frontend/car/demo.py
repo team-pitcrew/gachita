@@ -528,10 +528,17 @@ def step(n, needles, timeout=15, note_="", seeded=False):
         face = seen(FACE) is not None
         results[n]["face"] = face
         check(f"{n} 오른쪽 위 프로필", face)
-    else:
-        results[n] = {"result": "없음", "note": note_ or f"화면 글 {needles[0]!r}이 {timeout}초 안에 안 보임 — {flow_state(meta[4])}", "shot": None}
+    else:  # 없을 때도 찍어 둔다(무엇이 떠 있었는지 — gap2·pass1의 20·21)
+        miss = shot.removesuffix(".png") + "-없음"; e2e.shot(miss)
+        results[n] = {"result": "없음", "note": note_ or f"화면 글 {needles[0]!r}이 {timeout}초 안에 안 보임 — {flow_state(meta[4])}", "shot": f"{miss}.png"}
     check(f"{n} {meta[1]}", got, matched=got)
     return bool(got)
+
+
+def logged(pattern, since):
+    """since(기기 시각 'MM-DD HH:MM:SS.000') 뒤 앱 기록(logcat GachitaAsk·GachitaCar)에 pattern이 있는지.
+    녹음 막대의 파형이 움직이는 동안 화면 트리(uiautomator)를 못 읽을 때 앱이 남긴 기록으로 확인한다(pass1의 20: 앱은 '카드 보임')."""
+    return re.search(pattern, adb("logcat", "-d", "-T", since, "-s", "GachitaAsk:I", "GachitaCar:I")) is not None
 
 
 def mark(n, result, why):
@@ -1010,10 +1017,12 @@ def drive_pitcrew(code):
         if t == SCENE_TALK: st["scene_ms"] = [t0, int(time.time() * 1000)]; save()
     # 내비는 판교에 머물고(도착 판정의 '지금 위치'도 내비 값 — Car.here) GPS를 옮겨도 닿지 않는다(gap2: outside_place).
     # 그래서 도착(20·21)은 가족 흐름의 1분 경로처럼 목적지 이름 '정자 카페거리'를 내비 위치 남쪽 NEAR_M에 둔다 — mock: 좌표만, 이름·대화·브리핑은 실제 흐름
-    here = navi_here(); end = near(here, -NEAR_M, 0)
+    here = navi_here(); end = near(here, -NEAR_M, 0); since = adb("shell", "date '+%m-%d %H:%M:%S.000'").strip()
     launch("--es", "route", f"{end[0]},{end[1]},{DEST[2]}", "--ei", "approachSeconds", APPROACH_S)
     split(); tap("함께 타는 중", timeout=3)
-    step(20, ["정차하면 자세히"], 25, f"목적지 이름 {DEST[2]}, 좌표는 내비 위치 {here}에서 남쪽 {NEAR_M:.0f} m(내비가 판교에 머물러 정자까지 못 감)")
+    why20 = f"목적지 이름 {DEST[2]}, 좌표는 내비 위치 {here}에서 남쪽 {NEAR_M:.0f} m(내비가 판교에 머물러 정자까지 못 감)"
+    if not step(20, ["정차하면 자세히"], 25, why20) and logged(rf"다음 장소 {DEST[2]} .*카드 보임", since):
+        results[20].update(result="보임", note=why20 + " — 화면 트리를 못 읽어 앱 기록 '카드 보임'으로 확인(캡처로 확인)")
     for t in T[20]: say(t)
     park(); step(21, [f"{DEST[2]} 도착", "먼저 할 일과 살 것을 모았어요"], 25)
     if not tap("계속", timeout=6):  # 최종 목적지 브리핑 '계속' → 여행 마무리(C22). 없으면 폰의 '여행 끝내기'와 같은 요청으로 마친다
