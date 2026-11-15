@@ -148,7 +148,11 @@ class Onboarding(private val context: Context, private val prefs: SharedPreferen
             val r = runCatching(job)
             main.post {
                 busy = false
-                r.onSuccess(ok).onFailure { note = if (it is ApiError) failureText(it) else "연결이 끊겨서 보내지 못했어요" }
+                r.onSuccess(ok).onFailure {
+                    // 저장된 로그인이 이 서버에서 통하지 않으면(401: 서버가 바뀌었거나 계정이 지워짐) 같은 화면에서 계속 실패하지 않게 지우고 로그인으로 보낸다
+                    if (it is ApiError && it.status == 401 && token != null) { prefs.edit().remove("account").apply(); stopRecording(); step = OnboardStep.LOGIN; note = "로그인이 풀렸어요. 다시 로그인하거나 새로 가입해 주세요"; return@onFailure }
+                    note = if (it is ApiError) failureText(it) else "연결이 끊겨서 보내지 못했어요"
+                }
             }
         }
     }
