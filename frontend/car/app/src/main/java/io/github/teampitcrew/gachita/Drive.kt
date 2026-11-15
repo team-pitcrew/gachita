@@ -1,5 +1,6 @@
 package io.github.teampitcrew.gachita
 
+import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.Canvas
@@ -263,12 +264,32 @@ internal fun TripHeader(shell: Shell, listening: Boolean) {
     val c = MaterialTheme.colorScheme
     val park = shell == Shell.PARKED
     Row(Modifier.fillMaxWidth().height(shell.head), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(shell.headGap)) {
+        BackButton()
         Mascot(listening, 48.dp)
         Text("가치타", style = CarText.Headline, maxLines = 1)
         Spacer(Modifier.weight(1f))
         if (park) Text("주차 중  P", color = c.onSurfaceVariant, style = CarText.Label, maxLines = 1)
         val me = LocalMe.current
         MeButton(me.face) { me.open(shell, me.face) }
+    }
+}
+
+/**
+ * 머리 줄 맨 왼쪽의 뒤로 단추(오너 11/15: 모든 화면, 화살표 아이콘만, 색은 ink-2). 누르면 기기 뒤로와 같은 길(각 화면의 BackHandler)로 간다.
+ * 돌아갈 곳이 없는 첫 화면에서는 앱이 닫히지 않게 아무 일도 하지 않는다.
+ */
+@Composable
+internal fun BackButton() {
+    val back = LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
+    val ink = MaterialTheme.colorScheme.onSurfaceVariant
+    Box(Modifier.size(56.dp).clip(RoundedCornerShape(10.dp)).clickable(role = Role.Button) { if (back?.hasEnabledCallbacks() == true) back.onBackPressed() }
+        .semantics { contentDescription = "뒤로" }, contentAlignment = Alignment.Center) {
+        Canvas(Modifier.size(28.dp)) {
+            val w = size.width; val h = size.height; val t = 3.dp.toPx()
+            drawLine(ink, Offset(w * 0.14f, h / 2), Offset(w * 0.86f, h / 2), t, StrokeCap.Round)
+            drawLine(ink, Offset(w * 0.14f, h / 2), Offset(w * 0.46f, h * 0.2f), t, StrokeCap.Round)
+            drawLine(ink, Offset(w * 0.14f, h / 2), Offset(w * 0.46f, h * 0.8f), t, StrokeCap.Round)
+        }
     }
 }
 
