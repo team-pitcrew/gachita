@@ -265,7 +265,9 @@ const log = (event, fields = {}) => console.log(JSON.stringify({ at: new Date().
 // 연결 실패(서버가 잠깐 다시 뜨는 중 등)와 앞단의 502–504는 5초 간격으로 tries번까지 다시 보낸다. 서버의 거절(그 밖의 HTTP 오류)은 그대로 끝낸다.
 // 로컬 고정 서버 8800은 develop이 바뀔 때마다 다시 떠서, 9분 만든 결과 PUT이 그 1–2초에 걸리면 작업을 잃었다(T158).
 // 임대 받기(claim)는 다시 보내지 않는다(응답만 잃었으면 그 작업은 임대 만료로 끝남, 다음 폴링이 대신함).
-export async function api(path, { method = "GET", body, type, tries = 6, fetcher = fetch, wait = 5000 } = {}) {
+// timeout: 한 번의 요청 제한. 운영은 Cloudflare 경로가 느려(한국 → LA 엣지 → 서울, 3.4 MB에 43~130초를 잼) 파일을 주고받는 요청은 길게 준다.
+const SLOW = 600_000;
+export async function api(path, { method = "GET", body, type, tries = 6, fetcher = fetch, wait = 5000, timeout = 120_000 } = {}) {
   let r;
   for (let attempt = 1; ; attempt++) {
     try {
@@ -273,13 +275,14 @@ export async function api(path, { method = "GET", body, type, tries = 6, fetcher
         method,
         body,
         headers: { authorization: `Bearer ${process.env.SHORTS_WORKER_TOKEN}`, ...(type && { "content-type": type }) },
-        signal: AbortSignal.timeout(120_000),
+        signal: AbortSignal.timeout(timeout),
       });
       // 앞단(로드 밸런서·Cloudflare)의 잠깐 실패(502–504)도 다시 보낸다: 운영은 배포로 파드가 바뀌는 동안 이렇게 답한다.
       if (![502, 503, 504].includes(r.status) || attempt >= tries) { r.attempts = attempt; break; }
       log("api_retry", { method, attempt, status: r.status });
     } catch (e) {
-      if (attempt >= tries) throw Object.assign(e, { code: "api_unreachable" });
+      // 시간 초과는 DOMException이라 code를 덮어쓸 수 없다. 새 오류로 감싼다.
+      if (attempt >= tries) throw Object.assign(Error(`api ${method} ${path} unreachable: ${e.message}`), { code: "api_unreachable", cause: e });
       log("api_retry", { method, attempt, message: String(e.message).slice(0, 120) });
     }
     await new Promise((ok) => setTimeout(ok, wait));
@@ -302,16 +305,16 @@ async function once() {
       const at = Date.now();
       try {
         const png = await cover(job, { signal: AbortSignal.any([signal, AbortSignal.timeout(6 * 60_000)]) });
-        await api(job.thumbnail, { method: "PUT", body: png, type: "image/png" });
+        await api(job.thumbnail, { method: "PUT", body: png, type: "image/png", timeout: SLOW });
         log("thumbnail", { id: job.id, bytes: png.length, ms: Date.now() - at });
       } catch (e) {
         log("thumbnail_failed", { id: job.id, code: e.code ?? "cover_failed", message: String(e.message).slice(0, 200), ms: Date.now() - at });
       }
     }
-    const wav = await api(job.audio);
+    const wav = await api(job.audio, { timeout: SLOW });
     const { video, usage, adaptation } = await make(job, wav, { signal });
     // 다시 보낸 끝에 410이면 앞서 보낸 것이 이미 받아들여진 것이다(응답만 잃음). 서버에는 완성으로 남아 있다.
-    const stored = await api(job.result, { method: "PUT", body: video, type: "video/mp4" }).catch((e) => (e.status === 410 && e.attempts > 1 ? null : Promise.reject(e)));
+    const stored = await api(job.result, { method: "PUT", body: video, type: "video/mp4", timeout: SLOW }).catch((e) => (e.status === 410 && e.attempts > 1 ? null : Promise.reject(e)));
     log(stored === null ? "completed_unconfirmed" : "completed", { id: job.id, bytes: video.length, ms: Date.now() - started, usage, adaptation });
   } catch (e) {
     log("failed", { id: job.id, code: e.code ?? "make_failed", message: String(e.message).slice(0, 300), ms: Date.now() - started });
