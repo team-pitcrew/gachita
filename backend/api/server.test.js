@@ -2478,18 +2478,18 @@ test("장면 재전사는 실제 발화 구간을 우선하고 클립에 남은 
 test("화자 값 모델·실행기(T170): /models·/vendor/ort는 assets 폴더에서 흘려 보내고 오래 캐시한다", async () => {
   const assets = fileURLToPath(new URL("./assets/", import.meta.url));
   const fresh = !(await stat(assets).catch(() => null)); // 받아 둔 진짜 파일이 있으면 시험 파일만 지운다
-  const file = joinPath(assets, "vendor", "ort", "t168-test.wasm");
+  const file = joinPath(assets, "vendor", "ort", "t170-test.wasm");
   await mkdir(joinPath(assets, "vendor", "ort"), { recursive: true });
   await writeFile(file, Buffer.from([0, 0x61, 0x73, 0x6d]));
   try {
-    const r = await fetch(`${base}/vendor/ort/t168-test.wasm`);
+    const r = await fetch(`${base}/vendor/ort/t170-test.wasm`);
     assert.deepEqual([r.status, r.headers.get("content-type"), r.headers.get("cache-control"), r.headers.get("content-length")], [200, "application/wasm", "public, max-age=31536000, immutable", "4"]);
     assert.deepEqual([...Buffer.from(await r.arrayBuffer())], [0, 0x61, 0x73, 0x6d]);
-    assert.equal((await fetch(`${base}/vendor/ort/t168-test.wasm`, { headers: { "if-none-match": r.headers.get("etag") } })).status, 304);
+    assert.equal((await fetch(`${base}/vendor/ort/t170-test.wasm`, { headers: { "if-none-match": r.headers.get("etag") } })).status, 304);
     assert.equal((await fetch(`${base}/models/없는파일.onnx`)).status, 404);
     assert.equal((await fetch(`${base}/vendor/ort/`)).status, 404, "폴더는 주지 않음");
     assert.ok([400, 404].includes((await fetch(`${base}/vendor/ort/..%2F..%2Fserver.js`)).status), "assets 밖은 주지 않음");
-    assert.equal((await fetch(`${base}/vendor/ort/t168-test.wasm`, { method: "POST" })).status, 405);
+    assert.equal((await fetch(`${base}/vendor/ort/t170-test.wasm`, { method: "POST" })).status, 405);
   } finally {
     await rm(fresh ? assets : file, { recursive: true, force: true });
   }

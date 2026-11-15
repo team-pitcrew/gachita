@@ -14,29 +14,30 @@ import { fileURLToPath } from "node:url";
 const MODEL = {
   url: "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/wespeaker_en_voxceleb_resnet34_LM.onnx",
   check: ["sha256", "e9848563da86f263117134dfd7ad63c92355b37de492b55e325400c9d9c39012"],
-  files: { "": "models/wespeaker.onnx" },
+  // 이름은 폰의 embedder 이름과 맞춘다(판이 바뀌면 이름을 바꿔 오래 캐시해도 안전하게)
+  files: { "": ["models/wespeaker-resnet34-v1.onnx", "e9848563da86f263117134dfd7ad63c92355b37de492b55e325400c9d9c39012"] },
 };
-// onnxruntime-web 1.27.0(MIT). npm 레지스트리가 tgz마다 공개하는 무결성 값(sha512)으로 확인하고, 폰이 부르는 세 파일만 꺼낸다.
+// onnxruntime-web 1.27.0(MIT). npm 레지스트리가 tgz마다 공개하는 무결성 값(sha512)으로 확인하고, 폰이 부르는 세 파일만 꺼내 파일마다 sha256도 본다.
 const ORT = {
   url: "https://registry.npmjs.org/onnxruntime-web/-/onnxruntime-web-1.27.0.tgz",
   check: ["sha512", "ogDLsqIozHZwifPuN37OproAo0byX6t43/bP8GzeZWBWD6MOGExswFAx3up4NS/vvWBOg2u2PXomDt3rMmdQSg==", "base64"],
   files: {
-    "package/dist/ort.wasm.min.mjs": "vendor/ort/ort.wasm.min.mjs",
-    "package/dist/ort-wasm-simd-threaded.mjs": "vendor/ort/ort-wasm-simd-threaded.mjs",
-    "package/dist/ort-wasm-simd-threaded.wasm": "vendor/ort/ort-wasm-simd-threaded.wasm",
+    "package/dist/ort.wasm.min.mjs": ["vendor/ort/1.27.0/ort.wasm.min.mjs", "9608e98a3fba9716f0cbd0bca0c94808b71dae2e9265ca3fe742ddc393a53ebc"],
+    "package/dist/ort-wasm-simd-threaded.mjs": ["vendor/ort/1.27.0/ort-wasm-simd-threaded.mjs", "0a1e718d99c41b22c21f2520ff4f9e883a6b5533856e398d21816ee8eb8185d3"],
+    "package/dist/ort-wasm-simd-threaded.wasm": ["vendor/ort/1.27.0/ort-wasm-simd-threaded.wasm", "d1ab1b94b16a65b29d710d0b587b29e7bed336827577623913479b8afe8113e6"],
   },
 };
 export const SOURCES = [MODEL, ORT];
 
-// 출처 표기(CC BY 4.0은 저작자·라이선스·출처를 밝혀야 한다). /models/NOTICE.txt, /vendor/ort/NOTICE.txt로 함께 준다.
+// 출처 표기(CC BY 4.0은 저작자·라이선스·출처를 밝혀야 한다). /models/NOTICE.txt, /vendor/ort/1.27.0/NOTICE.txt로 함께 준다.
 export const NOTICE = {
-  "models/NOTICE.txt": `wespeaker.onnx
+  "models/NOTICE.txt": `wespeaker-resnet34-v1.onnx
 - 모델: WeSpeaker ResNet34-LM (VoxCeleb), WeNet Open Source Community — https://github.com/wenet-e2e/wespeaker
 - 가중치 라이선스: CC BY 4.0 — https://creativecommons.org/licenses/by/4.0/
 - ONNX 파일: k2-fsa/sherpa-onnx 릴리스 'speaker-recongition-models'의 wespeaker_en_voxceleb_resnet34_LM.onnx(바꾸지 않음) — ${MODEL.url}
 - sha256: ${MODEL.check[1]}
 `,
-  "vendor/ort/NOTICE.txt": `onnxruntime-web 1.27.0 (ort.wasm.min.mjs, ort-wasm-simd-threaded.mjs, ort-wasm-simd-threaded.wasm)
+  "vendor/ort/1.27.0/NOTICE.txt": `onnxruntime-web 1.27.0 (ort.wasm.min.mjs, ort-wasm-simd-threaded.mjs, ort-wasm-simd-threaded.wasm)
 - Copyright (c) Microsoft Corporation. MIT License — https://github.com/microsoft/onnxruntime/blob/main/LICENSE
 - 출처: ${ORT.url} (npm integrity ${ORT.check[0]}-${ORT.check[1]}, 바꾸지 않음)
 `,
@@ -60,7 +61,7 @@ export async function fetchAssets(out) {
   try {
     for (const src of SOURCES) {
       const buf = await fetchChecked(src);
-      for (const [member, to] of Object.entries(src.files)) {
+      for (const [member, [to, sha256]] of Object.entries(src.files)) {
         let data = buf;
         if (member) {
           // tgz 안의 파일: 시스템 tar로 그 파일만 꺼낸다(의존성 없이)
@@ -69,6 +70,7 @@ export async function fetchAssets(out) {
           execFileSync("tar", ["-xzf", tgz, "-C", work, member]);
           data = await readFile(join(work, member));
         }
+        if (!digest(data, ["sha256", sha256])) throw new Error(`${to}: sha256 값이 다릅니다`);
         await mkdir(dirname(join(work, "out", to)), { recursive: true });
         await writeFile(join(work, "out", to), data);
       }

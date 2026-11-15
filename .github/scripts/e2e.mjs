@@ -177,12 +177,12 @@ step("웹앱 첫 화면과 정적 파일", async () => {
 // 폰 웹이 브라우저에서 화자 값을 만들 때 쓰는 모델·실행기(T170). 이미지를 만들 때 공식 릴리스에서 받아 확인한 파일이 같은 출처로 나오고 오래 캐시된다.
 step("화자 값 모델과 실행기(같은 출처, 오래 캐시)", async () => {
   for (const [file, type, least] of [
-    ["/models/wespeaker.onnx", "application/octet-stream", 26_000_000],
-    ["/vendor/ort/ort-wasm-simd-threaded.wasm", "application/wasm", 13_000_000],
-    ["/vendor/ort/ort-wasm-simd-threaded.mjs", "text/javascript", 10_000],
-    ["/vendor/ort/ort.wasm.min.mjs", "text/javascript", 10_000],
+    ["/models/wespeaker-resnet34-v1.onnx", "application/octet-stream", 26_000_000],
+    ["/vendor/ort/1.27.0/ort-wasm-simd-threaded.wasm", "application/wasm", 13_000_000],
+    ["/vendor/ort/1.27.0/ort-wasm-simd-threaded.mjs", "text/javascript", 10_000],
+    ["/vendor/ort/1.27.0/ort.wasm.min.mjs", "text/javascript", 10_000],
     ["/models/NOTICE.txt", "text/plain", 100],
-    ["/vendor/ort/NOTICE.txt", "text/plain", 100],
+    ["/vendor/ort/1.27.0/NOTICE.txt", "text/plain", 100],
   ]) {
     const r = await call("GET", file);
     status(r, 200);
