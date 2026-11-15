@@ -27,8 +27,8 @@ fun parseAccountProfile(json: String): AccountProfile = JSONObject(json).let { o
     )
 }
 
-/** 시안 C01–C08의 단계. RECORDING은 C07(녹음 중·녹음 끝). */
-enum class OnboardStep { WELCOME, SIGNUP, CONSENT, PROFILE, PHOTO, VOICE, RECORDING, DONE }
+/** 시안 C01–C08의 단계. RECORDING은 C07(녹음 중·녹음 끝). LOGIN은 시안에 없는 화면 — C02 '이미 계정이 있나요?' 카드에서 간다(11/15 오너). */
+enum class OnboardStep { WELCOME, SIGNUP, LOGIN, CONSENT, PROFILE, PHOTO, VOICE, RECORDING, DONE }
 
 /**
  * 가입·로그인·다시 열기 뒤 빠진 단계만(11/15 오너: DB에 있는 계정으로 로그인하면 처음부터 다시 받지 않는다):
