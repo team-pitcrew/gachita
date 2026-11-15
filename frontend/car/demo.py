@@ -99,8 +99,9 @@ GROUP = "PITCREW"
 NAMES = (os.environ.get("DEMO_NAMES") or "정민,지민,지환,민준").split(",")
 SEATS = (os.environ.get("DEMO_SEATS") or "ROW_1_LEFT,ROW_1_RIGHT,ROW_2_LEFT,ROW_2_RIGHT").split(",")
 CREW = ("dad", "mom", "crew3", "crew4")  # 상태 파일의 자리. 화자1 = 차에서 가입하는 운전자(옛 흐름의 'dad' 자리를 그대로 씀)
-START = (37.5045, 127.0244, "신논현")  # 출발(오너). 내비는 판교에 머물러 서버 장소 기록으로만 보인다
-DEST = (37.3666, 127.1078, "정자 카페거리")  # 목적지(오너). 내비 경로·도착 판정(GPS를 옮김)
+START = (37.5045, 127.0244, "신논현")
+PATH_POINTS = os.environ.get("DEMO_PATH", "37.5045,127.0244;37.4844,127.0343;37.4470,127.0590;37.4003,127.1035;37.3666,127.1078")  # 신논현 → 정자(F5·F6 #534)  # 출발(오너). 내비는 판교에 머물러 서버 장소 기록으로만 보인다
+DEST = (37.3666, 127.1078, "정자 카페거리")  # 목적지(오너). 17–19의 내비 경로. 도착(20·21)은 이 이름을 내비 위치 옆에 둠(drive_pitcrew)
 SCENE_TALK = "talk-where"  # 고를 장면 '우리 어디로 갈까요?'(원본 영상 578–608초). 제목일 뿐 그 말이 받아 적히지는 않아(gap2) 넣은 시간대의 줄로 장면을 고른다
 if FLOW == "pitcrew":  # 사람: 부르는 이름은 옛 흐름 함수(account·ready_profile·voice_wav)와 같은 열쇠를 쓰고 프로필 이름만 화자 이름으로
     PEOPLE = {"아빠": ("아빠", "glasses", SEATS[0], NAMES[0]), "엄마": ("엄마", "healing", SEATS[1], NAMES[1]),
@@ -528,10 +529,17 @@ def step(n, needles, timeout=15, note_="", seeded=False):
         face = seen(FACE) is not None
         results[n]["face"] = face
         check(f"{n} 오른쪽 위 프로필", face)
-    else:
-        results[n] = {"result": "없음", "note": note_ or f"화면 글 {needles[0]!r}이 {timeout}초 안에 안 보임 — {flow_state(meta[4])}", "shot": None}
+    else:  # 없을 때도 찍어 둔다(무엇이 떠 있었는지 — gap2·pass1의 20·21)
+        miss = shot.removesuffix(".png") + "-없음"; e2e.shot(miss)
+        results[n] = {"result": "없음", "note": note_ or f"화면 글 {needles[0]!r}이 {timeout}초 안에 안 보임 — {flow_state(meta[4])}", "shot": f"{miss}.png"}
     check(f"{n} {meta[1]}", got, matched=got)
     return bool(got)
+
+
+def logged(pattern, since):
+    """since(기기 시각 'MM-DD HH:MM:SS.000') 뒤 앱 기록(logcat GachitaAsk·GachitaCar)에 pattern이 있는지.
+    녹음 막대의 파형이 움직이는 동안 화면 트리(uiautomator)를 못 읽을 때 앱이 남긴 기록으로 확인한다(pass1의 20: 앱은 '카드 보임')."""
+    return re.search(pattern, adb("logcat", "-d", "-T", since, "-s", "GachitaAsk:I", "GachitaCar:I")) is not None
 
 
 def mark(n, result, why):
@@ -851,6 +859,30 @@ def near(here, north_m, east_m):
     return round(here[0] + north_m / 111_320, 6), round(here[1] + east_m / (111_320 * math.cos(math.radians(here[0]))), 6)
 
 
+def hms(t):
+    return sum(int(x) * 60 ** i for i, x in enumerate(reversed(t.split(":"))))
+
+
+def edit_scene(row, extend_s):
+    """#532: 고른 장면의 끝 손잡이를 extend_s초만큼 끈다(음수면 줄임). 파형 자리는 화면 글로 셈 — '전체 HH:MM:SS'(여행 길이),
+    축 글 '00:00'(파형 왼쪽 끝)·마지막 축 글(오른쪽 끝, 그 아래 74px), 고른 행 바로 아래 'HH:MM:SS–HH:MM:SS'(장면 구간)."""
+    if not extend_s: return None
+    ns = ui()
+    total = next((hms(m.group(1)) for n in ns for m in [re.search(r"전체 (\d+:\d\d:\d\d)", n[0])] if m), None)
+    axis = sorted((n for n in ns if re.fullmatch(r"\d\d:\d\d", n[0])), key=lambda n: n[4][0])
+    below = sorted((n for n in ns if re.match(r"\d+:\d\d:\d\d–\d+:\d\d:\d\d", n[0]) and n[4][1] >= row[4][1]), key=lambda n: n[4][1])
+    if not (total and len(axis) >= 2 and below):
+        note("scene.edit.skip", why="파형 축·구간 글을 못 찾음"); return None
+    x0, x1 = axis[0][4][0], axis[-1][4][2]; y = (axis[0][4][1] + axis[0][4][3]) // 2 - 74
+    before = below[0][0].split(" /")[0]; to = hms(before.split("–")[1])
+    xa, xb = (x0 + (x1 - x0) * t / total for t in (to, min(total, to + extend_s)))
+    xb += 32 if extend_s > 0 else -32  # 끌기는 터치 슬롭(약 25px, 3초) 뒤부터 움직인다(pass3: 25px 끌기는 그대로, 손 확인: 82px → +7초, 56px → +4초)
+    adb("shell", "input", "swipe", str(int(xa)), str(y), str(int(xb)), str(y), "1200"); time.sleep(1.5)
+    after = next((n[0].split(" /")[0] for n in ui() if re.match(r"\d+:\d\d:\d\d–", n[0]) and abs(n[4][1] - below[0][4][1]) < 20), None)
+    note("scene.edit", before=before, after=after, extend_s=extend_s)
+    return before, after
+
+
 def scene_keys(code):
     """SCENE_TALK을 넣은 시간대(st.scene_ms, 끝 5초 여유)에 받아 적힌 줄의 앞 6자. 장면 행 제목은 그 장면의 가장 힘 있는 줄이라 이것으로 행을 찾는다."""
     w, tok = st.get("scene_ms"), st.get("trip", {}).get("mom")
@@ -879,8 +911,8 @@ def after_steps(code):
         else: want = [n for n in picks if re.match(r"^[☐☑]\s*[13]\.\s", n[0])]  # 시안: 1번과 3번
         for n in want:
             x1, y1, x2, y2 = n[4]; adb("shell", "input", "tap", str((x1 + x2) // 2), str((y1 + y2) // 2)); time.sleep(1)
-        if FLOW == "pitcrew" and tap("구간 편집", "범위 편집", "구간 조정", timeout=3): note("scene.edit", note="구간 편집 화면(F5)")  # 앱에 생기면 누름
-        step(28, ["선택한 2개 생성", "선택한 "], seeded=SEED); tap("선택한 2개 생성", "선택한 ", exact=False)
+        edit = edit_scene(want[0], float(os.environ.get("DEMO_SCENE_EDIT_S", "3"))) if FLOW == "pitcrew" and want else None
+        step(28, ["선택한 2개 생성", "선택한 "], note_=f"파형에서 구간 끝을 끌어 {edit[0]} → {edit[1]}(#532)" if edit else "", seeded=SEED); tap("선택한 2개 생성", "선택한 ", exact=False)
         step(29, ["콘텐츠를 만들어요", "콘텐츠 생성 중"])
         # PITCREW 쇼츠는 일꾼(Agent SDK + 스킬)이 한 번에 한 편, 30초 장면 하나에 약 8–15분(그림 칸 하나 1.5–2분, 일꾼 세션) → 기본 1200초. 녹화에서는 그 대기를 뺀다
         make_s = int(os.environ.get("DEMO_MAKE_S", "120" if FLOW == "family" else "1200"))
@@ -910,6 +942,10 @@ def after_steps(code):
 # 경로 95–125초·카페 516–546 / '우리 어디로 갈까요?' 578–608 / 도착 1258–1284. 장면 후보는 30초 창이라(Scenes.kt) 578–608을 일시정지 뒤에 따로 넣는다(gap2: 카페와 이어 넣으니 두 대화가 섞인 장면)
 TALKS_REAL = {17: ["talk-route", "talk-cafe"], 19: ["talk-where"], 20: ["talk-arrive"]}
 TALKS_OLD = {17: ["drive-a"], 19: ["drive-b"], 20: []}
+
+
+def wave_seconds(path):
+    with wave.open(str(path)) as w: return w.getnframes() / w.getframerate()
 
 
 def talks():
@@ -959,6 +995,11 @@ def pitcrew_group(code=None):
     return g
 
 
+def hide_keyboard():
+    """화면 자판이 떠 있으면 내린다(뒤로 한 번). 떠 있지 않으면 누르지 않는다(뒤로가 앱 화면을 넘기지 않게)."""
+    if "mInputShown=true" in adb("shell", "dumpsys", "input_method"): adb("shell", "input", "keyevent", "KEYCODE_BACK"); time.sleep(1)
+
+
 def open_groups():
     """전체 그룹 목록(C16 groups). 가족 그룹이 없으면 가족 화면이 '우리 가족 추가'(C09, 위 탭 없음)로 열리므로
     머리 줄 프로필 메뉴의 그룹 칸('동승 그룹 변경' = 앱의 onGroup)으로 간다. 가족 그룹이 있으면 위 탭 '함께 타는 중'."""
@@ -975,6 +1016,7 @@ def pitcrew_group_steps():
     code = None
     if tap("+ 새 그룹 만들기", timeout=8) and wait(["새 동승 그룹", "그룹 이름"], 10):
         typed = type_into(0, GROUP)  # 영문이라 adb input text로 들어감
+        hide_keyboard()  # pass3: 화면 자판이 '그룹 저장'을 가려 누름이 자판에 떨어짐
         step(8, ["새 동승 그룹", "그룹 이름"], note_="" if typed else "그룹 이름 칸에 넣지 못함")
         tap("그룹 저장"); tap(GROUP, timeout=8); tap("동승자 초대하기", timeout=8)  # 저장 → 목록(C16L) → 혼자인 그룹(C16G) → 초대
         if step(9, ["초대 코드와 링크를 만들었어요", "초대 코드"]):
@@ -990,16 +1032,35 @@ def pitcrew_group_steps():
     return tap("이 그룹과 출발", timeout=8)
 
 
+# mock(11/15 중앙: 패스에서는 켜고 결과표에 '시드', 녹화는 서버 규칙이 실제 대화 '주차할 공간도 생각하셔야 돼요'를 잡으면 끔 — DEMO_ARRIVAL_SEED=''): 차의 도착 카드(C20)는 그 장소의 할 일이 있어야 뜬다(MainActivity arrive: items가 비면 카드 없음).
+# 실제 PITCREW 대화에는 '정자 카페거리'에 붙은 할 일 문장이 없어(pass1 21·25 없음) 조수석 사람의 말 한 줄을 기록본에 넣는다(기기 demo-seed).
+# 서버 규칙(place-rules-v2)으로 '카페거리'·먼저 할 일·'주차부터 먼저 하기'가 된다.
+ARRIVAL_SEED = os.environ.get("DEMO_ARRIVAL_SEED", f"{DEST[2]} 도착하면 주차부터 먼저 하자")
+
+
+def seed_arrival_todo(code):
+    st["arrival_seeded"] = False  # 같은 폴더로 다시 돌릴 때 지난 값이 남지 않게
+    tok = st.get("trip", {}).get("mom")
+    if not ARRIVAL_SEED or not tok: return
+    who = list(PEOPLE)[1]; p = trip_people(code)[who]
+    gen = api("GET", f"/trips/{code}").get("generation", 1); at = int(time.time() * 1000)
+    item = {"seq": 1, "at": at, "endAt": at + 2500, "text": ARRIVAL_SEED, "generation": gen,
+            **({"participantId": p["id"], "speakerMethod": "device-voice", "speakerConfidence": 0.93, "seatArea": p["seat"]} if p else {})}
+    api("POST", f"/trips/{code}/utterances", {"device": "demo-seed", "generation": gen, "items": [item]}, tok)
+    st["arrival_seeded"] = True; save(); note("seed.arrival", text=ARRIVAL_SEED, who=PEOPLE[who][3])
+
+
 def drive_pitcrew(code):
     """17–21 순정 내비 옆 좁은 창(F3·F4): 실제 차 안 대화(talks(): 경로 → 일시정지·재개 → 카페·'우리 어디로 갈까요?' → 도착 전에 도착 대화),
     목적지 정자 카페거리 도착 전·도착 브리핑. 출발 '신논현'은 서버 장소 기록으로(내비는 판교에 머묾)."""
     rec_part(2)
     tok = st.get("trip", {}).get("mom")
     if tok: api("POST", f"/trips/{code}/places", {"kind": "start", "name": START[2], "lat": START[0], "lng": START[1], "at": int(time.time() * 1000)}, tok)
-    launch("--es", "route", f"{DEST[0]},{DEST[1]},{DEST[2]}")  # 남은 시간 기준은 앱 기본 300초 — 판교에서 약 8분이라 아직 '도착 전'이 아님
+    # 발화 위치를 신논현→정자 길 위로(F5·F6 #534 디버그 인자, 내비가 판교에 머물러 쇼츠가 한 점에 겹치는 것을 막음 — mock: 위치만). 옛 APK는 무시한다
+    T = talks(); secs = sum(wave_seconds(OUT / "inputs" / f"{t}.wav") for ts in T.values() for t in ts) + float(os.environ.get("DEMO_PAUSE_S", "30"))
+    launch("--es", "route", f"{DEST[0]},{DEST[1]},{DEST[2]}", "--es", "path", PATH_POINTS, "--ei", "pathSeconds", str(int(secs)))  # 남은 시간 기준은 앱 기본 300초 — 판교에서 약 8분이라 아직 '도착 전'이 아님
     if not split(): note("split.fail")
     drive(); tap("함께 타는 중", timeout=3); wait(["방금 받아 적은 말"], 15)
-    T = talks()
     for t in T[17]: say(t)
     step(17, ["방금 받아 적은 말"], 30, f"실제 차 안 대화 {', '.join(T[17])}")
     tap("일시정지"); step(18, ["멈추기 전 마지막 대화"])
@@ -1010,12 +1071,17 @@ def drive_pitcrew(code):
         if t == SCENE_TALK: st["scene_ms"] = [t0, int(time.time() * 1000)]; save()
     # 내비는 판교에 머물고(도착 판정의 '지금 위치'도 내비 값 — Car.here) GPS를 옮겨도 닿지 않는다(gap2: outside_place).
     # 그래서 도착(20·21)은 가족 흐름의 1분 경로처럼 목적지 이름 '정자 카페거리'를 내비 위치 남쪽 NEAR_M에 둔다 — mock: 좌표만, 이름·대화·브리핑은 실제 흐름
-    here = navi_here(); end = near(here, -NEAR_M, 0)
+    seed_arrival_todo(code)
+    here = navi_here(); end = near(here, -NEAR_M, 0); since = adb("shell", "date '+%m-%d %H:%M:%S.000'").strip()
     launch("--es", "route", f"{end[0]},{end[1]},{DEST[2]}", "--ei", "approachSeconds", APPROACH_S)
     split(); tap("함께 타는 중", timeout=3)
-    step(20, ["정차하면 자세히"], 25, f"목적지 이름 {DEST[2]}, 좌표는 내비 위치 {here}에서 남쪽 {NEAR_M:.0f} m(내비가 판교에 머물러 정자까지 못 감)")
+    why20 = f"목적지 이름 {DEST[2]}, 좌표는 내비 위치 {here}에서 남쪽 {NEAR_M:.0f} m(내비가 판교에 머물러 정자까지 못 감)"
+    if not step(20, ["정차하면 자세히"], 25, why20) and logged(rf"다음 장소 {DEST[2]} .*카드 보임", since):
+        results[20].update(result="보임", note=why20 + " — 화면 트리를 못 읽어 앱 기록 '카드 보임'으로 확인(캡처로 확인)")
     for t in T[20]: say(t)
-    park(); step(21, [f"{DEST[2]} 도착", "먼저 할 일과 살 것을 모았어요"], 25)
+    seeded = bool(st.get("arrival_seeded"))  # 시드 한 줄로 띄운 카드면 결과표에 '시드'
+    if seeded and results.get(20, {}).get("result") == "보임": results[20].update(result="시드", note=results[20]["note"] + f" — 할 일 줄은 시드 '{ARRIVAL_SEED}'")
+    park(); step(21, [f"{DEST[2]} 도착", "먼저 할 일과 살 것을 모았어요"], 25, f"할 일은 시드 '{ARRIVAL_SEED}'(mock)" if seeded else "", seeded=seeded)
     if not tap("계속", timeout=6):  # 최종 목적지 브리핑 '계속' → 여행 마무리(C22). 없으면 폰의 '여행 끝내기'와 같은 요청으로 마친다
         tok = st.get("trip", {}).get("mom")
         if tok: api("PATCH", f"/trips/{code}", {"status": "ended"}, tok); note("trip.ended.by", who="폰 역할(API)")
@@ -1092,7 +1158,7 @@ def main(apk):
             if only(8): from_family = pitcrew_group_steps()
             else:
                 for role, who in zip(CREW[1:], list(PEOPLE)[1:]): ready_profile(role, who)
-                pitcrew_group(); open_family(); tap("함께 타는 중", timeout=6); tap(GROUP, timeout=8); from_family = tap("이 그룹과 출발", timeout=10)
+                pitcrew_group(); open_groups(); tap(GROUP, timeout=8); from_family = tap("이 그룹과 출발", timeout=10)
         elif only(8): from_family = family_steps()
         else: seed(); open_family(); from_family = tap("이 가족과 출발", timeout=10)
         code = start_trip(from_family)  # 여행이 없으면 17–35는 '실행 안 함'으로 남는다
