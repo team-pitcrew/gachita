@@ -28,7 +28,7 @@ class DemoPackTest {
         assertEquals(listOf("어디로 갈까?", "바다 어때?"), said.map { it.text })
         assertTrue(said.all { l -> trip.people.any { it.id == l.participantId } })
         assertEquals(1_000_000L + 20_000, said[0].at)
-        assertEquals(listOf("출발지", "도착지"), pack.tripPlaces(trip).map { it.name })
+        assertEquals(listOf("출발지", "출발지", "도착지"), pack.tripPlaces(trip).map { it.name })
         // 추천 장면: 팩의 장면 그대로
         val pick = pack.picks(trip).single()
         assertEquals(Triple(1, "바다 가자", "“바다 어때?”"), Triple(pick.number, pick.title, pick.quote))
@@ -36,7 +36,7 @@ class DemoPackTest {
         // 콘텐츠 기록: 쇼츠·경로·출발과 도착, 장면 id가 momentId
         val contents = pack.contentTrip(trip)
         assertEquals("나들이 모임", contents.crew)
-        assertEquals(listOf("start", "arrived"), contents.places.map { it.kind })
+        assertEquals(listOf("origin", "start", "arrived"), contents.places.map { it.kind }) // origin: 경로 요약에 출발지 이름을 넣는 줄
         assertEquals(1_000_000L + 1_200_000, contents.places.last().at)
         assertEquals(3, contents.route.size)
         val item = contents.contents.single()

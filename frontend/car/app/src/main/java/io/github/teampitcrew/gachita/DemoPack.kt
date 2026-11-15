@@ -63,7 +63,9 @@ internal data class DemoPack(val title: String, val group: String, val seconds: 
     private fun contentPlaces(trip: Trip): List<ContentPlace> {
         val at = routeSeconds
         val named = route.indices.filter { route[it].name != null }
-        return named.mapIndexed { n, i -> ContentPlace(if (n == 0) "start" else "arrived", route[i].name!!, origin(trip) + ms(at[i]), route[i].lat, route[i].lng) }
+        // 지도 옆 경로 요약(contentPlaceChain)은 'start'를 빼므로, 출발지 이름도 보이게 같은 자리에 'origin' 한 줄을 더 둔다(오너 11/15: 출발지 → 도착지)
+        return named.take(1).map { i -> ContentPlace("origin", route[i].name!!, origin(trip) + ms(at[i]), route[i].lat, route[i].lng) } +
+            named.mapIndexed { n, i -> ContentPlace(if (n == 0) "start" else "arrived", route[i].name!!, origin(trip) + ms(at[i]), route[i].lat, route[i].lng) }
     }
 
     fun afterLines(trip: Trip): List<AfterLine> = lines.mapIndexed { i, l -> AfterLine(i + 1L, origin(trip) + ms(l.at), l.text, l.who, l.who) }
