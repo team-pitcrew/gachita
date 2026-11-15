@@ -1002,7 +1002,7 @@ def pitcrew_group_steps():
     return tap("이 그룹과 출발", timeout=8)
 
 
-# mock(11/15 중앙 결정 대기, 끄려면 DEMO_ARRIVAL_SEED=''): 차의 도착 카드(C20)는 그 장소의 할 일이 있어야 뜬다(MainActivity arrive: items가 비면 카드 없음).
+# mock(11/15 중앙: 패스에서는 켜고 결과표에 '시드', 녹화는 서버 규칙이 실제 대화 '주차할 공간도 생각하셔야 돼요'를 잡으면 끔 — DEMO_ARRIVAL_SEED=''): 차의 도착 카드(C20)는 그 장소의 할 일이 있어야 뜬다(MainActivity arrive: items가 비면 카드 없음).
 # 실제 PITCREW 대화에는 '정자 카페거리'에 붙은 할 일 문장이 없어(pass1 21·25 없음) 조수석 사람의 말 한 줄을 기록본에 넣는다(기기 demo-seed).
 # 서버 규칙(place-rules-v2)으로 '카페거리'·먼저 할 일·'주차부터 먼저 하기'가 된다.
 ARRIVAL_SEED = os.environ.get("DEMO_ARRIVAL_SEED", f"{DEST[2]} 도착하면 주차부터 먼저 하자")
@@ -1016,7 +1016,7 @@ def seed_arrival_todo(code):
     item = {"seq": 1, "at": at, "endAt": at + 2500, "text": ARRIVAL_SEED, "generation": gen,
             **({"participantId": p["id"], "speakerMethod": "device-voice", "speakerConfidence": 0.93, "seatArea": p["seat"]} if p else {})}
     api("POST", f"/trips/{code}/utterances", {"device": "demo-seed", "generation": gen, "items": [item]}, tok)
-    note("seed.arrival", text=ARRIVAL_SEED, who=PEOPLE[who][3])
+    st["arrival_seeded"] = True; save(); note("seed.arrival", text=ARRIVAL_SEED, who=PEOPLE[who][3])
 
 
 def drive_pitcrew(code):
@@ -1048,7 +1048,9 @@ def drive_pitcrew(code):
     if not step(20, ["정차하면 자세히"], 25, why20) and logged(rf"다음 장소 {DEST[2]} .*카드 보임", since):
         results[20].update(result="보임", note=why20 + " — 화면 트리를 못 읽어 앱 기록 '카드 보임'으로 확인(캡처로 확인)")
     for t in T[20]: say(t)
-    park(); step(21, [f"{DEST[2]} 도착", "먼저 할 일과 살 것을 모았어요"], 25)
+    seeded = bool(st.get("arrival_seeded"))  # 시드 한 줄로 띄운 카드면 결과표에 '시드'
+    if seeded and results.get(20, {}).get("result") == "보임": results[20].update(result="시드", note=results[20]["note"] + f" — 할 일 줄은 시드 '{ARRIVAL_SEED}'")
+    park(); step(21, [f"{DEST[2]} 도착", "먼저 할 일과 살 것을 모았어요"], 25, f"할 일은 시드 '{ARRIVAL_SEED}'(mock)" if seeded else "", seeded=seeded)
     if not tap("계속", timeout=6):  # 최종 목적지 브리핑 '계속' → 여행 마무리(C22). 없으면 폰의 '여행 끝내기'와 같은 요청으로 마친다
         tok = st.get("trip", {}).get("mom")
         if tok: api("PATCH", f"/trips/{code}", {"status": "ended"}, tok); note("trip.ended.by", who="폰 역할(API)")
