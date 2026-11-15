@@ -71,12 +71,13 @@ export function planShort(source, options = {}) {
   for (const c of scene.cues)
     if (c.participantId)
       counts.set(c.participantId, (counts.get(c.participantId) ?? 0) + 1);
-  const selected = [...counts]
+  const speakers = [...counts]
     .sort((a, b) => b[1] - a[1])
     .map(([id]) => source.cast.find((c) => c.participantId === id))
-    .filter(Boolean)
-    .slice(0, 4);
-  // 많이 말한 순서로 네 명까지 캐릭터로 나온다(가족 넷). 화자 대조가 없으면 이름 없는 기본 캐릭터 둘.
+    .filter(Boolean);
+  // 화자 대조로 말한 사람이 많이 말한 순서로 먼저, 그다음 같이 탄 사람(참가 순)으로 네 명까지 캐릭터로 나온다(가족 넷).
+  // 같이 탄 사람에게는 말을 붙이지 않는다: 대조되지 않은 줄의 자막은 그대로 '화자 미확인'. 아무도 없으면 이름 없는 기본 캐릭터 둘.
+  const selected = [...speakers, ...source.cast.filter((c) => !speakers.includes(c))].slice(0, 4);
   const cast = Array.from({ length: Math.max(2, selected.length) }, (_, i) => {
     const c = selected[i];
     return {

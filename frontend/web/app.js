@@ -74,6 +74,10 @@ let stale = false; // 입력 중에 온 변경은 입력이 끝난 뒤 그린다
 let conversationPending = false;
 let savingProfile = false;
 let reading = false; // 여행 화면의 '동의 켜기': 켜기 전에 동의 문구 전문을 보이는 중
+// 내 프로필이 탄 진행 중 여행(GET /profiles/me/trips의 boarding·driving·parked). 차가 그룹으로 출발시키면 구성원 폰이 이걸로 안다.
+let active = null;
+let activeAt = 0;
+const ACTIVE_WINDOW = 12 * 60 * 60 * 1000;
 const shares = createShares({
   getProfile: () => profile,
   getProfileToken: () => store("profile"),
@@ -121,6 +125,7 @@ const conversations = createConversations({
   onHome: () => { location.hash = ""; },
   onShorts: () => openContents(),
   onScenes: () => afterTrip.open({ step: "select" }), // P44 '추천 장면 고르기' → 추천 장면 3개(P23)
+  onRide: () => goRide(),
 });
 const todos = createTodos({
   getTrip: () => trip,
@@ -150,7 +155,9 @@ const scenes = createScenePicker({ getTrip: () => trip, getParticipant: () => tr
 const afterTrip = createAfterTrip({ getTrip: () => trip, getParticipant: () => trip?.participants.find((p) => p.id === myId()), getToken: myToken,
   request: (method, path, body, signal) => asMe(trip.participants.find((p) => p.id === myId()), (c, token) => api(method, `/trips/${c}${path}`, body, token, signal)),
   remember: store, avatar: (person) => personAvatar(person), getPlaces: () => places.items(), isOnline: () => !offline, onHome: () => { location.hash = ""; },
-  onTalk: () => conversations.open(), onContents: () => openContents() });
+  onTalk: () => conversations.open(), onRide: () => goRide(),
+  // P32 장면 칸·'콘텐츠 기록 보기'는 그 장면의 재생 화면(P37)으로: after-trip은 'asset:여행코드:영상id'를 넘긴다
+  onContents: (picked) => contents.open(picked ? { view: "player", selected: picked.split(":")[2] } : undefined) });
 // 여행을 끝낸 직후(종료)에 이 폰에서 한 번, 그리고 멈춘 만들기가 남아 있으면 이 페이지에서 한 번 마무리 화면을 연다.
 // 주차(경유지·목적지 도착)에는 열지 않는다: 도착 브리핑(F4)을 덮지 않게, 장소를 읽기 전 첫 화면이 '주차'로 보여도. 주차 중에는 '여행 마무리 보기' 카드로 연다.
 // 다른 창(대화 기록·쇼츠·부탁 시트 등)이 열려 있으면 열지 않는다. 동의하고 이 폰에서 연결한 사람만.
@@ -182,11 +189,12 @@ const onboarding = createOnboarding({
   consentText: CONSENT,
   render: () => render(),
   onBegin: () => { if (location.hash !== "#start") location.hash = "start"; },
-  onDone: () => { location.hash = ""; },
+  // 마치고 나가는 길은 주소를 쌓지 않고 바꿔 끼운다: 브라우저 뒤로가 마친 온보딩(#start, P04)을 다시 열지 않게.
+  onDone: () => location.replace("#"),
   // F2(가족 그룹, groups.js): 온보딩을 마치면 가족 추가(P09)로 잇는다.
   // 초대 링크로 들어온 사람은 처음 화면으로 돌아가 render의 groups.resume()이 참여 화면(phoneJoin)을 연다
-  onFamily: () => { location.hash = ""; if (!groups.pending()) groups.open(); },
-  onOther: () => { location.hash = "me"; },
+  onFamily: () => { location.replace("#"); if (!groups.pending()) groups.open(); },
+  onOther: () => location.replace("#me"),
   hasInvite: () => Boolean(groups.pending()),
   isOnline: () => !offline && navigator.onLine !== false,
 });
@@ -201,6 +209,10 @@ const groups = createGroups({
     location.hash = tripCode;
   },
   onChange: () => loadProfile(),
+  // 그룹 창의 탭(P14·P15·P16·P43·초대): 대화 기록(P44)·콘텐츠 기록(P33)을 연다. '함께 타는 중'은 진행 중 여행이 있을 때만 그 여행(P17)으로.
+  onTalk: () => openConversations(),
+  onContents: () => openContents(),
+  onRide: () => { if (liveCode()) { groups.close(); goRide(); } },
 });
 groups.remember();
 const startRide = () => boarding.open();
@@ -221,10 +233,19 @@ const contents = createContents({
   avatar: (person) => personAvatar(person),
   isOnline: () => !offline,
   onHome: () => { location.hash = ""; },
-  onRide: () => render(),
+  onRide: () => goRide(),
   onTalk: () => openConversations(),
 });
 const openContents = () => contents.open();
+// 지금 갈 수 있는 진행 중 여행: 보고 있는 여행(끝나지 않음), 없으면 처음 화면이 읽어 둔 진행 중 여행.
+const liveCode = () => (trip && code() === trip.code && trip.status !== "ended" ? trip.code : active?.code ?? null);
+// 탭 '함께 타는 중'·'함께 타는 중으로': 진행 중 여행이 있으면 그 여행 화면(P17), 없거나 끝났으면 내 동승 그룹(P16, 시안 P22–P38의 행선).
+function goRide() {
+  const live = liveCode();
+  if (live) { if (code() === live) render(); else location.hash = live; }
+  else if (profile) groups.openAt("groups");
+  else location.hash = "";
+}
 
 // 오른쪽 위 내 얼굴과 프로필 드롭다운(시안 C17m을 폰 톤으로, docs/design.md §5). 다른 창 위에서도 열리므로 고른 곳으로 가기 전에 열린 창을 닫는다.
 // 차량 QR 참여는 자기 '닫기'처럼 받은 초대도 잊는다 — 남기면 다음 그리기의 boarding.resume()이 고른 화면 위로 다시 연다.
@@ -257,9 +278,10 @@ function logout() {
   toast("로그아웃했어요.");
 }
 const openConversations = () => {
-  if (trip?.code === code()) return conversations.open();
-  const last = store("trip");
+  if (trip && trip.code === code()) return conversations.open();
+  const last = store("trip") || active?.code;
   if (last) { conversationPending = true; location.hash = last; }
+  else toast("아직 대화 기록이 없어요. 차에 연결해 함께 타면 여기에 모여요.");
 };
 
 // 프로필 다시 읽기. 지워졌거나 모르는 토큰이면 이 폰에서도 잊는다.
@@ -348,6 +370,25 @@ async function asMe(me, call) {
 
 const typing = () => app.contains(document.activeElement) && /^(INPUT|SELECT)$/.test(document.activeElement.tagName);
 
+// 처음 화면에 있는 동안 내 프로필이 탄 진행 중 여행을 읽는다. ponytail: 6초마다 목록 전체를 읽는다(한 사람 여행 50개까지) — 느리면 진행 중만 주는 길을 서버에.
+async function readActive() {
+  if (!profile || Date.now() - activeAt < 6000) return;
+  activeAt = Date.now();
+  // ?status=active(#530): 끝나지 않은 여행만, 경로·콘텐츠를 셈하지 않고 준다. 그 질의를 모르는 서버(400)면 전체 목록에서 고른다.
+  const { items } = await mine("GET", "/profiles/me/trips?status=active").catch((e) => (e.status === 400 ? mine("GET", "/profiles/me/trips") : Promise.reject(e)));
+  // 끝내지 않고 남은 옛 여행(탑승 중으로 남은 것)이 저절로 열리지 않게, 최근 12시간 안에 만든 여행만 진행 중으로 본다.
+  // ponytail: 고정 12시간 — 하루를 넘는 여행이 생기면 늘리거나 서버가 오래된 탑승 여행을 끝내게 한다.
+  active = items.find((t) => t.status !== "ended" && Date.now() - t.createdAt < ACTIVE_WINDOW) ?? null;
+}
+// 그룹 여행이 시작됐는데 이 폰이 아직 그 여행에 들어가지 않았으면 그 여행을 연다. 열면 refresh의 claim()이 프로필로 다시 참가해
+// 이 폰의 참가자 토큰을 받고, 기록 동의를 아직 정하지 않았으면 동의 화면(phoneJoin과 같은 역할, boarding.openConsent)이 뜬다.
+// 다른 창을 보고 있거나 초대·차량 QR 참여 중이면 기다린다.
+function openActive() {
+  if (!active || store(active.code) || location.hash || document.querySelector("dialog[open]") || boarding.pending() || groups.pending()) return false;
+  location.hash = active.code;
+  return true;
+}
+
 async function refresh(force) {
   if (failed && !force) return;
   const recoveringProfile = !profile && !!store("profile") && navigator.onLine !== false;
@@ -378,7 +419,15 @@ async function refresh(force) {
       trip = null;
       failed = e.message;
     }
-  } else if (!force && !recoveringProfile) return;
+  } else {
+    if (!location.hash && profile) {
+      const was = `${active?.code}:${active?.status}`;
+      await readActive().catch(() => {});
+      if (openActive()) return;
+      if (`${active?.code}:${active?.status}` !== was) force = true; // 처음 화면의 '함께 타는 중' 줄을 다시 그린다
+    }
+    if (!force && !recoveringProfile) return;
+  }
   if (typing() && !force) stale = true;
   else render();
 }
@@ -545,7 +594,7 @@ function profileConnection() {
 // 없으면 처음 만들기. 오른쪽 위 드롭다운의 '내 프로필'이 여기로 온다(docs/design.md §5).
 function profileView() {
   if (!profile && store("profile")) return [header(button("이전", () => (location.hash = ""), "plain")), profileConnection()];
-  const back = button("‹", () => (location.hash = ""), "plain profile-back");
+  const back = button("‹", () => (navigated ? history.back() : (location.hash = "")), "plain profile-back"); // 온 화면으로(앱 안에서 왔을 때), 아니면 처음 화면
   back.setAttribute("aria-label", "이전 화면으로");
   if (!profile) return [
     header(back, h("span", { className: "meta" }, "프로필 만들기")),
@@ -602,23 +651,21 @@ function home() {
       profile ? h("div", { className: "home-profile" }, editPortrait(), h("div", {}, h("p", { className: "meta" }, "오늘도 함께해요"), h("h1", {}, `${profile.name} 님`))) : h("h1", {}, "같이 탄 오늘,", h("br"), "함께 남겨요."),
       h("p", { className: "sub" }, profile ? "차 안에서 나눈 이야기가 우리만의 기록이 돼요." : "이름과 얼굴을 정하고, 차 화면의 QR을 스캔해 주세요."),
     ),
+    // 그룹 여행이 진행 중이면 맨 위에(차가 출발시킨 여행, GET /profiles/me/trips). 누르면 그 여행 화면(P17)으로 간다.
+    active && h("section", { className: "home-section home-live" }, h("h2", {}, "지금 함께 타는 중"),
+      entry("record", active.title || active.groupName || "함께 타는 여행", `${TRIP[active.status] ?? "여행 중"} · ${active.members.length}명이 함께 타요`, () => { location.hash = active.code; }, "ride-entry")),
     profile?.email && !profile.hasVoice && entry("record", "15초 목소리 등록", "차에서 말한 사람을 알아보는 데 써요", () => { onboarding.open(); location.hash = "start"; }),
-    profile ? entry("qr", "차량 QR로 참여", "차 화면의 QR을 휴대폰으로 스캔해요", startRide, "ride-entry") : store("profile") ? profileConnection() : entry("pencil", "내 프로필 만들기", "사진 또는 캐릭터로 나를 소개해요", () => { location.hash = "me"; }, "ride-entry"),
+    // 진행 중 여행이 있으면 그 줄만 강조한다
+    profile ? entry("qr", "차량 QR로 참여", "차 화면의 QR을 휴대폰으로 스캔해요", startRide, active ? "" : "ride-entry") : store("profile") ? profileConnection() : entry("pencil", "내 프로필 만들기", "사진 또는 캐릭터로 나를 소개해요", () => { location.hash = "me"; }, "ride-entry"),
     profile && entry("record", "우리 가족", "가족과 동승 그룹, 좌석과 초대 코드", () => groups.open()),
     // 옛 쇼츠 보관함은 콘텐츠 기록 갤러리(P33)로 옮겨 갔다(폰은 쇼츠를 만들지 않는다, 11/15 오너).
     profile && h("section", { className: "home-section" }, h("h2", {}, "다시 만나는 우리 이야기"), entry("play", "콘텐츠 기록", "여행에서 고른 장면으로 만든 영상", openContents)),
-    last && h("section", { className: "home-section" },
+    // 옛 '내 기록본'·'나눈 장면'(시안에 없는 처음 화면 입구)은 뺐다. '여행 열기'는 남긴다 — 끝난 여행의 마무리(P22)로 돌아가는 길이 이것뿐이다.
+    last && last !== active?.code && h("section", { className: "home-section" },
       h("div", { className: "between" }, h("h2", {}, "함께한 여행"), button("여행 열기", () => { location.hash = last; }, "plain")),
       entry("record", "대화 기록", "최근에 탄 여행의 이야기를 이어 봐요", openConversations),
     ),
-    profile && h("section", { className: "home-section" },
-      h("h2", {}, "내가 남긴 순간"),
-      h("div", { className: "home-library" },
-        entry("record", "내 기록본", "내가 한 말과 남긴 장면", records.openFeed),
-        entry("play", "나눈 장면", "동승자와 주고받은 기록", () => shares.openList("received")),
-      ),
-    ),
-    !last && h("section", { className: "home-first" },
+    !last && !active && h("section", { className: "home-first" },
       avatar({ character: "travel" }),
       h("div", {}, h("h2", {}, "첫 이야기를 기다리고 있어요"), h("p", { className: "meta" }, "차에 연결하면 대화 기록과 남긴 장면이 여기에 모여요.")),
     ),
@@ -672,7 +719,7 @@ const consentOn = (me) =>
 
 // '함께 타는 중'(최종 시안 P17–P21). 위는 지금 상태(제목·좌석 지도·기록 상태 또는 곧 도착·도착 부탁),
 // 아래는 그대로 둔 기능(할 일, 챙길 부탁, 내 동의, 장면·자막·공유)이다. 도착과 '확인'은 이 탭에서만 기억한다(여행·동의 세대별, 저장하지 않음).
-const ride = { seen: { key: "", place: "", at: null }, near: { key: "", id: "" } };
+const ride = { seen: { key: "", place: "", at: null }, near: { key: "", id: "" }, ack: "" }; // ack: 동승자가 '계속'을 누른 도착(여행·세대:장소)
 function tripView(me) {
   const t = `/${trip.code}`;
   const driver = me.seat === "ROW_1_LEFT";
@@ -718,6 +765,7 @@ function tripView(me) {
   };
   const recordButton = (className) => h("button", { type: "button", className, disabled: offline || (!trip.recording && waiting.length > 0), onclick: toggleRecording }, trip.recording ? "기록 중지" : "기록 재개");
   let main = null;
+  const acked = state.kind === "arrived" && ride.ack === `${scope}:${state.place}`;
   if (state.kind === "near") main = button("확인", () => { ride.near = { key: scope, id: state.id }; render(); }, "primary");
   else if (trip.status === "driving") main = recordButton("primary big");
   else if (state.kind === "arrived" && driver) {
@@ -725,6 +773,9 @@ function tripView(me) {
     const [label, status] = arrivalMove(state);
     main = button(label, () => patch("", { status })().then(() => status === "ended" && trip?.status === "ended" && !afterTrip.isOpen() && afterTrip.open()), "primary");
     moves.splice(moves.findIndex((m) => m[1] === status), 1);
+  } else if (state.kind === "arrived" && !acked) {
+    // 동승자 폰의 '계속'(시안 P20 → P21): 여행 상태는 운전석이 바꾸고, 이 폰은 도착 브리핑을 접고 좌석·기록 화면으로 돌아간다.
+    main = button("계속", () => { ride.ack = `${scope}:${state.place}`; render(); }, "primary");
   } else if (moves.length) main = move(moves.shift(), "primary");
 
   // 기록 상태 띠. 곧 도착 화면에서는 주 단추가 '확인'이라 기록 중지·재개를 띠 안에 둔다(멈추는 길을 가리지 않게).
@@ -737,7 +788,7 @@ function tripView(me) {
     h("h2", {}, "오늘의 주행을 기록했어요"), h("p", { className: "meta" }, "전체 음성 올리기와 추천 장면을 확인하고 콘텐츠로 남겨요."),
     button("여행 마무리 보기", () => afterTrip.open(), "primary"));
   const now = state.kind === "near" ? [nearBrief(state, asks, trip.participants), band(true)]
-    : state.kind === "arrived" ? arrivalBrief(state, asks, trip.participants)
+    : state.kind === "arrived" && !acked ? arrivalBrief(state, asks, trip.participants)
     : [afterEntry, seatMap(trip, me, personAvatar), band(false)];
   queueMicrotask(() => { if (trip && code() === trip.code) offerAfterTrip(me, state.kind); });
 
@@ -1068,8 +1119,34 @@ function render() {
 }
 
 
-addEventListener("hashchange", () => (boarding.close(), location.hash !== "#start" && onboarding.close(), openingShort?.abort(), (reading = false), short && closeShort(), location.hash === "#me" && fillDraft(), (trip = null), (failed = ""), refresh(true)));
+let navigated = false; // 이 페이지에서 주소를 한 번이라도 옮겼나(내 프로필 '‹'가 뒤로 갈 수 있나)
+addEventListener("hashchange", () => (navigated = true, boarding.close(), location.hash !== "#start" && onboarding.close(), openingShort?.abort(), (reading = false), short && closeShort(), location.hash === "#me" && fillDraft(), (trip = null), (failed = ""), refresh(true)));
 app.addEventListener("focusout", () => setTimeout(() => stale && !typing() && render())); // 입력이 끝나면 밀린 변경을 그린다
+
+// 겹친 창(<dialog>: 대화 기록·여행 마무리·콘텐츠 기록·그룹·차량 QR·메뉴)과 브라우저·안드로이드 뒤로(web-design-guidelines '뒤로는 상태를 따른다').
+// 창이 열리면 같은 주소로 기록을 하나 쌓고, 뒤로 가면 맨 위 창에 Esc(cancel)를 보낸다 — 창이 자기 안의 앞 단계로 가면(그룹·콘텐츠) 기록을 다시 쌓는다.
+// 단추로 닫으면 쌓은 기록을 되돌린다. ponytail: 열린 창 수만 센다. 같은 순간에 닫고 여는 창 바꾸기는 수가 같아 기록을 건드리지 않는다.
+let overlays = 0, skipPop = 0;
+const openDialogs = () => [...document.querySelectorAll("dialog[open]")];
+new MutationObserver(() => {
+  const n = openDialogs().length;
+  if (n > overlays) for (; overlays < n; overlays++) history.pushState({ overlay: true }, "");
+  else if (n < overlays) {
+    const k = overlays - n;
+    overlays = n;
+    if (history.state?.overlay) { skipPop++; history.go(-k); } // 주소가 그사이 바뀌었으면(여행으로 이동 등) 그대로 둔다
+  }
+}).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["open"] });
+addEventListener("popstate", () => {
+  if (skipPop) return void skipPop--;
+  const top = openDialogs().at(-1);
+  if (!top) return;
+  overlays--; // 이 창의 기록은 방금 빠졌다
+  const cancel = new Event("cancel", { cancelable: true });
+  top.dispatchEvent(cancel);
+  if (!cancel.defaultPrevented) top.close();
+  if (top.open) { history.pushState({ overlay: true }, ""); overlays++; } // 창이 앞 단계로만 갔다
+});
 setInterval(refresh, 2000); // ponytail: 2초마다 묻는다(바뀐 게 없으면 304). 지연이 문제가 되면 SSE로 바꾼다.
 render();
 const refreshConfig = () => api("GET", "/config").then((c) => {

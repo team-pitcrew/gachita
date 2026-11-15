@@ -72,15 +72,13 @@ test("미확인 화자를 실명으로 추측하지 않고 수정된 자막은 �
   const s = source();
   s.scenes[0].cues.forEach((x) => (x.participantId = null));
   const p = planShort(s);
-  assert.deepEqual(
-    p.cast.map((x) => x.participantId),
-    [null, null],
-  );
+  // 같이 탄 사람의 캐릭터는 나오지만, 대조되지 않은 줄을 누구에게도 붙이지 않는다(자막 '화자 미확인').
   assert.deepEqual(
     p.cast.map((x) => x.character),
-    ["basic", "basic-small"],
+    ["cap", "glasses-small"],
   );
   assert.ok(p.cues.every((x) => x.slot === null));
+  assert.deepEqual(planShort({ ...s, cast: [] }).cast.map((x) => [x.participantId, x.character]), [[null, "basic"], [null, "basic-small"]]);
   const before = p.planHash;
   s.scenes[0].cues[0].text = "다른 대화";
   assert.notEqual(planShort(s).planHash, before);
@@ -101,6 +99,15 @@ test("가족 넷이 말하면 많이 말한 순서로 네 캐릭터가 모두 �
   const p = planShort(s);
   assert.deepEqual(p.cast.map((x) => [x.slot, x.participantId]), [[0, "c"], [1, "d"], [2, "a"], [3, "b"]]);
   assert.equal(p.cues.find((x) => x.participantId === "e").slot, null, "다섯째는 캐릭터 없이 화면 밖 목소리");
+});
+test("한 사람만 대조돼도 같이 탄 네 사람의 캐릭터가 모두 나오고 말은 그 사람에게만 붙습니다", () => {
+  const s = source();
+  s.cast.push({ participantId: "c", name: "다", character: "pet", seat: "ROW_2_LEFT" }, { participantId: "d", name: "라", character: "healing", seat: "ROW_2_RIGHT" });
+  s.scenes[0].cues[0].participantId = "d";
+  s.scenes[0].cues[1].participantId = null;
+  const p = planShort(s);
+  assert.deepEqual(p.cast.map((x) => x.participantId), ["d", "a", "b", "c"]);
+  assert.deepEqual(p.cues.map((x) => x.slot), [0, null]);
 });
 test("한국어 자막은 원문을 모두 유지하고 ASS 태그를 실행하지 않습니다", () => {
   const p = planShort(source());

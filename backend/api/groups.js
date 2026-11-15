@@ -17,6 +17,16 @@ const inviteOf = (code, expiresAt) => ({ code, expiresAt, url: `/?group=${code}`
 const GROUP_ID = /^[A-Za-z0-9-]{1,64}$/; // 새 그룹은 UUID, 옛 그룹은 8자
 const MAX_MEMBERS = 10; // 그룹 하나에(아이 포함). 자리는 다섯이고 나머지는 자리 없이 둔다
 const MAX_GROUPS = 20; // 한 사람이 속한 그룹
+// 초대·QR로 들어온 성인과 새로 만든 아이를 빈자리에 앉힌다(T162). 자리 없이 들어오면 '이 가족과 출발'이 그 사람을 빼고 여행을 만들었다.
+// 운전석은 만든 사람 자리라 고르지 않고, 뒤 가운데는 차 좌석 화면(C16B, 네 칸)에 없어 고르지 않는다. 다 차면 자리 없음(사람이 좌석 배정에서 앉힘).
+const ADULT_SEATS = ["ROW_1_RIGHT", "ROW_2_LEFT", "ROW_2_RIGHT"];
+const CHILD_SEATS = ["ROW_2_LEFT", "ROW_2_RIGHT", "ROW_1_RIGHT"];
+// 그룹 줄을 잠근 트랜잭션 안에서 부른다(초대 참여·아이 만들기 모두 FOR UPDATE) — 동시에 들어온 둘이 같은 자리를 고르지 않게.
+async function freeSeat(db, groupId, order) {
+  const { rows } = await db.query("SELECT seat FROM group_members WHERE group_id = $1 AND seat IS NOT NULL", [groupId]);
+  const taken = new Set(rows.map((r) => r.seat));
+  return order.find((s) => !taken.has(s)) ?? null;
+}
 
 // 초대 코드는 숫자 4자리라 짐작할 수 있다. 틀린 코드(없음·만료) 시도를 프로세스마다 10분 창으로 묶는다:
 // 프로필 하나에 10번, 모두 합쳐 60번. 넘으면 429. 코드 수명(24시간)·그룹당 하나·대표가 구성원을 보고 빼기와 함께 막는다.
@@ -148,8 +158,8 @@ export async function groups(req, seg, b, { profileOf, text, bool, oneOf, obj, s
       if (await tooManyGroups(db, me.id)) fail(409, `그룹은 ${MAX_GROUPS}개까지`);
       const g = { id: randomUUID(), kind, name, owner_id: me.id };
       await db.query("INSERT INTO groups (id, kind, name, owner_id) VALUES ($1, $2, $3, $4)", [g.id, kind, name, me.id]);
-      // 가족은 만든 사람(차를 모는 사람)을 운전석에 둔다. 동승 그룹은 자리 없이 시작한다.
-      await db.query("INSERT INTO group_members (group_id, profile_id, seat) VALUES ($1, $2, $3)", [g.id, me.id, kind === "family" ? "ROW_1_LEFT" : null]);
+      // 만든 사람(차를 모는 사람)을 운전석에 둔다. 동승 그룹도 같다 — 자리 없이 시작하면 차의 참석 QR(운전석이 차 계정)이 403이었다(T162).
+      await db.query("INSERT INTO group_members (group_id, profile_id, seat) VALUES ($1, $2, 'ROW_1_LEFT')", [g.id, me.id]);
       const [, view] = await viewOf(db, g);
       return [201, view];
     });
@@ -189,7 +199,7 @@ export async function groups(req, seg, b, { profileOf, text, bool, oneOf, obj, s
          VALUES ($1, $2, false, $3, $4, $5, CASE WHEN $5 THEN now() END, CASE WHEN $5 THEN $6 ELSE '' END)`,
         [child, name, character, me.id, consent, version]
       );
-      await db.query("INSERT INTO group_members (group_id, profile_id) VALUES ($1, $2)", [g.id, child]);
+      await db.query("INSERT INTO group_members (group_id, profile_id, seat) VALUES ($1, $2, $3)", [g.id, child, await freeSeat(db, g.id, CHILD_SEATS)]);
       const [, view] = await viewOf(db, g);
       return [201, view];
     });
@@ -322,7 +332,7 @@ export async function groupInvites(req, seg, { profileOf }) {
       // 같은 코드로 다시 들어오면 그대로 200(구성원을 늘리지 않음). 코드는 24시간 동안 여러 사람이 쓴다.
       if (members.length >= MAX_MEMBERS) fail(409, `그룹 구성원은 ${MAX_MEMBERS}명까지`);
       if (await tooManyGroups(db, me.id)) fail(409, `그룹은 ${MAX_GROUPS}개까지`);
-      await db.query("INSERT INTO group_members (group_id, profile_id) VALUES ($1, $2)", [i.group_id, me.id]);
+      await db.query("INSERT INTO group_members (group_id, profile_id, seat) VALUES ($1, $2, $3)", [i.group_id, me.id, await freeSeat(db, i.group_id, ADULT_SEATS)]);
       await db.query("UPDATE invites SET uses = uses + 1 WHERE code = $1", [code]);
     }
     const { g } = await load(db, i.group_id, me.id);

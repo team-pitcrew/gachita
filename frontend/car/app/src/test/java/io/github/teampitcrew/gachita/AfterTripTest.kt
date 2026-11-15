@@ -91,4 +91,25 @@ class AfterTripTest {
         assertEquals(.95f, serverShortProgress("generating", 3_600_000), 1e-6f)
         assertEquals(1f, serverShortProgress("completed", 0), 1e-6f)
     }
+
+    @Test fun serverJobPollRetriesOnlyNetworkHiccups() {
+        assertEquals(true, retryJobPoll(java.net.SocketTimeoutException("read timed out"), 1))
+        assertEquals(true, retryJobPoll(ApiError(503, "x"), 3) == ApiError(503, "x").transient)
+        assertEquals(false, retryJobPoll(ApiError(403, "동의"), 1)) // 동의 철회는 서버가 작업을 취소 — 바로 끝냄
+        assertEquals(false, retryJobPoll(ApiError(410, "x"), 1))
+        assertEquals(false, retryJobPoll(java.io.IOException("x"), 12)) // 1분 넘게 닿지 않으면 끝냄
+    }
+
+    @Test fun segmentEditKeeps15to45SecondsInsideTrip() {
+        val o = 0L; val e = 1_327_000L // 22분 여행
+        assertEquals(570_000L to 608_000L, afterNudge(578_000, 608_000, true, -8_000, o, e)) // 시작을 8초 앞으로
+        assertEquals(563_000L to 608_000L, afterNudge(578_000, 608_000, true, -60_000, o, e)) // 45초까지만
+        assertEquals(593_000L to 608_000L, afterNudge(578_000, 608_000, true, 60_000, o, e)) // 15초 아래로는 안 줄어듦
+        assertEquals(578_000L to 623_000L, afterNudge(578_000, 608_000, false, 90_000, o, e))
+        assertEquals(0L to 30_000L, afterNudge(0, 30_000, true, -5_000, o, e)) // 여행 앞으로 못 나감
+        assertEquals(1_310_000L to 1_327_000L, afterNudge(1_310_000, 1_320_000, false, 60_000, o, e)) // 여행 끝까지
+        assertEquals(578_000L to 608_000L, afterPlace(593_000, o, e)) // 누른 곳 가운데 30초
+        assertEquals(0L to 30_000L, afterPlace(3_000, o, e))
+        assertEquals(1_297_000L to 1_327_000L, afterPlace(1_326_000, o, e))
+    }
 }

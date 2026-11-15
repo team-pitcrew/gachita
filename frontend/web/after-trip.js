@@ -156,7 +156,7 @@ const sleep = (ms, signal) => new Promise((ok, no) => {
 // getTrip/getParticipant/getToken: 지금 여행·이 폰의 참가자·참가자 토큰. request(method, path, body, signal): 이 폰의 참가자 토큰으로 /trips/{code}{path}.
 // remember(key, value?): 이 폰에 남긴 생성 계획 읽기·쓰기(null이면 지움). avatar(person): 얼굴. onContents(selectedId?): 콘텐츠 기록(쇼츠 보관함).
 // onTalk(): 대화 기록. (옛 '직접 고르기'·장면 고르기 입구는 11/15 시안 수렴에서 뺐다)
-export function createAfterTrip({ getTrip, getParticipant, getToken, request, remember, avatar, getPlaces = () => [], isOnline = () => true, onHome, onTalk, onContents }) {
+export function createAfterTrip({ getTrip, getParticipant, getToken, request, remember, avatar, getPlaces = () => [], isOnline = () => true, onHome, onTalk, onContents, onRide = () => {} }) {
   const dialog = h("dialog", { className: "after-dialog", "aria-labelledby": "after-title" });
   document.body.append(dialog);
   let view = null; // 보고 있는 화면 { code, generation, participantId, step: upload|select|make|done, audio, audioMissing, lines, picks, chosen, error }
@@ -359,7 +359,8 @@ export function createAfterTrip({ getTrip, getParticipant, getToken, request, re
       dialog.querySelector(".after-body").replaceWith(body);
     } else dialog.replaceChildren(
       appBar({ online: isOnline(), onHome: () => { close(); onHome?.(); } }),
-      journeyTabs("contents", { ride: close, talk: () => { close(); onTalk(); } }),
+      // 탭: '함께 타는 중'은 진행 중 여행(P17), 끝났으면 내 동승 그룹(P16) — app.js goRide. '콘텐츠 기록'은 갤러리(P33).
+      journeyTabs("contents", { ride: () => { close(); onRide(); }, talk: () => { close(); onTalk(); }, contents: () => { close(); onContents(); } }),
       body,
       h("footer", { className: "after-bottom" }, actions),
     );
@@ -485,7 +486,9 @@ export function createAfterTrip({ getTrip, getParticipant, getToken, request, re
     if (!parkedNow(t)) return toast("주차한 뒤 장면을 고를 수 있어요.");
     if (step === "select" && !p.consent) return toast("기록에 동의한 사람만 장면을 고를 수 있어요.");
     stop();
-    const r = restore();
+    let r = restore();
+    // 대화 기록의 '추천 장면 고르기'(P44 → P23): 다 만들었거나 실패만 남은 지난 계획은 고르기를 막지 않는다(전에는 P32가 다시 열렸다).
+    if (step === "select" && r && !r.active && !r.items.some((i) => !i.assetId && i.phase !== "failed")) { forget(r); run = r = null; }
     view = { code: t.code, generation: t.generation ?? 1, participantId: p.id, step: r ? "make" : step, chosen: new Set(), audio: undefined };
     paint();
     if (!dialog.open) dialog.showModal();

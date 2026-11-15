@@ -447,8 +447,8 @@ fun FamilyFlow(
     val childChar = CHARS[kidCount % CHARS.size] // 시안 C11 '캡모자 서준'(첫째), C41 '기본 하은'(둘째)
 
     ParkedFrame(
-        // 위 탭: 주차 중 '함께 타는 중'은 전체 그룹 목록(C16 groups), 나머지는 여행 화면의 그 탭으로.
-        tab = if (tabless(view, guest)) null else 0, onTab = { if (it == 0) view = FamilyView.GROUPS else onTab(it) },
+        // 위 탭: '함께 타는 중'은 진행 중인 여행이 있으면 C17(MainActivity가 닫아 준다), 없으면 전체 그룹 목록(C16 groups). 나머지는 여행 화면의 그 탭으로.
+        tab = if (tabless(view, guest)) null else 0, onTab = { if (it == 0) view = FamilyView.GROUPS; onTab(it) },
         overlay = { CarToast(note) },
         bottom = {
             when (view) {

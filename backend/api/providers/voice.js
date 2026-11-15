@@ -220,3 +220,11 @@ export function similarity(a, b) {
 
 // 확신 기준. 초안 값 — 지환 시험 음성의 정확도 표로 조정한다(ADR-0019).
 export const matchThreshold = () => Number(process.env.VOICE_MATCH_THRESHOLD ?? 0.9);
+
+// 기기에서 하는 판정(차 안 대조)의 여백 규칙. 절대 기준 하나로는 실제 목소리가 잘 갈리지 않는다: 유사도가 전체로 낮게 나오는 소리는
+// 누구와도 기준을 못 넘고, 높게 나오는 소리는 두 사람이 함께 넘어 틀린다. 그래서 후보가 둘 이상이면
+// '가장 비슷한 사람이 바닥(floor) 이상이고 두 번째 사람보다 여백(margin) 이상 앞설 때'만 붙인다. 후보가 한 명이면 위의 절대 기준을 쓴다.
+// 값은 실제 차 안 목소리 한 녹음의 조각 118개로 골랐다(11/15: 절대 기준 0.85 → 맞힘 55·틀림 14·모름 49, 이 규칙 → 69·12·37).
+// 다른 목소리에서는 다를 수 있어 환경 변수로 둔다.
+export const matchFloor = () => Number(process.env.VOICE_MATCH_FLOOR ?? 0.6);
+export const matchMargin = () => Number(process.env.VOICE_MATCH_MARGIN ?? 0.06);

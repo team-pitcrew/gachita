@@ -9,7 +9,7 @@
 | `car-sitcom-v1` | 차 안 두 캐릭터의 2D 시트콤 장면 |
 | `travel-postcard-v1` | 같은 캐릭터와 창밖 수채 풍경의 여행 엽서 |
 
-15~45초 장면을 5~8초 칸으로 나누고 칸마다 그림 한 장을 만듭니다. 출연 캐릭터는 그 장면에서 많이 말한 순서로 네 사람까지의 프로필 캐릭터(`frontend/web/chars/{character}.png`)입니다. 화자 대조가 없으면 이름을 추측하지 않고 기본 캐릭터와 '화자 미확인' 자막을 씁니다. 그림에는 사람·실제 얼굴·글자를 넣지 않습니다. 자막(Noto Sans CJK KR 지정)과 소리(녹음 클립)는 일꾼이 마지막에 합칩니다. 결과는 720×1280 H.264/AAC MP4입니다.
+15~45초 장면을 5~8초 칸으로 나누고 칸마다 그림 한 장을 만듭니다. 출연 캐릭터는 그 장면에서 화자 대조로 말한 사람(많이 말한 순서), 그다음 같이 탄 사람으로 네 사람까지의 프로필 캐릭터(`frontend/web/chars/{character}.png`)입니다. 대조되지 않은 줄은 누구에게도 붙이지 않고 '화자 미확인' 자막을 씁니다. 참가자가 없으면 기본 캐릭터 둘입니다. 그림에는 사람·실제 얼굴·글자를 넣지 않습니다. 자막(Noto Sans CJK KR 지정)과 소리(녹음 클립)는 일꾼이 마지막에 합칩니다. 결과는 720×1280 H.264/AAC MP4입니다.
 
 `externalData`는 OpenAI(미국)로 가는 것입니다: 장면의 받아 적은 글(참가자 이름은 캐릭터 번호로 바꿈)과 출연 캐릭터 그림. 소리는 보내지 않습니다. `audioReference: true`는 400입니다(옛 앱의 `false`는 받습니다).
 
@@ -51,8 +51,9 @@
 
 | 요청 | 응답 |
 |---|---|
-| `POST /api/short-worker/claim` | 대기 중 가장 오래된 작업을 60분 임대해 200 `{id, leaseUntil, template:{id,name,direction}, plan, audio, result}`. 없거나 꺼져 있으면 204. 내주기 전에 동의·원본을 다시 보고, 바뀌었으면 취소하고 204 |
+| `POST /api/short-worker/claim` | 대기 중 가장 오래된 작업을 60분 임대해 200 `{id, leaseUntil, template:{id,name,direction}, plan, audio, thumbnail, result}`(thumbnail은 T166). 없거나 꺼져 있으면 204. 내주기 전에 동의·원본을 다시 보고, 바뀌었으면 취소하고 204 |
 | `GET /api/short-worker/jobs/{id}/audio` | 장면 원음 WAV. 임대 중인 작업만(아니면 410) |
+| `PUT /api/short-worker/jobs/{id}/thumbnail` | 표지 그림(T166). 본문은 `image/png`(3 MB까지, PNG 서명 검사). 임대 중인 작업만. 동의·원본을 다시 보고 S3 `shorts/{id}/thumbnail.png`에 둡니다(다시 올리면 덮음). 키를 `object_keys`에 먼저 적어 취소·철회 정리가 영상과 함께 지웁니다. 200 `{id, thumbnailUrl}` |
 | `PUT /api/short-worker/jobs/{id}/result` | 본문은 `video/mp4` 바이트(최대 64 MB). 기본 영상과 같은 ffprobe 검사(9:16, 영상·소리 하나씩, 장면 길이와 1초 안) 뒤 동의·원본을 다시 보고 S3 `shorts/{id}/final.mp4`에 둡니다. 200은 `completed`. 그사이 철회·자료 변경이면 작업을 취소하고 403/409/410 |
 | `POST /api/short-worker/jobs/{id}/fail` | `{ "errorCode": "ffmpeg_failed" }`(영소문자·숫자·`_`). `failed`, `errorCode: worker_<값>` |
 

@@ -48,7 +48,8 @@ class VoiceTest {
         assertEquals(1.0, similarity(vector(cases[0]), vector(cases[0])), 1e-12)
     }
 
-    private fun prints(g: Int, vararg who: Pair<String, DoubleArray>, embedder: String = EMBEDDER) = JSONObject().put("generation", g).put("embedder", embedder)
+    private fun prints(g: Int, vararg who: Pair<String, DoubleArray>, embedder: String = EMBEDDER, rule: Boolean = false) = JSONObject().put("generation", g).put("embedder", embedder)
+        .apply { if (rule) put("floor", 0.6).put("margin", 0.06) }
         .put("dims", VOICE_DIMS).put("threshold", 0.9).put("items", org.json.JSONArray(who.map { (id, v) -> JSONObject().put("participantId", id).put("vector", org.json.JSONArray(v)).put("seconds", 7) }))
 
     @Test fun `받은 대조 값으로 서버와 같은 기준으로 가린다`() {
@@ -197,5 +198,32 @@ class VoiceTest {
         assertEquals(0, vp.size); assertFalse(file.exists())
         // 새 세대의 응답은 받는다
         assertTrue(vp.refresh(3_000, 3) { prints(3, "dad" to low) }); assertEquals("dad", vp.match(low, listOf("dad")).who)
+    }
+
+    @Test fun `여백 규칙으로 말한 사람을 정한다`() {
+        val (low, mid, high, low2) = cases.map(::vector)
+        val vp = VoicePrints(tmp.root, "ABC123", TEST_SEAL)
+        vp.put(prints(1, "dad" to low, "kid" to high, rule = true))
+        val all = listOf("dad", "kid")
+        assertEquals("dad", vp.identify(low2, all, null).who) // 0.995 대 −0.16: 뚜렷이 앞섬
+        assertEquals("dad", vp.identify(low2, all, listOf("dad")).who)
+        assertNull("가장 비슷한 사람이 발화의 줄과 다른 줄이면 붙이지 않음", vp.identify(low2, all, listOf("kid")).who)
+        assertNull("바닥(0.6)에 못 미침", vp.identify(mid, all, null).who) // kid 0.50
+
+        // 두 사람이 모두 가깝다: 절대 기준으로는 붙였겠지만(1.0 ≥ 0.9) 두 번째와의 차가 0.005라 붙이지 않는다
+        vp.put(prints(1, "dad" to low, "uncle" to low2, rule = true))
+        assertNull(vp.identify(low, listOf("dad", "uncle"), null).who)
+        assertEquals("dad", vp.match(low, listOf("dad", "uncle")).who)
+
+        // 후보가 한 명이면 견줄 사람이 없으니 절대 기준(0.9)
+        assertEquals("dad", vp.identify(low2, listOf("dad"), null).who)
+        assertNull(vp.identify(mid, listOf("dad"), null).who)
+        assertNull("등록값이 없는 후보뿐", vp.identify(low, listOf("mom"), null).who)
+
+        // 옛 서버(floor·margin 없음): 전처럼 줄에서 먼저, 없으면 모두에서 절대 기준
+        vp.put(prints(1, "dad" to low, "kid" to high))
+        assertEquals("dad", vp.identify(low2, all, listOf("kid")).who)
+        vp.put(prints(1, "dad" to low, "uncle" to low2))
+        assertEquals("dad", vp.identify(low, listOf("dad", "uncle"), null).who)
     }
 }

@@ -3,6 +3,7 @@
 운영자 맥에서 도는 일꾼입니다([ADR-0025](../../../docs/adr/0025-shorts-generation-worker-codex-skill.md), 계약은 [short-generation.md](../../../docs/api/short-generation.md)). API 이미지에는 들어가지 않습니다(`.dockerignore`).
 
 1. API에 밖으로만 연결해 작업을 임대받습니다(`POST /api/short-worker/claim`, 15초마다).
+   - 받자마자 표지 그림을 먼저 한 장 만들어 올립니다(T166, `PUT …/thumbnail`). Codex(추론 `low`)가 시안 C32 표지([`reference/`](reference/), 'Archive / galleryCar' 두 장)의 화풍으로 출연 캐릭터를 파스텔 종이 위에 그립니다. 그림에 글자는 없고, 800×1100 PNG입니다. 앱은 위에 날짜·대사·설명을 얹습니다. 실패해도 영상은 계속 만듭니다(앱 표지는 캐릭터로).
 2. Codex 스레드(ChatGPT 구독 로그인, `gpt-6-astra`, 추론 `xhigh`)가 [`skill/`](skill/)의 youtube-shorts-factory 스킬로 레퍼런스 분석 → 각색 → 스토리보드 → 장면 그림을 만듭니다. 인물은 프로필 캐릭터 그림(`frontend/web/chars/`)을 투사합니다.
 3. 그림마다 켄 번스(ffmpeg)를 주고, 원래 목소리와 자막(`../short-render.js`)을 합쳐 720×1280 MP4를 올립니다.
 

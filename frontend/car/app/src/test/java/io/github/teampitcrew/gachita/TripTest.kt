@@ -205,4 +205,24 @@ class TripTest {
         assertEquals("동의를 저장하지 못했어요 · 서버가 거절했어요(403 동의는 본인만 켤 수 있음)", refused.note)
         assertEquals(refused.note, refused.polled().note) // 저장하지 못한 것은 남긴다
     }
+
+    // 여행 제목 '{지역} {무리} 여행'(흐름점검 — 이번 시연 '정자 PITCREW 여행')
+    @Test fun tripTitleFromDestinationAndGroup() {
+        val pit = CarGroup("g1", "PITCREW", "guest", emptyList(), null)
+        val fam = CarGroup("g2", "우리 가족", "family", emptyList(), null)
+        assertEquals("정자 PITCREW 여행", tripTitle("정자 카페거리", pit, "함께하는 여행"))
+        assertEquals("강릉 가족 여행", tripTitle(" 강릉  숙소", fam, "함께하는 여행"))
+        assertEquals("PITCREW 여행", tripTitle(null, pit, "함께하는 여행"))
+        assertEquals("함께하는 여행", tripTitle("", null, "함께하는 여행"))
+    }
+
+    // 폰 '기록 중지': 주행 중 서버 기록이 꺼지면 차도 멈춘다. 주차로 서버가 기록을 끈 것은 멈춤이 아니다
+    @Test fun phoneStopStopsTheCarButParkingDoesNot() {
+        val people = listOf(Person("a", "아빠", "ROW_1_LEFT", true))
+        val driving = Trip("T1", "t", "driving", people, 0, 1, recording = true)
+        val rec = Session(gear = "D", ours = setOf("a")).withTrip(driving).startRecording(auto = true)
+        assertTrue(rec.recording)
+        assertFalse(rec.withTrip(driving.copy(recording = false, version = 2)).recording) // 폰 '기록 중지'
+        assertTrue(rec.withTrip(driving.copy(status = "parked", recording = false, version = 2)).recording) // 주차: 차는 계속
+    }
 }
