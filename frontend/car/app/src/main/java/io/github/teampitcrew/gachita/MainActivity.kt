@@ -457,6 +457,7 @@ class MainActivity : ComponentActivity() {
                     prefs.edit().putString("tokens", Live.seal(this).line(JSONObject(mine).toString())).commit() // 다시 받을 수 없는 값이라 디스크에 쓰고 돌아온다
                     familyOpen = false; afterStart = null; wrapWhenParked = false
                     s = Session(gear = s.gear, ours = mine.keys).withTrip(keep(got))
+                    if (s.agreed) startRecording() // 모두 동의했으면 출발(주차 중)과 함께 기록 시작 — C17의 ●를 따로 누르지 않게(오너 지시, F5·F6 #514와 맞춤)
                 }
                     .onFailure { s = s.copy(busy = false); error = "여행을 만들지 못했어요 · ${reason(it)}" }
             }
