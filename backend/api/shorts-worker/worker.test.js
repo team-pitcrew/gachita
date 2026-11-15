@@ -133,4 +133,12 @@ test("앞단의 502–504는 다시 보내고, 다시 보낸 끝의 거절에는
   const lost = async () => (++calls === 1 ? new Response("", { status: 504 }) : new Response("", { status: 410 }));
   await assert.rejects(api("/x", { method: "PUT", fetcher: lost, wait: 0 }), (e) => e.status === 410 && e.attempts === 2, "응답만 잃고 이미 받아들여진 경우를 가릴 수 있다");
 });
+test("파일을 주고받는 요청은 느린 운영 경로를 견디게 제한 시간을 길게 줍니다", async () => {
+  process.env.GACHITA_API ??= "http://127.0.0.1:1";
+  const slow = (ms) => async (url, o) => new Promise((ok, no) => { const t = setTimeout(() => ok(new Response(null, { status: 204 })), ms); o.signal.addEventListener("abort", () => { clearTimeout(t); no(o.signal.reason); }); });
+  await assert.rejects(api("/x", { fetcher: slow(200), timeout: 50, tries: 1 }), (e) => e.code === "api_unreachable");
+  assert.equal(await api("/x", { fetcher: slow(200), timeout: 1000, tries: 1 }), null);
+  const src = (await import("node:fs")).readFileSync(new URL("./worker.mjs", import.meta.url), "utf8");
+  for (const call of ["job.thumbnail", "job.audio", "job.result"]) assert.match(src.split("\n").find((l) => l.includes(`api(${call}`)), /timeout: SLOW/, `${call}에 긴 제한`);
+});
 
