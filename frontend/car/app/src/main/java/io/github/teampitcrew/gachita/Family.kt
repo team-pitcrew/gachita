@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -268,7 +269,7 @@ private fun detailOf(g: CarGroup?) = if (g != null && soloGuest(g)) FamilyView.G
 
 /** 위 탭이 없는 화면: 가족 추가·아이·목소리(C09–C12·C39–C42)와 가족 초대(C10·C16I). 동승 그룹 초대(C16)와 나머지는 탭이 있다. */
 private fun tabless(view: FamilyView, guest: Boolean) =
-    view == FamilyView.MEMBER || view == FamilyView.CHILD || view == FamilyView.CHILD_VOICE || view == FamilyView.INVITE || (!guest && view == FamilyView.GROUP_INVITE)
+    view == FamilyView.MEMBER || view == FamilyView.CHILD || view == FamilyView.CHILD_VOICE // 초대 화면은 C16 guestInvite(2005:3229)대로 위 탭이 있다(오너 11/15)
 
 /** 프로필 메뉴에서 가족 흐름으로 바로 가는 곳: '동승 그룹 변경' → C16 groups, '좌석 배정' → C16B. */
 enum class FamilyJump { GROUPS, SEATS }
@@ -559,7 +560,7 @@ fun FamilyFlow(
                 }
             }
             FamilyView.INVITE, FamilyView.GROUP_INVITE -> { // C10 · C16 · C16I
-                InviteTitle(g?.copy(invite = invite), counted = view == FamilyView.INVITE)
+                InviteTitle()
                 InviteBody(g, invite, ::copy, ::link, ctx, { sharing = true }, Modifier.weight(1f))
             }
             FamilyView.CHILD -> { // C11 · C41
@@ -908,15 +909,9 @@ private fun Waveform(levels: DoubleArray, now: Int) {
     }
 }
 
-/** 초대 화면 제목: 가족 초대(C10)는 '1명 등록 / 1명 초대 중 / 2명 미등록'과 오른쪽 2x2 배지(g에 지금 초대를 넣어 준다), 그 밖(C16·C16I)은 안내 문장. */
+/** 초대 화면 제목(C16 guestInvite 2005:3229 그대로, 오너 11/15 "이 화면과 동일하게"): 가족·동승 그룹 모두 '동승자 초대하기'와 안내 문장. */
 @Composable
-private fun InviteTitle(g: CarGroup?, counted: Boolean) {
-    val title = if (g?.kind == "guest") "동승자 초대하기" else "가족 초대하기"
-    if (counted && g != null) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(24.dp)) {
-        TitleBlock(title, slotLine(g), Modifier.weight(1f))
-        GroupFaces(g, 2f / 3)
-    } else TitleBlock(title, "초대 코드와 링크를 만들었어요. 편한 방식으로 전달해 주세요.")
-}
+private fun InviteTitle() = TitleBlock("동승자 초대하기", "초대 코드와 링크를 만들었어요. 편한 방식으로 전달해 주세요.")
 
 /** 스캔 가능한 초대 QR(320): 흰 바탕 검은 칸(QR은 테마와 관계없이 흑백이어야 읽힌다). */
 @Composable
@@ -954,12 +949,15 @@ private fun InviteBody(g: CarGroup?, invite: GroupInvite?, copy: (String) -> Uni
         }
         Column(Modifier.weight(1f).fillMaxHeight().padding(top = 24.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
             Text("초대 링크", style = CarText.Title)
-            Surface(Modifier.fillMaxWidth(), LinkShape, color = c.primaryContainer) {
-                Column(Modifier.padding(horizontal = 24.dp, vertical = 20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("${g?.name ?: "우리 가족"} 초대 링크", style = CarText.Title)
-                    Text("열면 앱에서 ${invite.code} 그룹으로 연결", style = CarText.Body)
+            Spacer(Modifier.height(15.dp)) // 시안 2263:5777
+            // 링크 카드(2047:2378): 높이 181, 글은 세로 가운데, 글자색 ink
+            Surface(Modifier.fillMaxWidth().height(181.dp), LinkShape, color = c.primaryContainer, contentColor = c.onSurface) {
+                Column(Modifier.padding(horizontal = 24.dp, vertical = 20.dp), verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterVertically)) {
+                    Text("${g?.name ?: "우리 가족"} 초대 링크", style = CarText.Title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text("열면 앱에서 ${invite.code} 그룹으로 연결", style = CarText.Body, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
+            Spacer(Modifier.height(18.dp)) // 시안 2189:6267
             CarButton("초대 링크 공유", height = 80.dp, onClick = share)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 CarButton("링크 복사", Modifier.weight(1f), CarButtonKind.Secondary, height = 80.dp) { copy(link()) }
@@ -967,8 +965,8 @@ private fun InviteBody(g: CarGroup?, invite: GroupInvite?, copy: (String) -> Uni
                     runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(link())).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
                 }
             }
-            // 시안: 가족 초대(C10·C16I)는 두 줄, 동승자 초대(C16 guestInvite)는 한 줄
-            Text("코드 입력, QR 스캔, 초대 링크 모두${if (g?.kind == "guest") " " else "\n"}같은 그룹으로 참여해요.", style = CarText.Body)
+            // 시안 2263:5770: 한 줄, 가운데
+            Text("코드 입력, QR 스캔, 초대 링크 모두 같은 그룹으로 참여해요.", Modifier.fillMaxWidth(), style = CarText.Body, textAlign = TextAlign.Center)
         }
     }
 }
