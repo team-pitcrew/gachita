@@ -201,6 +201,15 @@ fun autoSeats(members: List<GroupMember>): Map<String, String> {
  */
 fun childWithoutVoice(g: CarGroup?): GroupMember? = g?.members?.firstOrNull { it.role == "child" && !it.hasVoice && it.consent }
 
+/**
+ * 출발할 수 없는 구성원: 목소리가 없는 사람(보호자 동의가 꺼진 아이는 녹음할 수 없어 예외). 서버도 그룹 여행을 409 voice_required로 막는다(T173) —
+ * 차가 먼저 보고 아이는 C12, 내 목소리는 C06, 다른 어른은 폰에서 등록하도록 알린다.
+ */
+fun voiceMissing(members: List<GroupMember>): List<GroupMember> = members.filter { !it.hasVoice && (it.role != "child" || it.consent) }
+
+/** 내 목소리가 없어 그룹을 만들 수 없을 때(서버 409 voice_required와 같은 뜻) — act가 오류 글 없이 멈춘다. */
+private class VoiceFirst : Exception()
+
 /** 동승 그룹에 만든 사람만 있을 때(C16G guestDetail, 전체 그룹의 '초대 대기'). 출발할 사람이 없어 초대부터 한다. */
 fun soloGuest(g: CarGroup) = g.kind == "guest" && g.members.size <= 1
 
@@ -307,6 +316,7 @@ private fun Face(key: String, size: Dp) = CharAvatar(charRes(key), size, CarShap
 fun FamilyFlow(
     server: String, token: String?, onClose: () -> Unit, onStart: (String) -> Unit, jump: FamilyJump? = null, onJumped: () -> Unit = {},
     onTab: (Int) -> Unit = { onClose() },
+    onNeedVoice: (() -> Unit)? = null, // 내 목소리가 없을 때 C06(목소리 등록)으로 — 부르는 쪽이 온보딩을 연다. 없으면 알림만
 ) {
     // 로그인 전에는 가족 화면이 없다(시안은 C08 뒤에만). 부르는 쪽이 잘못 열면 바로 닫는다
     if (token == null) { LaunchedEffect(Unit) { onClose() }; return }
@@ -331,6 +341,7 @@ fun FamilyFlow(
     var guestName by remember { mutableStateOf("") }
     var myName by remember { mutableStateOf("") }
     var myVoice by remember { mutableStateOf(true) } // C09 내 카드 '목소리 등록 완료'(읽기 전에는 시안 글)
+    var myId by remember { mutableStateOf<String?>(null) }
     var pickSeat by remember { mutableStateOf(Seat.ROW_1_LEFT.name) } // 좌석 배정(C16B)에서 누른 자리 → 구성원 선택(C16C)
 
     val api = remember(server) { Server(server) }
@@ -343,13 +354,15 @@ fun FamilyFlow(
         if (!inFlight.compareAndSet(false, true)) return
         busy = true; note = ""
         scope.launch {
-            runCatching { work() }.onFailure { note = failureText(it) }
+            runCatching { work() }.onFailure { if (it !is VoiceFirst) note = failureText(it) }
             busy = false
             inFlight.set(false)
         }
     }
+    fun toast(text: String) { note = text }
+    fun needVoice() { onNeedVoice?.invoke() ?: toast("내 목소리를 먼저 등록해 주세요") }
     suspend fun <T> io(block: () -> T): T = withContext(Dispatchers.IO) { block() }
-    suspend fun load() { groups = io { api.groups(token) }; io { AccountApi(server).me(token) }.let { myName = it.name; myVoice = it.hasVoice } }
+    suspend fun load() { groups = io { api.groups(token) }; io { AccountApi(server).me(token) }.let { myName = it.name; myVoice = it.hasVoice; myId = it.id } }
     // 동승 그룹은 서버에서 자리 없이 시작한다. 시안(C15 '민준 / 운전석')대로 만든 사람(대표)을 운전석에 앉혀 저장한다.
     fun createGuest(): CarGroup {
         val made = api.createGroup(token, guestName.trim().ifBlank { "동승 그룹" }, "guest")
@@ -358,15 +371,25 @@ fun FamilyFlow(
     }
     // 아이 저장 뒤 갈 곳(seatsAfterChild): 아이가 둘 이상이면 전체 그룹 목록(C42 → C16 groups), 아니면 가족 추가(C12 → C40).
     fun afterChildSaved() { view = if (family()?.members?.let(::seatsAfterChild) == true) FamilyView.GROUPS else FamilyView.MEMBER }
-    suspend fun ensureFamily(): CarGroup = family() ?: io { api.createGroup(token, "우리 가족", "family") }.also { put(it) }
+    suspend fun ensureFamily(): CarGroup = family() ?: run { if (!myVoice) { needVoice(); throw VoiceFirst() }; io { api.createGroup(token, "우리 가족", "family") }.also { put(it) } }
     suspend fun issue(g: CarGroup, to: FamilyView = FamilyView.INVITE) {
         groupId = g.id
         invite = io { api.groupInvite(token, g.id) }
         view = to
     }
-    fun toast(text: String) { note = text }
     // '이 그룹과 출발'(C16A·C43): 자리 없는 구성원을 빈자리에 앉혀 저장한 뒤 여행을 만든다(autoSeats)
-    fun depart(g: CarGroup) = act { val add = autoSeats(g.members); if (add.isNotEmpty()) put(io { api.saveSeats(token, g.id, add) }); onStart(g.id) }
+    // '이 그룹과 출발'(C16A·C43): 목소리 없는 구성원이 있으면 출발하지 않고 그 사람의 등록으로(아이 C12 · 나 C06 · 다른 어른은 폰).
+    // 모두 되면 자리 없는 구성원을 빈자리에 앉혀 저장한 뒤 여행을 만든다(autoSeats).
+    fun depart(g: CarGroup) {
+        val missing = voiceMissing(g.members)
+        val kid = missing.firstOrNull { it.role == "child" }
+        when {
+            kid != null -> { child = kid; voiceState = ""; view = FamilyView.CHILD_VOICE; toast("${kid.name}의 목소리를 먼저 등록해요") }
+            missing.any { it.profileId == myId } -> needVoice()
+            missing.isNotEmpty() -> toast("${missing.joinToString(", ") { it.name }}님은 폰에서 목소리를 먼저 등록해 주세요")
+            else -> act { val add = autoSeats(g.members); if (add.isNotEmpty()) put(io { api.saveSeats(token, g.id, add) }); onStart(g.id) }
+        }
+    }
     LaunchedEffect(note) { if (note.isNotEmpty()) { delay(toastMs(note)); note = "" } } // 2047:2276 알림(복사 1.5초, 원본에 없는 오류 글 3초)
     fun link() = server.trimEnd('/') + (invite?.url ?: "")
     fun copy(text: String) {
@@ -498,7 +521,7 @@ fun FamilyFlow(
                     act { put(io { api.saveSeats(token, g!!.id, seatChanges(g.members, seats)) }); pick = null; view = FamilyView.GROUP }
                 }
                 FamilyView.GUEST -> CarButton("그룹 저장", Modifier.weight(1f), enabled = !busy) {
-                    act { val made = io { createGuest() }; put(made); view = FamilyView.GROUPS } // C15 → C16L
+                    if (!myVoice) needVoice() else act { val made = io { createGuest() }; put(made); view = FamilyView.GROUPS } // C15 → C16L
                 }
                 FamilyView.GROUPS -> CarButton("우리 가족 보기", Modifier.weight(1f), enabled = !busy) { // 가족 그룹이 없으면 가족 추가(C09)부터
                     if (fam != null) { groupId = fam.id; view = FamilyView.DETAIL } else view = FamilyView.MEMBER
