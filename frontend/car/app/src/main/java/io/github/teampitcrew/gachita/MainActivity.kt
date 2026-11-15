@@ -165,6 +165,10 @@ class MainActivity : ComponentActivity() {
     private var pendingRoute: List<String>? = null // 내비에 붙으면 보낼 목적지(디버그 인자)
     private var pendingStops: List<Place> = emptyList() // 그 목적지 앞에 들를 곳(디버그 인자 --es stops, 시연 T150)
     private var etaSeen = "" // 마지막으로 로그에 남긴 다음 장소·남은 시간(디버그)
+    // mock(디버그 시연): 발화에 붙일 위치를 이 점들을 따라 옮긴다(--es path, routeFrom). 비어 있으면 내비 위치
+    private var demoPath: List<Pair<Double, Double>> = emptyList()
+    private var demoPathMs = 600_000L
+    private var demoPathFrom = 0L
     private var approachLimit = APPROACH_SECONDS // 도착 전 카드를 띄울 남은 시간(초). 디버그 인자 --ei approachSeconds로만 바꾼다(시연 T150)
     private var offers = 0L // 제안 번호. 늦게 온 콜백이 다른 제안을 건드리지 않게
     private var todoState by mutableStateOf(SharedTodoState())
@@ -376,6 +380,11 @@ class MainActivity : ComponentActivity() {
         // 에뮬레이터 GPS는 움직이지 않아 남은 시간이 줄지 않는다. 시연 경로가 길로 5분을 넘으면 이 값으로 카드를 띄운다(디버그 빌드만)
         if (debug && i?.hasExtra("approachSeconds") == true) approachLimit = i.getIntExtra("approachSeconds", APPROACH_SECONDS).coerceIn(1, 3600)
         if (debug) pendingRoute = i?.getStringExtra("route")?.split(",")?.takeIf { it.size == 3 } ?: pendingRoute
+        // mock: 에뮬레이터 내비는 GPS를 옮겨도 판교에 머물러 발화 위치가 한 점에 모인다(C35·C36에 장면이 한 곳에 겹침).
+        // --es path "위도,경도;위도,경도;…"(--ei pathSeconds, 기본 600)면 받은 때부터 그 시간에 걸쳐 점들을 따라간 위치를 발화에 붙인다. 디버그 빌드만, 빈 값이면 끔
+        if (debug && i?.hasExtra("path") == true) {
+            demoPath = parsePath(i.getStringExtra("path")); demoPathMs = i.getIntExtra("pathSeconds", 600).coerceIn(10, 7200) * 1000L; demoPathFrom = System.currentTimeMillis()
+        }
         // mock: F4 화면 확인용 시연 데이터(near·nearPaused·finalNear·finalPaused·mart·final, 빈 값이면 끔). 디버그 빌드에서만
         if (debug && i?.hasExtra("f4") == true) f4Mock = i.getStringExtra("f4")?.takeIf { it.isNotBlank() }
         routeIfReady()
@@ -718,6 +727,10 @@ class MainActivity : ComponentActivity() {
     /** 기록 중이면 내비에 지금 위치를 물어 둔다. 발화에 붙인다(FIX_MS). 휴게소를 찾는 중이면 그 물음을 끊지 않게 묻지 않는다. */
     private fun locate() {
         if (!s.recording || offer?.stage == Offer.Stage.FINDING || arrivalLoading) return
+        if (demoPath.size > 1) { // mock: 디버그 시연 경로(도착 판정·휴게소 제안은 그대로 내비 위치)
+            val (la, ln) = alongPath(demoPath, (System.currentTimeMillis() - demoPathFrom).toDouble() / demoPathMs)
+            Live.fix = Fix(la, ln, System.currentTimeMillis()); return
+        }
         car.here { la, ln, _ -> if (la != null && ln != null) Live.fix = Fix(la, ln, System.currentTimeMillis()) }
     }
 
