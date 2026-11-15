@@ -231,20 +231,33 @@ export async function make(job, wav, { drawFrames = draw, signal } = {}) {
 
 const log = (event, fields = {}) => console.log(JSON.stringify({ at: new Date().toISOString(), event, ...fields }));
 
-async function api(path, { method = "GET", body, type } = {}) {
-  const r = await fetch(new URL(path, process.env.GACHITA_API), {
-    method,
-    body,
-    headers: { authorization: `Bearer ${process.env.SHORTS_WORKER_TOKEN}`, ...(type && { "content-type": type }) },
-    signal: AbortSignal.timeout(120_000),
-  });
+// 연결 실패(서버가 잠깐 다시 뜨는 중 등)는 5초 간격으로 tries번까지 다시 보낸다. 서버의 거절(HTTP 오류)은 그대로 끝낸다.
+// 로컬 고정 서버 8800은 develop이 바뀔 때마다 다시 떠서, 9분 만든 결과 PUT이 그 1–2초에 걸리면 작업을 잃었다(T158).
+// 임대 받기(claim)는 다시 보내지 않는다(응답만 잃었으면 그 작업은 임대 만료로 끝남, 다음 폴링이 대신함).
+export async function api(path, { method = "GET", body, type, tries = 6, fetcher = fetch, wait = 5000 } = {}) {
+  let r;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      r = await fetcher(new URL(path, process.env.GACHITA_API), {
+        method,
+        body,
+        headers: { authorization: `Bearer ${process.env.SHORTS_WORKER_TOKEN}`, ...(type && { "content-type": type }) },
+        signal: AbortSignal.timeout(120_000),
+      });
+      break;
+    } catch (e) {
+      if (attempt >= tries) throw Object.assign(e, { code: "api_unreachable" });
+      log("api_retry", { method, attempt, message: String(e.message).slice(0, 120) });
+      await new Promise((ok) => setTimeout(ok, wait));
+    }
+  }
   if (r.status === 204) return null;
   if (!r.ok) throw Object.assign(Error(`api ${method} ${path} ${r.status}`), { code: `api_${r.status}`, status: r.status });
   return r.headers.get("content-type")?.startsWith("application/json") ? r.json() : Buffer.from(await r.arrayBuffer());
 }
 
 async function once() {
-  const job = await api("/api/short-worker/claim", { method: "POST", body: "{}", type: "application/json" });
+  const job = await api("/api/short-worker/claim", { method: "POST", body: "{}", type: "application/json", tries: 1 });
   if (!job) return false;
   const started = Date.now();
   log("claimed", { id: job.id, shots: job.plan.shots.length, seconds: job.plan.seconds, leaseUntil: job.leaseUntil });
