@@ -994,6 +994,11 @@ def pitcrew_group(code=None):
     return g
 
 
+def hide_keyboard():
+    """화면 자판이 떠 있으면 내린다(뒤로 한 번). 떠 있지 않으면 누르지 않는다(뒤로가 앱 화면을 넘기지 않게)."""
+    if "mInputShown=true" in adb("shell", "dumpsys", "input_method"): adb("shell", "input", "keyevent", "KEYCODE_BACK"); time.sleep(1)
+
+
 def open_groups():
     """전체 그룹 목록(C16 groups). 가족 그룹이 없으면 가족 화면이 '우리 가족 추가'(C09, 위 탭 없음)로 열리므로
     머리 줄 프로필 메뉴의 그룹 칸('동승 그룹 변경' = 앱의 onGroup)으로 간다. 가족 그룹이 있으면 위 탭 '함께 타는 중'."""
@@ -1010,6 +1015,7 @@ def pitcrew_group_steps():
     code = None
     if tap("+ 새 그룹 만들기", timeout=8) and wait(["새 동승 그룹", "그룹 이름"], 10):
         typed = type_into(0, GROUP)  # 영문이라 adb input text로 들어감
+        hide_keyboard()  # pass3: 화면 자판이 '그룹 저장'을 가려 누름이 자판에 떨어짐
         step(8, ["새 동승 그룹", "그룹 이름"], note_="" if typed else "그룹 이름 칸에 넣지 못함")
         tap("그룹 저장"); tap(GROUP, timeout=8); tap("동승자 초대하기", timeout=8)  # 저장 → 목록(C16L) → 혼자인 그룹(C16G) → 초대
         if step(9, ["초대 코드와 링크를 만들었어요", "초대 코드"]):
