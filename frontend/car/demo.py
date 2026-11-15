@@ -457,12 +457,13 @@ def prepare():
     except SystemExit as e: note("say.off", why=str(e))
 
 
-ENROLL_MAX_S = 14  # 차의 목소리 등록은 15초에 닫힌다. 그보다 긴 소리는 gRPC 넣기 큐에 남아 다음 넣기를 막고, 기록이 켜지면 받아 적힌다(리허설 run2)
+ENROLL_MAX_S = 12  # 차의 목소리 등록은 15초에 닫히고 넣기는 '녹음 시작' 뒤 약 2초에 시작한다. 남은 소리는 gRPC 넣기 큐에 남아 다음 넣기를 막고,
+# 기록이 켜지면 받아 적힌다(리허설 run2, gap2: 14초 실제 클립이 239초 뒤에야 끝남) — 2초 넘게 남긴다
 injecting = threading.Lock()  # 넣기는 한 번에 하나. 앞의 것이 끝나기 전에 다음을 보내지 않는다
 
 
 def injectable(name):
-    """넣을 파일 이름. 등록용(enroll-*)은 앞 14초만 잘라 <name>-14s.wav로 따로 둔다(미리 둔 실제 녹음도 원본은 그대로 둠)."""
+    """넣을 파일 이름. 등록용(enroll-*)은 앞 ENROLL_MAX_S초만 잘라 <name>-14s.wav로 따로 둔다(미리 둔 실제 녹음도 원본은 그대로 둠)."""
     if not name.startswith("enroll-"): return name
     with wave.open(str(OUT / "inputs" / f"{name}.wav")) as w:
         params, frames = w.getparams(), w.readframes(min(w.getnframes(), w.getframerate() * ENROLL_MAX_S))
