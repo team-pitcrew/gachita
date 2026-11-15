@@ -31,6 +31,19 @@ class GroupScreensTest {
         assertEquals("2명  |  동승 그룹", groupLine(solo.copy(members = solo.members + m("f", "지우", null))))
     }
 
+    @Test fun `좌석 칸은 시안대로 2x2, 뒤 가운데에 앉은 사람이 있으면 그 칸을 더함`() {
+        assertEquals(listOf(Seat.ROW_2_LEFT, Seat.ROW_2_RIGHT), gridSeats(family.members)[1])
+        assertEquals(listOf(Seat.ROW_2_LEFT, Seat.ROW_2_CENTER, Seat.ROW_2_RIGHT), gridSeats(family.members + m("c", "지민", "ROW_2_CENTER"))[1])
+    }
+
+    @Test fun `출발 전 자리 없는 사람은 빈자리에 앞에서 뒤로, 자리가 모자라면 남김`() {
+        val joined = listOf(m("dad", "민준", "ROW_1_LEFT"), m("a", "지환", null), m("b", "지민", null), m("c", "상현", "ROW_2_LEFT"))
+        assertEquals(mapOf("a" to "ROW_1_RIGHT", "b" to "ROW_2_RIGHT"), autoSeats(joined))
+        assertEquals(emptyMap<String, String>(), autoSeats(family.members.filter { it.seat != null }))
+        val six = (1..6).map { m("p$it", "사람$it", null) }
+        assertEquals(5, autoSeats(six).size)
+    }
+
     @Test fun `혼자인 동승 그룹만 초대부터`() {
         assertTrue(soloGuest(solo))
         assertFalse(soloGuest(family))

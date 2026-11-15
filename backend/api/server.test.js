@@ -1294,6 +1294,7 @@ test("차가 대조 값을 받아 가 차 안에서 붙인 화자를 발화와 �
   const prints = await got.json();
   assert.deepEqual([got.status, got.headers.get("cache-control")], [200, "private, no-store"]);
   assert.deepEqual([prints.generation, prints.embedder, prints.dims, prints.threshold], [1, "logmel-pitch-1", 112, 0.9]);
+  assert.deepEqual([prints.floor, prints.margin], [0.6, 0.06], "기기 판정의 바닥·여백(여백 규칙)");
   assert.deepEqual(prints.items.map((p) => [p.participantId, p.source, p.vector.length]).sort(), [[a.id, "trip", 112], [b.id, "trip", 112]].sort());
   assert.deepEqual(prints.items.find((p) => p.participantId === a.id).vector, cases[0].vector, "올린 값 그대로");
   assert.equal((await call("GET", `${t}/voice-prints`))[0], 401);

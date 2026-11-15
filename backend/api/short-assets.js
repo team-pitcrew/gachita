@@ -231,5 +231,13 @@ export function shortAssets(ctx, overrides = {}) {
     return [200,data,row.media.mimeType];
   }
 
-  return { request, sweep, valid, start: () => { setInterval(sweep, 30_000).unref(); void sweep(); } };
+  // 이 영상이 지금 원본과 같은가(갤러리 목록, T162). 파일 경로(request)와 같은 비교다. composition은 여행마다 한 번 읽어 넘긴다.
+  async function fresh(trip, id, composition) {
+    const row = (await db().query("SELECT moment_id, source_hash FROM short_assets WHERE id=$1", [id])).rows[0];
+    if (!row) return false;
+    try { return (await source(trip, db(), row.moment_id, composition)).sourceHash === row.source_hash; }
+    catch (e) { if ([404, 409].includes(e.status)) return false; throw e; }
+  }
+
+  return { request, sweep, valid, fresh, start: () => { setInterval(sweep, 30_000).unref(); void sweep(); } };
 }

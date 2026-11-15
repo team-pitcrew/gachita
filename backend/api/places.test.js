@@ -52,6 +52,13 @@ const placesOf = async (code, token) => {
   assert.equal(res.status, 200);
   return res.data.items;
 };
+// 장면 클립 줄을 넣고(버킷 없이) 지금 원본 해시를 받는다. 콘텐츠 기록은 지금 원본과 같은 영상만 보인다(T162).
+const clip = (code, momentId, startAt, seconds) =>
+  tripsDb().query(
+    "INSERT INTO recordings (trip_code, moment_id, generation, participant_id, object_key, start_at, bytes, seconds) VALUES ($1, $2, 1, 'p', $3, $4, $5, $6)",
+    [code, momentId, `${code}/${momentId}.wav`, startAt, Math.round(seconds * 32_000) + 44, seconds]
+  );
+const sourceHash = async (code, momentId, token) => (await call("GET", `/trips/${code}/short-assets/source?moment=${momentId}`, undefined, token)).data.sourceHash;
 const join = async (code, who, seat, consent = true) =>
   (await call("POST", `/trips/${code}/participants`, who.token ? { seat, consent } : { name: who.name, seat, consent }, who.token)).data;
 
@@ -174,17 +181,23 @@ test("내 여행: 내 프로필이 참가한 여행만 최신 순으로, 구성�
   const moment = (await call("POST", `/trips/${first.code}/moments`, { at: t0 + 40_000, lat: 38.19, lng: 128.6, label: "파도 소리" }, a.token)).data;
   const plain = (await call("POST", `/trips/${first.code}/moments`, { at: t0 + 10_000 }, a.token)).data;
   // 보관을 마친 영상 줄을 직접 넣는다(파일 검사·업로드는 short-assets 시험이 본다). 정리 작업이 원본 해시를 다시 보지 않게 임대 시각을 뒤로 둔다.
+  // 원본 해시와 제작 계획은 장면 클립 줄을 넣은 뒤 서버에서 받는다 — 지금 원본과 다른 영상은 목록에서 빠진다(T162).
+  await clip(first.code, moment.id, t0 + 20_000, 30);
+  await clip(first.code, plain.id, t0 - 10_000, 30);
+  const hash = await sourceHash(first.code, moment.id, a.token);
+  const planned = await call("POST", `/trips/${first.code}/short-plans`, { templateId: "car-sitcom-v1", momentId: plain.id }, a.token);
+  assert.equal(planned.status, 200, JSON.stringify(planned.data));
   const assetId = randomUUID();
   await tripsDb().query(
     `INSERT INTO short_assets (id, trip_code, participant_id, generation, moment_id, source_hash, idempotency_key, request_hash, sha256, media, object_key, state, attempt, lease_until)
-     VALUES ($1, $2, $3, 1, $4, 'h', 'key-1', 'r', 's', $5, 'k1', 'completed', $6, now() + interval '1 hour'), ($7, $2, $3, 1, $4, 'h', 'key-2', 'r', 's', $5, 'k2', 'uploading', $6, now() + interval '1 hour')`,
-    [assetId, first.code, a.id, moment.id, { seconds: 12.5, mimeType: "video/mp4" }, randomUUID(), randomUUID()]
+     VALUES ($1, $2, $3, 1, $4, $8, 'key-1', 'r', 's', $5, 'k1', 'completed', $6, now() + interval '1 hour'), ($7, $2, $3, 1, $4, $8, 'key-2', 'r', 's', $5, 'k2', 'uploading', $6, now() + interval '1 hour')`,
+    [assetId, first.code, a.id, moment.id, { seconds: 12.5, mimeType: "video/mp4" }, randomUUID(), randomUUID(), hash]
   );
   const genId = randomUUID();
   await tripsDb().query(
     `INSERT INTO short_generations (id, trip_code, participant_id, generation, moment_id, idempotency_key, request_hash, plan, source_key, state)
-     VALUES ($1, $2, $3, 1, $4, 'g-1', 'r', $5, '', 'completed'), ($6, $2, $3, 1, $4, 'g-2', 'r', $5, '', 'failed')`,
-    [genId, first.code, a.id, plain.id, { seconds: 8, templateId: "t" }, randomUUID()]
+     VALUES ($1, $2, $3, 1, $4, 'g-1', 'r', $5, $7, 'completed'), ($6, $2, $3, 1, $4, 'g-2', 'r', $5, $7, 'failed')`,
+    [genId, first.code, a.id, plain.id, planned.data, randomUUID(), `${first.code}/${plain.id}.wav`]
   );
   await call("PATCH", `/trips/${first.code}`, { status: "ended" });
 
@@ -220,7 +233,7 @@ test("내 여행: 내 프로필이 참가한 여행만 최신 순으로, 구성�
 
   // 콘텐츠: 완료된 것만, 장면의 제목·좌표·그때의 장소, 시각순
   assert.deepEqual(trip.contents.map(({ lines, cast, ...c }) => c), [
-    { id: genId, momentId: plain.id, title: "가족 바다 여행", seconds: 8, at: t0 + 10_000, from: t0 - 10_000, to: t0 + 20_000, lat: null, lng: null, place: "집", kind: "generated", url: `/api/trips/${first.code}/short-generations/${genId}/file` },
+    { id: genId, momentId: plain.id, title: "가족 바다 여행", seconds: planned.data.seconds, at: t0 + 10_000, from: t0 - 10_000, to: t0 + 20_000, lat: null, lng: null, place: "집", kind: "generated", url: `/api/trips/${first.code}/short-generations/${genId}/file` },
     { id: assetId, momentId: moment.id, title: "파도 소리", seconds: 12.5, at: t0 + 40_000, from: t0 + 20_000, to: t0 + 50_000, lat: 38.19, lng: 128.6, place: "속초 해수욕장", kind: "device", url: `/api/trips/${first.code}/short-assets/${assetId}/file` },
   ]);
   // 장면 구간의 자막 줄은 30줄까지, 말한 사람을 모르면 이름 없이(지어내지 않음)
@@ -258,11 +271,12 @@ test("콘텐츠 기록: 장면에서 말한 사람(cast)과 자막 줄, 프로�
   ];
   assert.equal((await call("POST", `/trips/${trip.code}/utterances`, { device: "car", generation: 1, items }, a.token)).status, 200);
   const moment = (await call("POST", `/trips/${trip.code}/moments`, { at: t0 + 2000, from: t0 + 500, to: t0 + 5000, label: "아빠보다 빠른 서준의 정답" }, a.token)).data;
+  await clip(trip.code, moment.id, t0 + 500, 4.5);
   const assetId = randomUUID();
   await tripsDb().query(
     `INSERT INTO short_assets (id, trip_code, participant_id, generation, moment_id, source_hash, idempotency_key, request_hash, sha256, media, object_key, state, attempt, lease_until)
-     VALUES ($1, $2, $3, 1, $4, 'h', 'key-c', 'r', 's', $5, 'kc', 'completed', $6, now() + interval '1 hour')`,
-    [assetId, trip.code, a.id, moment.id, { seconds: 4.5, mimeType: "video/mp4" }, randomUUID()]
+     VALUES ($1, $2, $3, 1, $4, $7, 'key-c', 'r', 's', $5, 'kc', 'completed', $6, now() + interval '1 hour')`,
+    [assetId, trip.code, a.id, moment.id, { seconds: 4.5, mimeType: "video/mp4" }, randomUUID(), await sourceHash(trip.code, moment.id, a.token)]
   );
   await call("PATCH", `/trips/${trip.code}`, { status: "parked" });
 
@@ -284,6 +298,9 @@ test("콘텐츠 기록: 장면에서 말한 사람(cast)과 자막 줄, 프로�
   const one = await call("GET", path, undefined, a.token);
   assert.equal(one.status, 200);
   assert.deepEqual(one.data, mine, "내 여행 항목과 같은 모양");
+  // 폰이 그룹 여행을 이어 타게(T162): 어느 그룹의 여행인지, 기록 중인지, 나는 이 여행의 누구인지(토큰은 싣지 않음)
+  assert.deepEqual([mine.groupId, mine.recording, mine.me], [null, false, { participantId: a.id, seat: "ROW_1_LEFT", consent: true }]);
+  assert.ok(!JSON.stringify(mine).includes(a.token), "참가자 토큰은 싣지 않음");
   assert.equal((await call("GET", path)).status, 401, "토큰 없이는 읽지 못함(장소·경로·자막)");
   assert.equal((await call("POST", path, {}, a.token)).status, 405);
   assert.equal((await call("GET", `${path}/x`, undefined, a.token)).status, 404);
@@ -292,4 +309,9 @@ test("콘텐츠 기록: 장면에서 말한 사람(cast)과 자막 줄, 프로�
   const other = await newTrip("남의 여행");
   const stranger = await join(other.code, { name: "남" }, "ROW_1_LEFT");
   assert.equal((await call("GET", path, undefined, stranger.token)).status, 401, "다른 여행의 토큰은 거절");
+
+  // 원본(자막)이 바뀐 영상은 파일이 409라 목록에서도 뺀다(T162, 흐름 점검: 목록에 보이는데 눌러도 열리지 않음)
+  assert.equal((await call("PATCH", `/trips/${trip.code}/captions/car/2`, { generation: 1, expectedVersion: 0, text: "아빠, 바다 보여!" }, a.token)).status, 200);
+  assert.deepEqual((await call("GET", "/profiles/me/trips", undefined, dad.token)).data.items[0].contents, []);
+  assert.deepEqual((await call("GET", path, undefined, a.token)).data.contents, []);
 });

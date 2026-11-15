@@ -83,15 +83,22 @@ class ContentsTest {
         val json = JSONObject("""{"code":"AB","title":"t","createdAt":1,"startedAt":5,"endedAt":null,"members":[],"places":[],"route":[],"contents":[]}""")
         assertEquals(5L, parseContentTrip(json).startedAt)
         assertNull(parseContentTrip(json).endedAt)
+        assertEquals("우리 가족", parseContentTrip(json).crew) // 그룹 없는 여행(groupName 없음)
+        assertEquals("PITCREW", parseContentTrip(JSONObject(json.toString()).put("groupName", "PITCREW")).crew)
+        assertEquals("우리 가족", parseContentTrip(JSONObject(json.toString()).put("groupName", JSONObject.NULL)).crew)
     }
 
     @Test
     fun `bundled OpenStreetMap projection and the schematic fallback`() {
-        assertTrue(contentOnBundledMap(listOf(37.7519 to 128.8761, 37.7955 to 128.9050)))
-        assertFalse(contentOnBundledMap(listOf(37.5 to 127.0, 37.6 to 127.1)))
-        assertFalse(contentOnBundledMap(emptyList()))
-        val p = contentOsmProjector(1080f, 660f)
-        val nw = p(OSM_NORTH to OSM_WEST); val se = p(OSM_SOUTH to OSM_EAST)
+        val gangneung = contentBundledMap(listOf(37.7519 to 128.8761, 37.7955 to 128.9050))
+        assertEquals(R.drawable.content_map_gangneung, gangneung?.res)
+        // 신논현 → 정자 카페거리(시연 여행)는 강남–분당 지도
+        assertEquals(R.drawable.content_map_gangnam_bundang, contentBundledMap(listOf(37.5045 to 127.0250, 37.4020 to 127.1080, 37.3648 to 127.1060))?.res)
+        assertNull(contentBundledMap(listOf(35.1 to 129.0, 35.2 to 129.1))) // 부산은 도식
+        assertNull(contentBundledMap(emptyList()))
+        val m = gangneung!!
+        val p = contentOsmProjector(m, 1080f, 660f)
+        val nw = p(m.north to m.west); val se = p(m.south to m.east)
         assertEquals(0f, nw.x, 0.5f); assertEquals(-48f, nw.y, 0.5f) // 1200×840을 1080 폭에 맞추면 위아래 48씩 잘림(시안 object-cover)
         assertEquals(1080f, se.x, 0.5f); assertEquals(708f, se.y, 0.5f)
     }

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { groupCode, groupLine, lostSeats, memberHeading, readiness, seatPick, seatRows, seatTo, swapSeats } from "./groups.js";
+import { fillSeats, groupCode, groupLine, lostSeats, memberHeading, readiness, seatPick, seatRows, seatTo, swapSeats } from "./groups.js";
 
 const O = "https://gachita.mangowhois.ai";
 
@@ -83,4 +83,12 @@ test("그룹 한 줄과 구성원·저장된 좌석(P16A·P16L)", () => {
   assert.equal(groupLine(solo), "1명  |  초대 대기");
   assert.equal(groupLine({ ...solo, invite: null }), "1명  |  동승 그룹");
   assert.equal(groupLine({ ...solo, members: [...solo.members, { name: "지우" }] }), "2명  |  동승 그룹");
+});
+
+test("출발 전에 자리 없는 구성원(초대·QR 참여)을 빈자리에 앞줄부터 앉힌다(P43 '자리 없음'으로 혼자 출발하던 것)", () => {
+  const m = (profileId, seat = null) => ({ profileId, name: profileId, seat });
+  assert.deepEqual(fillSeats([m("jm", "ROW_1_LEFT"), m("ji"), m("jh"), m("mj")]), { ji: "ROW_1_RIGHT", jh: "ROW_2_LEFT", mj: "ROW_2_RIGHT" });
+  assert.deepEqual(fillSeats([m("a", "ROW_1_LEFT"), m("b", "ROW_1_RIGHT")]), {}, "모두 앉았으면 바꾸지 않는다");
+  const five = fillSeats([m("a", "ROW_1_LEFT"), m("b", "ROW_1_RIGHT"), m("c", "ROW_2_LEFT"), m("d", "ROW_2_RIGHT"), m("e"), m("f")]);
+  assert.deepEqual(five, { e: "ROW_2_CENTER" }, "뒤 가운데는 마지막, 빈자리가 모자라면 남는 사람은 그대로");
 });
