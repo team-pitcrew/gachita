@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { fillSeats, groupCode, groupLine, lostSeats, memberHeading, readiness, seatPick, seatRows, seatTo, swapSeats } from "./groups.js";
+import { fillSeats, groupCode, groupLine, lostSeats, memberHeading, readiness, seatPick, seatRows, seatTo, swapSeats, childWithoutVoice } from "./groups.js";
 
 const O = "https://gachita.mangowhois.ai";
 
@@ -91,4 +91,12 @@ test("출발 전에 자리 없는 구성원(초대·QR 참여)을 빈자리에 �
   assert.deepEqual(fillSeats([m("a", "ROW_1_LEFT"), m("b", "ROW_1_RIGHT")]), {}, "모두 앉았으면 바꾸지 않는다");
   const five = fillSeats([m("a", "ROW_1_LEFT"), m("b", "ROW_1_RIGHT"), m("c", "ROW_2_LEFT"), m("d", "ROW_2_RIGHT"), m("e"), m("f")]);
   assert.deepEqual(five, { e: "ROW_2_CENTER" }, "뒤 가운데는 마지막, 빈자리가 모자라면 남는 사람은 그대로");
+});
+
+test("목소리 없는 아이는 보호자 동의가 켜진 아이만 다시 묻고, 동의 꺼진 아이·목소리 있는 아이는 아님", () => {
+  const kid = { profileId: "k", role: "child", hasVoice: false, consent: true };
+  assert.equal(childWithoutVoice({ members: [{ role: "owner", hasVoice: true }, kid] })?.profileId, "k");
+  assert.equal(childWithoutVoice({ members: [{ ...kid, hasVoice: true }] }), null);
+  assert.equal(childWithoutVoice({ members: [{ ...kid, consent: false }] }), null);
+  assert.equal(childWithoutVoice(null), null);
 });

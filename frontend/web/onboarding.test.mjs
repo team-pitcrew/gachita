@@ -5,7 +5,10 @@ import { accountError, callName, firstStep, MIN_SECONDS, nextAfterAccount, provi
 
 test("처음 열 때: 토큰 없음 → 시작, 기기 프로필 → 계정 만들기, 동의 전 → 동의, 그 밖 → 프로필부터", () => {
   assert.equal(firstStep(null, false), "welcome");
-  assert.equal(firstStep({ email: null, consent: false }, true), "signup");
+  // 이메일 없는 기기 프로필도 동의 → 프로필 → 목소리. 목소리까지 마친 뒤에만 계정 만들기(11/15 오너: 프로필엔 목소리 반드시)
+  assert.equal(firstStep({ email: null, consent: false }, true), "consent");
+  assert.equal(firstStep({ email: null, name: "지민", consent: true, hasVoice: false }, true), "profile");
+  assert.equal(firstStep({ email: null, name: "지민", consent: true, hasVoice: true }, true), "signup");
   assert.equal(firstStep({ email: "a@b.co", consent: false }, true), "consent");
   assert.equal(firstStep({ email: "a@b.co", consent: true, hasVoice: false }, true), "profile");
   assert.equal(firstStep({ email: "a@b.co", consent: true, hasVoice: true }, true), "profile");
