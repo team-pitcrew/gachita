@@ -23,11 +23,13 @@ export function firstStep(profile, hasToken) {
   return "profile";
 }
 
-// 로그인·가입 뒤 이어 갈 단계: 동의가 없으면 동의, 목소리가 없으면 프로필, 다 있으면 끝(null).
-export function nextAfterAccount(profile, mode) {
+// 로그인·가입·동의 뒤 빠진 단계만(11/15 오너, 차 missingStep과 같음): 동의가 없으면 동의, 이름(가입 때 임시 이름은 아님)·캐릭터가
+// 없으면 프로필, 목소리가 없으면 목소리, 다 있으면 끝(null).
+export function nextAfterAccount(profile) {
   if (!profile?.consent) return "consent";
-  if (mode === "login" && profile.hasVoice) return null;
-  return "profile";
+  if (!profile.name?.trim() || provisionalOnly(profile) || !profile.character) return "profile";
+  if (!profile.hasVoice) return "voice";
+  return null;
 }
 
 // 받침이 있으면 '이야', 없으면 '야'(시안: '나는 민준이야'). 한글이 아니면 '이야'.
@@ -131,7 +133,7 @@ export function createOnboarding({ getProfile, getToken, setToken, loadProfile, 
         draft.password = "";
         await loadProfile();
         fill();
-        const next = nextAfterAccount(me(), mode);
+        const next = nextAfterAccount(me());
         if (next) go(next); else { close(); onDone(); }
       });
     };
@@ -159,7 +161,8 @@ export function createOnboarding({ getProfile, getToken, setToken, loadProfile, 
       await call("PATCH", "/profiles/me", { consent: true });
       await loadProfile();
       fill();
-      step = "profile";
+      const next = nextAfterAccount(me());
+      if (next) step = next; else { close(); onDone(); }
     })))];
 
   const saveProfile = async () => {

@@ -14,11 +14,13 @@ test("처음 열 때: 토큰 없음 → 시작, 기기 프로필 → 계정 만�
   assert.equal(firstStep({ email: "a@b.co", consent: true, hasVoice: true }, true), "profile");
 });
 
-test("계정 뒤: 동의가 없으면 동의, 로그인했고 목소리까지 있으면 끝, 아니면 프로필", () => {
-  assert.equal(nextAfterAccount({ consent: false, hasVoice: true }, "login"), "consent");
-  assert.equal(nextAfterAccount({ consent: true, hasVoice: true }, "login"), null);
-  assert.equal(nextAfterAccount({ consent: true, hasVoice: false }, "login"), "profile");
-  assert.equal(nextAfterAccount({ consent: true, hasVoice: true }, "signup"), "profile");
+test("계정 뒤: 빠진 단계만 — 동의, 프로필(이름·캐릭터), 목소리, 다 있으면 끝", () => {
+  const done = { email: "jimin@b.co", name: "지민", character: "healing", consent: true, hasVoice: true };
+  assert.equal(nextAfterAccount(done), null);
+  assert.equal(nextAfterAccount({ ...done, consent: false }), "consent");
+  assert.equal(nextAfterAccount({ ...done, name: "jimin" }), "profile"); // 가입 때 임시 이름(이메일 앞부분)
+  assert.equal(nextAfterAccount({ ...done, character: "" }), "profile");
+  assert.equal(nextAfterAccount({ ...done, hasVoice: false }), "voice"); // 이름·캐릭터가 있으면 P04를 다시 받지 않는다
 });
 
 test("읽을 문장의 이름 뒤 조사는 받침을 따른다", () => {
