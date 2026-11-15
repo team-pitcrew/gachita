@@ -172,6 +172,7 @@ class VoicePrints(dir: File, val trip: String, private val seal: Seal, now: Long
     private var margin = Double.NaN
     private var always = true // 미확인 0%: 여백 규칙을 넘지 못해도 가장 가까운 사람으로 정한다(서버가 assign: "margin"을 주면 끔)
     private var prints = emptyMap<String, DoubleArray>()
+    private var strong = emptyMap<String, FloatArray>() // 둘째 값(강한 화자 값, StrongVoice.kt). 서버가 맡아 둔 것을 함께 받는다
     /** 사본을 받은 시각(파일에 함께 둔다). 0이면 다음 대조 전에 다시 받는다(등록함, 탑승자가 바뀜). */
     @Volatile var fetchedAt = 0L
     // init보다 앞에 둔다: 뒤에 두면 init의 read()가 되살린 값을 속성 초기화가 다시 0으로 덮어, 다시 켠 뒤 첫 expire()가 유효한 사본을 지운다.
@@ -196,6 +197,10 @@ class VoicePrints(dir: File, val trip: String, private val seal: Seal, now: Long
         prints = if (!ok) emptyMap() else (0 until items.length()).map { items.getJSONObject(it) }.associate { p ->
             p.getString("participantId") to p.getJSONArray("vector").let { v -> DoubleArray(v.length()) { i -> v.getDouble(i) } }
         }.filterValues { it.size == VOICE_DIMS }
+        // 둘째 값: 이름이 이 앱의 모델과 같을 때만(모델이 바뀌면 견주지 않고 1차 규칙으로). 1차 값이 있는 사람의 것만 둔다
+        strong = if (o.optString("strongEmbedder") != STRONG_EMBEDDER) emptyMap() else (0 until items.length()).map { items.getJSONObject(it) }
+            .filter { it.optJSONArray("strong")?.length() == STRONG_DIMS && it.getString("participantId") in prints }
+            .associate { p -> p.getString("participantId") to p.getJSONArray("strong").let { v -> FloatArray(v.length()) { i -> v.getDouble(i).toFloat() } } }
         generation = o.getInt("generation"); threshold = o.getDouble("threshold")
         floor = o.optDouble("floor"); margin = o.optDouble("margin") // 옛 서버는 주지 않는다(NaN)
         always = o.optString("assign") != "margin"
@@ -249,7 +254,7 @@ class VoicePrints(dir: File, val trip: String, private val seal: Seal, now: Long
     }
 
     private fun clear() {
-        prints = emptyMap(); generation = 0; threshold = 2.0; floor = Double.NaN; margin = Double.NaN; fetchedAt = 0; savedAt = 0
+        prints = emptyMap(); strong = emptyMap(); generation = 0; threshold = 2.0; floor = Double.NaN; margin = Double.NaN; fetchedAt = 0; savedAt = 0
         file.delete()
     }
 
@@ -281,6 +286,23 @@ class VoicePrints(dir: File, val trip: String, private val seal: Seal, now: Long
         // 실제 차 안 목소리에서 이렇게 정한 이름의 3~4할은 틀린다(교정본 36줄 가운데 22줄 맞음) — 사람이 고칠 수 있고, 근거(basis)를 남긴다.
         val (pick, near) = row?.let { r -> sims.firstOrNull { it.first in r } } ?: sims.first()
         return Speaker(pick, Math.round(near * 1000) / 1000.0, basis = "nearest")
+    }
+
+    /** 둘째 값을 가진 사람이 있는지(없으면 강한 모델을 올리지 않는다). */
+    val hasStrong: Boolean @Synchronized get() = strong.isNotEmpty()
+
+    /**
+     * 둘째 값(강한 화자 값)으로 말한 사람을 정한다. all은 녹음에 동의한 탑승자, row는 발화의 좌석 줄에 앉은 사람(줄을 모르면 null).
+     * 등록한 탑승자 **모두**가 둘째 값을 가졌을 때만 정한다 — 한 명이라도 없으면(옛 앱에서 등록, 모델을 못 올린 기기) 견줄 수 없으니 null을 돌려주고
+     * 부르는 쪽이 1차 임베더(identify)로 정한다. 규칙: 그 줄에 앉은 등록자 가운데 가장 가까운 사람, 줄을 모르거나 그 줄에 등록자가 없으면
+     * 등록자 모두 가운데 가장 가까운 사람(미확인 0%). 시연 원천의 교정본 36줄에서 27줄 맞음(맥에서 같은 모델, 1차 임베더는 22줄).
+     */
+    @Synchronized fun identifyStrong(v: FloatArray, all: Collection<String>, row: Collection<String>?): Speaker? {
+        val who = all.filter { it in prints }
+        if (who.isEmpty() || who.any { it !in strong }) return null
+        val sims = who.map { it to cosine(v, strong.getValue(it)) }.sortedByDescending { it.second }
+        val (best, sim) = row?.let { r -> sims.firstOrNull { it.first in r } } ?: sims.first()
+        return Speaker(best, Math.round(sim * 1000) / 1000.0, basis = "strong")
     }
 
     /** 미확인 0% 규칙이 켜져 있고 견줄 등록값이 있는지. 켜져 있으면 값을 못 낸 짧은 말도 앞뒤 말의 사람을 물려받는다(inherit). */

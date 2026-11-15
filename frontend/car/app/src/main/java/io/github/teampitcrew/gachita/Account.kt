@@ -88,6 +88,10 @@ class AccountApi(base: String, private val open: (URL) -> HttpURLConnection = { 
     /** 차 안에서 계산한 목소리 값만 올린다(ADR-0023). 소리는 보내지 않는다. */
     fun voice(token: String, vector: DoubleArray, seconds: Double) { call("POST", "/api/profiles/me/voice", voiceValue(vector, seconds), token) }
 
+    /** 둘째 값(강한 화자 값, strongValue)을 같은 경로로 올린다. 1차 값을 올린 뒤에(서버가 1차 값이 없으면 409). */
+    fun strongVoice(token: String, body: JSONObject) { call("POST", "/api/profiles/me/voice", body, token) }
+    fun childStrongVoice(token: String, groupId: String, profileId: String, body: JSONObject) { call("POST", "/api/groups/$groupId/members/$profileId/voice", body, token) }
+
     /** 보호자가 아이의 목소리 값을 올린다(POST /groups/{id}/members/{profileId}/voice, 본문은 본인 등록과 같음). 보호자 동의가 꺼져 있으면 서버가 409. */
     fun childVoice(token: String, groupId: String, profileId: String, vector: DoubleArray, seconds: Double) {
         call("POST", "/api/groups/$groupId/members/$profileId/voice", voiceValue(vector, seconds), token)
