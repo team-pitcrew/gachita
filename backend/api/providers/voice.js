@@ -108,6 +108,7 @@ const melCenters = Array.from({ length: MEL_BANDS + 2 }, (_, i) => {
   const high = mel(7600);
   return 700 * (Math.exp((low + ((high - low) * i) / (MEL_BANDS + 1)) / 2595) - 1);
 });
+const SILENT_FRAME = 1e-10; // 프레임의 평균 제곱이 이보다 작으면 무음(약 −100 dBFS)
 const hzToBin = (hz) => Math.round((hz / 16000) * FRAME);
 
 // 샘플을 대조용 벡터로 바꾼다. 로그멜(평균·분산) + 음높이 통계(무게 3배) → L2 정규화.
@@ -120,6 +121,12 @@ export function embed(samples) {
     let mean = 0;
     for (let i = 0; i < FRAME; i++) mean += samples[off + i];
     mean /= FRAME;
+    // 완전한 무음 프레임(디지털 0 — 에뮬레이터에 넣는 소리의 앞뒤·사이, 차가 원음 자리에 채운 무음)은 건너뛴다.
+    // 넣으면 로그멜이 바닥값(−10)으로 찍혀 평균·분산이 크게 틀어진다: 15초 등록 음성 앞뒤에 0.3초만 있어도 같은 사람의 유사도가 0.45~0.9로 떨어졌다(11/15 실제 목소리).
+    // 실제 마이크 소리에는 이런 프레임이 없어(16비트 최소 잡음도 1e-9쯤) 값이 바뀌지 않는다 — 시험 벡터도 그대로다.
+    let energy = 0;
+    for (let i = 0; i < FRAME; i++) energy += (samples[off + i] - mean) ** 2;
+    if (energy / FRAME < SILENT_FRAME) continue;
     for (let i = 0; i < FRAME; i++) re[i] = (samples[off + i] - mean) * window[i];
     fft(re, im);
     const power = new Float64Array(FRAME / 2);
@@ -139,7 +146,7 @@ export function embed(samples) {
     }
     frames.push(mel);
   }
-  if (!frames.length) throw { status: 400, error: "소리가 너무 짧음" };
+  if (!frames.length) throw { status: 400, error: samples.length >= FRAME ? "말소리가 없어 등록할 수 없음" : "소리가 너무 짧음" };
   const dim = frames[0].length;
   const mean = new Array(dim).fill(0);
   for (const f of frames) for (let i = 0; i < dim; i++) mean[i] += f[i];
