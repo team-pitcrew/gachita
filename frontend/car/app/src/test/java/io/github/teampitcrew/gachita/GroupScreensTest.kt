@@ -31,6 +31,11 @@ class GroupScreensTest {
         assertEquals("2명  |  동승 그룹", groupLine(solo.copy(members = solo.members + m("f", "지우", null))))
     }
 
+    @Test fun `좌석 칸은 시안대로 2x2, 뒤 가운데에 앉은 사람이 있으면 그 칸을 더함`() {
+        assertEquals(listOf(Seat.ROW_2_LEFT, Seat.ROW_2_RIGHT), gridSeats(family.members)[1])
+        assertEquals(listOf(Seat.ROW_2_LEFT, Seat.ROW_2_CENTER, Seat.ROW_2_RIGHT), gridSeats(family.members + m("c", "지민", "ROW_2_CENTER"))[1])
+    }
+
     @Test fun `혼자인 동승 그룹만 초대부터`() {
         assertTrue(soloGuest(solo))
         assertFalse(soloGuest(family))

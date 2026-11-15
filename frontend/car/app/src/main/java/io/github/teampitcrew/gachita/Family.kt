@@ -175,8 +175,14 @@ fun readiness(members: List<GroupMember>): String {
 /** 좌석 이름(ROW_2_LEFT)을 화면 글(뒤 왼쪽)로. 모르는 값이나 자리 없음은 null. */
 fun seatLabel(seat: String?): String? = seat?.let { s -> Seat.entries.firstOrNull { it.name == s }?.label?.replace("뒷자리", "뒤") }
 
-/** 좌석 배정(C16B)에 그리는 자리: 앞 둘, 뒤 둘(SeatGrid와 같음). */
-val GRID_SEATS = listOf(listOf(Seat.ROW_1_LEFT, Seat.ROW_1_RIGHT), listOf(Seat.ROW_2_LEFT, Seat.ROW_2_RIGHT))
+/**
+ * 좌석 칸(C14·C43 SeatGrid, C16B SeatAssign): 시안은 앞 둘·뒤 둘. 폰 QR 참가·서버는 '뒤 가운데'(ROW_2_CENTER)도 받으므로
+ * 그 자리에 앉은 사람이 있을 때만 뒤 가운데 칸을 더해 보이고 옮길 수 있게 한다(없으면 시안 그대로 2×2).
+ */
+fun gridSeats(members: List<GroupMember>): List<List<Seat>> = listOf(
+    listOf(Seat.ROW_1_LEFT, Seat.ROW_1_RIGHT),
+    if (members.any { it.seat == Seat.ROW_2_CENTER.name }) listOf(Seat.ROW_2_LEFT, Seat.ROW_2_CENTER, Seat.ROW_2_RIGHT) else listOf(Seat.ROW_2_LEFT, Seat.ROW_2_RIGHT),
+)
 
 /** 동승 그룹에 만든 사람만 있을 때(C16G guestDetail, 전체 그룹의 '초대 대기'). 출발할 사람이 없어 초대부터 한다. */
 fun soloGuest(g: CarGroup) = g.kind == "guest" && g.members.size <= 1
@@ -728,7 +734,7 @@ private fun SeatGrid(members: List<GroupMember>, onPick: (SeatPick) -> Unit) {
     Surface(Modifier.fillMaxWidth(), CarShape.Card, color = c.surface, border = BorderStroke(2.dp, c.outlineVariant)) {
         Column(Modifier.padding(28.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
             Text("차량 앞쪽 ↑", style = CarText.Label, color = c.onSurfaceVariant)
-            GRID_SEATS.forEach { row ->
+            gridSeats(members).forEach { row ->
                 Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
                     row.forEach { seat ->
                         val m = at[seat.name]
@@ -756,7 +762,7 @@ internal fun SeatAssign(members: List<GroupMember>, swaps: Boolean = true, onSea
     Surface(Modifier.fillMaxWidth(), GroupShape, color = c.surface) {
         Column(Modifier.padding(28.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
             Text("차량 앞쪽 ↑", Modifier.fillMaxWidth(), style = CarText.Label, color = c.onSurfaceVariant, textAlign = TextAlign.Center)
-            GRID_SEATS.forEach { row ->
+            gridSeats(members).forEach { row ->
                 Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
                     row.forEach { seat ->
                         val m = at[seat.name]
