@@ -3,8 +3,8 @@
 
 기본 흐름은 D# 실흐름 PITCREW(T159, 오너 11/15): 어른 4명 그룹 'PITCREW', 출발 신논현 → 목적지 정자 카페거리, 실제 차 안 영상에서
 뽑은 목소리(사람마다 등록 클립 + 주행 대화 30초 구간 넷)를 넣고, 여행 뒤 '우리 어디로 갈까요?' 구간을 골라 쇼츠로 만든다.
-  - 입력(저장소 밖, 개인 목소리, 16 kHz 2채널, 왼쪽 = 앞줄): DEMO_INPUTS = 화자 식별 세션의 derived 폴더
-    (enroll/enroll-speakerN-front|rear.wav, inputs/talk-route|cafe|where|arrive.wav). 점검용 옛 배치(enroll-화자N.wav·drive-a/b.wav)도 읽는다.
+  - 입력(저장소 밖, 개인 목소리, 16 kHz 2채널, 왼쪽 = 앞줄): DEMO_INPUTS = 화자 식별 세션의 폴더. 시연은 이름 배치
+    (enroll-<이름>.wav, talk-route|cafe|where|arrive-seat.wav). 화자 번호 배치(derived/)와 점검용 옛 배치(enroll-화자N.wav·drive-a/b.wav)도 읽는다.
     이름은 DEMO_NAMES(기본 정민,지민,지환,민준), 좌석은 DEMO_SEATS(기본 운전석·조수석·뒤 왼쪽·뒤 오른쪽), 각 이름이 몇 번 화자인지는 DEMO_SPEAKERS(기본 2,1,4,3 — 11/15 중앙 잠정 확정). 첫 사람이 차에서 가입한다.
   - 순정 내비는 GPS를 옮겨도 판교에 머문다(11/13·11/15 확인) — 출발 '신논현'은 서버 장소 기록(지도 선)으로만 보이고, 내비는 목적지
     '정자 카페거리'로 안내한다. 도착(250 m 판정)은 주차 직전에 GPS를 목적지로 옮겨(adb emu geo fix) 만든다.
@@ -905,12 +905,16 @@ def talks():
 
 def pitcrew_inputs():
     """DEMO_INPUTS의 실제 녹음을 OUT/inputs로 옮겨 둔다(같은 이름의 .json이 없으면 supplied = 실제 녹음). 없거나 형식이 틀리면 멈춘다 — 합성음으로 대신하지 않는다.
-    두 배치를 읽는다. 화자 식별 세션의 배치: enroll/enroll-speakerN-front|rear.wav(앞줄이면 front, 뒷줄이면 rear) + inputs/talk-*.wav.
+    세 배치를 읽는다. 이름 배치(시연용, pitcrew/inputs): enroll-<이름>.wav + talk-*-seat.wav(화자를 좌석 줄 채널에 놓음 — 차가 줄을 잡음).
+    화자 번호 배치(derived): enroll/enroll-speakerN-front|rear.wav(앞줄이면 front, 뒷줄이면 rear) + inputs/talk-*.wav(원본 채널, 줄은 '모름').
     옛 배치(점검용 합성): enroll-화자N.wav + drive-a/b.wav. NAMES[i]가 몇 번 화자인지는 DEMO_SPEAKERS(기본 1,2,3,4 — 오너가 들어 보고 정함)."""
     src, dst = pathlib.Path(os.environ.get("DEMO_INPUTS", OUT / "inputs")), OUT / "inputs"
     dst.mkdir(parents=True, exist_ok=True)
     spk = (os.environ.get("DEMO_SPEAKERS") or "2,1,4,3").split(",")
-    if (src / "enroll").is_dir():
+    if (src / f"enroll-{NAMES[0]}.wav").exists():  # 이름 붙은 좌석 줄 클립(pitcrew/inputs, 11/15): 등록은 그 사람 줄 채널만, 대화는 화자를 줄 채널에 놓은 -seat
+        pairs = [(src / f"enroll-{name}.wav", f"enroll-{who}") for name, who in zip(NAMES, PEOPLE)]
+        pairs += [(src / f"{t}-seat.wav", t) for ts in TALKS_REAL.values() for t in ts]
+    elif (src / "enroll").is_dir():
         pairs = [(src / "enroll" / f"enroll-speaker{n}-{'front' if seat.startswith('ROW_1') else 'rear'}.wav", f"enroll-{who}") for n, seat, who in zip(spk, SEATS, PEOPLE)]
         pairs += [(src / "inputs" / f"{t}.wav", t) for ts in TALKS_REAL.values() for t in ts]
     else:
