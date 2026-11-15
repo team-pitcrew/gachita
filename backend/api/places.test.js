@@ -6,6 +6,7 @@ import pg from "pg";
 import { migrate, server } from "./server.js";
 import { endStores, tripsDb } from "./db.js";
 import { captureLog } from "./log.js";
+import { withVoice } from "./voice-fixture.js";
 
 let base, adminUrl, names;
 captureLog(() => {});
@@ -42,6 +43,7 @@ async function call(method, path, body, token) {
 const profile = async (name, character) => {
   const made = await call("POST", "/profiles", { name, ...(character ? { character } : {}) });
   assert.equal(made.status, 201);
+  await withVoice(base, made.data.token); // 프로필로 참가하려면 목소리 먼저(T173)
   return made.data;
 };
 const newTrip = async (title = "바다 여행") => (await call("POST", "/trips", { title })).data;

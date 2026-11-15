@@ -5,6 +5,7 @@ import pg from "pg";
 import { migrate, server } from "./server.js";
 import { endStores, profilesDb, tripsDb } from "./db.js";
 import { captureLog } from "./log.js";
+import { withVoice } from "./voice-fixture.js";
 
 let base, adminUrl, names;
 captureLog(() => {});
@@ -37,7 +38,7 @@ async function call(method, path, body, token) {
     ...(body ? { body: JSON.stringify(body) } : {}) });
   return { status: response.status, data: response.status === 204 ? null : await response.json() };
 }
-const person = async () => (await call("POST", "/profiles", { name: "삭제 경쟁", consentDefault: true })).data;
+const person = async () => { const p = (await call("POST", "/profiles", { name: "삭제 경쟁", consentDefault: true })).data; await withVoice(base, p.token); return p; }; // 목소리까지(T173)
 const trip = async () => (await call("POST", "/trips", { title: "시간 제한 없는 여행" })).data;
 const join = (t, p) => call("POST", `/trips/${t.code}/participants`, { seat: "ROW_1_RIGHT" }, p.token);
 const remove = p => call("DELETE", "/profiles/me", undefined, p.token);

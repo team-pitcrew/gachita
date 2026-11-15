@@ -5,6 +5,7 @@ import pg from "pg";
 import { migrate, server } from "./server.js";
 import { endStores, tripsDb } from "./db.js";
 import { captureLog } from "./log.js";
+import { withVoice } from "./voice-fixture.js";
 
 let base, adminUrl, names;
 captureLog(() => {});
@@ -41,7 +42,8 @@ async function call(method, path, body, token) {
   const data = res.status === 204 ? undefined : await res.json();
   return { status: res.status, data, headers: res.headers };
 }
-const profile = async (name) => (await call("POST", "/profiles", { name, character: "bunny", consentDefault: true })).data;
+// 프로필은 만들 때 목소리까지 등록한다(T173, 목소리 없으면 동승 연결이 409)
+const profile = async (name) => { const p = (await call("POST", "/profiles", { name, character: "bunny", consentDefault: true })).data; await withVoice(base, p.token); return p; };
 const trip = async () => (await call("POST", "/trips", { title: "동승 연결 시험" })).data;
 const issue = async (person) => (await call("POST", "/ride-links", {}, person.token)).data;
 const redeem = (t, link, seat = "ROW_1_RIGHT") => call("POST", `/trips/${t.code}/ride-links`, { code: link.code, seat });

@@ -14,6 +14,7 @@ import { classify, migrate, server, sweep, verifyGoogleLink, shortServiceContext
 import { shortGenerations } from "./short-generations.js";
 import { shortAssets } from "./short-assets.js";
 import { captureLog } from "./log.js";
+import { withVoice } from "./voice-fixture.js";
 import { cues, suggest } from "./scenes.js";
 import { endStores, profilesDb, tripsDb } from "./db.js";
 
@@ -133,6 +134,12 @@ after(async () => {
 
 const OURS = "https://gachita.mangowhois.ai/oauth/google/callback"; // 구글이 코드를 돌려줄 우리 주소(T27)
 const VERIFIER = "v".repeat(43); // PKCE code_verifier. 가짜 구글은 "w"로 된 것을 '맞지 않음'으로 거절한다
+// 프로필을 만들고 목소리까지 등록한다(T173: 목소리 없으면 프로필 참가·그룹·차량 QR·동승 연결이 409). call과 같은 [상태, 본문].
+const voicedProfile = async (body) => {
+  const made = await call("POST", "/api/profiles", body);
+  if (made[0] === 201) await withVoice(base, made[1].token);
+  return made;
+};
 const call = async (method, path, body, token) => {
   const res = await fetch(base + path, { method, body: body && JSON.stringify(body), headers: token ? { authorization: `Bearer ${token}` } : {} });
   return [res.status, res.status === 304 || res.status === 204 ? null : await res.json()];
@@ -140,7 +147,7 @@ const call = async (method, path, body, token) => {
 const join = (code, name, seat, consent = true) => call("POST", `/api/trips/${code}/participants`, { name, seat, consent });
 
 test("본인 확인은 동의 전에도 토큰 주체의 네 필드만 주고 기존 인증 경계를 지킵니다(T115)", async () => {
-  const [, profile] = await call("POST", "/api/profiles", { name: "본인 확인" });
+  const [, profile] = await voicedProfile({ name: "본인 확인" });
   const [, trip] = await call("POST", "/api/trips", {});
   const t = `/api/trips/${trip.code}`;
   const [, guest] = await join(trip.code, "다른 참가자", "ROW_1_LEFT");
@@ -248,7 +255,7 @@ test("동의 켜기는 본인의 참가자 토큰으로만, 끄기와 자리는 
   assert.equal((await call("PATCH", `${t}/participants/nobody`, { consent: true }, a.token))[0], 404);
 
   // 다시 참가해도 앞 기기의 토큰은 산다: 가장 최근 것과 그 앞의 4개
-  const [, me] = await call("POST", "/api/profiles", { name: "엄마" });
+  const [, me] = await voicedProfile({ name: "엄마" });
   const [, first] = await call("POST", `${t}/participants`, { seat: "ROW_1_LEFT", consent: false }, me.token);
   const tokens = [first.token];
   for (let i = 0; i < 5; i++) tokens.push((await call("POST", `${t}/participants`, { seat: "ROW_1_LEFT" }, me.token))[1].token);
@@ -261,7 +268,7 @@ test("동의 켜기는 본인의 참가자 토큰으로만, 끄기와 자리는 
 });
 
 test("프로필: 발급, 토큰으로 본인 확인, 프로필로 참가하면 이름과 동의 기본값을 가져온다", async () => {
-  const [created, me] = await call("POST", "/api/profiles", { name: "지우", prefs: { passenger: { tempC: 23 } }, consentDefault: true });
+  const [created, me] = await voicedProfile({ name: "지우", prefs: { passenger: { tempC: 23 } }, consentDefault: true });
   assert.equal(created, 201);
   assert.match(me.token, /^[A-Za-z0-9_-]{43}$/);
   assert.equal(me.prefs, undefined, "좌석·공조 선호는 받지도 돌려주지도 않는다(옛 클라이언트가 보내도 무시)");
@@ -343,14 +350,14 @@ test("구글 OAuth: 기기 프로필에 연결하고, 다른 기기에서 계정
   const link = (body, token) => call("POST", "/api/profiles/me/links/google", body, token);
 
   // 기기 프로필에 연결한다. 이름은 그대로, 토큰은 새로 주지 않는다.
-  const [, me] = await call("POST", "/api/profiles", { name: "민준" });
+  const [, me] = await voicedProfile({ name: "민준" });
   const [linked, after] = await link({ code: "code-1", redirectUri: "http://localhost:5173/oauth/google/callback", codeVerifier: VERIFIER }, me.token);
   assert.equal(linked, 200);
   assert.deepEqual([after.name, after.links], ["민준", ["google"]]);
   assert.equal(after.token, undefined, "연결할 때는 토큰을 새로 주지 않는다");
 
   // 이미 다른 프로필에 연결된 계정은 거절한다.
-  const [, other] = await call("POST", "/api/profiles", { name: "다른 사람" });
+  const [, other] = await voicedProfile({ name: "다른 사람" });
   assert.equal((await link({ code: "code-1", redirectUri: OURS, codeVerifier: VERIFIER }, other.token))[0], 409);
 
   // 토큰 없이 같은 계정으로 찾아 들어가면 같은 프로필과 이 기기 토큰을 준다.
@@ -425,7 +432,7 @@ test("제공자 오류를 코드 거절과 장애으로 나눠 알린다(T21)", 
 });
 
 test("조회 뒤 구글 연결이 바뀌면 오래된 계정으로 토큰을 받지 못한다(T21)", async () => {
-  const [, me] = await call("POST", "/api/profiles", { name: "주인" });
+  const [, me] = await voicedProfile({ name: "주인" });
   const [, after] = await call("POST", "/api/profiles/me/links/google", { code: "code-9", redirectUri: OURS, codeVerifier: VERIFIER }, me.token);
   // 찾아 들어가기 요청이 연결 확인을 마친 뒤, 소유자가 다른 구글 계정으로 갈아끼운 상황(결정적 재현).
   await profilesDb().query("UPDATE profiles SET provider_user_id = 'code-B' WHERE id = $1", [after.id]);
@@ -446,8 +453,8 @@ test("발화를 기록본으로 저장하고 프로필 피드로 읽는다(T39)"
     tripsDb().query("UPDATE utterances SET profile_id = $3 WHERE trip_code = $1 AND seq = ANY($2::bigint[])", [trip.code, seqs, profileId]);
 
   // 참가자 토큰: 프로필·손님 모두 참가 응답에 한 번씩 받는다(ADR-0007)
-  const [, meA] = await call("POST", "/api/profiles", { name: "아빠" });
-  const [, meB] = await call("POST", "/api/profiles", { name: "아들" });
+  const [, meA] = await voicedProfile({ name: "아빠" });
+  const [, meB] = await voicedProfile({ name: "아들" });
   const [ja, pa] = await call("POST", `${t}/participants`, { seat: "ROW_1_LEFT", consent: true }, meA.token);
   const [jb, pb] = await call("POST", `${t}/participants`, { seat: "ROW_2_LEFT", consent: true }, meB.token);
   const [jg, pg] = await join(trip.code, "민준", "ROW_2_RIGHT", true);
@@ -600,8 +607,8 @@ async function legacyGroup(ownerId, memberId = ownerId) {
 }
 
 test("옛 QR 초대(/j)와 대리 참가는 410으로 닫고, 옛 그룹 자료는 새 그룹 API로 읽히며 프로필 삭제를 보존한다(T46·T133)", async () => {
-  const [, owner] = await call("POST", "/api/profiles", { name: "대표" });
-  const [, member] = await call("POST", "/api/profiles", { name: "기존 구성원" });
+  const [, owner] = await voicedProfile({ name: "대표" });
+  const [, member] = await voicedProfile({ name: "기존 구성원" });
   const { groupId, kidId, code } = await legacyGroup(owner.id, member.id);
   await migrate(); // 다시 기동해도 롤백에 필요한 옛 표와 자료를 파괴하지 않는다.
   const count = async (table) => (await profilesDb().query(`SELECT count(*)::int AS n FROM ${table}`)).rows[0].n;
@@ -664,7 +671,7 @@ test("옛 QR 초대(/j)와 대리 참가는 410으로 닫고, 옛 그룹 자료�
 });
 
 test("기기별 프로필 토큰과 사진은 그룹 종료 뒤에도 동작한다", async () => {
-  const [, mom] = await call("POST", "/api/profiles", { name: "엄마", character: "bunny" });
+  const [, mom] = await voicedProfile({ name: "엄마", character: "bunny" });
   // 같은 프로필의 두 기기 토큰은 서로를 끊지 않는다(티켓 완료 기준)
   const [ct, car] = await call("POST", "/api/profiles/me/tokens", { device: "car" }, mom.token);
   assert.equal(ct, 201);
@@ -701,7 +708,7 @@ test("이전 판(프로필마다 토큰 하나)으로 되돌려도 프로필이 
   const [st, me] = await call("GET", "/api/profiles/me", null, token);
   assert.deepEqual([st, me.id], [200, id]);
   // 새 코드가 만든 프로필도 첫 토큰을 옛 칸에 적어, 이전 이미지로 되돌려도 읽힌다
-  const [, fresh] = await call("POST", "/api/profiles", { name: "새 판" });
+  const [, fresh] = await voicedProfile({ name: "새 판" });
   const { rows } = await profilesDb().query("SELECT token_hash FROM profiles WHERE id = $1", [fresh.id]);
   assert.ok(rows[0].token_hash.equals(createHash("sha256").update(fresh.token).digest()));
 });
@@ -752,8 +759,8 @@ const slowPost = async (path, buf, token, headers = {}) => {
 test("목소리 등록으로 발화의 화자를 프로필에 붙인다(T38)", async () => {
 
   // 등록: 원본은 어디에도 남기지 않고 대조용 값만
-  const [, mom] = await call("POST", "/api/profiles", { name: "엄마" });
-  const [, dad] = await call("POST", "/api/profiles", { name: "아빠" });
+  const [, mom] = await voicedProfile({ name: "엄마" });
+  const [, dad] = await voicedProfile({ name: "아빠" });
   const reg = await postRaw("/api/profiles/me/voice", wav(210, 3), mom.token);
   assert.equal(reg.status, 200);
   const regBody = await reg.json();
@@ -762,8 +769,8 @@ test("목소리 등록으로 발화의 화자를 프로필에 붙인다(T38)", a
   assert.equal((await postRaw("/api/profiles/me/voice", wav(340, 2), dad.token)).status, 200);
   assert.equal((await postRaw("/api/profiles/me/voice", wav(210, 3))).status, 401, "토큰 없이는 등록 못 함");
   assert.equal((await fetch(`${base}/api/profiles/me/voice`, { method: "POST", headers: { authorization: `Bearer ${mom.token}` }, body: Buffer.from("not-wav") })).status, 400, "WAV만 받음");
-  const raws = await profilesDb().query("SELECT count(*)::int AS n FROM voice_prints");
-  assert.equal(raws.rows[0].n, 2, "등록값 두 개(원본 음성은 표에 없음)");
+  const raws = await profilesDb().query("SELECT count(*)::int AS n FROM voice_prints WHERE profile_id = ANY($1::uuid[])", [[mom.id, dad.id]]);
+  assert.equal(raws.rows[0].n, 2, "등록값 두 개(원본 음성은 표에 없음, 사람마다 하나)");
 
   // 여행: 두 사람이 다른 자리에 앉고, 발화를 올려 둔다
   const [, trip] = await call("POST", "/api/trips", {});
@@ -1004,7 +1011,7 @@ test("사람이 지운 클립은 철회·다시 동의 뒤에도 받지 않고, 
 test("장면 후보는 말이 몰린 구간을 규칙으로 고르고, 숏폼은 클립과 자막 큐로 내준다(T43)", async () => {
   const [, trip] = await call("POST", "/api/trips", { title: "속초" });
   const t = `/api/trips/${trip.code}`;
-  const [, momProfile] = await call("POST", "/api/profiles", { name: "엄마", character: "토끼" });
+  const [, momProfile] = await voicedProfile({ name: "엄마", character: "토끼" });
   const [, mom] = await call("POST", `${t}/participants`, { seat: "ROW_1_LEFT", consent: true }, momProfile.token);
   const [, son] = await join(trip.code, "아들", "ROW_2_LEFT");
   // 여행을 10분 전에 만든 셈으로 둔다(장면 시각은 여행을 만든 뒤 ~ 지금+1분만 받는다)
@@ -1093,7 +1100,7 @@ test("고른 장면 클립을 Nemotron으로 다시 받아 적고, 실패하면 
   const t = `/api/trips/${trip.code}`;
   const t0 = Date.now() - 600_000;
   await tripsDb().query("UPDATE trips SET doc = jsonb_set(doc, '{createdAt}', to_jsonb($2::bigint)) WHERE code = $1", [trip.code, t0 - 1000]);
-  const [, momProfile] = await call("POST", "/api/profiles", { name: "엄마" });
+  const [, momProfile] = await voicedProfile({ name: "엄마" });
   const [, mom] = await call("POST", `${t}/participants`, { seat: "ROW_1_LEFT", consent: true }, momProfile.token);
   await join(trip.code, "서아", "ROW_2_LEFT");
   const said = ["서와야 바다 봐", "되풀이 해 봐", "고장 난 줄", "붐빔 시험"];
@@ -1151,7 +1158,7 @@ test("재전사 도중 글이나 클립을 지우면 더 보내지 않고 붙이
   const t = `/api/trips/${trip.code}`;
   const t0 = Date.now() - 600_000;
   await tripsDb().query("UPDATE trips SET doc = jsonb_set(doc, '{createdAt}', to_jsonb($2::bigint)) WHERE code = $1", [trip.code, t0 - 1000]);
-  const [, momProfile] = await call("POST", "/api/profiles", { name: "엄마" });
+  const [, momProfile] = await voicedProfile({ name: "엄마" });
   const [, mom] = await call("POST", `${t}/participants`, { seat: "ROW_1_LEFT", consent: true }, momProfile.token);
   const [, son] = await join(trip.code, "아들", "ROW_2_LEFT");
   const lines = [
@@ -1347,7 +1354,7 @@ test("차가 대조 값을 받아 가 차 안에서 붙인 화자를 발화와 �
   await tripsDb().query("DELETE FROM utterances WHERE trip_code = $1 AND device = 'filler'", [trip.code]);
 
   // 값을 모으는 사이 누군가 동의를 철회하면, 철회 전 목록으로 읽은 그 사람의 프로필 값을 내주지 않는다(세대도 철회 뒤의 값)
-  const [, mom] = await call("POST", "/api/profiles", { name: "엄마" });
+  const [, mom] = await voicedProfile({ name: "엄마" });
   assert.equal((await json("/api/profiles/me/voice", value(1), mom.token)).status, 200, "프로필에도 값만 등록");
   const [, pm] = await call("POST", `${t}/participants`, { seat: "ROW_1_RIGHT", consent: true }, mom.token);
   assert.deepEqual((await call("GET", `${t}/voice-prints`, null, a.token))[1].items.find((p) => p.participantId === pm.id)?.source, "profile");
@@ -1414,7 +1421,7 @@ test("손님 참가자도 여행에 목소리를 등록하면 화자가 붙는�
   assert.equal(await prints(b.id), 0, "꺼져 있다 켜지면 옛 값을 지움");
   await call("PATCH", `${t}/participants/${c.id}`, { consent: true }, c.token);
   assert.equal(await prints(c.id), 1, "켜진 채로 다시 켜면 그대로");
-  const [, me] = await call("POST", "/api/profiles", { name: "삼촌" });
+  const [, me] = await voicedProfile({ name: "삼촌" });
   await postRaw("/api/profiles/me/voice", wav(260, 3), me.token);
   const [, d] = await call("POST", `${t}/participants`, { seat: "ROW_1_RIGHT", consent: false }, me.token);
   const r3 = await (await postRaw(`${t}/voice-match?row=1`, wav(260, 1.5), a.token)).json();
@@ -1477,7 +1484,7 @@ test("차 화면에서 고친 화자를 발화 줄에 남긴다(T37)", async () 
   assert.equal((await call("PATCH", `${t}/utterances/%E0%A4%A/1`, { participantId: b.id }, a.token))[0], 400);
 
   // 프로필 참가자로 고치면 피드에도 나오도록 profile_id가 같이 붙고, 동의하지 않은 사람의 이름은 붙이지 않는다
-  const [, me] = await call("POST", "/api/profiles", { name: "엄마" });
+  const [, me] = await voicedProfile({ name: "엄마" });
   const [, m] = await call("POST", `${t}/participants`, { seat: "ROW_1_RIGHT", consent: true }, me.token);
   assert.deepEqual(Object.entries((await fix(1, m.id, a.token))[1]).filter(([k]) => k.endsWith("Id")), [["participantId", m.id], ["profileId", me.id]]);
   await call("PATCH", `${t}/participants/${b.id}`, { consent: false });
@@ -1485,8 +1492,8 @@ test("차 화면에서 고친 화자를 발화 줄에 남긴다(T37)", async () 
 });
 
 test("한 여행의 내 앨범 장면을 발화와 섞거나 자르지 않고 준다(T81 공유 후보)", async () => {
-  const [, me] = await call("POST", "/api/profiles", { name: "엄마" });
-  const [, you] = await call("POST", "/api/profiles", { name: "아빠" });
+  const [, me] = await voicedProfile({ name: "엄마" });
+  const [, you] = await voicedProfile({ name: "아빠" });
   const [, trip] = await call("POST", "/api/trips", {});
   const [, other] = await call("POST", "/api/trips", {});
   const t = `/api/trips/${trip.code}`;
@@ -1518,7 +1525,7 @@ test("한 여행의 내 앨범 장면을 발화와 섞거나 자르지 않고 �
 
 test("쓰기가 몰려도 서버가 멈추지 않는다", async () => {
   // 같은 여행에 쓰기 15개가 동시에 닥쳐도 모두 응답해야 한다(리뷰 재현).
-  const [, me] = await call("POST", "/api/profiles", { name: "지우", consentDefault: true });
+  const [, me] = await voicedProfile({ name: "지우", consentDefault: true });
   const [, trip] = await call("POST", "/api/trips", {});
   const t = `/api/trips/${trip.code}`;
   const [, p] = await call("POST", `${t}/participants`, { seat: "ROW_1_LEFT" }, me.token);
@@ -1753,7 +1760,7 @@ test("수동 자막은 동의한 여행 참가자만 고치며 동시 수정·�
 test("늦은 ASR은 수동 자막을 덮지 않고 초기화·자기 글 삭제는 숏폼에도 반영한다(T80)", async () => {
   const [, trip] = await call("POST", "/api/trips", {});
   const t = `/api/trips/${trip.code}`;
-  const [, profile] = await call("POST", "/api/profiles", { name: "지우" });
+  const [, profile] = await voicedProfile({ name: "지우" });
   const [, a] = await call("POST", `${t}/participants`, { seat: "ROW_1_LEFT", consent: true }, profile.token);
   const [, b] = await join(trip.code, "하늘", "ROW_2_LEFT");
   const original = "서와야 바다 봐";
@@ -2106,7 +2113,7 @@ test("장소별 할 일은 실제 전사·교정본에서 묶고 완료·취소�
 });
 
 test("자기 글을 지우면 파생 할 일·브리핑에도 원문이나 교정본이 남지 않습니다(T103)", async () => {
-  const [, profile] = await call("POST", "/api/profiles", { name: "작성자" });
+  const [, profile] = await voicedProfile({ name: "작성자" });
   const [, trip] = await call("POST", "/api/trips", {}), t = `/api/trips/${trip.code}`;
   const [, p] = await call("POST", `${t}/participants`, { seat: "ROW_1_LEFT", consent: true }, profile.token);
   await call("PATCH", `${t}/participants/${p.id}`, { consent: true }, p.token);
@@ -2322,7 +2329,7 @@ test("웹 첫 전사는 실제 공급자 계약·전원 동의·세대·취소�
     const res = await upload(f);
     assert.equal(res.status, 409);
     assert.equal("text" in await res.json(), false);
-    const [, profile] = await call("POST", "/api/profiles", { name: "검증 참가자" });
+    const [, profile] = await voicedProfile({ name: "검증 참가자" });
     const [, caller] = await call("POST", `${f.path}/participants`, { seat: "ROW_2_LEFT", consent: true }, profile.token);
     asr.onCall = async () => { assert.equal((await call("DELETE", "/api/profiles/me", null, profile.token))[0], 204); };
     assert.equal((await upload({ ...f, caller }, { url: `${f.path}/transcriptions?generation=2` })).status, 401);
@@ -2357,7 +2364,7 @@ test("웹 첫 전사는 실제 공급자 계약·전원 동의·세대·취소�
 });
 
 test("선택적인 실제 구간·익명 화자는 저장·수정·숏폼에 남고 동의 철회 때 지워집니다(T110)", async () => {
-  const [, profile] = await call("POST", "/api/profiles", { name: "구간 검증" });
+  const [, profile] = await voicedProfile({ name: "구간 검증" });
   const [, trip] = await call("POST", "/api/trips", {});
   const t = `/api/trips/${trip.code}`;
   const [, person] = await call("POST", `${t}/participants`, { seat: "ROW_1_LEFT", consent: true }, profile.token);

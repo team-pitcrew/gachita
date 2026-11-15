@@ -6,6 +6,7 @@ import pg from "pg";
 import { migrate, server } from "./server.js";
 import { endStores, profilesDb, tripsDb } from "./db.js";
 import { captureLog } from "./log.js";
+import { withVoice } from "./voice-fixture.js";
 
 let base, adminUrl, names, vector;
 captureLog(() => {});
@@ -44,10 +45,12 @@ async function call(method, path, body, token, type = "application/json") {
 }
 let n = 0;
 // 계정을 만들고 계정 동의를 켠다(version을 주면 그 판으로 — 지금 판이 아니면 여행에 이어지지 않는다).
-async function person(name, { consent = true, version } = {}) {
+// 목소리도 등록한다(T173: 목소리 없으면 그룹 만들기·초대 참여·그룹 여행이 409). voice:false면 등록하지 않는다.
+async function person(name, { consent = true, version, voice = true } = {}) {
   const made = await call("POST", "/accounts", { email: `p${++n}-${process.pid}@example.com`, password: "가족여행가자123", name, character: "bunny" });
   assert.equal(made.status, 201);
   if (consent) await call("PATCH", "/profiles/me", { consent: true, ...(version ? { consentVersion: version } : {}) }, made.data.token);
+  if (voice) await withVoice(base, made.data.token);
   return made.data;
 }
 const family = async (owner, name = "우리 가족", kind = "family") => {
@@ -71,7 +74,7 @@ test("그룹 만들기: 가족·동승 모두 대표를 운전석에. 내 그룹
   const stranger = await person("남");
   const fam = await family(dad);
   assert.deepEqual([fam.name, fam.kind, fam.ownerId, fam.invite], ["우리 가족", "family", dad.id, null]);
-  assert.deepEqual(fam.members, [{ profileId: dad.id, name: "아빠", character: "bunny", hasPhoto: false, hasVoice: false, consent: true, role: "owner", seat: "ROW_1_LEFT", pending: false }]);
+  assert.deepEqual(fam.members, [{ profileId: dad.id, name: "아빠", character: "bunny", hasPhoto: false, hasVoice: true, consent: true, role: "owner", seat: "ROW_1_LEFT", pending: false }]);
   const crew = await family(dad, "출근 동승", "guest");
   assert.deepEqual([crew.kind, crew.members[0].seat], ["guest", "ROW_1_LEFT"], "동승 그룹도 만든 사람이 운전석(차 참석 QR, T162)");
   assert.deepEqual((await call("GET", "/groups", undefined, dad.token)).data.items.map((g) => g.id), [fam.id, crew.id]);
@@ -108,7 +111,7 @@ test("초대 코드: 모양·24시간·그룹당 하나, 미리보기, 성인으
   assert.equal((await joinGroup(made.data.code)).status, 401, "들어가려면 프로필 토큰");
   const joined = await joinGroup(made.data.code, mom);
   assert.equal(joined.status, 200);
-  assert.deepEqual(memberOf(joined.data, mom.id), { profileId: mom.id, name: "엄마", character: "bunny", hasPhoto: false, hasVoice: false, consent: true, role: "adult", seat: "ROW_1_RIGHT", pending: false });
+  assert.deepEqual(memberOf(joined.data, mom.id), { profileId: mom.id, name: "엄마", character: "bunny", hasPhoto: false, hasVoice: true, consent: true, role: "adult", seat: "ROW_1_RIGHT", pending: false });
   assert.deepEqual(joined.data.invite, made.data, "구성원은 지금 초대 코드·주소를 본다");
   const again = await joinGroup(made.data.code, mom);
   assert.equal(again.status, 200);
@@ -273,6 +276,10 @@ test("그룹으로 여행 만들기: 저장된 자리, 각자 계정 동의, 모
   const momsKid = await child(fam, mom, "도윤");
   assert.equal((await voice(fam, kid.profileId, dad)).status, 200);
   await call("PUT", `/groups/${fam.id}/seats`, { seats: { [aunt.id]: null, [mom.id]: "ROW_1_RIGHT", [kid.profileId]: "ROW_2_LEFT", [momsKid.profileId]: "ROW_2_RIGHT" } }, dad.token);
+  // 자리 있는 구성원이 모두 목소리가 있어야 출발한다(T173): 도윤(엄마가 보호자)이 아직이라 409와 그 사람
+  const blocked = await call("POST", "/trips", { groupId: fam.id }, dad.token);
+  assert.deepEqual([blocked.status, blocked.data.type, blocked.data.reason, blocked.data.missing], [409, "conflict", "voice_required", [{ profileId: momsKid.profileId, name: "도윤", child: true }]]);
+  assert.equal((await voice(fam, momsKid.profileId, mom)).status, 200);
 
   assert.equal((await call("POST", "/trips", { groupId: fam.id })).status, 401);
   assert.equal((await call("POST", "/trips", { groupId: 3 }, dad.token)).status, 400);
@@ -298,7 +305,8 @@ test("그룹으로 여행 만들기: 저장된 자리, 각자 계정 동의, 모
   await call("PATCH", `/trips/${trip.code}/participants/${by(mom.id).id}`, { consent: true }, rejoin.data.token);
   const prints = await call("GET", `/trips/${trip.code}/voice-prints`, undefined, trip.tokens[by(dad.id).id]);
   assert.equal(prints.status, 200);
-  assert.deepEqual(prints.data.items.map((i) => [i.participantId, i.source]), [[by(kid.profileId).id, "profile"]]);
+  // 목소리 먼저(T173)라 모두 등록돼 있다: 녹음에 동의한 참가자 모두의 프로필 값(아이는 profileId로 찾음)
+  assert.deepEqual(prints.data.items.map((i) => [i.participantId, i.source]).sort(), [dad, mom, kid, momsKid].map((x) => [by(x.id ?? x.profileId).id, "profile"]).sort());
   const open = (await call("GET", `/trips/${trip.code}`)).data;
   assert.deepEqual([open.groupId, open.groupName], [undefined, undefined], "토큰 없는 여행 문서에는 그룹을 싣지 않음");
   const stored = (await tripsDb().query("SELECT doc FROM trips WHERE code = $1", [trip.code])).rows[0].doc;
@@ -349,6 +357,7 @@ test("빼기·나가기: 대표는 남을, 성인은 자기만. 아이를 빼거
 
   // 아이가 탔던 여행은 프로필 지우기와 같게 정리된다
   await call("PUT", `/groups/${fam.id}/seats`, { seats: { [kid.profileId]: "ROW_2_LEFT" } }, dad.token);
+  assert.equal((await voice(fam, kid.profileId, dad)).status, 200, "출발하려면 아이 목소리도(T173)");
   const trip = (await call("POST", "/trips", { groupId: fam.id }, dad.token)).data;
   assert.equal((await remove(dad, dad.id)).status, 204, "대표가 나가면 그룹이 없어짐");
   assert.equal(await exists(kid.profileId), false, "그룹의 아이도 지움");
@@ -370,4 +379,36 @@ test("대표가 프로필을 지우면 그룹과 그룹의 아이(다른 보호�
   assert.deepEqual(left.rows.map((r) => r.id), [mom.id]);
   assert.equal((await profilesDb().query("SELECT count(*)::int AS n FROM voice_prints WHERE profile_id = $1", [momsKid.profileId])).rows[0].n, 0, "아이 목소리 값도 함께");
   assert.deepEqual((await call("GET", "/groups", undefined, mom.token)).data, { items: [] });
+});
+
+test("목소리 먼저(T173): 목소리 없는 프로필은 그룹을 만들거나 초대로 들어오지 못하고, 보호자 동의를 끈 아이만 예외로 출발한다", async () => {
+  const dad = await person("아빠");
+  const mute = await person("목소리 아직", { voice: false });
+  const made = await call("POST", "/groups", { name: "우리 가족", kind: "family" }, mute.token);
+  assert.deepEqual([made.status, made.data.type, made.data.reason], [409, "conflict", "voice_required"], "그룹 만들기");
+  const fam = await family(dad);
+  const code = await invite(fam, dad);
+  const joined = await joinGroup(code, mute);
+  assert.deepEqual([joined.status, joined.data.reason], [409, "voice_required"], "초대 참여");
+  assert.equal((await call("GET", "/groups", undefined, mute.token)).data.items.length, 0, "들어가지 않음");
+  // 등록하면 같은 코드로 들어간다
+  assert.equal((await call("POST", "/profiles/me/voice", JSON.stringify({ embedder: "logmel-pitch-1", vector, seconds: 7 }), mute.token)).status, 200);
+  assert.equal((await joinGroup(code, mute)).status, 200);
+  // 보호자 동의를 끈 아이는 녹음하지 않으므로 목소리 없이도 출발한다(예외), 동의가 켜진 아이는 막힌다
+  const quiet = await child(fam, dad, "조용이", false);
+  const kid = await child(fam, dad, "서준");
+  await call("PUT", `/groups/${fam.id}/seats`, { seats: { [mute.id]: null, [quiet.profileId]: "ROW_2_LEFT", [kid.profileId]: "ROW_2_RIGHT" } }, dad.token);
+  const blocked = await call("POST", "/trips", { groupId: fam.id }, dad.token);
+  assert.deepEqual([blocked.status, blocked.data.missing.map((m) => m.name)], [409, ["서준"]]);
+  assert.match(blocked.data.error, /서준/);
+  assert.equal((await voice(fam, kid.profileId, dad)).status, 200);
+  const trip = await call("POST", "/trips", { groupId: fam.id }, dad.token);
+  assert.equal(trip.status, 201);
+  assert.ok(trip.data.participants.some((p) => p.profileId === quiet.profileId), "동의를 끈 아이도 자리대로 탐(녹음은 안 함)");
+  // 프로필로 여행에 새로 들어오는 길도 같다
+  const solo = await person("혼자", { voice: false });
+  const open = (await call("POST", "/trips", {})).data;
+  const join = await call("POST", `/trips/${open.code}/participants`, { seat: "ROW_1_LEFT" }, solo.token);
+  assert.deepEqual([join.status, join.data.reason], [409, "voice_required"], "프로필 참가");
+  assert.equal((await call("POST", `/trips/${open.code}/participants`, { name: "손님", seat: "ROW_1_RIGHT", consent: false })).status, 201, "이름만 있는 손님은 그대로(차 파트와 따로 맞춤)");
 });

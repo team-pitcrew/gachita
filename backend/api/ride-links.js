@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { tripsDb } from "./db.js";
 import { withActiveProfile } from "./profile-lifecycle.js";
+import { requireVoice } from "./accounts.js";
 
 const fail = (status, error) => { throw { status, error }; };
 const hash = (value) => createHash("sha256").update(value).digest();
@@ -62,6 +63,7 @@ export async function redeemRideLink(req, tripCode, body, { profileById, seats }
       const trip = trips[0]?.doc ?? fail(404, "없는 여행");
       if (!["boarding", "parked"].includes(trip.status)) fail(409, "주차 중에만 동승자를 연결할 수 있음");
       if (trip.participants.some((p) => p.profileId === me.id)) fail(409, "이미 참가한 프로필");
+      requireVoice(me); // 동승 연결로 들어오려면 목소리 먼저(T173)
       if (trip.participants.some((p) => p.seat === body.seat)) fail(409, "이미 다른 사람이 앉은 자리");
       // 폰에게만 미리 준 토큰의 해시를 참가자에 옮긴다. 차는 동의를 켤 자격을 받지 않는다.
       const participant = { id: randomUUID().slice(0, 8), profileId: me.id, name: me.name, character: me.character,

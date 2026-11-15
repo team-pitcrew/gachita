@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: 가치타 API
-  version: 0.22.0
+  version: 0.23.0
   summary: 여행 세션, 기기 프로필과 이메일 계정, 동승 연결, 부탁, 장면, 기록본, 화자 대조, 여행 전체 음성
   description: |
     웹앱(frontend/web)과 차량 앱(frontend/car)이 부르는 API입니다. 구현은 backend/api/server.js입니다.
@@ -2490,6 +2490,20 @@ components:
             required: [error, type]
             properties:
               error: { type: string, description: 사람이 읽는 이유(바뀔 수 있음) }
+              reason:
+                type: string
+                enum: [voice_required]
+                description: "같은 type 안에서 화면이 갈 곳을 가르는 값(T173). voice_required(409)는 목소리를 등록하지 않은 프로필이 그룹 만들기·초대 참여·프로필 참가·차량 QR·동승 연결·그룹 여행을 하려 함 — 목소리 등록으로 보낸다(docs/api/accounts.md '목소리 먼저')"
+              missing:
+                type: array
+                description: "그룹 여행 만들기(POST /trips {groupId})의 voice_required에서 목소리가 없는 자리 있는 구성원(T173)"
+                items:
+                  type: object
+                  required: [profileId, name, child]
+                  properties:
+                    profileId: { type: string, format: uuid }
+                    name: { type: string }
+                    child: { type: boolean, description: 보호자가 등록하는 아이면 true }
               type:
                 type: string
                 enum: [invalid, unauthenticated, forbidden, not_found, method_not_allowed, conflict, gone, too_large, rate_limited, unavailable, internal]

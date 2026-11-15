@@ -35,6 +35,24 @@
 
 그룹으로 여행을 만드는 길(가족·동승 그룹)은 다음 티켓(T133)에서 열고, 같은 규칙(각자 계정 동의, 아이는 보호자 동의)을 씁니다.
 
+## 목소리 먼저(T173)
+
+오너 원칙: **프로필을 만들 때 목소리를 반드시 등록합니다.** 서버도 목소리가 없는 프로필이 그룹·여행에 들어가지 못하게 막습니다. '목소리가 있다'는 `hasVoice`(지금 임베더 길이의 값)이고, 보호자 동의가 꺼진 아이는 녹음하지 않으므로 예외입니다.
+
+| 막는 자리 | 응답 |
+|---|---|
+| 그룹 만들기 `POST /groups` | 409 `{type: "conflict", reason: "voice_required"}` |
+| 초대 참여 `POST /group-invites/{code}`(새 구성원만, 이미 구성원이면 200) | 같음 |
+| 프로필 참가 `POST /trips/{code}/participants`(새 참가자만, 다시 참가는 그대로) | 같음 |
+| 차량 QR `POST /boarding-invites/{invite}/participants`(새 참가자만) | 같음 |
+| 동승 연결 `POST /trips/{code}/ride-links` | 같음 |
+| 그룹 여행 `POST /trips {groupId}` | 자리 있는 구성원 가운데 목소리가 없는 사람이 있으면 409 `reason: "voice_required"`, `missing: [{profileId, name, child}]`(문장에도 이름) |
+
+- 폰·차는 문장이 아니라 `reason`으로 가르고, 목소리 등록으로 보냅니다(성인 P06·C06, 아이는 보호자가 P12·C12).
+- 임베더가 바뀌면 옛 등록값은 `hasVoice: false`가 되므로, 옛 사용자도 이 409를 받고 다시 등록합니다(ADR-0023).
+- 이름만 있는 손님 참가(토큰 없음)와 아이 만들기(`POST /groups/{id}/children`)는 막지 않습니다. 아이는 그룹 여행을 만들 때 위 표의 마지막 줄로 막힙니다.
+- 목소리 지우기(`DELETE /profiles/me/voice`)는 그대로 됩니다(지울 권리). 지운 뒤에는 새로 들어가는 자리에서 막힙니다.
+
 ## 프로필에 더한 칸
 
 | 칸 | 뜻 |
