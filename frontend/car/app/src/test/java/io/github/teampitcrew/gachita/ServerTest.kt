@@ -44,6 +44,12 @@ class ServerTest {
         assertNull(Server(url).trip("AB23CD", 3))
     }
 
+    @Test fun `목소리 먼저 409는 막힌 구성원을 준다(T173)`() = serve(409, """{"error":"목소리를 먼저 등록해 주세요: 서준","type":"conflict","reason":"voice_required","missing":[{"profileId":"p2","name":"서준","child":true}]}""") { url ->
+        val e = runCatching { Server(url).trip("AB23CD") }.exceptionOrNull() as ApiError
+        assertEquals(listOf(VoiceMissing("p2", "서준", true)), e.voiceMissing)
+        assertNull(ApiError(409, "자리가 정해진 구성원이 없어요", """{"error":"자리가 정해진 구성원이 없어요","type":"conflict"}""").voiceMissing) // 다른 409는 그대로 알림
+    }
+
     @Test fun `서버가 거절하면 ApiError`() = serve(404, """{"error":"여행이 없습니다"}""") { url ->
         assertTrue(runCatching { Server(url).trip("AB23CD") }.exceptionOrNull() is ApiError)
     }
