@@ -374,7 +374,8 @@ export function createContents({ getProfileToken, getTrip, getParticipant, getPa
     const scroll = h("div", { className: "conversation-body contents-body" }, head, body);
     dialog.replaceChildren(
       appBar({ online: isOnline(), onHome: () => { close(); onHome?.(); } }),
-      journeyTabs("contents", { ride: () => { close(); onRide(); }, talk: () => { close(); onTalk(); }, contents: () => go(s, "gallery") }),
+      // 탭 '대화 기록'(P44)은 지금 보고 있는 여행(고른 장면의 여행, 없으면 기록에 동의한 가장 최근 여행)의 대화를 연다 — 이 폰이 들어간 적 없는 끝난 여행이어도(app.js).
+      journeyTabs("contents", { ride: () => { close(); onRide(); }, talk: () => { const c = (find(s, s.selected)?.trip ?? s.trips.find((t) => t.me?.consent) ?? s.trips[0])?.code; close(); onTalk(c); }, contents: () => go(s, "gallery") }),
       scroll,
       h("footer", { className: `conversation-bottom${(FOOT[view]?.(s) ?? []).length > 1 ? " two" : ""}` }, FOOT[view]?.(s) ?? []),
     );
