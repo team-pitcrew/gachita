@@ -153,19 +153,18 @@ class Onboarding(private val context: Context, private val prefs: SharedPreferen
         }
     }
 
-    /** C02 '가입하고 계속': 가입, 이미 가입한 이메일이면 같은 칸으로 로그인(AccountApi.enter). */
-    fun submitAccount() {
+    /** C02 '가입하고 계속': 가입, 이미 가입한 이메일이면 같은 칸으로 로그인(AccountApi.enter). login: 로그인 화면 '로그인하고 계속'(AccountApi.login). */
+    fun submitAccount(login: Boolean = false) {
         if (!validEmail(email)) { note = "이메일 주소를 확인해 주세요"; return }
         if (!validPassword(password)) { note = "비밀번호는 8~72자로 적어 주세요"; return }
         val e = email.trim(); val pw = password; val url = server()
         if (busy) return
         busy = true; note = ""
         io.execute {
-            val r = runCatching { AccountApi(url).enter(e, pw) }
+            val r = runCatching { if (login) AccountApi(url).login(e, pw) else AccountApi(url).enter(e, pw).first }
             main.post {
                 busy = false
-                r.onSuccess { (got, _) ->
-                    val (p, t) = got
+                r.onSuccess { (p, t) ->
                     saveToken(t); password = ""; adopt(p)
                     // 시안 C02 → C03. 새 계정은 동의부터, 이미 가입한 계정(로그인)은 빠진 단계만 — 다 있으면 온보딩을 끝내고 가족·그룹 화면
                     missingStep(p)?.let(::go) ?: finish()
@@ -272,8 +271,8 @@ fun OnboardingScreen(o: Onboarding, driving: Boolean = false, onFamily: () -> Un
     val mic = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { if (it) o.startRecording() }
     LaunchedEffect(o, driving) { if (!driving) o.start() }
     val step = if (driving) OnboardStep.WELCOME else o.step ?: OnboardStep.WELCOME
-    // 기기 뒤로: 앞 화면이 있는 단계만 한 칸 뒤로(C02 → C01, C05·C06 → C04, C07 → C06). 동의(C03) 뒤로는 이미 만든 계정이라 앱 기본(나가기)
-    val back = when (step) { OnboardStep.SIGNUP -> OnboardStep.WELCOME; OnboardStep.PHOTO, OnboardStep.VOICE -> OnboardStep.PROFILE; OnboardStep.RECORDING -> OnboardStep.VOICE; else -> null }
+    // 기기 뒤로: 앞 화면이 있는 단계만 한 칸 뒤로(C02 → C01, 로그인 → C02, C05·C06 → C04, C07 → C06). 동의(C03) 뒤로는 이미 만든 계정이라 앱 기본(나가기)
+    val back = when (step) { OnboardStep.SIGNUP -> OnboardStep.WELCOME; OnboardStep.LOGIN -> OnboardStep.SIGNUP; OnboardStep.PHOTO, OnboardStep.VOICE -> OnboardStep.PROFILE; OnboardStep.RECORDING -> OnboardStep.VOICE; else -> null }
     BackHandler(!driving && back != null && !o.busy) { if (step == OnboardStep.RECORDING) o.again() else o.go(back!!) }
     val p = o.profile
     val shownName = p?.name?.takeIf { it.isNotBlank() } ?: o.name
@@ -285,6 +284,7 @@ fun OnboardingScreen(o: Onboarding, driving: Boolean = false, onFamily: () -> Un
             when (step) {
                 OnboardStep.WELCOME -> CarButton("가치타 시작하기", enabled = !driving) { o.go(OnboardStep.SIGNUP) }
                 OnboardStep.SIGNUP -> CarButton("가입하고 계속", enabled = !o.busy) { o.submitAccount() }
+                OnboardStep.LOGIN -> CarButton("로그인하고 계속", enabled = !o.busy) { o.submitAccount(login = true) }
                 OnboardStep.CONSENT -> CarButton("동의하고 계속", enabled = !o.busy) { o.agree() }
                 OnboardStep.PROFILE -> CarButton("목소리 등록하기", enabled = !o.busy) { o.saveProfile() }
                 OnboardStep.PHOTO -> CarButton("캐릭터로 계속") { o.useCharacter() } // 시안 행선: C05 → C04(저장은 C04 '목소리 등록하기')
@@ -302,6 +302,7 @@ fun OnboardingScreen(o: Onboarding, driving: Boolean = false, onFamily: () -> Un
         val (title, sub) = when (step) {
             OnboardStep.WELCOME -> "함께 탄 순간을 오래" to "운전할 때는 부탁을, 여행 후에는 추억을."
             OnboardStep.SIGNUP -> "내 계정 만들기" to "이 계정으로 차량과 폰을 함께 사용해요."
+            OnboardStep.LOGIN -> "로그인" to "가입한 이메일로 로그인해 기록을 불러와요."
             OnboardStep.CONSENT -> "우리의 대화를 남기기 전에" to "아래 내용을 확인하고 한 번에 동의해 주세요."
             OnboardStep.PROFILE -> "나를 소개해 주세요" to "01 프로필   →   02 목소리   →   03 가족"
             OnboardStep.PHOTO -> "프로필 사진" to "사진 대신 캐릭터도 언제든 선택할 수 있어요."
@@ -324,11 +325,13 @@ fun OnboardingScreen(o: Onboarding, driving: Boolean = false, onFamily: () -> Un
             Column(Modifier.widthIn(max = 988.dp).fillMaxWidth().fillMaxHeight().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(24.dp)) {
                 when (step) {
                     OnboardStep.WELCOME -> Unit
-                    OnboardStep.SIGNUP -> {
+                    OnboardStep.SIGNUP, OnboardStep.LOGIN -> {
+                        // 로그인은 시안에 없어 C02 틀·조각 그대로(제목·칸·아래 카드만 다름). 가입 화면도 이미 가입한 이메일이면 로그인으로 잇는다(AccountApi.enter)
                         NoAutofill()
                         CarField("이메일", o.email, { o.email = it }, KeyboardType.Email, placeholder = "minjun@example.com")
-                        CarField("비밀번호", o.password, { o.password = it }, KeyboardType.Password, secret = true)
-                        InfoCard("이미 계정이 있나요?", "같은 계정으로 로그인해 기록을 불러와요.") // 같은 칸에 넣고 '가입하고 계속'이면 로그인(AccountApi.enter)
+                        CarField("비밀번호", o.password, { o.password = it }, KeyboardType.Password, secret = true, onDone = { o.submitAccount(login = step == OnboardStep.LOGIN) })
+                        if (step == OnboardStep.SIGNUP) InfoCard("이미 계정이 있나요?", "같은 계정으로 로그인해 기록을 불러와요.", onClick = { o.go(OnboardStep.LOGIN) })
+                        else InfoCard("처음이에요?", "계정 만들기", onClick = { o.go(OnboardStep.SIGNUP) })
                     }
                     OnboardStep.CONSENT -> {
                         InfoCard("탑승 시 대화 자동 기록", "가족 그룹 연결 시 시작 / 기록 상태 표시와 일시정지 제공")

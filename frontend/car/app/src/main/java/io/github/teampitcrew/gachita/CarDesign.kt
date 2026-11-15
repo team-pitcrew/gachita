@@ -1,5 +1,6 @@
 package io.github.teampitcrew.gachita
 
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.foundation.layout.size
@@ -22,6 +23,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -179,7 +183,7 @@ fun InfoCard(
     onClick: (() -> Unit)? = null,
 ) {
     val c = MaterialTheme.colorScheme
-    Surface(modifier.clip(CarShape.Card).then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier), CarShape.Card,
+    Surface(modifier.clip(CarShape.Card).then(if (onClick != null) Modifier.clickable(role = Role.Button, onClick = onClick) else Modifier), CarShape.Card, // 누르는 카드는 단추로 읽히고 누름 물결이 보인다
         color = if (soft) c.primaryContainer else c.surface) {
         Row(Modifier.padding(26.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(24.dp)) {
             if (photo != null) Image(photo.asImageBitmap(), null, Modifier.size(92.dp).clip(CarShape.Face), contentScale = ContentScale.Crop)
@@ -192,14 +196,19 @@ fun InfoCard(
     }
 }
 
-/** 입력란(시안: 라벨 Label 24 ink-2, 칸 surface-2 · 모서리 32 · 여백 22 · Body 28, 높이 84). */
+/**
+ * 입력란(시안: 라벨 Label 24 ink-2, 칸 surface-2 · 모서리 32 · 여백 22 · Body 28, 높이 84).
+ * onDone: 자판의 완료 키로 보낸다. 차 자판(CarIME)이 화면 아래 655px를 덮어 아래 단추가 가려지므로 자판을 닫고 부른다.
+ */
 @Composable
-fun CarField(label: String, value: String, change: (String) -> Unit, type: KeyboardType, secret: Boolean = false, placeholder: String = "") {
+fun CarField(label: String, value: String, change: (String) -> Unit, type: KeyboardType, secret: Boolean = false, placeholder: String = "", onDone: (() -> Unit)? = null) {
     val c = MaterialTheme.colorScheme
+    val focus = LocalFocusManager.current
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) { // 시안: 라벨과 칸 사이 24
         Text(label, style = CarText.Label, color = c.onSurfaceVariant)
         BasicTextField(value, change, Modifier.fillMaxWidth().height(84.dp), singleLine = true, textStyle = CarText.Body.copy(color = c.onSurface),
-            cursorBrush = SolidColor(c.primary), keyboardOptions = KeyboardOptions(keyboardType = type),
+            cursorBrush = SolidColor(c.primary), keyboardOptions = KeyboardOptions(keyboardType = type, imeAction = if (onDone != null) ImeAction.Done else ImeAction.Default),
+            keyboardActions = KeyboardActions(onDone = onDone?.let { { focus.clearFocus(); it() } }),
             visualTransformation = if (secret) PasswordVisualTransformation() else VisualTransformation.None,
             decorationBox = { inner ->
                 Box(Modifier.fillMaxSize().clip(CarShape.Card).background(c.surfaceVariant).padding(horizontal = 22.dp), contentAlignment = Alignment.CenterStart) {
