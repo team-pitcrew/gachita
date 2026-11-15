@@ -180,7 +180,7 @@ function welcome() {
     const created = await api('POST', '/trips', { title: title.value.trim() });
     const driver = await api('POST', `/trips/${created.code}/participants`, { name: name.value.trim(), seat: 'ROW_1_LEFT', consent: false });
     car = { code: created.code, id: driver.id, token: driver.token }; saveCar();
-  }); } }, h('img', { className: 'welcome-mark', src: '/icons/gachita-192.png', alt: '가치타 캐릭터' }), h('h2', {}, '함께 탄 이야기,', h('br'), '목소리 그대로.'), h('p', {}, '차량에서 시작한 여행을 웹에서도 이어 갑니다. 참석 QR로 일행을 초대하고, 모두의 동의를 받은 뒤 대화를 남겨 보세요.'), joinedChoice(candidate), h('details', { className: 'welcome-new', open: !candidate }, h('summary', {}, '새 여행 만들기'), field('여행 이름', title), field('내 이름', name), h('button', { type: 'submit', className: 'primary', disabled: busy }, busy ? '여행 만드는 중' : '여행 시작하기')), error && h('p', { role: 'alert', className: 'error-text' }, error));
+  }); } }, h('img', { className: 'welcome-mark', src: '/icons/gachita-192.png', alt: '가치타 로고' }), h('h2', {}, '함께 탄 이야기,', h('br'), '목소리 그대로.'), h('p', {}, '차량에서 시작한 여행을 웹에서도 이어 갑니다. 참석 QR로 일행을 초대하고, 모두의 동의를 받은 뒤 대화를 남겨 보세요.'), joinedChoice(candidate), h('details', { className: 'welcome-new', open: !candidate }, h('summary', {}, '새 여행 만들기'), field('여행 이름', title), field('내 이름', name), h('button', { type: 'submit', className: 'primary', disabled: busy }, busy ? '여행 만드는 중' : '여행 시작하기')), error && h('p', { role: 'alert', className: 'error-text' }, error));
 }
 function render() {
   updateStatus();
