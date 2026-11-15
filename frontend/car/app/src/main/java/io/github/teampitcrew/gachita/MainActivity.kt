@@ -284,6 +284,7 @@ class MainActivity : ComponentActivity() {
         // 실행 인자(--es server, --ei widthDp, --es route)는 디버그 빌드에서만 받는다. 밖에서 연 화면이 서버 주소를 바꾸지 못하게
         debug = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
         if (debug) intent.getStringExtra("server")?.let { prefs.edit().putString("server", it).apply() }
+        if (debug && intent.getBooleanExtra("voicecheck", false)) kotlin.concurrent.thread { Log.i("GachitaVoice", strongSelfCheck(this)) } // 디버그: 이 기기에서 강한 화자 모델이 도는지
         if (debug) { profileToken = intent.getStringExtra("profileToken")?.takeIf { it.isNotBlank() }; familyOpen = intent.getBooleanExtra("family", false) }
         server = prefs.getString("server", null) ?: DEFAULT_SERVER
         device = prefs.getString("device", null) ?: UUID.randomUUID().toString().also { prefs.edit().putString("device", it).apply() }
@@ -698,15 +699,20 @@ class MainActivity : ComponentActivity() {
             box.ackedAfter(first.seq - 21).filter { it.seq < first.seq }.forEach { p -> sp[p.seq]?.who?.let { known += p to it } }
         } }
         val voiceless = ArrayList<Utterance>()
+        val store = Strong.prints(this)
+        val strong = if (store.size > 0) Wespeaker.of(this) else null // 이 차에서 등록한 사람이 없으면 모델을 올리지 않는다
         for (u in items) {
             val to = u.endedAt - 500 // 최종 결과는 말 끝 0.6초 뒤에 온다(11/13): 끝의 무음을 덜어 목소리만
             val from = maxOf(u.startedAt + LEAD_MS / 2, to - 9_900) // 서버 대조와 같은 구간(0.5~10초)
             if (!clipsAllowed) return // 그사이 동의를 껐으면(철회) 원음을 더 읽지 않는다
             val pcm = if (to - from < 600) null else clipFile(files, from..to)?.let { runCatching { it.cut(Live.seal(this), from, to) }.getOrNull() }
-            val v = pcm?.takeIf { it.size >= RATE }?.let { embed(pcmSamples(it)) }
+            val samples = pcm?.takeIf { it.size >= RATE }?.let(::pcmSamples)
+            val v = samples?.let { embed(it) }
             if (v == null) { voiceless += u; continue } // 원음이 없거나 짧음: 아래에서 앞뒤 말의 사람을 물려받는다
             val row = u.seatZone?.let { z -> seated.filter { it.seat.startsWith("ROW_${z + 1}_") } }
-            val r = vp.identify(v, seated.map(Person::id), row?.map(Person::id)) // 여백 규칙(Voice.kt)
+            // 등록한 탑승자 모두가 이 차의 강한 화자 값을 가졌으면 그것으로(StrongVoice.kt), 아니면 1차 임베더의 여백 규칙으로(Voice.kt)
+            val r = strong?.embed(samples!!)?.let { w -> store.identify(w, seated.associate { it.id to it.profileId }, row?.map(Person::id), vp.ids()) }
+                ?: vp.identify(v, seated.map(Person::id), row?.map(Person::id))
             sp.set(u.seq, r.copy(sent = r.who == null)); sp.done(u.seq) // 찾았으면 서버에 남길 때까지 sent = false
             r.who?.let { known += u to it }
             Log.i("GachitaCapture", "말한 사람 ${u.seq} 구역 ${u.seatZone ?: "모름"} ${if (r.who != null) "찾음" else "모름"} ${r.confidence} ${r.basis}") // 이름·글자는 남기지 않는다
@@ -1454,6 +1460,7 @@ class MainActivity : ComponentActivity() {
      */
     private fun logout() {
         prefs.edit().remove("account").apply()
+        Strong.clear(this) // 이 차에 둔 강한 화자 값(등록한 사람들의 목소리 값)도 지운다
         profileToken = null; menuFamily = null; familyOpen = false
         // 계정이 없는 차는 녹음하지 않는다(화면 밖에서 이어 녹음하지 않게, 흐름점검 52). 여행·동의는 계정과 따로라 그대로 둔다
         if (s.recording) { s = s.copy(started = false); syncCapture() }

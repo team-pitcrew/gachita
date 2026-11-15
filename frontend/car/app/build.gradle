@@ -1,8 +1,33 @@
 plugins { id 'com.android.application'; id 'org.jetbrains.kotlin.android'; id 'org.jetbrains.kotlin.plugin.compose' }
+
+// 차 안 화자 식별의 강한 모델(StrongVoice.kt): 실행기 sherpa-onnx 2.0.1(Apache-2.0, ONNX Runtime 포함)과 모델 wespeaker resnet34(가중치 CC BY 4.0).
+// 둘 다 저장소에 넣지 않고(AAR 49 MB, 모델 25 MB) 빌드 때 공식 GitHub 릴리스에서 받아 sha256을 확인한다. 한 번 받으면 다시 받지 않는다.
+// 받아 둔 파일이 없는데 --offline이면 여기서 멈춘다(받을 주소를 알려 줌).
+def speakerFiles = [
+ [url: 'https://github.com/k2-fsa/sherpa-onnx/releases/download/v2.0.1/sherpa-onnx-2.0.1.aar',
+  to: file('libs/sherpa-onnx-2.0.1.aar'), sha256: 'a8d09d1d32f3eb8520482c6d3d43fae674681c5b050385967c70a3c2c9bf0ee7'],
+ [url: 'https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/wespeaker_en_voxceleb_resnet34_LM.onnx',
+  to: file('src/main/assets/wespeaker.onnx'), sha256: 'e9848563da86f263117134dfd7ad63c92355b37de492b55e325400c9d9c39012'],
+]
+def sha256Of = { File f -> def d = java.security.MessageDigest.getInstance('SHA-256'); f.eachByte(1 << 16) { b, n -> d.update(b, 0, n) }; d.digest().encodeHex().toString() }
+speakerFiles.each { f ->
+ if (f.to.exists() && sha256Of(f.to) == f.sha256) return
+ if (gradle.startParameter.offline) throw new GradleException("${f.to} 가 없습니다. 온라인으로 한 번 빌드하거나 ${f.url} 를 그 자리에 받아 두세요")
+ f.to.parentFile.mkdirs()
+ def tmp = new File(f.to.path + '.part')
+ new URL(f.url).withInputStream { i -> tmp.withOutputStream { it << i } }
+ if (sha256Of(tmp) != f.sha256) { tmp.delete(); throw new GradleException("${f.url} 의 sha256이 다릅니다") }
+ tmp.renameTo(f.to)
+}
 android {
  namespace 'io.github.teampitcrew.gachita'
  compileSdk 34
  defaultConfig { applicationId 'io.github.teampitcrew.gachita'; minSdk 29; targetSdk 34; versionCode 1; versionName '0.1.0' }
+ // sherpa-onnx의 네이티브 라이브러리는 arm64(차, Apple 실리콘 에뮬레이터)만 넣는다: JNI가 쓰는 libsherpa-onnx-jni와 libonnxruntime 둘, 약 27 MB.
+ // 다른 ABI(인텔 에뮬레이터 등)에서는 라이브러리를 못 올려 1차 임베더만 쓴다(StrongVoice.kt가 실패를 받아 넘긴다) — 앱은 그대로 깔리고 돈다.
+ packaging { jniLibs { excludes += ['**/libsherpa-onnx-c-api.so', '**/libsherpa-onnx-cxx-api.so',
+  '**/x86/libonnxruntime.so', '**/x86/libsherpa-onnx-jni.so', '**/x86_64/libonnxruntime.so', '**/x86_64/libsherpa-onnx-jni.so',
+  '**/armeabi-v7a/libonnxruntime.so', '**/armeabi-v7a/libsherpa-onnx-jni.so'] } }
  compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
  kotlinOptions { jvmTarget = '17' }
  buildFeatures { compose true }
@@ -27,6 +52,7 @@ dependencies {
  implementation 'ai.pleos.playground:NaviHelper:3.0.5'
  implementation 'ai.pleos.playground:TextToSpeech:3.3.1'
  implementation 'ai.pleos.playground:SpeechToText:3.3.1'
+ implementation files('libs/sherpa-onnx-2.0.1.aar') // 위에서 받음. 차 안 화자 식별(StrongVoice.kt)
  implementation 'com.google.zxing:core:3.5.3' // 차량 참석 QR 생성. 휴대폰 기본 카메라로 읽는다(T106)
  testImplementation 'junit:junit:4.13.2'
  testImplementation 'org.json:json:20240303' // 단위 테스트에서 android.jar의 org.json은 빈 껍데기라 진짜를 넣는다

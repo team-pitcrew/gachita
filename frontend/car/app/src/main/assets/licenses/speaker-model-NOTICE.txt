@@ -1,0 +1,12 @@
+차 안 화자 식별(말한 사람 구분)에 쓰는 것
+
+1. sherpa-onnx 2.0.1 — https://github.com/k2-fsa/sherpa-onnx
+   Copyright (c) Xiaomi Corporation and the sherpa-onnx contributors. Apache License 2.0
+   https://www.apache.org/licenses/LICENSE-2.0
+   ONNX Runtime (Microsoft, MIT License)을 포함합니다. https://github.com/microsoft/onnxruntime
+
+2. 화자 임베딩 모델 wespeaker_en_voxceleb_resnet34_LM — https://github.com/wenet-e2e/wespeaker
+   WeSpeaker(코드 Apache License 2.0)가 VoxCeleb으로 학습해 공개한 가중치. Creative Commons Attribution 4.0 International (CC BY 4.0)
+   https://creativecommons.org/licenses/by/4.0/
+   Wang et al., "WeSpeaker: A Research and Production oriented Speaker Embedding Learning Toolkit", ICASSP 2023.
+   고친 것 없이 그대로 씁니다(sherpa-onnx가 배포한 ONNX 파일).

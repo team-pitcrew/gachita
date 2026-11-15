@@ -241,7 +241,7 @@ class Onboarding(private val context: Context, private val prefs: SharedPreferen
         work({
             val v = embed(pcmSamples(bytes)) ?: throw ApiError(400, "소리가 너무 짧아요")
             AccountApi(url).voice(t, v, bytes.size / 2.0 / RATE)
-            AccountApi(url).me(t)
+            AccountApi(url).me(t).also { p -> runCatching { Strong.enroll(context, p.id, bytes) } } // 강한 화자 값은 차 안에만(StrongVoice.kt)
         }) { p -> pcm = null; adopt(p); go(OnboardStep.DONE) }
     }
 
