@@ -1229,6 +1229,15 @@ button.content-more { justify-self: start; min-height: 44px; padding: 0; backgro
 /* 재생(P37): 큰 표지 250 가운데, 그 아래 재생·위치 */
 .content-player { display: grid; justify-items: center; gap: 12px; padding-top: 22px; }
 .content-player .content-poster { width: 250px; }
+.content-video { width: min(100%, 300px); aspect-ratio: 9 / 16; border-radius: 16px; background: #000; }
+.room-list { display: grid; }
+.room-row { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; align-items: center; gap: 12px; min-height: 68px; padding: 10px 0; border-radius: 0; border-bottom: 1px solid var(--line, rgba(128,128,128,.2)); background: none; color: var(--ink); text-align: left; }
+.room-row .message-face, .room-row .message-face .avatar { width: 44px; height: 44px; }
+.room-text { display: grid; gap: 2px; min-width: 0; }
+.room-text strong { font-size: 16px; font-weight: 600; }
+.room-text strong small { color: var(--ink-2); font-weight: 400; }
+.room-text > small { color: var(--ink-2); font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.room-back { justify-self: start; min-height: 28px; padding: 0; color: var(--ink-2); font-size: 14px; }
 .content-play { min-height: 36px; padding: 0; background: none; color: var(--ink-2); font-size: 15px; font-weight: 500; }
 .content-seek { width: 100%; accent-color: var(--accent-fill); }
 /* 내보내기(P38): 표지 180 가운데, 아래 제목 19/28 · 'MP4 / 9:16 / 32초' 15/22 · 본문 17/26 · 안내 15/22 */
