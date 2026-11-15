@@ -194,6 +194,13 @@ fun autoSeats(members: List<GroupMember>): Map<String, String> {
     return members.filter { it.seat == null }.mapNotNull { m -> if (free.hasNext()) m.profileId to free.next() else null }.toMap()
 }
 
+/**
+ * 목소리를 아직 등록하지 않은 아이(보호자 동의가 켜진 아이만). 아이 프로필은 C11에서 먼저 만들고 C12에서 목소리를 올리므로, C12를 떠나거나
+ * 앱이 닫히면 목소리 없는 아이가 남는다 — 가족 흐름을 열 때 그 아이의 C12부터 다시 연다(11/15 오너: 프로필을 만들 때 목소리 등록은 반드시).
+ * 보호자 동의가 꺼진 아이는 녹음할 수 없어 예외.
+ */
+fun childWithoutVoice(g: CarGroup?): GroupMember? = g?.members?.firstOrNull { it.role == "child" && !it.hasVoice && it.consent }
+
 /** 동승 그룹에 만든 사람만 있을 때(C16G guestDetail, 전체 그룹의 '초대 대기'). 출발할 사람이 없어 초대부터 한다. */
 fun soloGuest(g: CarGroup) = g.kind == "guest" && g.members.size <= 1
 
@@ -371,7 +378,10 @@ fun FamilyFlow(
         busy = true
         runCatching { load() }.onFailure { note = failureText(it) }
         val members = family()?.members.orEmpty()
+        val silent = childWithoutVoice(family())
+        if (silent != null) { child = silent; voiceState = "" }
         view = when {
+            silent != null -> FamilyView.CHILD_VOICE // 목소리 없이 남은 아이: 그 아이의 C12부터
             members.size > 1 && members.all { it.seat != null } -> FamilyView.GROUP
             family() == null && groups.isNotEmpty() -> FamilyView.GROUPS // 동승 그룹만 있는 계정(PITCREW 등)은 가족 추가가 아니라 그룹 목록
             else -> FamilyView.MEMBER
@@ -388,7 +398,9 @@ fun FamilyFlow(
     BackHandler {
         if (sharing) { sharing = false; return@BackHandler }
         view = when (view) {
-            FamilyView.INVITE, FamilyView.CHILD, FamilyView.CHILD_VOICE -> FamilyView.MEMBER
+            FamilyView.INVITE, FamilyView.CHILD -> FamilyView.MEMBER
+            // C12·C42: 아이 프로필은 이미 만들어졌다 — 목소리를 올리기(또는 동의가 꺼져 녹음할 수 없음) 전에는 떠나지 않는다(시안에 건너뛰기 없음)
+            FamilyView.CHILD_VOICE -> if (voiceState == "saved" || voiceState == "blocked") FamilyView.MEMBER else FamilyView.CHILD_VOICE
             FamilyView.SEAT -> FamilyView.GROUP
             FamilyView.GUEST, FamilyView.DETAIL, FamilyView.GUEST_DETAIL -> FamilyView.GROUPS
             FamilyView.GROUPS -> { groupId = family()?.id; if (family() != null) FamilyView.GROUP else { onClose(); view } }
