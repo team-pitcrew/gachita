@@ -22,6 +22,7 @@ private const val MEL_BANDS = 26
 private const val FRAME = 512 // 32 ms @ 16 kHz
 private const val HOP = 160 // 10 ms
 private const val PITCH_BINS = 20
+private const val SILENT_FRAME = 1e-10 // 프레임의 평균 제곱이 이보다 작으면 무음(약 −100 dBFS)
 const val VOICE_DIMS = MEL_BANDS * 2 + PITCH_BINS * 3
 
 /** 16비트 LE 모노 PCM → 표본(−1~1). 서버의 wavMono와 같은 값(32768로 나눔). */
@@ -88,6 +89,11 @@ fun embed(samples: FloatArray): DoubleArray? {
         var mean = 0.0
         for (i in 0 until FRAME) mean += samples[off + i]
         mean /= FRAME
+        // 완전한 무음 프레임(디지털 0 — 에뮬레이터에 넣는 소리의 앞뒤, 등록 때 원음 자리에 채운 무음)은 건너뛴다(서버 voice.js와 같은 규칙).
+        // 넣으면 로그멜이 바닥값으로 찍혀 평균·분산이 크게 틀어진다. 실제 마이크 소리에는 이런 프레임이 없어 값이 바뀌지 않는다.
+        var energy = 0.0
+        for (i in 0 until FRAME) { val d = samples[off + i] - mean; energy += d * d }
+        if (energy / FRAME < SILENT_FRAME) { off += HOP; continue }
         for (i in 0 until FRAME) { re[i] = (samples[off + i] - mean) * WINDOW[i]; im[i] = 0.0 }
         fft(re, im)
         val mel = DoubleArray(MEL_BANDS)
