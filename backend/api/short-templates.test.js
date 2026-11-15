@@ -129,3 +129,17 @@ test("한국어 자막은 원문을 모두 유지하고 ASS 태그를 실행하�
   assert.equal((ass.match(/가/g) || []).length, 113);
   assert.match(ass, /Noto Sans CJK KR/);
 });
+test("자막은 낱말 경계에서 줄을 바꾸고 문장부호만 남은 줄을 만들지 않습니다", () => {
+  const p = planShort(source());
+  p.title = "같이 간 다음에 부산 가는 거예요 부산";
+  p.cues[0].text = "이게 근데 우리 지금 다 긴장해야 돼요. 우리도 다 진짜. 우리도 돌아가는 길에 당하는 거 아니야?";
+  p.cues[1].text = "했는데 해서 이제 바로 출발하는 거죠.";
+  const texts = subtitles(p).split("\n").filter((l) => l.startsWith("Dialogue:")).map((l) => l.split(",,0,0,0,,")[1]);
+  const lines = texts.flatMap((t) => t.split("\\N"));
+  assert.ok(lines.every((l) => /[가-힣A-Za-z0-9]/.test(l)), "글자 없는 줄(문장부호만)이 없다");
+  assert.ok(lines.every((l) => [...l].length <= 20));
+  const words = p.cues[0].text.split(" ");
+  const shown = texts.filter((t) => t.startsWith("가\\N")).flatMap((t) => t.split("\\N").slice(1)).join(" ").split(" ");
+  assert.deepEqual(shown.slice(0, words.length), words, "낱말이 갈리지 않고 순서대로 남는다");
+});
+
