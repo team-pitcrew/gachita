@@ -75,4 +75,20 @@ class AfterTripTest {
         assertEquals("서버에 닿지 않아요(SocketTimeoutException)", afterError(java.net.SocketTimeoutException("read timed out")))
         assertEquals(failureText(ApiError(409, "x")), afterError(ApiError(409, "x")))
     }
+
+    @Test fun serverShortRequestCarriesPlanAndConsent() {
+        val plan = JSONObject().put("momentId", "m1").put("templateId", "car-sitcom-v1").put("planHash", "a".repeat(64)).put("cast", JSONArray())
+        val body = serverShortRequest(plan, 3, "11111111-2222-3333-4444-555555555555")
+        assertEquals(listOf("m1", "car-sitcom-v1", "a".repeat(64), 3, true), listOf(body.getString("momentId"), body.getString("templateId"), body.getString("planHash"), body.getInt("generation"), body.getBoolean("externalGenerationConsent")))
+        val key = body.getString("idempotencyKey")
+        assertEquals(true, Regex("^[A-Za-z0-9_-]{8,100}$").matches(key)) // 서버 멱등 키 규칙
+        assertEquals(key, serverShortRequest(plan, 3, "11111111-2222-3333-4444-555555555555").getString("idempotencyKey")) // 다시 보내도 같은 작업
+    }
+
+    @Test fun serverShortProgressNeverClaimsDoneEarly() {
+        assertEquals(.05f, serverShortProgress("queued", 600_000), 1e-6f)
+        assertEquals(.5f, serverShortProgress("generating", 360_000), 1e-6f)
+        assertEquals(.95f, serverShortProgress("generating", 3_600_000), 1e-6f)
+        assertEquals(1f, serverShortProgress("completed", 0), 1e-6f)
+    }
 }
