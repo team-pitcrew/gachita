@@ -18,7 +18,11 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -67,6 +71,21 @@ internal fun afterDuration(seconds: Long): String = when {
 }
 
 /** 추천 장면: 후보 점수 상위 n개를 시각 순으로(같은 점수면 앞선 장면). 후보 규칙은 5개까지(Scenes.kt), 3개는 화면의 몫. */
+/** 구간 편집 한계: 쇼츠로 만들 수 있는 길이 15–45초(서버 생성 규칙)이고 여행 안. */
+internal const val AFTER_MIN_MS = 15_000L
+internal const val AFTER_MAX_MS = 45_000L
+
+/** 구간 경계를 d만큼 끈다(start면 시작, 아니면 끝). 길이는 15–45초, 여행(origin–end) 밖으로 나가지 않는다. */
+internal fun afterNudge(from: Long, to: Long, start: Boolean, d: Long, origin: Long, end: Long): Pair<Long, Long> =
+    if (start) (from + d).coerceIn(maxOf(origin, to - AFTER_MAX_MS), maxOf(origin, to - AFTER_MIN_MS)) to to
+    else from to (to + d).coerceIn(minOf(end, from + AFTER_MIN_MS), minOf(end, from + AFTER_MAX_MS))
+
+/** 파형 빈 곳을 누른 시각 t에 30초 구간을 놓는다(여행 끝에 닿으면 앞으로 민다). */
+internal fun afterPlace(t: Long, origin: Long, end: Long): Pair<Long, Long> {
+    val from = (t - 15_000).coerceIn(origin, maxOf(origin, end - 30_000))
+    return from to from + 30_000
+}
+
 internal fun topPicks(cands: List<SceneCandidate>, n: Int = 3): List<SceneCandidate> =
     cands.filter { it.to > it.from }.sortedWith(compareByDescending<SceneCandidate> { it.score }.thenBy { it.from }).take(n).sortedBy { it.from }
 
@@ -344,7 +363,23 @@ internal fun AfterTrip(trip: Trip, lines: List<AfterLine>, base: String, token: 
     val running = AfterRuns.run?.takeIf { it.code == trip.code && it.generation == trip.generation }
     var step by remember(trip.code, trip.generation) { mutableStateOf(if (running != null) AfterStep.MAKE else start) }
     if (step == AfterStep.MAKE && running?.finished == true && !running.active) step = AfterStep.DONE
-    val chosen = remember(trip.code, trip.generation) { mutableStateListOf<Long>() }
+    val chosen = remember(trip.code, trip.generation) { mutableStateListOf<Int>() } // 고른 장면 번호(구간을 바꿔도 그대로)
+    // 구간 편집(시안 파형 '추천 구간과 선택 핸들'): 번호 → 사람이 정한 구간. 고른 장면의 경계를 끌어 바꾸고, 파형 빈 곳을 누르면
+    // 그 자리에 직접 고른 구간(번호 = 추천 수 + 1)을 둔다. 제목·대사는 바뀐 구간 안의 말로 다시 고른다.
+    val ranges = remember(trip.code, trip.generation) { mutableStateMapOf<Int, Pair<Long, Long>>() }
+    fun repick(n: Int, from: Long, to: Long): AfterPick {
+        val inside = lines.filter { it.at in from until to }
+        val here = inside.firstOrNull { it.lat != null }
+        val cand = SceneCandidate(inside.firstOrNull()?.at ?: from, from, to, "", 0, inside.map { SceneLine(it.key, it.at, it.zone, it.lat, it.lng) }, here?.lat, here?.lng)
+        return afterPicks(listOf(cand), byKey, names).first().copy(number = n)
+    }
+    val shown = picks.map { p -> ranges[p.number]?.let { (f, t) -> repick(p.number, f, t) } ?: p } +
+        listOfNotNull(ranges[picks.size + 1]?.let { (f, t) -> repick(picks.size + 1, f, t) })
+    fun place(t: Long) { val n = picks.size + 1; ranges[n] = afterPlace(t, origin, end); if (n !in chosen) chosen.add(n) }
+    fun nudge(n: Int, start: Boolean, d: Long) {
+        val (f, t) = ranges[n] ?: picks.firstOrNull { it.number == n }?.let { it.from to it.to } ?: return
+        ranges[n] = afterNudge(f, t, start, d, origin, end)
+    }
     // 이 차의 전체 음성 올리기(FullAudio). 다른 여행·세대의 상태면 아직 시작 전.
     val mine = FullAudio.key == "${trip.code}:${trip.generation}"
     val audio = if (mine) FullAudio.state else AudioState.IDLE
@@ -353,7 +388,7 @@ internal fun AfterTrip(trip: Trip, lines: List<AfterLine>, base: String, token: 
     val seconds = ((end - origin) / 1000).takeIf { it > 0 } ?: (if (mine) FullAudio.seconds.toLong() else 0L)
     val making = running != null && running.items.any { it.phase != Phase.DONE && it.phase != Phase.FAILED } && running.active
     val failed = running != null && !making && running.items.none { it.phase == Phase.DONE }
-    fun toggle(k: Long) { if (k in chosen) chosen.remove(k) else chosen.add(k) }
+    fun toggle(n: Int) { if (n in chosen) chosen.remove(n) else chosen.add(n) }
     fun open() { if (!making) AfterRuns.run = null; onContents() } // 아직 만드는 중이면 실행을 남겨 둔다(돌아오면 진행이 보임)
     // C32 완성 표지 → 그 장면의 플레이어(시안 C37·player3): 콘텐츠 기록이 목록을 읽고 바로 연다(Contents.kt ContentLink)
     fun openScene(moment: String?) { ContentLink.moment = moment; open() }
@@ -388,15 +423,15 @@ internal fun AfterTrip(trip: Trip, lines: List<AfterLine>, base: String, token: 
                     Surface(Modifier.fillMaxWidth(), CarShape.Card, color = c.surface) {
                         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             Text("${trip.title.ifBlank { "함께 탄 여행" }} / 전체 ${afterClock(seconds * 1000)}", style = CarText.Label, color = c.onSurfaceVariant)
-                            SceneWave(fine, picks, origin, end, chosen.toSet(), ::toggle)
+                            SceneWave(fine, shown, origin, end, chosen.toSet(), ::toggle, ::place, ::nudge)
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                 listOf("00:00", afterAxis((end - origin) / 2), afterAxis(end - origin)).forEach { Text(it, style = CarText.Label, color = c.onSurfaceVariant) }
                             }
                         }
                     }
-                    picks.forEach { p -> SceneRow(p, p.from in chosen, origin) { toggle(p.from) } }
+                    shown.forEach { p -> SceneRow(p, p.number in chosen, origin) { toggle(p.number) } }
                     // 추천 장면이 없으면(받아 적은 말이 없는 여행) 막다른 화면이 되지 않게 까닭과 콘텐츠 기록으로 가는 단추(시안 밖 상태)
-                    if (picks.isEmpty()) Text("받아 적은 대화가 없어 추천할 장면을 찾지 못했어요.", style = CarText.Body, color = c.onSurfaceVariant)
+                    if (shown.isEmpty()) Text("받아 적은 대화가 없어 추천할 장면을 찾지 못했어요.", style = CarText.Body, color = c.onSurfaceVariant)
                 }
                 AfterStep.MAKE -> Centered {
                     val r = running
@@ -418,10 +453,10 @@ internal fun AfterTrip(trip: Trip, lines: List<AfterLine>, base: String, token: 
         val n = chosen.size
         when (step) {
             AfterStep.UPLOAD -> CarButton("추천 장면 보기") { step = AfterStep.SELECT }
-            AfterStep.SELECT -> if (picks.isEmpty()) CarButton("콘텐츠 기록 보기", onClick = ::open)
+            AfterStep.SELECT -> if (shown.isEmpty()) CarButton("콘텐츠 기록 보기", onClick = ::open)
             else CarButton(if (n == 0) "장면을 선택해 주세요" else "선택한 ${n}개 생성", enabled = n > 0 && token != null) {
                 if (token != null && n > 0) {
-                    val run = AfterRun(trip.code, trip.generation, picks.filter { it.from in chosen }.map(::AfterItem), trip.people)
+                    val run = AfterRun(trip.code, trip.generation, shown.filter { it.number in chosen }.map(::AfterItem), trip.people)
                     AfterRuns.start(context, base, token, run, allowed, ready); step = AfterStep.MAKE
                 }
             }
@@ -484,15 +519,23 @@ private fun WaveCard(label: String, bars: List<Float>, seconds: Long) {
  * 구간 위 가운데 번호 칩(54×44, 모서리 12, y 8 — 고르면 accent/on-accent, 아니면 surface-2/ink). 칩을 눌러도 목록과 같은 선택이 바뀐다.
  */
 @Composable
-private fun SceneWave(bars: List<Float>, picks: List<AfterPick>, origin: Long, end: Long, chosen: Set<Long>, onToggle: (Long) -> Unit) {
+private fun SceneWave(bars: List<Float>, picks: List<AfterPick>, origin: Long, end: Long, chosen: Set<Int>, onToggle: (Int) -> Unit,
+    onPlace: (Long) -> Unit, onNudge: (Int, Boolean, Long) -> Unit) {
     val c = MaterialTheme.colorScheme
     fun at(t: Long) = if (end > origin) ((t - origin).toFloat() / (end - origin)).coerceIn(0f, 1f) else 0f
-    BoxWithConstraints(Modifier.fillMaxWidth().height(166.dp)) {
+    val place by rememberUpdatedState(onPlace)
+    val nudge by rememberUpdatedState(onNudge)
+    val span = maxOf(1L, end - origin)
+    // 파형 빈 곳을 누르면 그 시각에 구간을 놓는다(구간·칩·경계는 위에서 먼저 받는다)
+    BoxWithConstraints(Modifier.fillMaxWidth().height(166.dp).pointerInput(origin, end) {
+        detectTapGestures { o -> place(origin + (o.x / size.width * span).toLong()) }
+    }) {
         val w = maxWidth
+        val msPerPx = span / with(LocalDensity.current) { w.toPx() }
         Canvas(Modifier.fillMaxSize()) {
             waveBars(bars, 6.dp.toPx(), 2.dp.toPx(), 118.dp.toPx(), 10.dp.toPx(), 73.dp.toPx(), c.onSurfaceVariant.copy(alpha = .55f))
             picks.forEach { p ->
-                val on = p.from in chosen
+                val on = p.number in chosen
                 val edge = (if (on) 3 else 1).dp.toPx()
                 val x0 = minOf(size.width * at(p.from), size.width - 2 * edge)
                 val x1 = (size.width * at(p.to)).coerceIn(x0 + edge, size.width - edge)
@@ -505,12 +548,21 @@ private fun SceneWave(bars: List<Float>, picks: List<AfterPick>, origin: Long, e
         // 구간 막대도 누르면 그 장면을 고르거나 푼다(시안 '구간 1 / 724–756초' → C24). 칩보다 먼저 두어 칩이 위에 온다.
         picks.forEach { p ->
             val x0 = w * at(p.from)
-            Box(Modifier.offset(x = x0, y = 62.dp).size(maxOf(w * at(p.to) - x0, 24.dp), 104.dp).clickable { onToggle(p.from) })
+            Box(Modifier.offset(x = x0, y = 62.dp).size(maxOf(w * at(p.to) - x0, 24.dp), 104.dp).clickable { onToggle(p.number) })
+        }
+        // 고른 구간의 경계(시안 '선택 핸들', 굵기 3)를 옆으로 끌어 시작·끝을 바꾼다. 누르기만 하면 아무것도 하지 않는다(뒤 파형에 구간이 놓이지 않게).
+        picks.filter { it.number in chosen }.forEach { p ->
+            listOf(true to p.from, false to p.to).forEach { (start, t) ->
+                Box(Modifier.offset(x = w * at(t) - 20.dp, y = 62.dp).size(40.dp, 104.dp)
+                    .semantics { contentDescription = "${p.number}번 장면 ${if (start) "시작" else "끝"} 조정" }
+                    .pointerInput(p.number, start) { detectTapGestures { } }
+                    .pointerInput(p.number, start, msPerPx) { detectHorizontalDragGestures { ch, dx -> ch.consume(); nudge(p.number, start, (dx * msPerPx).toLong()) } })
+            }
         }
         picks.forEach { p ->
-            val on = p.from in chosen
+            val on = p.number in chosen
             val mid = w * ((at(p.from) + at(p.to)) / 2)
-            Surface(onClick = { onToggle(p.from) }, shape = RoundedCornerShape(12.dp), color = if (on) c.primary else c.surfaceVariant,
+            Surface(onClick = { onToggle(p.number) }, shape = RoundedCornerShape(12.dp), color = if (on) c.primary else c.surfaceVariant,
                 modifier = Modifier.offset(x = (mid - 27.dp).coerceIn(0.dp, maxOf(0.dp, w - 54.dp)), y = 8.dp).size(54.dp, 44.dp)
                     .semantics { contentDescription = "${p.number}번 장면 ${if (on) "선택 해제" else "선택"}" }) {
                 Box(contentAlignment = Alignment.Center) { Text("${p.number}", style = CarText.Label, color = if (on) c.onPrimary else c.onSurface) }
