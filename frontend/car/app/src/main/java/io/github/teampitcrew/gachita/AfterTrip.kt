@@ -37,7 +37,9 @@ import java.util.UUID
  * 여행 마무리 → 추천 장면 고르기 → 생성 → 결과(최종 시안 C22–C32, 시연판 D21–D26·D補 select*, 흐름 F5). 폰은 frontend/web/after-trip.js.
  * 화면은 원본 Figma `Y7zFqGUEAFDWTumG30MsOs`를 11/15에 읽은 수치(T156). 색은 Material 역할, 글자는 CarText, 모양은 CarShape(CarDesign.kt).
  * - 처리 위치 원칙: 장면 후보는 차 안 규칙(Scenes.kt suggestScenes), 고른 장면은 POST /moments로 남기고(폰이 같은 기록을 읽음),
- *   장면 소리는 이 차가 이미 하는 장면 클립 올리기(MainActivity.clips, POST /recordings)로만 나간다. 영상은 기기 기본 영상(exportShortVideo) → short-assets.
+ *   장면 소리는 이 차가 이미 하는 장면 클립 올리기(MainActivity.clips, POST /recordings)로만 나간다.
+ * - 영상(T158, ADR-0025): 서버 생성이 켜져 있으면 고른 장면으로 short-plans → short-generations를 맡기고(맥의 Codex 일꾼이 프로필 캐릭터
+ *   최대 4명·구간 원음·자막으로 만듦) 완성될 때까지 진행을 본다. 꺼져 있으면(503) 기기 기본 영상(exportShortVideo) → short-assets.
  * - 전체 음성: 여행을 마치면 이 차가 원음 전체를 올린다(FullAudio.kt, T132, 다 올린 때부터 2일 보관). C22는 그 실제 진행을 보인다.
  * - 받아 적은 말은 이 차의 보관함(Live.outbox, 지금 동의 세대·글 있는 줄)에서 읽는다. 이 차가 받아 적지 않은 여행이면(줄이 4개 미만) 서버 기록본으로.
  */
@@ -158,6 +160,18 @@ internal fun storedShort(items: org.json.JSONArray, source: SharedShortSource, s
             it.optInt("generation") == source.generation && it.optString("sourceHash") == source.hash && it.optJSONObject("result")?.optString("sha256") == sha256
     }
 
+/** 서버 생성 요청 본문. 사람이 '선택한 장면 생성'을 누른 것이 외부 생성 확인이다(계획의 externalData: 글·캐릭터 그림만, 소리는 안 감). */
+internal fun serverShortRequest(plan: org.json.JSONObject, generation: Int, key: String): org.json.JSONObject = org.json.JSONObject()
+    .put("momentId", plan.getString("momentId")).put("templateId", plan.getString("templateId")).put("planHash", plan.getString("planHash"))
+    .put("generation", generation).put("externalGenerationConsent", true).put("idempotencyKey", "car-$key")
+
+/** 서버 생성 진행(0~1): 대기 5%, 만드는 중은 걸린 시간을 12분에 맞춰 95%까지(일꾼은 진행을 알리지 않는다), 완성 100%. */
+internal fun serverShortProgress(state: String, elapsedMs: Long): Float = when (state) {
+    "completed" -> 1f
+    "generating", "composing" -> (.05f + .9f * elapsedMs / 720_000f).coerceAtMost(.95f)
+    else -> .05f
+}
+
 private class AfterSourceChanged : IllegalStateException("원음·자막·화자가 바뀌었어요. 다시 만들어 주세요")
 private class AfterStopped(message: String) : IllegalStateException(message)
 
@@ -234,6 +248,23 @@ internal object AfterRuns {
             if (source.generation != run.generation) throw AfterStopped("기록 동의가 바뀌어 멈췄어요")
             item.seconds = source.seconds; item.phase = Phase.RENDER; item.render = 0f
             item.cast = shortSceneCast(source.short, source.short.scenes.singleOrNull(), null, run.people).mapNotNull { it.character?.drawable }
+            // 서버 생성(맥의 Codex 일꾼). 꺼져 있으면(503) 아래 기기 영상으로 간다.
+            val plan = try { net { api.shortPlan(run.code, token, "car-sitcom-v1", false, item.momentId) } } catch (e: ApiError) { if (e.status == 503) null else throw e }
+            val accepted = plan?.let { p -> try { net { api.createShortJob(run.code, token, serverShortRequest(p, run.generation, key)) } } catch (e: ApiError) { if (e.status == 503) null else throw e } }
+            if (plan != null && accepted != null) {
+                val cast = plan.optJSONArray("cast")
+                item.cast = (0 until (cast?.length() ?: 0)).mapNotNull { i -> ShortCharacter.entries.firstOrNull { it.key == cast!!.getJSONObject(i).optString("character") }?.drawable }
+                val started = System.currentTimeMillis()
+                var job: org.json.JSONObject = accepted
+                while (job.optString("state") !in setOf("completed", "failed", "canceled", "submission_unknown")) {
+                    item.render = serverShortProgress(job.optString("state"), System.currentTimeMillis() - started)
+                    delay(5000)
+                    job = net { api.shortJob(run.code, token, accepted.getString("id")) }
+                }
+                if (job.optString("state") != "completed") throw AfterStopped("쇼츠를 만들지 못했어요(${job.optString("errorCode").ifBlank { job.optString("state") }})")
+                item.render = 1f; item.phase = Phase.DONE
+                return
+            }
             val dir = File(context.cacheDir, "after-${UUID.randomUUID()}")
             val control = ShortExportControl()
             try {
