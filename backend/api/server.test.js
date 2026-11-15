@@ -1829,6 +1829,7 @@ const shortWorker=(extra={})=>{
   claim:()=>service.worker(workerReq('POST'),['claim'],{}),
   audio:id=>job(id,'audio','GET'),
   result:(id,video=Buffer.from('final MP4'))=>job(id,'result','PUT',video),
+  thumbnail:(id,png,type='image/png')=>service.worker(Object.assign(workerReq('PUT',png),{headers:{authorization:`Bearer ${WORKER_TOKEN}`,'content-type':type}}),['jobs',id,'thumbnail'],{}),
   fail:(id,errorCode)=>service.worker(workerReq('POST'),['jobs',id,'fail'],{errorCode})};
 };
 // 다른 시험이 남긴 대기 작업을 치워 이 작업만 받아 가게 한다.
@@ -1866,6 +1867,17 @@ test('생성 API: 계획 확인·멱등·한도·자막 변경·철회와 다운
   assert.deepEqual(await w.claim(),[204],'임대한 작업은 다시 주지 않는다');
   assert.equal((await call('GET',job,null,f.a.token))[1].state,'generating');
   assert.equal((await w.audio(id))[1].toString(),'original audio');
+  // 표지 그림(T166): 영상보다 먼저 올리고, 만드는 중에도 작업 보기에 주소가 실린다. PNG만 받는다.
+  const png=Buffer.concat([Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a]),Buffer.from('cover')]);
+  assert.equal((await call('GET',job,null,f.a.token))[1].thumbnailUrl,undefined);
+  await assert.rejects(w.thumbnail(id,Buffer.from('not png')),e=>e.status===400);
+  await assert.rejects(w.thumbnail(id,png,'image/jpeg'),e=>e.status===400);
+  assert.deepEqual(await w.thumbnail(id,png),[200,{id,thumbnailUrl:`${job}/thumbnail`}]);
+  assert.equal((await w.thumbnail(id,png))[0],200,'다시 올리면 덮는다');
+  const making=await w.service.request({method:'GET',headers:{authorization:`Bearer ${f.a.token}`}},f.trip.code,'short-generations',id,null,{});
+  assert.deepEqual([making[1].state,making[1].thumbnailUrl],['generating',`${job}/thumbnail`]);
+  assert.deepEqual((await w.service.request({method:'GET',headers:{authorization:`Bearer ${f.a.token}`}},f.trip.code,'short-generations',id,'thumbnail',{})).slice(1),[png,'image/png'],'만드는 중에도 표지를 받는다');
+  await assert.rejects(w.service.request({method:'GET',headers:{authorization:`Bearer ${other.a.token}`}},f.trip.code,'short-generations',id,'thumbnail',{}),e=>e.status===401,'다른 여행의 토큰은 못 받음');
   const bad=shortWorker({probe:async()=>{throw {status:400,error:'9:16 세로 영상이 필요해요'};}});
   await assert.rejects(bad.result(id),e=>e.status===400);assert.equal(bad.objects.size,0);
   const [done,view]=await w.result(id);assert.equal(done,200);assert.equal(view.state,'completed');assert.equal(view.progress.completedShots,view.progress.totalShots);

@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { material, kenBurns, inside, make, prompt, MOTIONS } from "./worker.mjs";
+import { material, kenBurns, inside, make, prompt, MOTIONS, cover, coverPrompt } from "./worker.mjs";
 
 const job = {
   template: { name: "차 안 대화극", direction: "Warm hand-drawn 2D sitcom frames. no human faces." },
@@ -69,4 +69,22 @@ test("그림·원음으로 장면 길이의 9:16 MP4를 만듭니다(ffmpeg)", {
   assert.deepEqual(p.streams.map((s) => s.codec_type).sort(), ["audio", "video"]);
   assert.deepEqual([p.streams.find((s) => s.width).width, p.streams.find((s) => s.width).height], [720, 1280]);
   assert.ok(seen, "작업 폴더를 그림 단계에 넘깁니다");
+});
+
+test("표지 그림(T166): 시안 표지·캐릭터 그림을 주고, 고른 그림을 표지 크기(800×1100) PNG로 자릅니다", { skip: !ffmpeg }, async () => {
+  let given;
+  const drawCover = async (dir) => {
+    given = (await import("node:fs")).readdirSync(dir).sort();
+    execFileSync("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", "color=c=0xfdf0d8:s=1024x1536", "-frames:v", "1", join(dir, "cover.png")]);
+    return { file: "cover.png" };
+  };
+  const png = await cover(job, { drawCover });
+  assert.deepEqual([...png.subarray(0, 8)], [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const src = await mkdtemp(join(tmpdir(), "gachita-cover-test-"));
+  await writeFile(join(src, "c.png"), png);
+  const p = JSON.parse(execFileSync("ffprobe", ["-v", "error", "-show_entries", "stream=width,height", "-of", "json", join(src, "c.png")]));
+  assert.deepEqual([p.streams[0].width, p.streams[0].height], [800, 1100]);
+  assert.deepEqual(given.filter((f) => f !== "cover.png"), ["cast-1.png", "cast-2.png", "reference-1.png", "reference-2.png", "scene.json"]);
+  assert.match(coverPrompt(2), /글자·숫자·자막·로고·말풍선·UI를 넣지 않습니다/);
+  await assert.rejects(cover(job, { drawCover: async () => ({ file: "../escape.png" }) }), (e) => e.code === "frame_path");
 });
