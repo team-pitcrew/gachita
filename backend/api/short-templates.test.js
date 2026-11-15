@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { planShort } from "./short-templates.js";
+import { planShort, fixedCharacter } from "./short-templates.js";
 import { subtitles } from "./short-render.js";
 const source = () => ({
   generation: 1,
@@ -108,6 +108,18 @@ test("한 사람만 대조돼도 같이 탄 네 사람의 캐릭터가 모두 �
   const p = planShort(s);
   assert.deepEqual(p.cast.map((x) => x.participantId), ["d", "a", "b", "c"]);
   assert.deepEqual(p.cues.map((x) => x.slot), [0, null]);
+});
+test("사람과 캐릭터의 짝은 말한 순서·장면과 무관하게 고정입니다", () => {
+  const s = source();
+  s.cast[1].character = ""; // 나: 프로필 캐릭터 없음
+  const first = planShort(s).cast.find((x) => x.participantId === "b").character;
+  s.scenes[0].cues.reverse().forEach((c) => (c.participantId = "b")); // 이번엔 나만 말함 → slot 0
+  const second = planShort(s).cast.find((x) => x.participantId === "b");
+  assert.equal(second.slot, 0);
+  assert.equal(second.character, first, "slot이 바뀌어도 같은 캐릭터");
+  assert.equal(fixedCharacter({ name: "나", character: "" }), first, "다른 여행에서도 이름이 같으면 같은 캐릭터");
+  assert.equal(fixedCharacter({ name: "가", character: "cap" }), "cap", "프로필 캐릭터가 있으면 그대로");
+  assert.equal(fixedCharacter({ name: "", character: "" }), null);
 });
 test("한국어 자막은 원문을 모두 유지하고 ASS 태그를 실행하지 않습니다", () => {
   const p = planShort(source());
