@@ -17,6 +17,14 @@ export const CONSENT_VERSION = "2026-11-14";
 // 계정 동의가 여행으로 이어지는지: 켜져 있고, 지금 문구 판에 동의했을 때만. 문구가 바뀌면(판을 올리면) 다시 동의를 받는다.
 // 본인이 자기 프로필 토큰으로 여행에 들어갈 때만 쓴다(참가, 차량 QR 초대) — 다른 사람이 대신 켜지 못한다.
 export const accountConsents = (profile) => profile.consent === true && profile.consentVersion === CONSENT_VERSION;
+// 프로필을 만들 때 목소리를 반드시 등록한다(오너 원칙, T173). 목소리가 없는 프로필은 그룹·여행에 들어가지 못한다(409 voice_required).
+// 예외는 보호자 동의가 꺼진 아이 하나(녹음하지 않아 등록할 수 없음). hasVoice는 지금 임베더 길이의 값만 세므로, 임베더가 바뀌면
+// 옛 사용자도 다시 등록해야 한다 — 폰·차는 이 409를 받으면 목소리 등록(P06·C06, 아이는 P12·C12)으로 보낸다.
+export const VOICE_REQUIRED = "voice_required";
+export const voiceReady = (p) => Boolean(p.hasVoice) || Boolean(p.managedBy && !p.consent);
+export function requireVoice(p) {
+  if (!voiceReady(p)) throw { status: 409, error: "목소리를 먼저 등록해 주세요", reason: VOICE_REQUIRED };
+}
 
 export async function hashPassword(password) {
   const salt = randomBytes(16);

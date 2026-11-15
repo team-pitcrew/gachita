@@ -4,6 +4,7 @@ import pg from "pg";
 import { migrate, server } from "./server.js";
 import { endStores, profilesDb, tripsDb } from "./db.js";
 import { captureLog } from "./log.js";
+import { withVoice } from "./voice-fixture.js";
 
 let base, adminUrl, names;
 captureLog(() => {});
@@ -43,6 +44,7 @@ async function call(method, path, body, token) {
 async function fixture() {
   const people = [];
   for (const name of ["보낸 사람", "받는 사람", "다른 사람"]) people.push((await call("POST", "/profiles", { name, character: "bunny" })).data);
+  for (const p of people) await withVoice(base, p.token); // 프로필로 참가하려면 목소리 먼저(T173)
   const trip = (await call("POST", "/trips", { title: "결과 공유 시험" })).data;
   const path = `/trips/${trip.code}`;
   const riders = [];

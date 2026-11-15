@@ -4,7 +4,7 @@
 import { randomInt, randomUUID } from "node:crypto";
 import { profilesDb } from "./db.js";
 import { DIMS } from "./providers/voice.js";
-import { accountConsents, CONSENT_VERSION } from "./accounts.js";
+import { accountConsents, CONSENT_VERSION, requireVoice, VOICE_REQUIRED, voiceReady } from "./accounts.js";
 
 const fail = (status, error) => {
   throw { status, error };
@@ -152,6 +152,7 @@ export async function groups(req, seg, b, { profileOf, text, bool, oneOf, obj, s
     return [200, { items: await views(profilesDb(), rows) }];
   }
   if (route === "list") {
+    requireVoice(me); // 그룹을 만드는 대표도 목소리 먼저(T173)
     const name = text(b.name, 20, "name");
     const kind = oneOf(b.kind, KINDS, "kind");
     return tx(me.id, async (db) => {
@@ -324,6 +325,7 @@ export async function groupInvites(req, seg, { profileOf }) {
     const { rows: members } = await db.query("SELECT profile_id FROM group_members WHERE group_id = $1", [i.group_id]);
     if (!members.some((m) => m.profile_id === me.id)) {
       // 같은 코드로 다시 들어오면 그대로 200(구성원을 늘리지 않음). 코드는 24시간 동안 여러 사람이 쓴다.
+      requireVoice(me); // 초대로 새로 들어오려면 목소리 먼저(T173). 이미 구성원이면 그대로 200
       if (members.length >= MAX_MEMBERS) fail(409, `그룹 구성원은 ${MAX_MEMBERS}명까지`);
       if (await tooManyGroups(db, me.id)) fail(409, `그룹은 ${MAX_GROUPS}개까지`);
       await db.query("INSERT INTO group_members (group_id, profile_id, seat) VALUES ($1, $2, $3)", [i.group_id, me.id, await freeSeat(db, i.group_id, ADULT_SEATS)]);
@@ -339,6 +341,10 @@ export async function groupForTrip(meId, groupId, db = profilesDb()) {
   const { g, members } = await load(db, groupId, meId);
   const seated = members.filter((m) => m.seat);
   if (!seated.length) fail(409, "자리가 정해진 구성원이 없어요. 좌석을 먼저 정해 주세요");
+  // 자리 있는 구성원은 모두 목소리가 있어야 출발한다(T173, 보호자 동의를 끈 아이는 예외). 화면은 missing으로 그 사람의 등록 화면으로 보낸다.
+  const missing = seated.filter((m) => !voiceReady({ hasVoice: m.has_voice, managedBy: m.managed_by, consent: m.consent }));
+  if (missing.length) throw { status: 409, error: `목소리를 먼저 등록해 주세요: ${missing.map((m) => m.name).join(", ")}`, reason: VOICE_REQUIRED,
+    missing: missing.map((m) => ({ profileId: m.profile_id, name: m.name, child: Boolean(m.managed_by) })) };
   return {
     id: g.id,
     name: g.name,

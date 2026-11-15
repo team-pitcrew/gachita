@@ -5,6 +5,7 @@ import pg from "pg";
 import { migrate, server } from "./server.js";
 import { endStores, profilesDb, tripsDb } from "./db.js";
 import { captureLog } from "./log.js";
+import { withVoice } from "./voice-fixture.js";
 
 let base, adminUrl, names;
 captureLog(() => {});
@@ -39,7 +40,8 @@ async function call(method, path, body, token) {
     ...(body ? { body: JSON.stringify(body) } : {}) });
   return { status: res.status, data: res.status === 204 ? undefined : await res.json(), headers: res.headers };
 }
-const profile = async (name) => (await call("POST", "/profiles", { name, character: "bunny", consentDefault: true })).data;
+// 프로필은 만들 때 목소리까지 등록한다(T173, 목소리 없으면 차량 QR 참가가 409)
+const profile = async (name) => { const p = (await call("POST", "/profiles", { name, character: "bunny", consentDefault: true })).data; await withVoice(base, p.token); return p; };
 const setup = async () => {
   const trip = (await call("POST", "/trips", { title: "차량 QR 초대" })).data;
   const driver = (await call("POST", `/trips/${trip.code}/participants`, { name: "운전자", seat: "ROW_1_LEFT", consent: true })).data;

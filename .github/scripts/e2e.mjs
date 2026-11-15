@@ -8,6 +8,7 @@
 // 한 줄로 알리고 1로 끝난다. E2E_WAIT_SECONDS(기본 60)는 서버가 뜰 때까지 기다리는 시간이다.
 // ponytail: 재시도는 서버가 뜰 때까지의 기다림에만 둔다. 흐름 중의 요청을 다시 보내면
 //           같은 부탁이 두 번 생기는 식으로 진짜 결함을 가린다.
+import { readFileSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
 
@@ -33,7 +34,7 @@ async function call(method, path, { body, raw, token } = {}) {
   try {
     res = await fetch(base + path, {
       method,
-      headers: token ? { authorization: `Bearer ${token}` } : {},
+      headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...(body !== undefined && raw === undefined ? { "content-type": "application/json" } : {}) },
       body: raw ?? (body === undefined ? undefined : JSON.stringify(body)),
       signal: AbortSignal.timeout(10_000),
     });
@@ -83,6 +84,10 @@ step("프로필 발급과 조회", async () => {
   same("조회한 이름과 토큰", [seen.id, seen.name, seen.token], [me.id, "지우", undefined]);
   status(await call("GET", "/api/profiles/me"), 401);
   status(await call("GET", "/api/profiles/me", { token: "x".repeat(43) }), 401);
+  // 프로필은 목소리까지 등록해야 여행에 들어간다(T173, 409 voice_required). 값은 서버·차가 함께 쓰는 시험 벡터의 첫 값
+  same("목소리 등록 전", status(await call("GET", "/api/profiles/me", { token: me.token }), 200).hasVoice, false);
+  status(await call("POST", "/api/profiles/me/voice", { token: me.token, body: { embedder: "logmel-pitch-1", vector: JSON.parse(readFileSync(new URL("../../backend/api/voice-vectors.json", import.meta.url), "utf8")).cases[0].vector, seconds: 7 } }), 200);
+  same("목소리 등록 뒤", status(await call("GET", "/api/profiles/me", { token: me.token }), 200).hasVoice, true);
 });
 
 step("여행 만들기", async () => {

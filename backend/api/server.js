@@ -20,7 +20,7 @@ import { clipStore } from "./providers/clips.js";
 import { googleIdentity, googlePublicConfig } from "./providers/google.js";
 import { cues, momentSpan, suggest } from "./scenes.js";
 import { checkStrong, checkVector, DIMS, embed, EMBEDDER, matchFloor, matchMargin, matchThreshold, similarity, STRONG_DIMS, STRONG_EMBEDDER, wavMono } from "./providers/voice.js";
-import { accountConsents, accounts, CONSENT_VERSION } from "./accounts.js";
+import { accountConsents, accounts, CONSENT_VERSION, requireVoice } from "./accounts.js";
 import { groupForTrip, groupInvites, groups, shareGroup } from "./groups.js";
 import { rideLinks, redeemRideLink } from "./ride-links.js";
 import { boardingInvites, tripBoardingInvites } from "./boarding-invites.js";
@@ -90,7 +90,8 @@ const DB_DOWN = /^(08|53|57014|57P0)/;
 const DB_DOWN_MESSAGE = /Connection terminated|timeout exceeded when trying to connect|not queryable/;
 // 던진 것을 응답으로: fail()의 {status, error}는 그대로, DB 문제는 503 unavailable, 나머지는 500 internal.
 export function classify(e) {
-  if (e?.status) return { status: e.status, type: ERROR_TYPE[e.status] ?? "internal", message: e.error };
+  // reason·missing(T173): 같은 종류 안에서 화면이 갈 곳을 가르는 값(예: voice_required와 목소리 없는 구성원). 문장은 바뀔 수 있다.
+  if (e?.status) return { status: e.status, type: ERROR_TYPE[e.status] ?? "internal", message: e.error, ...(e.reason && { reason: e.reason }), ...(e.missing && { missing: e.missing }) };
   const down = DB_DOWN.test(e?.code ?? "") || ["ECONNREFUSED", "ECONNRESET", "ETIMEDOUT"].includes(e?.code) || DB_DOWN_MESSAGE.test(e?.message ?? "");
   return down ? { status: 503, type: "unavailable", message: "서버가 잠시 바빠요. 잠시 뒤 다시 해 주세요" } : { status: 500, type: "internal", message: "서버 오류" };
 }
@@ -1204,6 +1205,7 @@ async function handle(trip, { req, m, sub, id, leaf, b, query, profile }, client
         again.tokenHash = tokenHash(token).toString("hex");
         return changed(200, { ...asParticipant(again), token });
       }
+      if (profile) requireVoice(profile); // 프로필로 새로 들어오려면 목소리 먼저(T173). 손님(이름만)은 차 파트와 따로 맞춘다
       const seat = oneOf(b.seat, SEATS, "seat");
       const p = profile
         // 동의를 보내지 않으면: 본인의 계정 동의(지금 문구 판)가 켜져 있으면 켠 채로, 아니면 지금처럼 프로필의 기본값(T128).
@@ -1732,9 +1734,9 @@ export const server = createServer(async (req, res) => {
     if (path.startsWith("/models/") || path.startsWith("/vendor/ort/")) return void (await serveAsset(path, req, res));
     await serveFile(path, req, res);
   } catch (e) {
-    const { status, type, message } = classify(e);
-    failure = { type, ...(status >= 500 && errFields(e, status === 500)) }; // 서버 쪽 오류만 원인을, 예상 못 한 것(500)만 스택까지
-    send(status, { error: message, type });
+    const { status, type, message, reason, missing } = classify(e);
+    failure = { type, ...(reason && { reason }), ...(status >= 500 && errFields(e, status === 500)) }; // 서버 쪽 오류만 원인을, 예상 못 한 것(500)만 스택까지
+    send(status, { error: message, type, ...(reason && { reason }), ...(missing && { missing }) });
   }
 });
 
