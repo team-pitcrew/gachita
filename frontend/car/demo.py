@@ -876,6 +876,7 @@ def edit_scene(row, extend_s):
     x0, x1 = axis[0][4][0], axis[-1][4][2]; y = (axis[0][4][1] + axis[0][4][3]) // 2 - 74
     before = below[0][0].split(" /")[0]; to = hms(before.split("–")[1])
     xa, xb = (x0 + (x1 - x0) * t / total for t in (to, min(total, to + extend_s)))
+    xb += 32 if extend_s > 0 else -32  # 끌기는 터치 슬롭(약 25px, 3초) 뒤부터 움직인다(pass3: 25px 끌기는 그대로, 손 확인: 82px → +7초, 56px → +4초)
     adb("shell", "input", "swipe", str(int(xa)), str(y), str(int(xb)), str(y), "1200"); time.sleep(1.5)
     after = next((n[0].split(" /")[0] for n in ui() if re.match(r"\d+:\d\d:\d\d–", n[0]) and abs(n[4][1] - below[0][4][1]) < 20), None)
     note("scene.edit", before=before, after=after, extend_s=extend_s)
