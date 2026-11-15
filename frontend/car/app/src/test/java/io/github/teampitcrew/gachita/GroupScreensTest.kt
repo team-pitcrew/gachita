@@ -44,6 +44,15 @@ class GroupScreensTest {
         assertEquals(5, autoSeats(six).size)
     }
 
+    @Test fun `목소리 없는 아이는 동의가 켜진 아이만 다시 묻고, 동의 꺼진 아이는 예외`() {
+        val kid = m("k", "서준", null, role = "child").copy(hasVoice = false)
+        val g = family.copy(members = family.members + kid)
+        assertEquals("k", childWithoutVoice(g)?.profileId)
+        assertNull(childWithoutVoice(g.copy(members = family.members + kid.copy(hasVoice = true))))
+        assertNull(childWithoutVoice(g.copy(members = family.members + kid.copy(consent = false))))
+        assertNull(childWithoutVoice(null))
+    }
+
     @Test fun `혼자인 동승 그룹만 초대부터`() {
         assertTrue(soloGuest(solo))
         assertFalse(soloGuest(family))
