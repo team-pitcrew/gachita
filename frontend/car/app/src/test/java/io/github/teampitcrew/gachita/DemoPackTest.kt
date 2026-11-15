@@ -53,9 +53,9 @@ class DemoPackTest {
         assertEquals(5_000_000L, pack.trip(live).createdAt)
     }
 
-    @Test fun heardLinesFollowTheTalkButSkipLongSilence() {
+    @Test fun heardLinesFollowTheTalkInRealTime() {
         val lines = listOf(DemoLine(20.0, "a", "하나"), DemoLine(22.0, "b", "둘"), DemoLine(22.1, "a", "셋"), DemoLine(300.0, "b", "넷"))
-        assertEquals(listOf(1500L, 2000L, 800L, 3500L), lines.indices.map { demoGapMs(lines, it) })
+        assertEquals(listOf(20_000L, 2000L, 300L, 120_000L), lines.indices.map { demoGapMs(lines, it) }) // 팩의 시각 그대로, 겹친 말은 0.3초, 아주 긴 빈틈은 2분까지
     }
 
     @Test fun rejectsBrokenPacks() {

@@ -158,9 +158,9 @@ internal fun parseDemoPack(json: String): DemoPack {
         people, lines, wave, route, scenes, stops)
 }
 
-/** [index]째 줄이 나오기까지 기다릴 시간: 앞 줄과의 원래 간격, 빈틈은 3.5초까지만(첫 줄은 1.5초 뒤), 겹친 말도 0.8초는 띄운다. */
+/** [index]째 줄이 나오기까지 기다릴 시간: 팩의 시각 그대로(실시간) — 편집에서 같은 구간의 소리를 붙이면 줄과 맞는다(오너 11/15). 겹친 말도 0.3초는 띄운다. */
 internal fun demoGapMs(lines: List<DemoLine>, index: Int): Long =
-    if (index == 0) 1500 else Math.round((lines[index].at - lines[index - 1].at) * 1000).coerceIn(800, 3500)
+    Math.round((lines[index].at - (if (index == 0) 0.0 else lines[index - 1].at)) * 1000).coerceIn(300, 120_000)
 
 /** 이 앱에 든 시연 팩(디버그 빌드의 assets/demo). 없거나 틀리면 pack은 null이고 앱은 평소대로 돈다. */
 internal object Demo {
