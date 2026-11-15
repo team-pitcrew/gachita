@@ -346,7 +346,7 @@ fun OnboardingScreen(o: Onboarding, driving: Boolean = false, onFamily: () -> Un
                         Surface(Modifier.fillMaxWidth(), CarShape.Card, color = c.surface) {
                             Row(Modifier.padding(24.dp), horizontalArrangement = Arrangement.spacedBy(30.dp)) {
                                 CHARS.take(4).forEach { (key, res) ->
-                                    Box(Modifier.clip(CarShape.Face).clickable { o.character = key }) { CharAvatar(res, 140.dp, CarShape.Face) }
+                                    Box(Modifier.clip(CarShape.Face).clickable { o.character = key }) { CharAvatar(res, 140.dp, CarShape.Face, ring = o.character == key) } // 고른 캐릭터에 테(오너 11/15: 눌러도 고른 표시가 없어 선택이 안 되는 것처럼 보임)
                                 }
                             }
                         }
