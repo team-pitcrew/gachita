@@ -41,13 +41,14 @@ const placeAt = (places, at) => places.findLast((p) => p.at <= at)?.name ?? null
 
 // GET /profiles/me/trips: 내 프로필이 참가한 여행을 최신 순으로. 여행을 가로질러 두 저장소를 읽는다.
 // ponytail: 참가자 검색은 문서 포함(@>)이라 여행 표를 훑는다. 여행이 수만 개가 되면 참가자 표나 GIN 색인으로.
-export async function myTrips(me, fresh) {
+// active면 끝나지 않은 여행만, 장소·경로·콘텐츠는 셈하지 않는다(T165, 모양은 같고 그 셋은 빈 목록).
+export async function myTrips(me, fresh, { active = false } = {}) {
   const { rows } = await tripsDb().query(
-    "SELECT doc FROM trips WHERE doc->'participants' @> $1::jsonb ORDER BY created_at DESC, code LIMIT $2",
+    `SELECT doc FROM trips WHERE doc->'participants' @> $1::jsonb ${active ? "AND doc->>'status' <> 'ended'" : ""} ORDER BY created_at DESC, code LIMIT $2`,
     [JSON.stringify([{ profileId: me.id }]), MAX_TRIPS]
   );
   const trips = rows.map((r) => r.doc);
-  return [200, { items: await tripItems(trips, (t) => t.participants.find((p) => p.profileId === me.id), fresh) }];
+  return [200, { items: await tripItems(trips, (t) => t.participants.find((p) => p.profileId === me.id), fresh, active) }];
 }
 
 // GET /trips/{code}/contents(F6): 프로필 토큰이 없는 기기(차)가 지금 여행 하나의 콘텐츠 기록을 /profiles/me/trips 항목과 같은 모양으로 읽는다.
@@ -60,8 +61,9 @@ export async function tripContents(trip, caller, fresh) {
 // 여행들을 콘텐츠 기록 항목으로. viewerOf(trip)는 읽는 사람의 참가자다. 그 참가자가 녹음에 동의했으면 장소·경로·콘텐츠를 채운다 —
 // 기록본과 같은 규칙이고, 아니면 빈 목록이다(T136: 장소도 동의한 참가자만).
 // fresh(trip, rows)는 그 여행의 영상 가운데 지금 원본(원음·자막·화자)과 같은 것의 id를 준다(server.js). 없으면 거르지 않는다.
-async function tripItems(trips, viewerOf, fresh) {
-  const open = trips.filter((t) => viewerOf(t)?.consent);
+// light면 장소·경로·콘텐츠를 셈하지 않는다(모두 빈 목록).
+async function tripItems(trips, viewerOf, fresh, light = false) {
+  const open = light ? [] : trips.filter((t) => viewerOf(t)?.consent);
   const codes = open.map((t) => t.code);
   const generations = open.map((t) => t.generation ?? 1);
 

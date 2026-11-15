@@ -35,7 +35,9 @@
 | `recording` | 지금 기록 중인지(T162) |
 | `me` | 이 여행에서의 나: `{participantId, seat, consent}`(T162). 참가자 토큰은 싣지 않는다 |
 
-**폰이 그룹 여행을 이어 타는 길(T162).** 차가 그룹으로 여행을 만들면(groups.md) 다른 성인의 폰에는 토큰이 없습니다. 폰은 이 목록에서 `status`가 `ended`가 아니고 `groupId`가 내 그룹인 여행을 찾아, 그 폰에 참가자 토큰이 없으면 프로필 토큰으로 `POST /api/trips/{code}/participants`(본문 없음)를 불러 있던 참가자(`me.participantId`, 자리·동의 그대로)와 새 토큰을 받습니다.
+**진행 중 여행만 가볍게(T165).** `GET /api/profiles/me/trips?status=active`는 끝나지 않은(`ended`가 아닌) 여행만 같은 모양으로 주고, `places`·`route`·`contents`는 셈하지 않아 빈 목록입니다. 폰 처음 화면처럼 자주(몇 초마다) 읽을 때 씁니다. 다른 `status` 값은 400입니다.
+
+**폰이 그룹 여행을 이어 타는 길(T162).** 차가 그룹으로 여행을 만들면(groups.md) 다른 성인의 폰에는 토큰이 없습니다. 폰은 이 목록에서 `status`가 `ended`가 아니고 `groupId`가 내 그룹인 여행을 찾아, 그 폰에 참가자 토큰이 없으면 프로필 토큰으로 `POST /api/trips/{code}/participants`(본문 없음, `seat`를 보내도 무시)를 불러 있던 참가자(`me.participantId`, 자리·동의 그대로)와 새 토큰을 받습니다.
 
 콘텐츠 하나에는 `from`·`to`(장면 구간, 없으면 장면 시각 앞 20초~뒤 10초), `cast`(그 구간에서 말한 사람, 화자를 확인한 줄만, 처음 말한 순서 — 갤러리 타일과 플레이어의 캐릭터), `lines`(그 구간의 발화 30줄까지 `{at, participantId, name, text}` — 플레이어의 자막 줄, 화자를 모르면 이름 없이)도 있습니다(F6). 글은 고친 글 → 다시 받아 적은 글 → 원래 글 순으로 고릅니다.
 
