@@ -233,13 +233,14 @@ private fun characterOf(p: ContentPerson?): Int = ShortCharacter.entries.firstOr
 private fun ContentFace(p: ContentPerson?, size: Dp) = CharAvatar(characterOf(p), size, CircleShape)
 
 /** 숏폼 표지 한 장에 필요한 값. */
-private data class CoverData(val date: String, val trip: String, val quote: String, val faces: List<ContentPerson?>, val caption: String, val seconds: Double)
+private data class CoverData(val date: String, val trip: String, val quote: String, val faces: List<ContentPerson?>, val caption: String, val seconds: Double,
+    val image: androidx.compose.ui.graphics.ImageBitmap? = null) // image: 일꾼이 만든 표지 그림(C32 DoneScene과 같음). mock: 지금은 시연 팩의 표지만(DemoPack.kt)
 
 private fun coverOf(item: ContentItem, trip: ContentTrip): CoverData {
     val q = contentQuote(item)
     // mock: 시안 표지 아래 한 줄('서준의 한마디에 모두 웃음', '숙소에 도착하기 직전')은 서버에 원천이 없다. 따옴표 줄을 말한 사람으로 만든 글(#392 표 '목업').
     val caption = q?.name?.takeIf { it.isNotBlank() }?.let { "${it}의 한마디" } ?: trip.title
-    return CoverData(contentCoverDate(item.at), trip.title.ifBlank { "함께 탄 여행" }, q?.text ?: item.title, item.cast.take(2), caption, item.seconds)
+    return CoverData(contentCoverDate(item.at), trip.title.ifBlank { "함께 탄 여행" }, q?.text ?: item.title, item.cast.take(2), caption, item.seconds, Demo.covers[item.id])
 }
 
 /**
@@ -254,13 +255,15 @@ private fun ContentCover(cover: CoverData, tint: Int, width: Dp, height: Dp = wi
     val d = LocalDensity.current
     fun s(v: Float) = with(d) { (v * k).dp.toSp() }
     val small = TextStyle(fontFamily = Pretendard, fontWeight = FontWeight.Medium, fontSize = s(18.75f), lineHeight = s(27.5f))
-    Column(Modifier.size(width, height).clip(RoundedCornerShape(25.dp * k)).background(CarPaper.Tints[tint % CarPaper.Tints.size]).padding(30.dp * k),
-        verticalArrangement = Arrangement.spacedBy(20.dp * k)) {
+    Box(Modifier.size(width, height).clip(RoundedCornerShape(25.dp * k)).background(CarPaper.Tints[tint % CarPaper.Tints.size])) {
+      // 표지 그림이 있으면 바탕으로 깔고 캐릭터 줄은 뺀다(그림에 캐릭터가 있다, AfterTrip DoneScene과 같음)
+      if (cover.image != null) Image(cover.image, null, Modifier.matchParentSize(), contentScale = ContentScale.Crop)
+      Column(Modifier.fillMaxSize().padding(30.dp * k), verticalArrangement = Arrangement.spacedBy(20.dp * k)) {
         Text("${cover.date}  ${cover.trip}", style = small, color = CarPaper.Ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
         Text(contentTwoLines(cover.quote), style = CarText.Title.copy(fontSize = s(40f), lineHeight = s(55f)),
             color = CarPaper.Ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
         Spacer(Modifier.weight(1f))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(15.dp * k, Alignment.CenterHorizontally)) {
+        if (cover.image == null) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(15.dp * k, Alignment.CenterHorizontally)) {
             cover.faces.forEach { ContentFace(it, 140.dp * k) }
         }
         Text(cover.caption, Modifier.fillMaxWidth(), style = small.copy(fontWeight = FontWeight.Normal, fontSize = s(16.25f), lineHeight = s(22.5f)),
@@ -270,6 +273,7 @@ private fun ContentCover(cover: CoverData, tint: Int, width: Dp, height: Dp = wi
             Spacer(Modifier.weight(1f))
             Text("▶ ${contentShortClock(cover.seconds)}", style = small, color = CarPaper.Ink, maxLines = 1)
         }
+      }
     }
 }
 
@@ -316,7 +320,8 @@ private fun LinkText(label: String, onClick: () -> Unit) =
  */
 @Composable
 internal fun ContentsRecord(base: String, code: String, token: String?, canRead: () -> Boolean, canPlay: () -> Boolean,
-    onRide: () -> Unit, onActiveChange: (Boolean) -> Unit, members: Int, modifier: Modifier = Modifier, onFamily: () -> Unit = onRide) {
+    onRide: () -> Unit, onActiveChange: (Boolean) -> Unit, members: Int, modifier: Modifier = Modifier, onFamily: () -> Unit = onRide,
+    demo: ContentTrip? = null) { // mock: 시연 팩의 콘텐츠 기록(DemoPack.kt). 있으면 서버를 읽지 않고 영상은 앱에 든 파일로
     val context = LocalContext.current
     val c = MaterialTheme.colorScheme
     val read by rememberUpdatedState(canRead)
@@ -344,6 +349,7 @@ internal fun ContentsRecord(base: String, code: String, token: String?, canRead:
     // 다시 읽다 실패하면 보이던 기록을 그대로 둔다. ponytail: 10초 조회, 서버가 새 쇼츠를 알리게 되면 그 신호로.
     LaunchedEffect(code, token) {
         loaded = false; empty = ""
+        if (demo != null) { trip = demo; loaded = true; return@LaunchedEffect }
         while (true) {
             if (token == null || !read()) { if (trip == null) loaded = true }
             else try {
@@ -365,6 +371,7 @@ internal fun ContentsRecord(base: String, code: String, token: String?, canRead:
 
     suspend fun fetch(it: ContentItem): File {
         file?.takeIf { f -> f.first == it.id }?.let { return it.second }
+        if (demo != null) return withContext(Dispatchers.IO) { Demo.video(context, it.id) }.also { f -> file?.second?.delete(); file = it.id to f }
         val t = requireNotNull(token) { "기록 동의와 연결을 확인해 주세요" }
         check(read()) { "모두의 기록 동의와 연결을 확인해 주세요" }
         val f = withContext(Dispatchers.IO) {
