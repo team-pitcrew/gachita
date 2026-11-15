@@ -6,7 +6,8 @@
 // ponytail: 프로필 토큰이 없는 손님도 여행 코드만 알면 참가하고 자리를 고치고 동의를 끌 수 있다.
 //           동의 켜기와 음성 경로는 참가자 토큰으로 본인만 한다(T68).
 import { createHash, randomBytes, randomInt, randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { readFile, stat } from "node:fs/promises";
 import { createServer } from "node:http";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -69,6 +70,7 @@ const MIME = {
   ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
   ".svg": "image/svg+xml; charset=utf-8", ".json": "application/json; charset=utf-8", ".webmanifest": "application/manifest+json; charset=utf-8",
   ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".ico": "image/vnd.microsoft.icon",
+  ".mjs": "text/javascript; charset=utf-8", ".wasm": "application/wasm", ".onnx": "application/octet-stream", ".txt": "text/plain; charset=utf-8",
 };
 
 // 옛 QR 초대(/j)와 다른 프로필을 대신 참가시키는 profileId는 계속 닫혀 있다. 그룹은 새 모양으로 되살렸다(T133, groups.js).
@@ -1573,6 +1575,31 @@ const tripAudioService = tripAudio({ withTrip, participantOf, sweepClips, queueR
 // 웹 파일은 쓸 때마다 다시 확인하게 한다(no-cache + ETag). 지시가 없으면 Cloudflare가 4시간 캐시해
 // 배포 뒤에도 옛 app.js가 쓰인다. 바뀌지 않았으면 304라 다시 받지 않는다.
 // ponytail: 파일 이름에 해시를 붙이는 빌드는 두지 않는다(빌드 없는 웹앱). 파일이 커지면 그때.
+// 폰 웹이 브라우저에서 화자 값(wespeaker)을 만들 때 쓰는 모델과 실행기(T170): /models/…, /vendor/ort/….
+// 저장소에 넣지 않고 이미지를 만들 때 공식 릴리스에서 받아 sha256을 확인한다(fetch-assets.mjs → backend/api/assets/).
+// 내용이 sha256으로 고정이라 오래 캐시한다. 25 MB라 메모리에 읽지 않고 흘려 보낸다. ETag는 처음 줄 때 한 번 세어 둔다.
+const ASSETS = fileURLToPath(new URL("./assets/", import.meta.url));
+const assetTags = new Map();
+async function assetTag(file) {
+  if (!assetTags.has(file)) {
+    const hash = createHash("sha256");
+    for await (const chunk of createReadStream(file)) hash.update(chunk);
+    assetTags.set(file, `"${hash.digest("base64url").slice(0, 22)}"`);
+  }
+  return assetTags.get(file);
+}
+async function serveAsset(path, req, res) {
+  const file = normalize(join(ASSETS, path));
+  if (!file.startsWith(ASSETS) || !extname(file)) fail(404, "없는 파일");
+  const info = await stat(file).catch(() => fail(404, "없는 파일"));
+  if (!info.isFile()) fail(404, "없는 파일");
+  const headers = { "cache-control": "public, max-age=31536000, immutable", etag: await assetTag(file) };
+  const inm = req.headers["if-none-match"];
+  if (inm === "*" || inm?.split(",").some((t) => t.trim().replace(/^W\//, "") === headers.etag)) return void (res.writeHead(304, headers), res.end());
+  res.writeHead(200, { "content-type": MIME[extname(file).toLowerCase()] ?? "application/octet-stream", "content-length": info.size, ...headers });
+  await new Promise((done, broke) => createReadStream(file).on("error", broke).pipe(res).on("finish", done).on("close", done));
+}
+
 async function serveFile(path, req, res) {
   const page = !extname(path);
   const file = normalize(join(WEB, page ? join(path, "index.html") : path));
@@ -1684,6 +1711,7 @@ export const server = createServer(async (req, res) => {
       return sendRaw(410, Buffer.from(`<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>동승 연결 안내 · 가치타</title><h1>동승 연결 방법이 바뀌었어요</h1><p>${RETIRED_GROUP}</p><a href="/">가치타 열기</a></html>`), "text/html; charset=utf-8");
     }
     if (req.method !== "GET") fail(405, "GET만 됨");
+    if (path.startsWith("/models/") || path.startsWith("/vendor/ort/")) return void (await serveAsset(path, req, res));
     await serveFile(path, req, res);
   } catch (e) {
     const { status, type, message } = classify(e);
