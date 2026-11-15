@@ -963,7 +963,7 @@ def pitcrew_group_steps():
     if tap("+ 새 그룹 만들기", timeout=8) and wait(["새 동승 그룹", "그룹 이름"], 10):
         typed = type_into(0, GROUP)  # 영문이라 adb input text로 들어감
         step(8, ["새 동승 그룹", "그룹 이름"], note_="" if typed else "그룹 이름 칸에 넣지 못함")
-        tap("그룹 저장"); tap("동승자 초대하기", timeout=8)
+        tap("그룹 저장"); tap(GROUP, timeout=8); tap("동승자 초대하기", timeout=8)  # 저장 → 목록(C16L) → 혼자인 그룹(C16G) → 초대
         if step(9, ["초대 코드와 링크를 만들었어요", "초대 코드"]):
             code = next((m.group(0) for t in words() for m in [re.search(r"TRIP-\d{4}", t)] if m), None)
             results[9]["note"] = f"초대 코드 {code}(서버가 고름)"
