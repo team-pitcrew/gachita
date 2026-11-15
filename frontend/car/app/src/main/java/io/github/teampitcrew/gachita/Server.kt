@@ -92,7 +92,7 @@ class Server(base: String, private val open: (URL) -> HttpURLConnection = { it.o
     fun contents(code: String, token: String): String = call("GET", "/api/trips/$code/contents", null, token, timeoutMs = 10000)!!
 
     fun shortTemplates(): JSONObject = JSONObject(call("GET", "/api/short-templates", null)!!)
-    fun shortPlan(code: String, token: String, template: String, audio: Boolean): JSONObject = JSONObject(call("POST", "/api/trips/$code/short-plans", JSONObject().put("templateId", template).put("audioReference", audio), token)!!)
+    fun shortPlan(code: String, token: String, template: String, audio: Boolean, moment: String? = null): JSONObject = JSONObject(call("POST", "/api/trips/$code/short-plans", JSONObject().put("templateId", template).put("audioReference", audio).apply { if (moment != null) put("momentId", moment) }, token)!!)
     fun shortJobs(code: String, token: String): JSONArray = JSONObject(call("GET", "/api/trips/$code/short-generations", null, token)!!).getJSONArray("items")
     fun shortJob(code: String, token: String, id: String): JSONObject = JSONObject(call("GET", "/api/trips/$code/short-generations/$id", null, token)!!)
     fun completedShortJob(code: String, token: String, id: String): JSONObject = shortJob(code, token, id).also { if (it.optString("state") != "completed") throw ApiError(409, "영상이 취소되었거나 아직 완성되지 않았어요") }
