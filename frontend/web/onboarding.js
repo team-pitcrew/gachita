@@ -225,7 +225,8 @@ export function createOnboarding({ getProfile, getToken, setToken, loadProfile, 
         : [h("strong", {}, `“안녕, 나는 ${callName(me()?.name || draft.name || "나")}.`), h("span", {}, "우리 가족과 함께 여행하는 시간이 좋아. 오늘은 바다를 보러 가고, 맛있는 것도 먹을 거야.”")]),
       h("div", { className: "ob-meter" }, h("span", { role: "status" }, `${done ? "녹음 끝" : "녹음 중"}  ${Math.floor(Math.min(s, VOICE_SECONDS))} / ${VOICE_SECONDS}초`), wave(rec),
         h("p", {}, h("span", {}, clock(s)), h("span", {}, clock(VOICE_SECONDS)))),
-      bottom(secondary("다시 녹음", startRecording), primary(busy ? "등록 중" : "녹음 완료", submitVoice, s < MIN_SECONDS))];
+      // '다시 녹음'은 준비 화면(P06)으로 돌아간다(시안 P07 → P06). 마이크는 놓고 모은 소리는 버린다.
+      bottom(secondary("다시 녹음", () => { rec?.cancel(); rec = null; go("voice"); }), primary(busy ? "등록 중" : "녹음 완료", submitVoice, s < MIN_SECONDS))];
   };
 
   // P08. 시안의 '민준 / 아빠'는 가족 안 역할인데 그 값은 그룹(F2)에 있다. 여기서는 이름만 쓴다.
@@ -253,7 +254,11 @@ export function createOnboarding({ getProfile, getToken, setToken, loadProfile, 
     mic = "";
     let current;
     try {
-      current = await startVoice({ slots: BARS.length, seconds: VOICE_SECONDS, onChange: () => { if (step === "recording" && rec === current) render(); } });
+      // 15초가 차면 저절로 등록하고 P08로(시안 P07 → P08). 전에는 '녹음을 마쳤어요'에 머물러 '녹음 완료'를 또 눌러야 했다.
+      current = await startVoice({ slots: BARS.length, seconds: VOICE_SECONDS, onChange: () => {
+        if (step !== "recording" || rec !== current) return;
+        if (current.done && !current.sent) { current.sent = true; submitVoice(); } else render();
+      } });
     } catch (e) {
       mic = e.message;
       return go("voice");

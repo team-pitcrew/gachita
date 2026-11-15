@@ -58,6 +58,13 @@ export function lostSeats(saved, edited) {
   return edited.filter((m) => before.get(m.profileId) && !m.seat);
 }
 
+// 자리 없는 구성원을 빈자리에 앉힌 결과 {profileId: seat}(바뀐 사람만). 앞줄부터, 뒤 가운데는 마지막. 빈자리가 모자라면 남는 사람은 그대로.
+export function fillSeats(members) {
+  const taken = new Set(members.map((m) => m.seat).filter(Boolean));
+  const free = ["ROW_1_LEFT", "ROW_1_RIGHT", "ROW_2_LEFT", "ROW_2_RIGHT", "ROW_2_CENTER"].filter((x) => !taken.has(x));
+  return Object.fromEntries(members.filter((m) => !m.seat && m.profileId).map((m) => [m.profileId, free.shift()]).filter(([, seat]) => seat));
+}
+
 export function swapSeats(members, a, b) {
   const seatA = members.find((m) => m.profileId === a)?.seat ?? null;
   const seatB = members.find((m) => m.profileId === b)?.seat ?? null;
@@ -102,7 +109,7 @@ export function memberHeading(group, me) {
   return ["우리 가족 추가", "기존 계정 연결 또는 아이 프로필 직접 만들기"];
 }
 
-export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange = () => {} }) {
+export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange = () => {}, onTalk = () => {}, onContents = () => {}, onRide = () => {} }) {
   let s = null;
   const call = (method, path, body) => api(method, path, body, getToken());
   const family = () => s.groups.find((g) => g.kind === "family") ?? null;
@@ -110,6 +117,7 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
 
   function close() {
     if (!s) return;
+    if (s.view === "join") sessionStorage.removeItem(PENDING); // 참여 전에 닫으면(Esc·가치타) 이 초대는 거절 — 다음 그리기에 다시 뜨지 않게. 링크를 다시 열면 된다
     s.meter?.cancel(); // 아이 목소리 녹음 중이면 마이크를 놓고 모은 소리를 버린다
     s.dialog.close();
     s.dialog.remove();
@@ -158,7 +166,8 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
   // 가치타를 누르면 대화 상자를 닫는다(앱 처음 화면). 시안에 없는 '‹'는 두지 않는다(11/15 오너 '시안이 기준') —
   // 돌아가는 길은 시안의 단추(그룹으로·좌석 배정으로·전체 그룹 …)와 가치타, 기기의 뒤로 가기(Esc → back())다.
   const top = () => appBar({ online: navigator.onLine, onHome: close });
-  const tabs = () => h("nav", { className: "journey-tabs", "aria-label": "여행 메뉴" }, h("button", { type: "button", className: "selected", "aria-current": "page" }, "함께 타는 중"), button("대화 기록", close), button("콘텐츠 기록", close));
+  // 탭: 대화 기록(P44)·콘텐츠 기록(P33)을 연다(전에는 창만 닫혔다). '함께 타는 중'은 진행 중 여행이 있으면 그 여행(P17) — app.js가 정한다.
+  const tabs = () => h("nav", { className: "journey-tabs", "aria-label": "여행 메뉴" }, h("button", { type: "button", className: "selected", "aria-current": "page", onclick: () => onRide() }, "함께 타는 중"), button("대화 기록", () => { close(); onTalk(); }), button("콘텐츠 기록", () => { close(); onContents(); }));
   const page = (title, sub, body, actions, withTabs = false, aside = null) => [
     top(),
     withTabs && tabs(),
@@ -357,10 +366,10 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
     paint();
   }
   const kidsIn = (id) => s.groups.find((x) => x.id === id)?.members.filter((m) => m.role === "child").length ?? 0;
-  // 아이를 저장한 뒤: 둘째 아이부터는 우리 가족 좌석(P42 → P43, 차의 C13과 같은 규칙), 아니면 가족 추가로.
+  // 아이를 저장한 뒤: 둘째 아이부터는 내 동승 그룹(시안 P42 '가족 그룹에 저장' → P16), 아니면 가족 추가로.
   async function afterChild() {
     await load();
-    go(kidsIn(s.childGroup) >= 2 ? "group" : "member");
+    go(kidsIn(s.childGroup) >= 2 ? "groups" : "member");
   }
   // 시안 P12 '하은도 같은 방법으로…'(첫 아이), P42 '우리 가족 4명의 프로필이 모두 준비됐어요.'(둘째 아이부터, 차 C13으로 가는 때와 같음)
   function childDone() {
@@ -410,8 +419,14 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
       ride(g, g.kind === "guest" ? "이 그룹과 출발" : "이 가족과 출발"),
     ], true);
   }
-  // 그룹으로 여행 만들기: 자리 있는 구성원만 탄다(docs/api/groups.md).
+  // 그룹으로 여행 만들기: 서버는 자리 있는 구성원만 태운다(docs/api/groups.md). 자리 없이 들어온 구성원(초대·QR 참여)은
+  // 빈자리에 앉혀 저장한 뒤 출발한다 — 차의 '이 그룹과 출발'과 같은 규칙(전에는 그 사람을 빼고 출발했다, P43 '자리 없음').
   const ride = (g, label) => button(label, () => act(async () => {
+    const seats = fillSeats(g.members);
+    if (Object.keys(seats).length) {
+      const saved = await call("PUT", `/groups/${g.id}/seats`, { seats });
+      s.groups = s.groups.map((x) => (x.id === saved.id ? saved : x));
+    }
     const trip = await call("POST", "/trips", { groupId: g.id, title: g.name });
     const me = trip.participants.find((p) => p.profileId === getProfile()?.id);
     close();
@@ -534,7 +549,7 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
       h("div", { className: "group-card soft row" }, face(me), h("div", {}, h("strong", {}, "내 계정"), h("small", {}, `${me?.name ?? ""} / 운전석`))),
       button("계정 초대 링크 만들기", () => act(async () => invite((await make()).id)), "group-ghost", s.busy),
       h("p", { className: "meta" }, "새 동승자는 본인이 동의한 뒤 그룹에 참여해요."),
-    ], [button("그룹 저장", () => act(async () => { await make(); go("detail"); }), "primary", s.busy)], true);
+    ], [button("그룹 저장", () => act(async () => { await make(); go("groups"); }), "primary", s.busy)], true); // 시안 P15 → P16L 전체 그룹
   }
 
   // 폰 QR·링크 참여(phoneJoin·phoneGuestJoin → phoneJoined·phoneGuestJoined). 토큰 없는 미리보기는 그룹·대표 이름만.
@@ -563,7 +578,9 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
     return page(g.kind === "guest" ? `${g.name || "동승 그룹"}에 참여했어요` : "우리 가족에 참여했어요", "차량과 폰에서 같은 프로필을 사용해요.", [
       h("div", { className: "group-card soft row" }, face(me), h("div", {}, h("strong", {}, `${me?.name ?? ""} / ${g.kind === "guest" ? "동승자" : me?.seat ? SEAT[me.seat] : "자리 정하기 전"}`), h("small", {}, me?.hasVoice ? "내 프로필과 등록된 목소리 연결 완료" : "내 프로필 연결 완료 / 목소리는 내 프로필에서 등록"))),
       h("div", { className: "group-card" }, h("strong", {}, "이제 함께 출발해요"), h("small", {}, "차량에서 내 캐릭터와 참여 상태를 확인해 주세요.")),
-    ], [button("차량에서 참여 확인", () => act(async () => { await load(); go("group"); }), "primary", s.busy)]);
+    // 시안: 폰 흐름은 여기서 끝나고 차(D10)에서 확인한다. 동승자 폰에 그룹 좌석·'출발'을 띄우지 않고 처음 화면으로 —
+    // 차가 그룹으로 출발시키면 처음 화면이 그 여행을 열고 기록 동의를 묻는다(app.js openActive).
+    ], [button("차량에서 참여 확인", close, "primary", s.busy)]);
   }
 
   function paint() {
@@ -581,7 +598,8 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
       await act(async () => {
         await load();
         const members = family()?.members ?? [];
-        s.view = members.length > 1 && members.every((m) => m.seat) ? "groups" : "member";
+        // 동승 그룹만 있는 계정(PITCREW 같은)도 내 동승 그룹으로(차의 C16 groups와 같음). 전에는 가족 추가(P09)로 갔다.
+        s.view = (members.length > 1 && members.every((m) => m.seat)) || (!family() && s.groups.length) ? "groups" : "member";
       });
     },
     // 프로필 드롭다운(C17m)에서 바로 여는 곳: 전체 그룹(P16L) 또는 지금 그룹(가족이 먼저)의 좌석 배정(P16B).

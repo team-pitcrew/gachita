@@ -136,6 +136,11 @@ export function createContents({ getProfileToken, getTrip, getParticipant, getPa
     dialog.replaceChildren();
   };
   dialog.addEventListener("close", () => { if (state) close(); });
+  // Esc·안드로이드 뒤로: 재생·내보내기는 콘텐츠 기록(P33)으로, 지도 자세히는 지도로 한 단계만(시안의 '콘텐츠 기록' 단추와 같은 행선).
+  dialog.addEventListener("cancel", (e) => {
+    const s = state, up = { player: "gallery", export: "gallery", detail: "map" }[s?.view];
+    if (up) { e.preventDefault(); go(s, up); }
+  });
   addEventListener("hashchange", close);
 
   const face = (person) => h("span", { className: "content-face" }, avatar(person ?? {}));
@@ -388,6 +393,13 @@ export function createContents({ getProfileToken, getTrip, getParticipant, getPa
     const video = h("video", { playsInline: true, preload: "auto", hidden: true });
     // 영상은 화면에 붙이지 않은 video로 재생한다(시안은 영상 대신 캐릭터와 자막 줄을 그린다). 소리는 그대로 난다.
     const s = state = { view, selected, trips: [], ready: false, controller: new AbortController(), video };
+    // 연 채로 있는 동안 차·폰이 새 영상을 마치면 보이게 다시 읽는다(목록 화면에서만, 15초마다, 화면을 볼 때만).
+    const again = setInterval(async () => {
+      if (state !== s || !s.ready || document.hidden || !["gallery", "timeline", "map"].includes(s.view)) return;
+      const trips = await read(s).catch(() => null);
+      if (state === s && trips && JSON.stringify(trips) !== JSON.stringify(s.trips)) { s.trips = trips; paint(s); }
+    }, 15000);
+    s.controller.signal.addEventListener("abort", () => clearInterval(again));
     s.request = (method, path, body, token) => api(method, path, body, token, s.controller.signal);
     video.ontimeupdate = video.onplay = video.onpause = video.onended = () => paint(s);
     paint(s);
@@ -396,6 +408,7 @@ export function createContents({ getProfileToken, getTrip, getParticipant, getPa
     catch (e) { if (state !== s || e.name === "AbortError") return; s.error = e.status === 403 ? "기록에 동의한 사람만 콘텐츠 기록을 볼 수 있어요." : e.message; paint(s); return; }
     if (state !== s) return;
     s.ready = true;
+    if (s.view === "player" && find(s, s.selected)) return open(s, s.selected); // 여행 마무리 P32의 장면 칸에서 바로 그 장면(P37)
     paint(s);
   }
   return { open: show, close };

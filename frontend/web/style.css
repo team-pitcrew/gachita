@@ -1353,3 +1353,6 @@ button.me-button { flex: none; display: inline-grid; place-items: center; width:
 .profile-logout { margin-top: 4px; }
 .profile-danger { justify-content: center; }
 
+/* 그룹 여행 기록 동의(boarding.js phonePaint, 시안 D補 phoneJoin·phoneJoined 틀): 밝은 폰 화면 안의 동의 문구 접기 */
+.boarding-phone .boarding-consent summary { color: var(--ink-2); }
+.boarding-phone .boarding-consent ul { color: var(--ink-2); }

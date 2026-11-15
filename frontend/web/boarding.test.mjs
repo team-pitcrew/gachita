@@ -74,12 +74,12 @@ test('휴대폰은 차 QR을 조회하고 선택한 자리로 참가한 뒤 자�
   assert.equal(f.calls.filter((c)=>c.method==='POST').length,0);f.choose('ROW_2_LEFT');await f.button('이 자리로 함께 타기').onclick();
   const join=f.calls.find((c)=>c.method==='POST');assert.equal(join.path,`/api/boarding-invites/${opaque}/participants`);assert.deepEqual(JSON.parse(join.body),{seat:'ROW_2_LEFT'});assert.equal(join.headers.authorization,'Bearer profile-token');
   assert.equal(f.calls.filter((c)=>c.method==='PATCH').length,0);assert.equal(f.joined[0].token,'phone-only-token');assert.equal(f.joined[0].code,'TRIP12');
-  await f.button('기록에 동의하기').onclick();const patch=f.calls.find((c)=>c.method==='PATCH');assert.equal(patch.headers.authorization,'Bearer phone-only-token');assert.deepEqual(JSON.parse(patch.body),{consent:true});
-  assert.ok(content(f.body).includes('내 기록 동의 켜짐'));f.button('여행으로 돌아가기').onclick();assert.equal(f.left[0].code,'TRIP12');
+  await f.button('동의하고 기록 참여').onclick();const patch=f.calls.find((c)=>c.method==='PATCH');assert.equal(patch.headers.authorization,'Bearer phone-only-token');assert.deepEqual(JSON.parse(patch.body),{consent:true});
+  assert.ok(content(f.body).includes('기록 동의 완료'));f.button('여행으로 돌아가기').onclick();assert.equal(f.left[0].code,'TRIP12');
 });
 test('기록 없이 참여하면 동의는 꺼진 채 합석한다',async(t)=>{
   const f=fixture(t);await f.boarding.open();f.choose('ROW_2_LEFT');await f.button('이 자리로 함께 타기').onclick();await f.button('기록 없이 함께 타기').onclick();
-  assert.equal(f.participant.consent,false);assert.equal(f.decisions.length,1);assert.ok(content(f.body).includes('내 기록 동의 꺼짐'));
+  assert.equal(f.participant.consent,false);assert.equal(f.decisions.length,1);assert.ok(content(f.body).includes('기록 없이 함께 타요'));
 });
 test('좌석 충돌 뒤 성공 화면을 만들지 않고 빈자리를 다시 조회한다',async(t)=>{
   const f=fixture(t);await f.boarding.open();f.choose('ROW_2_LEFT');f.data.respond=()=>Response.json({error:'좌석 충돌'},{status:409});await f.button('이 자리로 함께 타기').onclick();
@@ -106,7 +106,7 @@ test('가입 응답 대기 중 만료되어도 화면 오류나 거짓 참가 �
 });
 
 test('연결 완료 화면도 다른 기기에서 바뀐 동의를 다시 반영한다',async(t)=>{
-  const f=fixture(t);await f.boarding.open();f.choose('ROW_2_LEFT');await f.button('이 자리로 함께 타기').onclick();await f.button('기록에 동의하기').onclick();
+  const f=fixture(t);await f.boarding.open();f.choose('ROW_2_LEFT');await f.button('이 자리로 함께 타기').onclick();await f.button('동의하고 기록 참여').onclick();
   const changed={...f.participant,consent:false};f.boarding.openConsent({...f.trip,participants:[changed]},changed,'phone-only-token');
-  assert.ok(content(f.body).includes('대화를 기록할까요?'));assert.ok(!content(f.body).includes('내 기록 동의 켜짐'));
+  assert.ok(content(f.body).includes('시작됐어요'));assert.ok(!content(f.body).includes('기록 동의 완료'));
 });
