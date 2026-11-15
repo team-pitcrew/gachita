@@ -1,11 +1,83 @@
+<p align="center"><img src="frontend/web/brand/gachita-logo-full.svg" alt="가치타 로고" width="160"></p>
+
 # 가치타
 
-**가족이 차 안에서 나눈 대화를 차가 받아 적어, 아이의 부탁은 내비 경유지로, 장소별 할 일은 도착했을 때 알려 주는 Pleos 차량 앱입니다.** PITCREW 팀의 현대자동차그룹 차량용 앱 개발 공모전 출품작입니다.
+**가족이 차 안에서 나눈 대화를 차가 받아 적어, 아이의 부탁은 내비 경유지로, 장소별 할 일은 도착했을 때 알려 주고, 여행 뒤에는 웃긴 순간을 쇼츠로 남기는 Pleos 차량 앱입니다.** PITCREW 팀의 현대자동차그룹 Pleos 해커톤 제출작입니다.
+
+## 제출 안내
+
+| 항목 | 내용 |
+|---|---|
+| 앱 이름 | **가치타** (PITCREW) |
+| 한 줄 소개 | 차 안 가족 대화를 받아 적어 부탁은 경유지와 도착 브리핑으로, 즐거운 순간은 쇼츠로 남기는 차량 앱 |
+| APK 파일 위치 | [`apk/pitcrew_gachita_release.apk`](apk/pitcrew_gachita_release.apk) (서명한 release, SHA-256 `defa488c1d676d7ffab981e1e0c2b69b30fdef301360a870541aaf175e4d4b27`) |
+| GitHub Release | [v1.0.0](https://github.com/team-pitcrew/gachita/releases/tag/v1.0.0) (같은 APK를 첨부) |
+| 서비스 주소 | https://gachita.mangowhois.ai (API 서버와 폰 웹앱) |
+
+### 실행 방법
+
+1. Pleos Connect Emulator 2.1.0을 켭니다.
+2. APK를 설치합니다.
+   ```bash
+   adb install -r -d -g apk/pitcrew_gachita_release.apk
+   ```
+3. 앱 목록에서 **가치타**를 엽니다. 서버 주소는 운영 서버(`https://gachita.mangowhois.ai`)가 기본값이라 따로 넣지 않습니다.
+4. 계정을 만들고 기록에 동의한 뒤, 프로필과 목소리(15초)를 등록합니다.
+5. 가족을 추가하고 좌석을 정한 다음 **이 그룹과 출발**을 누르면 기록이 시작됩니다. 동승자는 초대 링크나 QR로 폰 웹앱에서 참여합니다.
+6. 주차(P) 상태에서 **콘텐츠 기록** 탭을 열면 추천 장면을 골라 쇼츠를 만들고 다시 볼 수 있습니다.
+
+### 테스트 환경과 필요한 설정
+
+| 항목 | 값 |
+|---|---|
+| 에뮬레이터 | Pleos Connect Emulator **2.1.0** |
+| OS · 아키텍처 | Android 14 (API 34) · arm64 |
+| 화면 규격 | **2560 × 1440 px**, 160 dpi (앱 전체 창과 내비 옆 반쪽 창 모두 지원) |
+| 네트워크 | 인터넷 연결 필요(운영 서버와 통신) |
+| 권한 | 마이크(녹음) — 설치할 때 `-g`로 주거나 첫 실행에서 허용 |
+| 차량 상태 | 기어 P에서 가족·좌석·콘텐츠 기록, 기어 D(주행 제한)에서 주행 화면. Virtual Console로 바꿉니다 |
+| 확인 범위 | 에뮬레이터에서 확인했습니다. 실차에서는 확인하지 않았습니다 |
+
+### 대표 구조도
+
+```mermaid
+flowchart TB
+  subgraph L1["사용자 화면"]
+    car["차량 앱 (Android · Kotlin · Jetpack Compose)"]
+    web["폰 웹앱 (빌드 없는 ES 모듈)"]
+  end
+  subgraph L2["차량 플랫폼"]
+    pleos["Pleos SDK · 내비 · 기어/주행 제한 · STT · TTS · Gleo"]
+    ondevice["차 안 처리 · 화자 구분(ONNX) · 부탁 인식 · 보관"]
+  end
+  subgraph L3["서버"]
+    api["API 서버 (Node 22) ×2"]
+    worker["쇼츠 일꾼 (영상 생성)"]
+  end
+  subgraph L4["데이터"]
+    pg[("Postgres · trips · profiles")]
+    s3[("S3 · 클립 · 쇼츠 · 백업")]
+  end
+  subgraph L5["인프라"]
+    infra["AWS 서울 · K3s · Argo CD · Terraform · Cloudflare"]
+  end
+  car --> pleos
+  car --> ondevice
+  car -- HTTPS --> api
+  web -- HTTPS --> api
+  api --> pg
+  api --> s3
+  worker -. 작업 받기 · 결과 올리기 .-> api
+  L3 --- L5
+  L4 --- L5
+```
+
+자세한 구조와 근거는 아래 [구조](#구조)와 [구조와 스택](docs/architecture.md)에 있습니다.
 
 | | |
 |---|---|
 | 서비스 | **https://gachita.mangowhois.ai** (서버와 폰 웹앱, 2026-11-13부터 AWS) |
-| 차량 앱 | [`apk/PITCREW_가치타_release.apk`](apk/PITCREW_가치타_release.apk) · [차량 앱 README](frontend/car/README.md) |
+| 차량 앱 | [`apk/pitcrew_gachita_release.apk`](apk/pitcrew_gachita_release.apk) · [차량 앱 README](frontend/car/README.md) |
 | 구조 | [구조와 스택](docs/architecture.md) · [결정 기록(ADR)](docs/adr) |
 | 화면과 시연 | [화면 기준과 시연 35단계](docs/design-screens.md) · [시연 영상 계획](docs/demo-video.md) |
 
@@ -105,7 +177,7 @@ AWS 자원은 [Terraform](backend/infra/terraform/README.md)으로, 클러스터
 2. **설치.** 앱은 사용자 10에서 돕니다. 같은 패키지의 디버그 빌드를 깔았던 에뮬레이터라면 서명이 달라 먼저 지웁니다(`adb uninstall io.github.teampitcrew.gachita`).
 
 ```bash
-adb install --user 10 -r -g apk/PITCREW_가치타_release.apk
+adb install --user 10 -r -g apk/pitcrew_gachita_release.apk
 ```
 
 ```bash
@@ -149,7 +221,7 @@ make check
 
 ## APK 파일 위치
 
-[`apk/PITCREW_가치타_release.apk`](apk/PITCREW_가치타_release.apk) — 차량 앱 release 빌드(패키지 `io.github.teampitcrew.gachita`, 버전 0.1.0, minSdk 29, targetSdk 34). 차량 소스 `1f2d067270e6bee5c21ef030ad66a492b3bd71b4`에서 `./gradlew assembleRelease`로 만들었습니다(11/14). 그 뒤 `develop`에 들어간 차량 화면 변경은 이 파일에 들어 있지 않습니다.
+[`apk/pitcrew_gachita_release.apk`](apk/pitcrew_gachita_release.apk) — 차량 앱 release 빌드(패키지 `io.github.teampitcrew.gachita`, 버전 0.1.0, minSdk 29, targetSdk 34). 차량 소스 `1f2d067270e6bee5c21ef030ad66a492b3bd71b4`에서 `./gradlew assembleRelease`로 만들었습니다(11/14). 그 뒤 `develop`에 들어간 차량 화면 변경은 이 파일에 들어 있지 않습니다.
 
 - 파일 SHA-256: `7bafb82e90756425597fe208ce12431fc09953152375aae728319750813c1e6b`
 - 서명 인증서 SHA-256: `6f07b9fd44ef8e0e04782c160983e05b91cf8c7f10cff22cf7d5e690e599b2f6`
