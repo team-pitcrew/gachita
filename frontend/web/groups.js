@@ -5,6 +5,7 @@ import { api, h, SEAT, SEATS, toast } from "./shared.js";
 import { CHARACTER_OPTIONS, characterImage, characterKey } from "./short-film.js";
 import { qrcode } from "./qrcode.js";
 import { startVoice, voiceBars, VOICE_SECONDS, WAVE_BARS } from "./voice-meter.js";
+import { warmStrong } from "./wespeaker.js";
 import { appBar } from "./ride.js";
 
 const PENDING = "gachita:group-pending"; // 프로필을 만들기 전에 연 초대 링크의 코드(이 탭에서만)
@@ -327,6 +328,7 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
   // 이 폰에서 값(112차원)으로 바꿔 POST /groups/{id}/members/{profileId}/voice(JSON, #356·#364 계약)로 값만 올린다.
   // 보호자 동의가 꺼진 아이는 녹음하지 않는다(서버도 409). 서버 400(말소리 없음)은 다시 녹음하게 한다.
   async function record() {
+    warmStrong(); // 두 번째 값(wespeaker)의 모델을 녹음하는 동안 받아 둔다
     const kid = s.child;
     s.meter?.cancel();
     s.meter = null;
@@ -354,8 +356,10 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
     s.voiceState = "saving";
     paint();
     try {
-      const { value } = await meter.finish();
-      await call("POST", `/groups/${s.childGroup}/members/${s.child.profileId}/voice`, value);
+      const { value, strong } = await meter.finish();
+      const path = `/groups/${s.childGroup}/members/${s.child.profileId}/voice`;
+      await call("POST", path, value);
+      strong.then((v) => v && call("POST", path, v)).catch(() => {}); // 두 번째 값(wespeaker, T169)은 뒤에서, 서버가 아직 모르면 넘김
       if (!s) return;
       s.voiceState = "saved";
     } catch (e) {

@@ -6,6 +6,7 @@ import { api, h, toast } from "./shared.js";
 import { appBar } from "./ride.js";
 import { CHARACTER_TYPES, characterImage, characterKey } from "./short-film.js";
 import { MIN_SECONDS, startVoice, voiceBars, VOICE_SECONDS, WAVE_BARS as BARS } from "./voice-meter.js";
+import { warmStrong } from "./wespeaker.js";
 
 export { MIN_SECONDS, VOICE_SECONDS };
 // 시안 P04의 앞 네 캐릭터(안경·힐링·캡모자·기본) 순서로 두고 나머지를 잇는다.
@@ -206,12 +207,13 @@ export function createOnboarding({ getProfile, getToken, setToken, loadProfile, 
   };
 
   // P06
-  const voice = () => [top(),
+  // P06에 들어오면 두 번째 값(wespeaker)의 모델을 미리 받아 둔다(읽고 15초 녹음하는 동안). 여러 번 불러도 한 번만 받는다.
+  const voice = () => (warmStrong(), [top(),
     title("15초만 들려주세요", "02 목소리 등록 / 조용한 곳에서 혼자 읽어 주세요."),
     h("div", { className: "ob-script" }, h("strong", {}, `“안녕, 나는 ${callName(me()?.name || draft.name || "나")}.`), h("span", {}, "우리 가족과 함께 여행하는 시간이 좋아. 오늘은 바다를 보러 가고, 맛있는 것도 먹을 거야.”")),
     h("div", { className: "ob-meter" }, h("span", {}, mic || "목소리 등록 준비"), wave(null), h("p", {}, h("span", {}, "00:00"), h("span", {}, clock(VOICE_SECONDS)))),
     note("등록한 목소리로 차량에서 발화자를 구분해요. 소리는 이 폰에서 값으로 바뀌고, 값만 서버에 저장돼요."),
-    bottom(primary("녹음 시작", startRecording))];
+    bottom(primary("녹음 시작", startRecording))]);
 
   // P07. 15초가 차면 저절로 멈춘다. '녹음 완료'는 5초부터 눌린다(눌러도 멈추고 바로 등록).
   const recording = () => {
@@ -273,12 +275,14 @@ export function createOnboarding({ getProfile, getToken, setToken, loadProfile, 
     got.stop();
     await work(async () => {
       if (!me()?.consent) { step = "consent"; return; }
-      const { value } = await got.finish(); // 표본은 값을 만든 뒤 버린다
+      const { value, strong } = await got.finish(); // 표본은 값을 만든 뒤 버린다
       try {
         await call("POST", "/profiles/me/voice", value);
       } catch (e) {
         throw e.status === 400 ? new Error("말소리가 없어 등록할 수 없음") : e;
       }
+      // 두 번째 값(wespeaker, T169)은 뒤에서 셈해 다 되면 올린다 — P08을 기다리게 하지 않고, 서버가 아직 모르면(400) 넘긴다.
+      strong.then((v) => v && call("POST", "/profiles/me/voice", v)).catch(() => {});
       await loadProfile();
       step = "done";
     });

@@ -4,6 +4,7 @@
 // 이 기기 안에서 값(112차원)만 만든다 — 소리는 기기를 떠나지 않는다(ADR-0023). 새 의존성 없이 브라우저 Web Audio만 쓴다.
 import { h } from "./shared.js";
 import { embed, RATE, toMono16k, voiceValue } from "./voice-embed.js";
+import { strongValue } from "./wespeaker.js";
 
 export const VOICE_SECONDS = 15;
 // 최종 시안 목소리 파형(P06·P07·P12·P42) 막대 36개의 높이(px, 314×72 틀). 녹음 전·다 들은 뒤의 모양이고, 녹음 중에는 실제 소리 크기.
@@ -51,7 +52,8 @@ export function voiceBars(meter, { className, slots, ready, min, max, upcoming }
 
 /**
  * 녹음 하나를 연다. onChange는 화면을 다시 그릴 때(약 0.1초마다, 그리고 끝날 때) 부른다.
- * 돌려주는 것: levels(칸별 0~1), elapsed()(초), done, stop()(마이크 놓기), finish()(→ {value, seconds}, 값만), cancel().
+ * 돌려주는 것: levels(칸별 0~1), elapsed()(초), done, stop()(마이크 놓기), finish()(→ {value, seconds, strong}, 값만), cancel().
+ * strong은 두 번째 값(wespeaker, T169)의 약속이다 — 뒤에서 셈해 {embedder, vector, seconds} 또는 null로 끝난다.
  * 마이크를 열지 못하면 Error(.reason = "denied" | "unavailable")를 던진다.
  */
 export async function startVoice({ slots, seconds = VOICE_SECONDS, onChange = () => {}, media = globalThis.navigator?.mediaDevices }) {
@@ -110,7 +112,9 @@ export async function startVoice({ slots, seconds = VOICE_SECONDS, onChange = ()
     const mono = await toMono16k(all, meter.rate);
     let vector;
     try { vector = embed(mono); } catch { throw new Error("소리가 너무 짧아요. 다시 녹음해 주세요."); }
-    return { value: voiceValue(vector, mono.length / RATE), seconds: mono.length / RATE };
+    const seconds = mono.length / RATE;
+    // 두 번째 값은 Worker에서 셈한다(표본은 그리로 옮겨지고 여기서는 비워진다). 1차 값을 기다리게 하지 않는다.
+    return { value: voiceValue(vector, seconds), seconds, strong: strongValue(mono).catch(() => null) };
   };
   return meter;
 }
