@@ -7,3 +7,8 @@ local.properties
 *.iml
 .kotlin/
 __pycache__/
+# 빌드 때 받는 것(app/build.gradle): 화자 식별 실행기와 모델
+app/libs/*.aar
+app/libs/*.part
+app/src/main/assets/wespeaker.onnx
+app/src/main/assets/*.part

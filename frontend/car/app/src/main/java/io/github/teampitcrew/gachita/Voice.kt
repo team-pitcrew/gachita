@@ -186,6 +186,8 @@ class VoicePrints(dir: File, val trip: String, private val seal: Seal, now: Long
     @Synchronized fun expire(now: Long) { if (generation != 0 && now - savedAt >= PRINTS_KEEP_MS) clear() }
 
     val size: Int @Synchronized get() = prints.size
+    /** 대조 값이 있는(어디서든 등록한) 참가자 id. */
+    @Synchronized fun ids(): Set<String> = prints.keys.toSet()
 
     private fun read(o: JSONObject) {
         // 다른 임베더의 값과는 견주지 않는다(서버가 수식을 바꿨는데 이 앱이 옛것이면 붙이지 않고 '모름')

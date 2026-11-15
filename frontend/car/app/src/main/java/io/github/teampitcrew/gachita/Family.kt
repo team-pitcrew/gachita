@@ -423,6 +423,7 @@ fun FamilyFlow(
                                 io {
                                     val v = embed(pcmSamples(pcm)) ?: throw ApiError(400, "소리가 너무 짧아요")
                                     AccountApi(server).childVoice(token, gid, kid.profileId, v, pcm.size / 2.0 / RATE)
+                                    runCatching { Strong.enroll(ctx, kid.profileId, pcm) } // 강한 화자 값은 차 안에만(StrongVoice.kt)
                                 }
                             }.onSuccess { voiceState = "saved" }
                                 .onFailure { voiceState = "failed"; note = if (it is ApiError && it.status == 400) "말소리가 없어 등록할 수 없음" else failureText(it) }
