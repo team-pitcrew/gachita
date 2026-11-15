@@ -77,6 +77,7 @@ let reading = false; // 여행 화면의 '동의 켜기': 켜기 전에 동의 �
 // 내 프로필이 탄 진행 중 여행(GET /profiles/me/trips의 boarding·driving·parked). 차가 그룹으로 출발시키면 구성원 폰이 이걸로 안다.
 let active = null;
 let activeAt = 0;
+const ACTIVE_WINDOW = 12 * 60 * 60 * 1000;
 const shares = createShares({
   getProfile: () => profile,
   getProfileToken: () => store("profile"),
@@ -373,8 +374,11 @@ const typing = () => app.contains(document.activeElement) && /^(INPUT|SELECT)$/.
 async function readActive() {
   if (!profile || Date.now() - activeAt < 6000) return;
   activeAt = Date.now();
-  const items = (await mine("GET", "/profiles/me/trips")).items;
-  active = items.find((t) => t.status !== "ended") ?? null;
+  // ?status=active(#530): 끝나지 않은 여행만, 경로·콘텐츠를 셈하지 않고 준다. 그 질의를 모르는 서버(400)면 전체 목록에서 고른다.
+  const { items } = await mine("GET", "/profiles/me/trips?status=active").catch((e) => (e.status === 400 ? mine("GET", "/profiles/me/trips") : Promise.reject(e)));
+  // 끝내지 않고 남은 옛 여행(탑승 중으로 남은 것)이 저절로 열리지 않게, 최근 12시간 안에 만든 여행만 진행 중으로 본다.
+  // ponytail: 고정 12시간 — 하루를 넘는 여행이 생기면 늘리거나 서버가 오래된 탑승 여행을 끝내게 한다.
+  active = items.find((t) => t.status !== "ended" && Date.now() - t.createdAt < ACTIVE_WINDOW) ?? null;
 }
 // 그룹 여행이 시작됐는데 이 폰이 아직 그 여행에 들어가지 않았으면 그 여행을 연다. 열면 refresh의 claim()이 프로필로 다시 참가해
 // 이 폰의 참가자 토큰을 받고, 기록 동의를 아직 정하지 않았으면 동의 화면(phoneJoin과 같은 역할, boarding.openConsent)이 뜬다.
