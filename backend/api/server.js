@@ -18,7 +18,7 @@ import { asrReady, contextOf, retranscribe, toWav, transcribe } from "./provider
 import { clipStore } from "./providers/clips.js";
 import { googleIdentity, googlePublicConfig } from "./providers/google.js";
 import { cues, momentSpan, suggest } from "./scenes.js";
-import { checkVector, DIMS, embed, EMBEDDER, matchFloor, matchMargin, matchThreshold, similarity, wavMono } from "./providers/voice.js";
+import { checkStrong, checkVector, DIMS, embed, EMBEDDER, matchFloor, matchMargin, matchThreshold, similarity, STRONG_DIMS, STRONG_EMBEDDER, wavMono } from "./providers/voice.js";
 import { accountConsents, accounts, CONSENT_VERSION } from "./accounts.js";
 import { groupForTrip, groupInvites, groups, shareGroup } from "./groups.js";
 import { rideLinks, redeemRideLink } from "./ride-links.js";
@@ -45,6 +45,7 @@ const VOICE_SQL = fileURLToPath(new URL("profiles-5-voice.sql", import.meta.url)
 const NO_PREFS_SQL = fileURLToPath(new URL("profiles-6-no-prefs.sql", import.meta.url));
 const ACCOUNTS_SQL = fileURLToPath(new URL("profiles-7-accounts.sql", import.meta.url));
 const NEW_GROUPS_SQL = fileURLToPath(new URL("profiles-8-groups.sql", import.meta.url));
+const VOICE_STRONG_SQL = fileURLToPath(new URL("profiles-9-voice-strong.sql", import.meta.url));
 const PHOTO_MAX = 1_000_000; // 프로필 사진 상한. 형식은 매직 바이트로만 확인한다(다시 그리기는 T46 화면, ADR-0009 위험)
 const MAX_BODY = 10_000;
 // ponytail: 여행 하나의 발화는 2만 줄까지(3시간 여행 ≈ 2,500줄). 명시적 삭제 한 번이 2초 제한(T26) 안에 끝나게 묶는다.
@@ -157,6 +158,7 @@ export async function migrate() {
   await tripsDb().query(await readFile(new URL("trips-13-utterance-segments.sql", import.meta.url), "utf8"));
   await tripsDb().query(await readFile(new URL("trips-14-utterance-speaker.sql", import.meta.url), "utf8"));
   await tripsDb().query(await readFile(new URL("trips-15-trip-audio.sql", import.meta.url), "utf8"));
+  await tripsDb().query(await readFile(new URL("trips-16-voice-strong.sql", import.meta.url), "utf8"));
   await profilesDb().query(await readFile(PROFILES_SQL, "utf8"));
   await profilesDb().query(await readFile(LINKS_SQL, "utf8"));
   await profilesDb().query(await readFile(ALBUM_SQL, "utf8"));
@@ -165,6 +167,7 @@ export async function migrate() {
   await profilesDb().query(await readFile(NO_PREFS_SQL, "utf8"));
   await profilesDb().query(await readFile(ACCOUNTS_SQL, "utf8"));
   await profilesDb().query(await readFile(NEW_GROUPS_SQL, "utf8"));
+  await profilesDb().query(await readFile(VOICE_STRONG_SQL, "utf8"));
 }
 
 async function readBody(req, limit = MAX_BODY) {
@@ -533,7 +536,9 @@ async function enrollment(req) {
       fail(400, "JSON이 아님");
     }
     b = obj(b, "본문");
-    if (b.embedder !== EMBEDDER) fail(400, `embedder: ${EMBEDDER}만 됨`);
+    // 둘째 값(강한 화자 값, 기기가 학습된 모델로 계산): 같은 경로로 한 번 더 올린다. 1차 값이 먼저 있어야 한다(저장할 때 봄)
+    if (b.embedder === STRONG_EMBEDDER) return { strong: true, vector: checkStrong(b.vector), seconds: num(b.seconds, 0.5, 20, "seconds") };
+    if (b.embedder !== EMBEDDER) fail(400, `embedder: ${EMBEDDER} 또는 ${STRONG_EMBEDDER}`);
     return { vector: checkVector(b.vector), seconds: num(b.seconds, 1, 20, "seconds") };
   }
   const { samples } = wavMono(await readRaw(req, 1_500_000)); // WAV 파싱 실패는 400으로 돌아온다
@@ -542,7 +547,24 @@ async function enrollment(req) {
   if (seconds < 1 || seconds > 20) fail(400, "등록 음성은 1~20초");
   return { vector: checkVector(embed(samples)), seconds }; // 값 등록과 같은 기준: 말소리가 없으면 400
 }
-const enrolled = ({ vector, seconds }) => [200, { seconds: Math.round(seconds * 10) / 10, dims: vector.length }];
+const enrolled = ({ vector, seconds, strong }) => [200, { seconds: Math.round(seconds * 10) / 10, dims: vector.length, ...(strong ? { embedder: STRONG_EMBEDDER } : {}) }];
+
+// 프로필의 목소리 값을 둔다. 1차 값을 (다시) 등록하면 둘째 값은 비운다 — 새 목소리의 1차 값과 옛 목소리의 둘째 값이 섞이지 않게.
+// 둘째 값은 1차 값이 있는 줄에만 채운다(없으면 409): 지우는 규칙(프로필 삭제, 목소리 지우기)을 한 줄로 함께 받는다.
+async function saveProfilePrint(profileId, print, gone) {
+  if (print.strong) {
+    const { rowCount } = await profilesDb().query("UPDATE voice_prints SET strong = $2, strong_seconds = $3, updated_at = now() WHERE profile_id = $1", [profileId, print.vector, print.seconds]);
+    if (!rowCount) fail(409, "1차 목소리 값을 먼저 등록함");
+    return;
+  }
+  await profilesDb()
+    .query(
+      `INSERT INTO voice_prints (profile_id, vector, seconds) VALUES ($1, $2, $3)
+       ON CONFLICT (profile_id) DO UPDATE SET vector = $2, seconds = $3, strong = NULL, strong_seconds = NULL, updated_at = now()`,
+      [profileId, print.vector, print.seconds]
+    )
+    .catch((e) => (e?.code === "23503" ? fail(404, gone) : Promise.reject(e)));
+}
 
 // 프로필의 목소리 등록·지우기(ADR-0019).
 async function voicePrint(req, m, profileId) {
@@ -550,16 +572,10 @@ async function voicePrint(req, m, profileId) {
     await profilesDb().query("DELETE FROM voice_prints WHERE profile_id = $1", [profileId]);
     return [204];
   }
-  const { vector, seconds } = await enrollment(req);
+  const print = await enrollment(req);
   // 본문을 받는 사이 프로필이 지워졌으면 외래 키가 막는다(23503) — 지워진 프로필의 값이 남지 않게.
-  await profilesDb()
-    .query(
-      `INSERT INTO voice_prints (profile_id, vector, seconds) VALUES ($1, $2, $3)
-       ON CONFLICT (profile_id) DO UPDATE SET vector = $2, seconds = $3, updated_at = now()`,
-      [profileId, vector, seconds]
-    )
-    .catch((e) => (e?.code === "23503" ? fail(404, "없는 프로필") : Promise.reject(e)));
-  return enrolled({ vector, seconds });
+  await saveProfilePrint(profileId, print, "없는 프로필");
+  return enrolled(print);
 }
 
 // 여행 참가자의 목소리 등록(T38). 차의 가족은 손님 참가자라 프로필 등록값이 없다 — 여행마다 둔다.
@@ -580,10 +596,12 @@ async function participantVoice(code, id, req) {
   await withTrip(code, true, async (trip, client) => {
     if (check(trip) !== generation) fail(409, "등록하는 사이 동의가 바뀜. 다시 등록함");
     await client.query(
-      `INSERT INTO trip_voice_prints (trip_code, participant_id, vector, seconds) VALUES ($1, $2, $3, $4)
-       ON CONFLICT (trip_code, participant_id) DO UPDATE SET vector = $3, seconds = $4, updated_at = now()`,
+      print.strong
+        ? `UPDATE trip_voice_prints SET strong = $3, strong_seconds = $4, updated_at = now() WHERE trip_code = $1 AND participant_id = $2`
+        : `INSERT INTO trip_voice_prints (trip_code, participant_id, vector, seconds) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (trip_code, participant_id) DO UPDATE SET vector = $3, seconds = $4, strong = NULL, strong_seconds = NULL, updated_at = now()`,
       [trip.code, id, print.vector, print.seconds]
-    );
+    ).then((r) => (print.strong && !r.rowCount ? fail(409, "1차 목소리 값을 먼저 등록함") : r));
   });
   return enrolled(print);
 }
@@ -639,13 +657,13 @@ async function transcriptions(code, req, query, signal) {
 async function printsOf(trip, which = () => true) {
   const seated = trip.participants.filter((p) => p.consent && which(p));
   if (!seated.length) return [];
-  const { rows: own } = await tripsDb().query("SELECT participant_id, vector, seconds FROM trip_voice_prints WHERE trip_code = $1 AND participant_id = ANY($2)", [trip.code, seated.map((p) => p.id)]);
-  const ownOf = new Map(own.map((r) => [r.participant_id, { vector: r.vector, seconds: r.seconds, source: "trip" }]));
+  const { rows: own } = await tripsDb().query("SELECT participant_id, vector, seconds, strong FROM trip_voice_prints WHERE trip_code = $1 AND participant_id = ANY($2)", [trip.code, seated.map((p) => p.id)]);
+  const ownOf = new Map(own.map((r) => [r.participant_id, { vector: r.vector, seconds: r.seconds, strong: r.strong, source: "trip" }]));
   const profileIds = seated.filter((p) => p.profileId && !ownOf.has(p.id)).map((p) => p.profileId);
   const { rows: fromProfiles } = profileIds.length
-    ? await profilesDb().query("SELECT profile_id, vector, seconds FROM voice_prints WHERE profile_id = ANY($1)", [profileIds])
+    ? await profilesDb().query("SELECT profile_id, vector, seconds, strong FROM voice_prints WHERE profile_id = ANY($1)", [profileIds])
     : { rows: [] };
-  const printOf = new Map(fromProfiles.map((r) => [r.profile_id, { vector: r.vector, seconds: r.seconds, source: "profile" }]));
+  const printOf = new Map(fromProfiles.map((r) => [r.profile_id, { vector: r.vector, seconds: r.seconds, strong: r.strong, source: "profile" }]));
   return seated.map((p) => [p, ownOf.get(p.id) ?? printOf.get(p.profileId)]).filter(([, v]) => v);
 }
 
@@ -670,8 +688,8 @@ async function voicePrints(code, req) {
       // 세대를 올리지 않고 빠진 사람(참가자 삭제)도 뺀다
       const here = new Set(after.participants.filter((p) => p.consent).map((p) => p.id));
       const items = prints.filter(([p, v]) => here.has(p.id) && v.vector.length === DIMS)
-        .map(([p, v]) => ({ participantId: p.id, vector: v.vector, seconds: v.seconds, source: v.source }));
-      return [200, { generation: after.generation ?? 1, embedder: EMBEDDER, dims: DIMS, threshold: matchThreshold(), floor: matchFloor(), margin: matchMargin(), items }, "private, no-store"];
+        .map(([p, v]) => ({ participantId: p.id, vector: v.vector, seconds: v.seconds, source: v.source, ...(v.strong?.length === STRONG_DIMS ? { strong: v.strong } : {}) }));
+      return [200, { generation: after.generation ?? 1, embedder: EMBEDDER, dims: DIMS, threshold: matchThreshold(), floor: matchFloor(), margin: matchMargin(), strongEmbedder: STRONG_EMBEDDER, items }, "private, no-store"];
     }
     trip = after;
   }
@@ -1659,7 +1677,7 @@ export const server = createServer(async (req, res) => {
       if (seg[1] === "trips" && seg[2] && seg[3] === "ride-links" && !seg[4])
         return send(...(await redeemRideLink(req, seg[2], body, { profileById, seats: SEATS })));
       if (seg[1] === "groups")
-        return send(...(await groups(req, seg.slice(2), body, { profileOf, text, bool, oneOf, obj, seats: SEATS, enrollment, enrolled, deleteProfiles })));
+        return send(...(await groups(req, seg.slice(2), body, { profileOf, text, bool, oneOf, obj, seats: SEATS, enrollment, enrolled, saveProfilePrint, deleteProfiles })));
       if (seg[1] === "group-invites") return send(...(await groupInvites(req, seg.slice(2), { profileOf })));
       if ((seg[1] === "accounts" || seg[1] === "sessions") && !seg[2]) return send(...(await accounts(req, seg[1], body, { profileOf, profileById, issueToken, text, tokenHash })));
       if (seg[1] === "profiles") {

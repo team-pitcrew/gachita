@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: 가치타 API
-  version: 0.22.0
+  version: 0.23.0
   summary: 여행 세션, 기기 프로필과 이메일 계정, 동승 연결, 부탁, 장면, 기록본, 화자 대조, 여행 전체 음성
   description: |
     웹앱(frontend/web)과 차량 앱(frontend/car)이 부르는 API입니다. 구현은 backend/api/server.js입니다.
@@ -2005,6 +2005,7 @@ paths:
         값은 이 여행에 등록한 것(`source: trip`)을 먼저, 없으면 그 사람 프로필의 등록값(`source: profile`)입니다. 다른 임베더로 만든 값(길이가 `dims`와 다름)은 빠집니다.
         대조 값은 민감정보입니다. 응답은 `Cache-Control: private, no-store`이고, 받은 쪽은 암호화해 두었다가 그 참가자의 동의가 꺼지거나 동의 세대(`generation`)가 오르거나 여행이 지워지면 지웁니다.
         기기의 판정 규칙(여백 규칙): 후보(동의한 등록자)가 둘 이상이면 가장 비슷한 사람의 코사인 유사도가 `floor` 이상이고 두 번째 사람보다 `margin` 이상 앞설 때만 화자를 붙입니다. 발화의 좌석 줄을 아는데 그 사람이 다른 줄에 앉았으면 붙이지 않습니다. 후보가 한 명뿐이면 `threshold`(서버 대조와 같은 절대 기준) 이상일 때만 붙입니다.
+        `strong`이 후보 모두에게 있고 기기가 같은 모델을 돌릴 수 있으면, 기기는 둘째 값으로 발화의 좌석 줄에서 가장 가까운 사람을 고릅니다(없는 사람이 섞이면 위 규칙).
         값을 모으는 사이 누군가 동의를 철회하면(동의 세대가 오름) 읽은 값을 버리고 새 상태로 다시 모읍니다. 응답의 `generation`·참가자·값은 한 시점의 것입니다. 철회가 계속 이어져 맞추지 못하면 409이고, 다시 부르면 됩니다.
         여행에는 시간 만료가 없습니다(T90). 여행이 지워지지 않았고 부르는 참가자가 동의한 동안에는 며칠 뒤에도 읽습니다.
       security: [{ participantToken: [] }]
@@ -2025,6 +2026,7 @@ paths:
                   threshold: { type: number, description: 확신 기준(초안 0.9, 조정 중) }
                   floor: { type: number, description: "여백 규칙의 바닥(기본 0.6). 후보가 둘 이상일 때 가장 비슷한 사람이 넘어야 하는 유사도" }
                   margin: { type: number, description: "여백 규칙의 여백(기본 0.06). 가장 비슷한 사람이 두 번째 사람보다 앞서야 하는 유사도 차" }
+                  strongEmbedder: { type: string, description: "항목의 strong을 만든 임베더 이름(지금 wespeaker-resnet34-v1). 기기의 것과 다르면 strong을 쓰지 않음" }
                   items:
                     type: array
                     items:
@@ -2035,6 +2037,7 @@ paths:
                         vector: { type: array, items: { type: number } }
                         seconds: { type: number, description: 등록 음성 길이 }
                         source: { type: string, enum: [trip, profile] }
+                        strong: { type: array, minItems: 256, maxItems: 256, items: { type: number }, description: "둘째 값(강한 화자 값). 그 사람이 올렸을 때만. 임베더는 응답의 strongEmbedder" }
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
@@ -2875,11 +2878,15 @@ components:
     VoicePrintInput:
       type: object
       required: [embedder, vector, seconds]
-      description: 기기가 계산한 목소리 대조 값(ADR-0023). 수식은 backend/api/providers/voice.js, 두 구현은 backend/api/voice-vectors.json으로 맞춥니다.
+      description: |
+        기기가 계산한 목소리 값(ADR-0023). 서버는 계산하지 않고 받아 둡니다. 값은 둘입니다. 같은 경로에 따로 올립니다(1차 값 먼저).
+        - 1차 값 `logmel-pitch-1`(112차원): 수식은 backend/api/providers/voice.js, 구현끼리는 backend/api/voice-vectors.json으로 맞춥니다.
+        - 둘째 값 `wespeaker-resnet34-v1`(256차원, 강한 화자 값): 공개 화자 모델 wespeaker_en_voxceleb_resnet34_LM을 sherpa-onnx 2.0.1과 같은 특징 추출(80 fbank, 25/10 ms, 표본 ×32768, CMN 없음)로 돌린 값 그대로(정규화하지 않음). 1차 값이 없으면 409, 1차 값을 다시 등록하면 지워집니다. 지우는 규칙은 1차 값과 같습니다(같은 줄).
+        응답의 `dims`는 받은 값의 길이, 둘째 값이면 `embedder`가 함께 옵니다.
       properties:
-        embedder: { type: string, const: logmel-pitch-1, description: 서버의 임베더 이름과 다르면 400 — 수식이 다른 값이 섞이지 않게 }
-        vector: { type: array, minItems: 112, maxItems: 112, items: { type: number }, description: "로그멜 평균 26 + 분산 26 + 음높이 60. 묶음마다 평균 0·길이 1(음높이를 못 잡았으면 그 묶음은 0). 아니면 400" }
-        seconds: { type: number, minimum: 1, maximum: 20, description: 값을 만든 등록 음성의 길이 }
+        embedder: { type: string, enum: [logmel-pitch-1, wespeaker-resnet34-v1], description: 모르는 이름이면 400 — 수식·모델이 다른 값이 섞이지 않게 }
+        vector: { type: array, minItems: 112, maxItems: 256, items: { type: number }, description: "logmel-pitch-1: 112개(로그멜 평균 26 + 분산 26 + 음높이 60, 묶음마다 평균 0·길이 1). wespeaker-resnet34-v1: 256개(유한한 수, 모두 0은 안 됨). 아니면 400" }
+        seconds: { type: number, minimum: 0.5, maximum: 20, description: "값을 만든 등록 음성의 길이. 1차 값은 1초부터, 둘째 값은 0.5초부터(디지털 무음을 뺀 길이)" }
     Utterance:
       allOf:
         - $ref: "#/components/schemas/UtteranceInput"

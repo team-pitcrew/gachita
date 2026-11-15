@@ -1338,6 +1338,35 @@ test("차가 대조 값을 받아 가 차 안에서 붙인 화자를 발화와 �
   assert.equal((await (await postRaw(`${t}/voice-match?row=2&device=car&seq=6`, wav(300, 1.5), a.token)).json()).applied, true);
   assert.deepEqual((await lines()).find((l) => l[0] === 6).slice(0, 3), [6, b.id, "server-voice"]);
 
+  // 둘째 값(강한 화자 값): 기기가 학습된 모델로 계산해 같은 경로로 한 번 더 올린다. 서버는 저장하고 조회 때 함께 준다
+  const strong = (seed) => ({ embedder: "wespeaker-resnet34-v1", vector: Array.from({ length: 256 }, (_, i) => Math.sin(i * seed + 1)), seconds: 13.4 });
+  const [, sp] = await call("POST", "/api/profiles", { name: "강한값" });
+  assert.equal((await json("/api/profiles/me/voice", strong(1), sp.token)).status, 409, "1차 값을 먼저 등록");
+  assert.equal((await json("/api/profiles/me/voice", value(2), sp.token)).status, 200);
+  const sreg = await json("/api/profiles/me/voice", strong(1), sp.token);
+  assert.deepEqual([sreg.status, await sreg.json()], [200, { seconds: 13.4, dims: 256, embedder: "wespeaker-resnet34-v1" }]);
+  assert.equal((await json("/api/profiles/me/voice", { ...strong(1), vector: strong(1).vector.slice(1) }, sp.token)).status, 400, "256차원");
+  assert.equal((await json("/api/profiles/me/voice", { ...strong(1), vector: new Array(256).fill(0) }, sp.token)).status, 400, "모두 0");
+  assert.equal((await json("/api/profiles/me/voice", { ...strong(1), embedder: "wespeaker-resnet34-v2" }, sp.token)).status, 400, "모르는 임베더");
+  const [, ps] = await call("POST", `${t}/participants`, { seat: "ROW_2_CENTER", consent: true }, sp.token);
+  const withStrong = (await call("GET", `${t}/voice-prints`, null, a.token))[1];
+  assert.equal(withStrong.strongEmbedder, "wespeaker-resnet34-v1");
+  assert.deepEqual(withStrong.items.find((p) => p.participantId === ps.id).strong, strong(1).vector, "올린 값 그대로");
+  assert.equal(withStrong.items.find((p) => p.participantId === a.id).strong, undefined, "둘째 값이 없는 사람은 칸이 없음");
+  assert.equal(withStrong.items.find((p) => p.participantId === ps.id).vector.length, 112, "1차 값은 그대로");
+  // 여행 참가자 값에도 같은 규칙. 1차 값을 다시 등록하면 둘째 값은 비운다(새 목소리와 섞이지 않게)
+  assert.equal((await json(`${t}/participants/${a.id}/voice`, strong(2), a.token)).status, 200);
+  assert.deepEqual((await call("GET", `${t}/voice-prints`, null, a.token))[1].items.find((p) => p.participantId === a.id).strong, strong(2).vector);
+  assert.equal((await json(`${t}/participants/${a.id}/voice`, value(0), a.token)).status, 200);
+  assert.equal((await call("GET", `${t}/voice-prints`, null, a.token))[1].items.find((p) => p.participantId === a.id).strong, undefined);
+  assert.equal((await json("/api/profiles/me/voice", value(2), sp.token)).status, 200);
+  assert.equal((await call("GET", `${t}/voice-prints`, null, a.token))[1].items.find((p) => p.participantId === ps.id).strong, undefined);
+  // 목소리를 지우면 두 값이 함께 사라진다(같은 줄)
+  assert.equal((await json("/api/profiles/me/voice", strong(1), sp.token)).status, 200);
+  assert.equal((await call("DELETE", "/api/profiles/me/voice", null, sp.token))[0], 204);
+  assert.equal((await profilesDb().query("SELECT count(*)::int AS n FROM voice_prints WHERE profile_id = $1", [sp.id])).rows[0].n, 0);
+  assert.equal((await call("GET", `${t}/voice-prints`, null, a.token))[1].items.some((p) => p.participantId === ps.id), false);
+
   // 한도(2만 줄)에 닿은 여행에서도 이미 받은 줄의 화자는 채운다. 새 줄만 거절한다
   await up([{ seq: 7, at: at + 10, text: "창문 열어도 돼?" }]);
   await tripsDb().query("INSERT INTO utterances (trip_code, device, seq, at, text, generation) SELECT $1, 'filler', g, $2, 'x', 1 FROM generate_series(1, 20000 - 7) g", [trip.code, at]);
