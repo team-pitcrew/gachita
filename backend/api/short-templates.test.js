@@ -80,7 +80,12 @@ test("미확인 화자를 실명으로 추측하지 않고 수정된 자막은 �
   assert.ok(p.cues.every((x) => x.slot === null));
   assert.deepEqual(planShort({ ...s, cast: [] }).cast.map((x) => [x.participantId, x.character]), [[null, "basic"], [null, "basic-small"]]);
   const before = p.planHash;
-  s.scenes[0].cues[0].text = "다른 대화";
+  // 재전사가 글만 바꾸면(끝 시각도 따라 바뀜) 같은 계획이다. 사람이 고치면(editVersion) 새 계획이다.
+  s.scenes[0].cues[0].text = "다시 받아 적은 조금 더 긴 대화";
+  s.scenes[0].cues[0].end = 3.5;
+  assert.equal(planShort(s).planHash, before);
+  assert.equal(planShort(s).cues[0].text, "다시 받아 적은 조금 더 긴 대화");
+  s.scenes[0].cues[0].editVersion = 1;
   assert.notEqual(planShort(s).planHash, before);
   // 원음은 외부 생성으로 보내지 않는다(ADR-0025). 옛 앱의 false는 받는다.
   assert.throws(() => planShort(s, { audioReference: true }), (e) => e.status === 400);

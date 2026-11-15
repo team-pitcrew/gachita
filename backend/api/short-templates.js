@@ -175,9 +175,32 @@ export function planShort(source, options = {}) {
   return {
     ...plan,
     planHash: fingerprint({
-      plan,
+      plan: planIdentity(plan),
       sourceRevision: scene.sourceRevision ?? null,
     }),
   };
 }
+
+// 계획의 지문에 넣는 것: 사람이 확인한 계획이 바뀌었는지 가리는 값만.
+// 재전사(T75)가 뒤늦게 채우는 자막 글과, 거기서 어림한 끝 시각·반응은 뺀다. 운영에서는 클립이 올라온 뒤 30~60초 동안
+// 글이 줄마다 바뀌어, 계획→생성 사이에 409가 나고 만드는 중인 작업이 '원본 바뀜'으로 취소됐다(T158).
+// 사람이 고친 자막(editVersion)·화자·캐릭터·자리·제목·줄 구성·동의 세대가 바뀌면 지문도 바뀐다.
+export const planIdentity = (plan) => ({
+  schemaVersion: plan.schemaVersion,
+  templateId: plan.templateId,
+  templateVersion: plan.templateVersion,
+  momentId: plan.momentId,
+  generation: plan.generation,
+  seconds: plan.seconds,
+  title: plan.title,
+  cast: plan.cast,
+  cues: plan.cues.map((c) => ({
+    start: c.start,
+    device: c.device,
+    seq: c.seq,
+    editVersion: c.editVersion,
+    participantId: c.participantId,
+    slot: c.slot,
+  })),
+});
 

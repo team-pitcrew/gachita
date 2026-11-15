@@ -3,7 +3,7 @@
 // 앱 계약(short-plans, short-generations, …/file, 콘텐츠 기록)은 T85 그대로다.
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { tripsDb } from "./db.js";
-import { planShort, templates, fingerprint } from "./short-templates.js";
+import { planShort, planIdentity, templates, fingerprint } from "./short-templates.js";
 import { shortMedia, mediaReady } from "./providers/short-media.js";
 import { ASSET_MAX_BYTES, inspectVideo } from "./providers/short-asset-probe.js";
 import { clipStore } from "./providers/clips.js";
@@ -89,7 +89,8 @@ export function shortGenerations(ctx, overrides = {}) {
       [trip.code, p.momentId, trip.generation ?? 1],
     );
     if (!rows[0]) fail(409, "장면 원음이 준비되지 않았어요");
-    p.planHash = fingerprint({ plan: p, sourceKey: rows[0].object_key });
+    // 재전사가 뒤늦게 바꾸는 글은 지문에 넣지 않는다(planIdentity). 원음 파일이 바뀌면 지문도 바뀐다.
+    p.planHash = fingerprint({ plan: planIdentity(p), sourceKey: rows[0].object_key });
     return { plan: p, sourceKey: rows[0].object_key };
   }
   async function valid(row) {
@@ -108,7 +109,7 @@ export function shortGenerations(ctx, overrides = {}) {
         current.sourceKey !== row.source_key
       )
         fail(409, "원음·자막·캐릭터가 바뀌었어요");
-      return true;
+      return current.plan; // 지금의 계획(재전사한 글이 들어 있을 수 있다)
     });
   }
   const cancel = (id, code = "source_changed") =>
@@ -327,7 +328,9 @@ export function shortGenerations(ctx, overrides = {}) {
       ).rows[0];
       if (!row) return [204];
       try {
-        await valid(row);
+        // 받는 순간의 글(재전사 반영)로 계획을 갱신해 넘긴다. 지문이 같으니 사람이 확인한 계획 그대로다.
+        row.plan = await valid(row);
+        await db().query("UPDATE short_generations SET plan=$2 WHERE id=$1 AND state='generating'", [row.id, row.plan]);
       } catch (e) {
         if (![403, 404, 409, 410].includes(e.status)) throw e;
         await cancel(row.id);
