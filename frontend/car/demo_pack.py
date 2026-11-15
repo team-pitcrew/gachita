@@ -109,6 +109,11 @@ def build(spec, out):
     manifest = {"version": 1, "title": spec["title"], "group": spec["group"], "seconds": seconds,
                 "people": [{"id": p["id"], "name": p["name"], "seat": p["seat"], "character": p.get("character", "")} for p in people],
                 "lines": sorted(lines, key=lambda l: l["at"]), "wave": wave, "route": route, "scenes": sorted(scenes, key=lambda s: s["from"])}
+    # 들르는 곳(선택): 도착 전 카드와 도착 브리핑. by는 people의 label → id
+    if spec.get("stops"):
+        manifest["stops"] = [{"name": st["name"], "nearAt": st["nearAt"], "briefAt": st["briefAt"], "final": bool(st.get("final")),
+                              "asks": [{"category": a["category"], "title": a["title"], "items": a.get("items", []),
+                                        **({"by": who[a["by"]]} if a.get("by") in who else {})} for a in st.get("asks", [])]} for st in spec["stops"]]
     if spec.get("started"):
         manifest["startedAt"] = int(datetime.datetime.fromisoformat(spec["started"]).timestamp() * 1000)
     (out / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=1), encoding="utf-8")

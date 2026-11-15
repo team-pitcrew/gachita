@@ -1,5 +1,6 @@
 package io.github.teampitcrew.gachita
 
+import androidx.compose.runtime.mutableStateListOf
 import android.content.Context
 import android.graphics.BitmapFactory
 import android.util.Log
@@ -35,8 +36,16 @@ internal data class DemoPoint(val lat: Double, val lng: Double, val name: String
 internal data class DemoScene(val id: String, val from: Double, val to: Double, val title: String, val quote: String, val who: String?,
     val video: String, val cover: String?, val seconds: Double, val lat: Double?, val lng: Double?)
 
+/** 도착 할 일 한 줄(도착 전 카드 C19·도착 브리핑 C20): category는 first·buy·remember·bring, by는 부탁한 사람 id. */
+internal data class DemoAsk(val category: String, val title: String, val items: List<String>, val by: String?)
+/** 들르는 곳: nearAt(초)부터 도착 전 카드, briefAt부터 도착 브리핑. final이면 최종 목적지(브리핑 '계속'이 여행을 마친다). */
+internal data class DemoStop(val name: String, val nearAt: Double, val briefAt: Double, val final: Boolean, val asks: List<DemoAsk>) {
+    fun todos(): List<SharedTodo> = asks.mapIndexed { i, a ->
+        SharedTodo("demo-$name-$i", name, a.title, "pending", 0, emptyList(), a.category, a.items.map { TodoItem(it, null) }, listOfNotNull(a.by), a.title)
+    }
+}
 internal data class DemoPack(val title: String, val group: String, val seconds: Double, val startedAt: Long?, val people: List<DemoPerson>,
-    val lines: List<DemoLine>, val wave: List<Double>, val route: List<DemoPoint>, val scenes: List<DemoScene>) {
+    val lines: List<DemoLine>, val wave: List<Double>, val route: List<DemoPoint>, val scenes: List<DemoScene>, val stops: List<DemoStop> = emptyList()) {
     private fun origin(trip: Trip) = startedAt ?: trip.createdAt
     private fun ms(seconds: Double) = Math.round(seconds * 1000)
     private val names get() = people.associate { it.id to it.name }
@@ -136,13 +145,22 @@ internal fun parseDemoPack(json: String): DemoPack {
     }.sortedBy { it.from }
     require(scenes.isNotEmpty()) { "scenes 가 비었어요" }
     require(scenes.map { it.id }.toSet().size == scenes.size) { "장면 id가 겹쳐요" }
+    val stops = (o.optJSONArray("stops")?.each { st ->
+        val nearAt = inTrip(st.real("nearAt"), "들르는 곳"); val briefAt = inTrip(st.real("briefAt"), "들르는 곳")
+        require(briefAt >= nearAt) { "도착 브리핑이 도착 전 카드보다 앞이에요" }
+        DemoStop(st.text("name"), nearAt, briefAt, st.optBoolean("final"), st.optJSONArray("asks").each { a ->
+            DemoAsk(a.text("category").also { require(it in setOf("first", "buy", "remember", "bring")) { "모르는 할 일 종류: $it" } }, a.text("title"),
+                a.optJSONArray("items")?.let { x -> (0 until x.length()).map { x.getString(it) } }.orEmpty(),
+                a.optString("by").trim().ifEmpty { null }?.also { require(it in ids) { "할 일을 부탁한 사람이 팩에 없어요: $it" } })
+        })
+    } ?: emptyList()).sortedBy { it.nearAt }
     return DemoPack(o.text("title"), o.text("group"), seconds, if (o.has("startedAt") && !o.isNull("startedAt")) o.getLong("startedAt") else null,
-        people, lines, wave, route, scenes)
+        people, lines, wave, route, scenes, stops)
 }
 
-/** [index]째 줄이 나오기까지 기다릴 시간: 앞 줄과의 원래 간격, 빈틈은 3.5초까지만(첫 줄은 1.5초 뒤), 겹친 말도 0.8초는 띄운다. */
+/** [index]째 줄이 나오기까지 기다릴 시간: 팩의 시각 그대로(실시간) — 편집에서 같은 구간의 소리를 붙이면 줄과 맞는다(오너 11/15). 겹친 말도 0.3초는 띄운다. */
 internal fun demoGapMs(lines: List<DemoLine>, index: Int): Long =
-    if (index == 0) 1500 else Math.round((lines[index].at - lines[index - 1].at) * 1000).coerceIn(800, 3500)
+    Math.round((lines[index].at - (if (index == 0) 0.0 else lines[index - 1].at)) * 1000).coerceIn(300, 120_000)
 
 /** 이 앱에 든 시연 팩(디버그 빌드의 assets/demo). 없거나 틀리면 pack은 null이고 앱은 평소대로 돈다. */
 internal object Demo {
@@ -169,11 +187,18 @@ internal object Demo {
     // 주행 중 '방금 받아 적은 말'(C17): 기록하는 동안 팩의 줄을 차례로 하나씩 낸다. 지금까지 낸 줄 수는 여행마다 하나(앱이 켜져 있는 동안).
     private var heardTrip by mutableStateOf<String?>(null)
     private var heardCount by mutableIntStateOf(0)
+    private val passed = mutableStateListOf<String>() // '계속'으로 닫은 들르는 곳
+    /** 지금 보일 들르는 곳과 단계(false: 도착 전 카드, true: 도착 브리핑). 낸 줄의 시각을 시계로 쓴다. */
+    fun stop(code: String, pack: DemoPack): Pair<DemoStop, Boolean>? {
+        val at = pack.lines.getOrNull(heard(code) - 1)?.at ?: return null
+        return pack.stops.lastOrNull { it.nearAt <= at && it.name !in passed }?.let { it to (at >= it.briefAt) }
+    }
+    fun pass(name: String) { if (name !in passed) passed.add(name) }
     /** 이 여행에서 지금까지 낸 줄 수. */
     fun heard(code: String): Int = if (heardTrip == code) heardCount else 0
     /** 기록 중인 동안 부른다(멈추면 취소 → 다시 부르면 이어 감). 다 내면 끝나고 되풀이하지 않는다. */
     suspend fun feed(code: String, pack: DemoPack) {
-        if (heardTrip != code) { heardTrip = code; heardCount = 0 }
+        if (heardTrip != code) { heardTrip = code; heardCount = 0; passed.clear() }
         while (heardCount < pack.lines.size) { delay(demoGapMs(pack.lines, heardCount)); heardCount++ }
     }
 

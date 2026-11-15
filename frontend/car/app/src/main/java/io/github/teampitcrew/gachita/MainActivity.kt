@@ -1412,7 +1412,10 @@ class MainActivity : ComponentActivity() {
         // mock: 시연 팩(DemoPack.kt)은 여행을 마친 뒤의 세 화면(대화 기록·여행 마무리·콘텐츠 기록)에만 끼운다. 주행 중 화면은 실제 값 그대로
         val anyPack = Demo.pack?.takeIf { f4Mock == null } // 대화 기록은 주행 중에도 팩의 줄(지금까지 나온 만큼)
         val pack = anyPack?.takeIf { raw.status == "ended" }
-        val b = mockBrief() ?: brief?.takeIf { vehicleParked() && offer?.stage.let { it == null || it == Offer.Stage.FINDING } } // 실제 P이고 제한이 풀린 동안만, 휴게소 제안이 먼저
+        // mock: 시연 팩의 들르는 곳(도착 전 카드 → 도착 브리핑). 실제 내비·서버 판정 대신 팩의 시각으로 띄운다
+        val packStop = Demo.pack?.takeIf { f4Mock == null && t.status != "ended" }?.let { p -> Demo.stop(t.code, p)?.let { p to it } }
+        val packBrief = packStop?.takeIf { it.second.second }?.let { (_, st) -> Brief(st.first.name, st.first.todos(), st.first.final) }
+        val b = mockBrief() ?: packBrief ?: brief?.takeIf { vehicleParked() && offer?.stage.let { it == null || it == Offer.Stage.FINDING } } // 실제 P이고 제한이 풀린 동안만, 휴게소 제안이 먼저
         // 도착 브리핑(C20)과 좌석 배정·참석 QR(C16B·C16C·C16 guestInvite)은 주차 틀('주차 중  P')
         val shell = tripShell(parked, destination == Destination.RIDE && (b != null || boarding.page != BoardingPage.HIDDEN), destination == Destination.SHORTS,
             talk = destination == Destination.CONVERSATION)
@@ -1435,7 +1438,7 @@ class MainActivity : ComponentActivity() {
                         destination == Destination.CONVERSATION -> Conversations(anyPack?.trip(t) ?: t, Modifier.fillMaxSize(), anyPack)
                         destination == Destination.SHORTS && parked && afterStart != null -> AfterTripTab(pack?.trip(t) ?: t, afterStart!!, Modifier.fillMaxSize(), pack)
                         destination == Destination.SHORTS && parked -> ShortsLibrary(pack?.trip(t) ?: t, Modifier.fillMaxSize(), pack)
-                        b != null -> ArrivalBrief(b.place, b.final, b.arrivalItems ?: placeAsks(b.place, todoList), if (f4Mock != null) F4Mock.people else t.people,
+                        b != null -> ArrivalBrief(b.place, b.final, b.arrivalItems ?: placeAsks(b.place, todoList), if (f4Mock != null) F4Mock.people else if (packBrief != null) packStop!!.first.trip(t).people else t.people,
                             onMain = { arrivalMain(b) }, modifier = Modifier.fillMaxSize(), details = if (f4Mock == "final") F4Mock.lodgeDetails else emptyMap())
                         else -> RideOverview(t, Modifier.fillMaxSize())
                     }
@@ -1523,7 +1526,8 @@ class MainActivity : ComponentActivity() {
             t.people.filterNot { it.consent }.map { it.name }, ended = ended)
         val note = s.note.ifBlank { arrivalNote }.ifBlank { if (mock == null && !s.online) "서버 연결을 기다리고 있어요" else "" }
         // 도착 전 카드: 내비가 다음 장소까지 5분 이하라고 알렸고 그 장소의 서버 할 일이 있을 때(C19, 최종 목적지도 C19 모양)
-        val nearAsks = (mockApproach() ?: near?.takeIf { it.trip == t.code && !parked })?.let { a ->
+        val packNear = Demo.pack?.takeIf { mock == null && !ended }?.let { p -> Demo.stop(t.code, p) }?.takeIf { !it.second }?.first // mock: 시연 팩의 도착 전 카드
+        val nearAsks = packNear?.todos()?.takeIf { it.isNotEmpty() } ?: (mockApproach() ?: near?.takeIf { it.trip == t.code && !parked })?.let { a ->
             (if (mock != null) mockNearAsks() else placeAsks(a.place, todoList)).takeIf { it.isNotEmpty() }
         }
         val o = offer?.takeIf { it.stage != Offer.Stage.FINDING }
@@ -1583,6 +1587,7 @@ class MainActivity : ComponentActivity() {
      */
     private fun arrivalMain(b: Brief) {
         if (f4Mock != null) { f4Mock = null; if (b.final) { afterStart = AfterStep.UPLOAD; destination = Destination.SHORTS }; return } // mock: 시연은 화면만 넘긴다
+        if (Demo.pack?.stops.orEmpty().any { it.name == b.place }) Demo.pass(b.place) // mock: 시연 팩의 들르는 곳은 닫으면 다시 뜨지 않는다
         if (!b.final) { brief = null; return }
         val scope = todoScope() ?: return
         bg({ Server(scope.server).endTrip(scope.trip, scope.token) }) { r ->
@@ -1646,7 +1651,7 @@ class MainActivity : ComponentActivity() {
             // 주행 중에는 C17에 지금까지 나온 줄까지만, 여행을 마치면 팩 전체. 실제 받아쓰기는 섞지 않는다
             val shown = if (t.status == "ended") pack.lines.size else Demo.heard(t.code)
             TranscriptScreen(t, remember(pack, t.createdAt, shown) { pack.transcript(t).take(shown) }, remember(pack, t.createdAt) { pack.tripPlaces(t) }, false, "", canPick = !carStatus.restricted,
-                onPick = { closeBoarding(); afterStart = AfterStep.SELECT; destination = Destination.SHORTS }, modifier = modifier, me = pack.driver)
+                onPick = { closeBoarding(); afterStart = AfterStep.SELECT; destination = Destination.SHORTS }, modifier = modifier, me = pack.people.firstOrNull { it.name == (onboarding.profile?.name ?: onboarding.name).trim() }?.id ?: pack.driver) // '(나)': 차에 로그인한 계정과 이름이 같은 사람, 없으면 운전석
             return
         }
         val scope = contentScope()
