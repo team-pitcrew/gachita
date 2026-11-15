@@ -328,6 +328,10 @@ internal fun AfterTrip(trip: Trip, lines: List<AfterLine>, base: String, token: 
     val wave = remember(lines) { afterBars(lines.map { it.at }, origin, end, 64) } // C22·C31 파형 막대 64개
     val fine = remember(lines) { afterBars(lines.map { it.at }, origin, end, 120) } // C23–C30 파형 막대 120개
     val place by produceState<String?>(null, trip.code) { value = withContext(Dispatchers.IO) { parkedPlace(context, trip.code) } }
+    // 무리 이름(동승 그룹이면 PITCREW): 차가 받는 여행 문서에는 그룹을 싣지 않아(server.js tripView) 콘텐츠 기록 응답에서 한 번 읽는다. 못 읽으면 '우리 가족'.
+    val crew by produceState("우리 가족", trip.code, token) {
+        if (token != null) runCatching { withContext(Dispatchers.IO) { parseContentTrip(org.json.JSONObject(Server(base).contents(trip.code, token))).crew } }.onSuccess { value = it }
+    }
     val running = AfterRuns.run?.takeIf { it.code == trip.code && it.generation == trip.generation }
     var step by remember(trip.code, trip.generation) { mutableStateOf(if (running != null) AfterStep.MAKE else start) }
     if (step == AfterStep.MAKE && running?.finished == true && !running.active) step = AfterStep.DONE
@@ -353,12 +357,12 @@ internal fun AfterTrip(trip: Trip, lines: List<AfterLine>, base: String, token: 
         val (title, sub) = when (step) {
             AfterStep.UPLOAD -> "오늘의 주행을 기록했어요" to (place?.let { "$it 도착 / " }.orEmpty() + "주차 후 여행 마무리")
             AfterStep.SELECT -> "남기고 싶은 순간을 골라요" to "전체 음성에서 찾은 추천 장면 ${picks.size}개"
-            AfterStep.MAKE -> "우리 가족의 콘텐츠를 만들어요" to "선택한 장면에 캐릭터와 자막을 입히는 중"
+            AfterStep.MAKE -> "${crew}의 콘텐츠를 만들어요" to "선택한 장면에 캐릭터와 자막을 입히는 중"
             // 하나도 못 만들었으면 완성됐다고 하지 않는다(시안 밖 실패 상태 — 표지마다 까닭을 보임). C31에서 일찍 넘어와 아직 만드는 중이면 C31 글.
             AfterStep.DONE -> when {
                 failed -> "콘텐츠를 만들지 못했어요" to "만들지 못한 까닭을 확인해 주세요."
-                making -> "우리 가족의 콘텐츠를 만들어요" to "선택한 장면에 캐릭터와 자막을 입히는 중"
-                else -> "우리 가족의 순간이 완성됐어요" to "선택한 장면을 콘텐츠 기록에 저장했어요."
+                making -> "${crew}의 콘텐츠를 만들어요" to "선택한 장면에 캐릭터와 자막을 입히는 중"
+                else -> "${crew}의 순간이 완성됐어요" to "선택한 장면을 콘텐츠 기록에 저장했어요."
             }
         }
         TitleBlock(title, sub, Modifier.fillMaxWidth())
@@ -367,7 +371,7 @@ internal fun AfterTrip(trip: Trip, lines: List<AfterLine>, base: String, token: 
         Box(Modifier.weight(1f).fillMaxWidth()) {
             when (step) {
                 AfterStep.UPLOAD -> Centered {
-                    InfoCard("우리 가족" + afterDuration(seconds).let { if (it.isEmpty()) "" else " / $it" }, dayRange(origin, end), soft = true)
+                    InfoCard(crew + afterDuration(seconds).let { if (it.isEmpty()) "" else " / $it" }, dayRange(origin, end), soft = true)
                     WaveCard(audioLabel(audio, upload), wave, seconds)
                     Text(audioNote(audio), style = CarText.Label, color = c.onSurfaceVariant)
                 }
@@ -382,6 +386,8 @@ internal fun AfterTrip(trip: Trip, lines: List<AfterLine>, base: String, token: 
                         }
                     }
                     picks.forEach { p -> SceneRow(p, p.from in chosen, origin) { toggle(p.from) } }
+                    // 추천 장면이 없으면(받아 적은 말이 없는 여행) 막다른 화면이 되지 않게 까닭과 콘텐츠 기록으로 가는 단추(시안 밖 상태)
+                    if (picks.isEmpty()) Text("받아 적은 대화가 없어 추천할 장면을 찾지 못했어요.", style = CarText.Body, color = c.onSurfaceVariant)
                 }
                 AfterStep.MAKE -> Centered {
                     val r = running
@@ -403,7 +409,8 @@ internal fun AfterTrip(trip: Trip, lines: List<AfterLine>, base: String, token: 
         val n = chosen.size
         when (step) {
             AfterStep.UPLOAD -> CarButton("추천 장면 보기") { step = AfterStep.SELECT }
-            AfterStep.SELECT -> CarButton(if (n == 0) "장면을 선택해 주세요" else "선택한 ${n}개 생성", enabled = n > 0 && token != null) {
+            AfterStep.SELECT -> if (picks.isEmpty()) CarButton("콘텐츠 기록 보기", onClick = ::open)
+            else CarButton(if (n == 0) "장면을 선택해 주세요" else "선택한 ${n}개 생성", enabled = n > 0 && token != null) {
                 if (token != null && n > 0) {
                     val run = AfterRun(trip.code, trip.generation, picks.filter { it.from in chosen }.map(::AfterItem), trip.people)
                     AfterRuns.start(context, base, token, run, allowed, ready); step = AfterStep.MAKE

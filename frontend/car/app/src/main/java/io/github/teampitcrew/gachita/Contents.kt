@@ -72,7 +72,10 @@ internal data class ContentItem(val id: String, val title: String, val seconds: 
 internal object ContentLink { var moment: String? = null }
 internal data class ContentTrip(val code: String, val title: String, val createdAt: Long, val members: List<ContentPerson>, val places: List<ContentPlace>,
     val route: List<Pair<Double, Double>>, val contents: List<ContentItem>, val startedAt: Long? = null, val endedAt: Long? = null,
-    val routeAt: List<Long> = emptyList())
+    val routeAt: List<Long> = emptyList(), val groupName: String? = null) {
+    /** 화면에 부르는 무리 이름: 동승 그룹이면 그 이름(PITCREW), 가족 그룹·그룹 없는 여행이면 '우리 가족'(시안 글). */
+    val crew get() = groupName?.takeIf { it.isNotBlank() } ?: "우리 가족"
+}
 
 private fun JSONObject.str(key: String): String? = if (isNull(key) || !has(key)) null else optString(key)
 private fun JSONObject.num(key: String): Double? = if (isNull(key) || !has(key)) null else optDouble(key).takeIf { !it.isNaN() }
@@ -96,7 +99,7 @@ internal fun parseContentTrip(json: JSONObject): ContentTrip {
                 c.optJSONArray("lines").list { ContentLine(it.getLong("at"), it.str("participantId"), it.str("name"), it.optString("text")) },
                 c.getString("url"), c.str("momentId"))
         }.map { it.copy(place = contentWay(it.at, it.place, places)) }.sortedBy { it.at },
-        json.num("startedAt")?.toLong(), json.num("endedAt")?.toLong(), routeAt)
+        json.num("startedAt")?.toLong(), json.num("endedAt")?.toLong(), routeAt, json.str("groupName"))
 }
 
 private fun hhmm(at: Long) = SimpleDateFormat("HH:mm", Locale.KOREA).format(Date(at))
@@ -283,7 +286,7 @@ private fun TripInfo(trip: ContentTrip, members: Int, onFamily: () -> Unit, widt
         Text(contentTripTitleLines(trip.title.ifBlank { "함께 탄 여행" }), style = CarText.Title, color = c.onSurface)
         Text("${hhmm(start)} — ${hhmm(end)}", style = CarText.Label, color = c.onSurfaceVariant)
         if (trip.members.isNotEmpty()) Row(Modifier.clickable(onClick = onFamily), horizontalArrangement = Arrangement.spacedBy(8.dp)) { trip.members.take(4).forEach { ContentFace(it, 56.dp) } }
-        Text("우리 가족 ${maxOf(members, trip.members.size)}명", Modifier.clickable(onClick = onFamily), style = CarText.Label, color = c.onSurfaceVariant)
+        Text("${trip.crew} ${maxOf(members, trip.members.size)}명", Modifier.clickable(onClick = onFamily), style = CarText.Label, color = c.onSurfaceVariant)
     }
 }
 
@@ -382,7 +385,7 @@ internal fun ContentsRecord(base: String, code: String, token: String?, canRead:
             val none = loaded && (items.isEmpty() || t == null)
             val (title, sub) = when {
                 !loaded -> "콘텐츠 기록" to ""
-                none -> "콘텐츠 기록" to "우리 가족 / 차량과 폰에서 이어보기"
+                none -> "콘텐츠 기록" to (t?.groupName?.takeIf { it.isNotBlank() }?.let { "$it / 차량과 폰에서 이어보기" } ?: "우리 가족 / 차량과 폰에서 이어보기")
                 page == ContentsPage.PLAYER && item != null -> item.title to listOfNotNull("${monthDay(item.at)} ${hhmm(item.at)}", item.place).joinToString("  ")
                 page == ContentsPage.EXPORT && item != null -> "영상이 준비됐어요" to "내 계정에 저장한 가족의 숏폼"
                 page == ContentsPage.DETAIL -> "이 길에서 나눈 이야기" to "" // 시안 C36에는 부제 없음

@@ -83,7 +83,8 @@ internal object FullAudio {
         io.execute {
             try { upload(dir, seal, Server(base), code, generation, token, canUpload, k) }
             catch (e: ApiError) {
-                if (e.status in listOf(404, 409, 410)) { settled = k; show(k, AudioState.STOPPED, 0f) } // 404: 이 서버에 전체 음성 경로가 없음
+                // 404: 이 서버에 전체 음성 경로가 없음. 403: 이 기기는 올릴 수 없음(받아 적은 말을 올리지 않은 기기·동의 없음) — 1분마다 다시 해도 같아 C22가 0%에 멈췄다
+                if (e.status in listOf(403, 404, 409, 410)) { settled = k; show(k, AudioState.STOPPED, 0f) }
                 else retryAt = System.currentTimeMillis() + 60_000
                 Log.i("GachitaAudio", "전체 음성 ${if (settled == k) "멈춤" else "미룸"} ${e.status}")
             } catch (e: Exception) { retryAt = System.currentTimeMillis() + 60_000; Log.i("GachitaAudio", "전체 음성 미룸 ${e.javaClass.simpleName}") }
@@ -140,5 +141,5 @@ internal fun audioNote(state: AudioState): String = when (state) {
     AudioState.READY -> "전체 음성을 다 올렸어요. 남기고 싶은 장면을 골라 주세요."
     AudioState.EXPIRED -> "전체 음성은 지웠어요. 이미 고른 장면의 소리와 만든 콘텐츠는 그대로 남아요."
     AudioState.NONE -> "이 차에서 기록하지 않은 여행이에요. 받아 적은 대화로 장면을 추천해요."
-    AudioState.STOPPED -> "동의가 바뀌었거나 지운 여행이라 전체 음성을 올리지 않아요. 받아 적은 대화로 장면을 추천해요."
+    AudioState.STOPPED -> "동의가 바뀌었거나 받아 적은 말이 없거나 지운 여행이라 전체 음성을 올리지 않아요. 받아 적은 대화로 장면을 추천해요."
 }

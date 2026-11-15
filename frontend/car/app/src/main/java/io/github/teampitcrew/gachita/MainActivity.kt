@@ -440,8 +440,11 @@ class MainActivity : ComponentActivity() {
             r.onSuccess { (got, mine) ->
                 tokens = mine
                 prefs.edit().putString("tokens", Live.seal(this).line(JSONObject(mine).toString())).commit() // 다시 받을 수 없는 값이라 디스크에 쓰고 돌아온다
-                familyOpen = false
+                // C16A·C43 '출발' → C17 함께 타는 중(앞 여행의 탭이 대화 기록·콘텐츠 기록이어도). 출발을 누른 것이 녹음 시작이라(시안 C17은 이미 기록 중)
+                // 모두 동의했으면 주차 중에 바로 녹음한다. 동의가 빠진 사람이 있으면 C17이 동의를 기다리고, 모이면 D로 나갈 때 자동 시작(autoRecord).
+                familyOpen = false; closeBoarding(); afterStart = null; destination = Destination.RIDE
                 s = Session(gear = s.gear, ours = mine.keys).withTrip(keep(got))
+                if (s.agreed) startRecording()
             }
                 .onFailure { s = s.copy(busy = false); error = "여행을 만들지 못했어요 · ${reason(it)}" }
         }

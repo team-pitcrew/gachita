@@ -83,6 +83,9 @@ class ContentsTest {
         val json = JSONObject("""{"code":"AB","title":"t","createdAt":1,"startedAt":5,"endedAt":null,"members":[],"places":[],"route":[],"contents":[]}""")
         assertEquals(5L, parseContentTrip(json).startedAt)
         assertNull(parseContentTrip(json).endedAt)
+        assertEquals("우리 가족", parseContentTrip(json).crew) // 그룹 없는 여행(groupName 없음)
+        assertEquals("PITCREW", parseContentTrip(JSONObject(json.toString()).put("groupName", "PITCREW")).crew)
+        assertEquals("우리 가족", parseContentTrip(JSONObject(json.toString()).put("groupName", JSONObject.NULL)).crew)
     }
 
     @Test
