@@ -11,6 +11,7 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -263,6 +264,9 @@ fun OnboardingScreen(o: Onboarding, driving: Boolean = false, onFamily: () -> Un
     val mic = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { if (it) o.startRecording() }
     LaunchedEffect(o, driving) { if (!driving) o.start() }
     val step = if (driving) OnboardStep.WELCOME else o.step ?: OnboardStep.WELCOME
+    // 기기 뒤로: 앞 화면이 있는 단계만 한 칸 뒤로(C02 → C01, C05·C06 → C04, C07 → C06). 동의(C03) 뒤로는 이미 만든 계정이라 앱 기본(나가기)
+    val back = when (step) { OnboardStep.SIGNUP -> OnboardStep.WELCOME; OnboardStep.PHOTO, OnboardStep.VOICE -> OnboardStep.PROFILE; OnboardStep.RECORDING -> OnboardStep.VOICE; else -> null }
+    BackHandler(!driving && back != null && !o.busy) { if (step == OnboardStep.RECORDING) o.again() else o.go(back!!) }
     val p = o.profile
     val shownName = p?.name?.takeIf { it.isNotBlank() } ?: o.name
     // 원본에 없는 오류 글(입력·서버·사진·마이크)은 본문에 따로 두지 않고 2047:2276 알림으로 잠깐 보인다(CarToast)

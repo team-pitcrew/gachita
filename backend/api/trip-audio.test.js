@@ -351,6 +351,23 @@ test("녹음한 기기의 참가자 토큰만, 모두 동의했을 때만, 지�
   assert.equal((await call("POST", `${t}/audio/complete`, { generation: 1, parts: 1, seconds: 1, sha256: sha(pcm) }, car.token)).status, 409);
 });
 
+test("받아 적은 말이 없는 여행은 내비 장소를 올린 기기나 운전석이 올린다(T162, C22가 0%에서 멈추지 않게)", async () => {
+  const trip = (await call("POST", "/trips", { title: "말 없는 여행" })).data;
+  const t = `/trips/${trip.code}`;
+  const join = async (name, seat) => (await call("POST", `${t}/participants`, { name, seat, consent: true })).data;
+  const [driver, phone, car] = [await join("운전", "ROW_1_LEFT"), await join("폰", "ROW_1_RIGHT"), await join("차", "ROW_2_LEFT")];
+  const pcm = pcmOf(1);
+  const body = { generation: 1, expectedBytes: pcm.length, seconds: 1, startedAt: trip.createdAt };
+  assert.equal((await call("POST", `${t}/audio/start`, body, phone.token)).status, 403, "발화도 장소도 없는 동승자 폰은 여전히 못 올림");
+  assert.equal((await call("POST", `${t}/audio/start`, body, driver.token)).status, 200, "운전석");
+  assert.equal((await call("POST", `${t}/places`, { kind: "start", name: "신논현역" }, car.token)).status, 201);
+  assert.equal((await put(t, 0, pcm, car.token)).status, 409, "운전석이 올리는 중이면 다른 기기는 끼어들지 못함");
+  assert.equal((await call("POST", `${t}/audio/start`, body, phone.token)).status, 403);
+  // 차 기기에서 발화가 들어오면 그때부터는 발화를 올린 기기만(이전 규칙 그대로)
+  assert.equal((await call("POST", `${t}/utterances`, { device: "car-1", items: [{ seq: 1, at: trip.createdAt + 1000, text: "출발", seatArea: "ROW_2_LEFT", generation: 1 }] }, car.token)).status, 200);
+  assert.equal((await call("POST", `${t}/audio/start`, body, driver.token)).status, 403, "발화가 생기면 운전석이라도 그 기기가 아니면 못 올림");
+});
+
 test("동의 철회(세대 오름)는 전체 음성·조각·잘라 둔 장면 클립을 지운다", async () => {
   const f = await setup();
   const { trip, t, car, phone } = f;

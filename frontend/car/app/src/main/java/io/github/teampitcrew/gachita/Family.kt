@@ -175,8 +175,24 @@ fun readiness(members: List<GroupMember>): String {
 /** 좌석 이름(ROW_2_LEFT)을 화면 글(뒤 왼쪽)로. 모르는 값이나 자리 없음은 null. */
 fun seatLabel(seat: String?): String? = seat?.let { s -> Seat.entries.firstOrNull { it.name == s }?.label?.replace("뒷자리", "뒤") }
 
-/** 좌석 배정(C16B)에 그리는 자리: 앞 둘, 뒤 둘(SeatGrid와 같음). */
-val GRID_SEATS = listOf(listOf(Seat.ROW_1_LEFT, Seat.ROW_1_RIGHT), listOf(Seat.ROW_2_LEFT, Seat.ROW_2_RIGHT))
+/**
+ * 좌석 칸(C14·C43 SeatGrid, C16B SeatAssign): 시안은 앞 둘·뒤 둘. 폰 QR 참가·서버는 '뒤 가운데'(ROW_2_CENTER)도 받으므로
+ * 그 자리에 앉은 사람이 있을 때만 뒤 가운데 칸을 더해 보이고 옮길 수 있게 한다(없으면 시안 그대로 2×2).
+ */
+fun gridSeats(members: List<GroupMember>): List<List<Seat>> = listOf(
+    listOf(Seat.ROW_1_LEFT, Seat.ROW_1_RIGHT),
+    if (members.any { it.seat == Seat.ROW_2_CENTER.name }) listOf(Seat.ROW_2_LEFT, Seat.ROW_2_CENTER, Seat.ROW_2_RIGHT) else listOf(Seat.ROW_2_LEFT, Seat.ROW_2_RIGHT),
+)
+
+/**
+ * 출발 전에 자리 없는 구성원을 빈자리에 앉힌다(앞에서 뒤로, 왼쪽부터 · 뒤 가운데는 마지막). 서버는 자리가 정해진 구성원만 여행에 넣고,
+ * 초대·QR로 들어온 사람은 자리 없이 들어오므로(C16A에는 앉은 사람만 보임) 그대로 출발하면 그 사람이 소리 없이 빠진다. 자리가 모자라면 남는다.
+ */
+fun autoSeats(members: List<GroupMember>): Map<String, String> {
+    val taken = members.mapNotNull { it.seat }.toMutableSet()
+    val free = listOf(Seat.ROW_1_LEFT, Seat.ROW_1_RIGHT, Seat.ROW_2_LEFT, Seat.ROW_2_RIGHT, Seat.ROW_2_CENTER).map { it.name }.filter { it !in taken }.iterator()
+    return members.filter { it.seat == null }.mapNotNull { m -> if (free.hasNext()) m.profileId to free.next() else null }.toMap()
+}
 
 /** 동승 그룹에 만든 사람만 있을 때(C16G guestDetail, 전체 그룹의 '초대 대기'). 출발할 사람이 없어 초대부터 한다. */
 fun soloGuest(g: CarGroup) = g.kind == "guest" && g.members.size <= 1
@@ -306,7 +322,8 @@ fun FamilyFlow(
     var seats by remember { mutableStateOf<List<GroupMember>>(emptyList()) }
     var pick by remember { mutableStateOf<SeatPick?>(null) }
     var guestName by remember { mutableStateOf("") }
-    var myName by remember { mutableStateOf("민준") } // mock: 토큰이 없을 때의 시연 이름
+    var myName by remember { mutableStateOf("") }
+    var myVoice by remember { mutableStateOf(true) } // C09 내 카드 '목소리 등록 완료'(읽기 전에는 시안 글)
     var pickSeat by remember { mutableStateOf(Seat.ROW_1_LEFT.name) } // 좌석 배정(C16B)에서 누른 자리 → 구성원 선택(C16C)
 
     val api = remember(server) { Server(server) }
@@ -325,7 +342,7 @@ fun FamilyFlow(
         }
     }
     suspend fun <T> io(block: () -> T): T = withContext(Dispatchers.IO) { block() }
-    suspend fun load() { groups = io { api.groups(token) }; myName = io { api.profileName(token) } }
+    suspend fun load() { groups = io { api.groups(token) }; io { AccountApi(server).me(token) }.let { myName = it.name; myVoice = it.hasVoice } }
     // 동승 그룹은 서버에서 자리 없이 시작한다. 시안(C15 '민준 / 운전석')대로 만든 사람(대표)을 운전석에 앉혀 저장한다.
     fun createGuest(): CarGroup {
         val made = api.createGroup(token, guestName.trim().ifBlank { "동승 그룹" }, "guest")
@@ -341,6 +358,8 @@ fun FamilyFlow(
         view = to
     }
     fun toast(text: String) { note = text }
+    // '이 그룹과 출발'(C16A·C43): 자리 없는 구성원을 빈자리에 앉혀 저장한 뒤 여행을 만든다(autoSeats)
+    fun depart(g: CarGroup) = act { val add = autoSeats(g.members); if (add.isNotEmpty()) put(io { api.saveSeats(token, g.id, add) }); onStart(g.id) }
     LaunchedEffect(note) { if (note.isNotEmpty()) { delay(toastMs(note)); note = "" } } // 2047:2276 알림(복사 1.5초, 원본에 없는 오류 글 3초)
     fun link() = server.trimEnd('/') + (invite?.url ?: "")
     fun copy(text: String) {
@@ -352,7 +371,11 @@ fun FamilyFlow(
         busy = true
         runCatching { load() }.onFailure { note = failureText(it) }
         val members = family()?.members.orEmpty()
-        view = if (members.size > 1 && members.all { it.seat != null }) FamilyView.GROUP else FamilyView.MEMBER
+        view = when {
+            members.size > 1 && members.all { it.seat != null } -> FamilyView.GROUP
+            family() == null && groups.isNotEmpty() -> FamilyView.GROUPS // 동승 그룹만 있는 계정(PITCREW 등)은 가족 추가가 아니라 그룹 목록
+            else -> FamilyView.MEMBER
+        }
         busy = false
     }
     // 전체 그룹을 열 때마다 다시 읽는다: 폰에서 초대로 들어온 사람, 다른 기기에서 바꾼 자리.
@@ -368,7 +391,7 @@ fun FamilyFlow(
             FamilyView.INVITE, FamilyView.CHILD, FamilyView.CHILD_VOICE -> FamilyView.MEMBER
             FamilyView.SEAT -> FamilyView.GROUP
             FamilyView.GUEST, FamilyView.DETAIL, FamilyView.GUEST_DETAIL -> FamilyView.GROUPS
-            FamilyView.GROUPS -> { groupId = family()?.id; if (family() != null) FamilyView.GROUP else FamilyView.MEMBER }
+            FamilyView.GROUPS -> { groupId = family()?.id; if (family() != null) FamilyView.GROUP else { onClose(); view } }
             FamilyView.ASSIGN -> FamilyView.DETAIL
             FamilyView.PICKER -> FamilyView.ASSIGN
             FamilyView.GROUP_INVITE -> detailOf(current())
@@ -456,7 +479,7 @@ fun FamilyFlow(
                 FamilyView.GROUP -> {
                     CarButton("새 동승 그룹", Modifier.width(440.dp), CarButtonKind.Secondary, enabled = !busy) { guestName = ""; view = FamilyView.GUEST }
                     // 서버는 자리가 정해진 구성원만 여행에 넣고 아무도 없으면 409다 — 앉힌 사람이 있을 때만 켠다.
-                    CarButton(if (guest) "이 그룹과 출발" else "이 가족과 출발", Modifier.weight(1f), enabled = !busy && g != null && g.members.any { it.seat != null }) { g?.let { onStart(it.id) } }
+                    CarButton(if (guest) "이 그룹과 출발" else "이 가족과 출발", Modifier.weight(1f), enabled = !busy && g != null && g.members.isNotEmpty()) { g?.let { depart(it) } }
                 }
                 FamilyView.SEAT -> CarButton("이 배치로 저장", Modifier.weight(1f), enabled = !busy && g != null && seatChanges(g.members, seats).isNotEmpty() && lostSeats(g.members, seats).isEmpty()) {
                     act { put(io { api.saveSeats(token, g!!.id, seatChanges(g.members, seats)) }); pick = null; view = FamilyView.GROUP }
@@ -470,7 +493,7 @@ fun FamilyFlow(
                 FamilyView.DETAIL -> {
                     CarButton("전체 그룹", Modifier.weight(1f), CarButtonKind.Secondary, enabled = !busy) { view = FamilyView.GROUPS }
                     // 서버는 자리가 정해진 구성원만 여행에 넣고 아무도 없으면 409다 — 앉힌 사람이 있을 때만 켠다.
-                    CarButton("이 그룹과 출발", Modifier.weight(1f), enabled = !busy && g != null && g.members.any { it.seat != null }) { g?.let { onStart(it.id) } }
+                    CarButton("이 그룹과 출발", Modifier.weight(1f), enabled = !busy && g != null && g.members.isNotEmpty()) { g?.let { depart(it) } }
                 }
                 FamilyView.ASSIGN -> {
                     CarButton("그룹으로", Modifier.weight(1f), CarButtonKind.Secondary, enabled = !busy) { view = FamilyView.DETAIL }
@@ -494,7 +517,7 @@ fun FamilyFlow(
                     when { kids.isNotEmpty() -> "${(listOf(myName) + adults.map { it.name } + kids.map { it.name }).joinToString(", ")} 준비 완료 / 다음 아이를 추가해 주세요."; adults.isNotEmpty() -> "${adults.last().name} 계정 연결 완료 / 이제 아이를 추가해 주세요."; else -> "기존 계정 연결 또는 아이 프로필 직접 만들기" })
                 // 시안의 '아빠 민준'·'엄마의 계정 초대하기'처럼 호칭이 든 글은 아빠·엄마를 고정하지 않는다(11/15 오너 "초대하기로 바꿔"): 이름, 초대는 '초대하기'.
                 Body(side = side.takeIf { others.isEmpty() }) {
-                    InfoCard(myName, "내 계정 / 목소리 등록 완료", soft = true, face = charRes(myChar))
+                    InfoCard(myName, if (myVoice) "내 계정 / 목소리 등록 완료" else "내 계정 / 목소리 미등록", soft = true, face = charRes(myChar))
                     CarButton("초대하기", kind = CarButtonKind.Secondary, enabled = !busy) { act { issue(ensureFamily()) } }
                     CarButton("아이 프로필 만들기", kind = CarButtonKind.Secondary, enabled = !busy) { view = FamilyView.CHILD }
                     InfoCard("가족 그룹은 한 번만", "저장한 구성원과 좌석을 다음 여행에도 사용")
@@ -728,7 +751,7 @@ private fun SeatGrid(members: List<GroupMember>, onPick: (SeatPick) -> Unit) {
     Surface(Modifier.fillMaxWidth(), CarShape.Card, color = c.surface, border = BorderStroke(2.dp, c.outlineVariant)) {
         Column(Modifier.padding(28.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
             Text("차량 앞쪽 ↑", style = CarText.Label, color = c.onSurfaceVariant)
-            GRID_SEATS.forEach { row ->
+            gridSeats(members).forEach { row ->
                 Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
                     row.forEach { seat ->
                         val m = at[seat.name]
@@ -756,7 +779,7 @@ internal fun SeatAssign(members: List<GroupMember>, swaps: Boolean = true, onSea
     Surface(Modifier.fillMaxWidth(), GroupShape, color = c.surface) {
         Column(Modifier.padding(28.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
             Text("차량 앞쪽 ↑", Modifier.fillMaxWidth(), style = CarText.Label, color = c.onSurfaceVariant, textAlign = TextAlign.Center)
-            GRID_SEATS.forEach { row ->
+            gridSeats(members).forEach { row ->
                 Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
                     row.forEach { seat ->
                         val m = at[seat.name]
