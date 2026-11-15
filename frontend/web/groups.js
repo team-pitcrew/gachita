@@ -1,7 +1,7 @@
 // 가족·동승 그룹(흐름 F2, T133): P09–P16, P16A·B·C·G·I·L(그룹 상세·좌석 배정·구성원 선택·혼자인 동승 그룹·초대·전체 그룹), P39–P43, 폰 QR 참여(phoneJoin·phoneJoined·phoneGuestJoin·phoneGuestJoined),
 // 초대 링크 공유·복사. 서버 계약은 docs/api/groups.md. 화면은 앱 위에 겹치는 전체 화면 대화 상자다(주소의 #는 바꾸지 않음).
 // 사용자가 쓴 글은 textContent로만 넣는다(innerHTML 금지).
-import { api, h, SEAT, SEATS, toast } from "./shared.js";
+import { api, h, needsVoice, SEAT, SEATS, toast } from "./shared.js";
 import { CHARACTER_OPTIONS, characterImage, characterKey } from "./short-film.js";
 import { qrcode } from "./qrcode.js";
 import { startVoice, voiceBars, VOICE_SECONDS, WAVE_BARS } from "./voice-meter.js";
@@ -113,7 +113,7 @@ export function memberHeading(group, me) {
   return ["우리 가족 추가", "기존 계정 연결 또는 아이 프로필 직접 만들기"];
 }
 
-export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange = () => {}, onTalk = () => {}, onContents = () => {}, onRide = () => {} }) {
+export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange = () => {}, onTalk = () => {}, onContents = () => {}, onRide = () => {}, onVoice = () => {} }) {
   let s = null;
   const call = (method, path, body) => api(method, path, body, getToken());
   const family = () => s.groups.find((g) => g.kind === "family") ?? null;
@@ -144,13 +144,32 @@ export function createGroups({ getProfile, getToken, onProfile, onTrip, onChange
     try {
       await fn();
     } catch (e) {
-      note(e.message);
+      if (needsVoice(e)) voiceFirst(e);
+      else note(e.message);
     } finally {
       if (s) {
         s.busy = false;
         paint();
       }
     }
+  }
+  // 서버의 '목소리 먼저'(409 voice_required, T173 — 그룹 만들기·초대 참여·그룹 여행 출발). 문장이 아니라 reason으로 가른다.
+  // 아이가 빠졌으면 보호자가 이 창에서 그 아이의 P12로, 내가 빠졌으면(또는 목록이 없으면) 이 창을 닫고 P06(app.js onVoice),
+  // 다른 어른만 빠졌으면 그 사람 폰에서 등록해야 하니 이름을 알린다. 초대 참여 중이었으면 초대는 남겨 둔다(등록한 뒤 다시 열림).
+  function voiceFirst(e) {
+    const missing = e.missing ?? [], me = getProfile()?.id;
+    const kid = missing.find((m) => m.child), g = kid && s.groups.find((x) => x.members.some((m) => m.profileId === kid.profileId));
+    if (g) {
+      Object.assign(s, { child: g.members.find((m) => m.profileId === kid.profileId), childGroup: g.id, view: "childVoice", voiceState: "", voiceNote: "" });
+      paint();
+      return void record();
+    }
+    if (!missing.length || missing.some((m) => m.profileId === me)) {
+      if (s.view === "join") s.view = "voice"; // close()가 초대를 거절로 지우지 않게
+      close();
+      return void onVoice();
+    }
+    note(`${missing.map((m) => m.name).join(", ")}님이 목소리를 등록해야 함께 출발할 수 있어요. 그분 폰에서 15초 목소리를 등록해 주세요.`);
   }
   const go = (view) => {
     s.view = view;
