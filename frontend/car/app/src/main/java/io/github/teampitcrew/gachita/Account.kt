@@ -12,25 +12,38 @@ import java.net.URL
 data class AccountProfile(
     val id: String, val name: String, val character: String, val email: String?,
     val consent: Boolean, val hasVoice: Boolean, val hasPhoto: Boolean,
+    val consentVersion: String? = null,
 )
+
+/** 차 C03이 보여 주는 동의 문구의 판. 서버 backend/api/accounts.js CONSENT_VERSION과 같게 둔다(문구를 바꾸면 둘 다). */
+const val CONSENT_VERSION = "2026-11-14"
 
 fun parseAccountProfile(json: String): AccountProfile = JSONObject(json).let { o ->
     AccountProfile(
         id = o.getString("id"), name = o.optString("name"), character = o.optString("character"),
         email = o.optString("email").takeIf { !o.isNull("email") && it.isNotEmpty() },
         consent = o.optBoolean("consent"), hasVoice = o.optBoolean("hasVoice"), hasPhoto = o.optBoolean("hasPhoto"),
+        consentVersion = o.optString("consentVersion").takeIf { !o.isNull("consentVersion") && it.isNotEmpty() },
     )
 }
 
 /** 시안 C01–C08의 단계. RECORDING은 C07(녹음 중·녹음 끝). */
 enum class OnboardStep { WELCOME, SIGNUP, CONSENT, PROFILE, PHOTO, VOICE, RECORDING, DONE }
 
-/** 처음 열 때: 토큰이 없으면 시작, 동의 전이면 동의, 그 밖은 프로필부터(목소리 다시 등록). */
-fun firstOnboardStep(p: AccountProfile?, hasToken: Boolean): OnboardStep = when {
-    !hasToken || p == null -> OnboardStep.WELCOME
-    !p.consent -> OnboardStep.CONSENT
-    else -> OnboardStep.PROFILE
+/**
+ * 가입·로그인·다시 열기 뒤 빠진 단계만(11/15 오너: DB에 있는 계정으로 로그인하면 처음부터 다시 받지 않는다):
+ * 지금 판의 동의가 없으면 C03, 이름(가입 때 넣은 이메일 앞부분은 이름이 아님)·캐릭터가 없으면 C04, 목소리(1차 값)가 없으면 C06,
+ * 다 있으면 null(온보딩을 끝내고 가족·그룹 화면). 둘째 값(강한 화자 값)이 없는 옛 계정은 막지 않는다(차는 1차 값으로 대조, #543).
+ */
+fun missingStep(p: AccountProfile): OnboardStep? = when {
+    !(p.consent && p.consentVersion == CONSENT_VERSION) -> OnboardStep.CONSENT
+    p.name.isBlank() || p.email?.let { p.name == provisionalName(it) } == true || p.character.isBlank() -> OnboardStep.PROFILE
+    !p.hasVoice -> OnboardStep.VOICE
+    else -> null
 }
+
+/** 처음 열 때: 토큰이 없으면 시작, 있으면 빠진 단계(missingStep). null이면 이미 다 마친 계정. */
+fun firstOnboardStep(p: AccountProfile?, hasToken: Boolean): OnboardStep? = if (!hasToken || p == null) OnboardStep.WELCOME else missingStep(p)
 
 /** 읽을 문장의 이름 부르기: 받침이 있으면 '이야', 없으면 '야'(시안 '나는 민준이야'). */
 fun callName(name: String): String {
