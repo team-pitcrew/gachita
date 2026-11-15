@@ -89,6 +89,19 @@ test("미확인 화자를 실명으로 추측하지 않고 수정된 자막은 �
   assert.equal(planShort(s, { audioReference: false }).audioReference, false);
   assert.ok(!p.externalData.some((x) => x.includes("원음")));
 });
+test("가족 넷이 말하면 많이 말한 순서로 네 캐릭터가 모두 나옵니다", () => {
+  const s = source();
+  s.cast.push(
+    { participantId: "c", name: "다", character: "pet", seat: "ROW_2_LEFT" },
+    { participantId: "d", name: "라", character: "travel-small", seat: "ROW_2_RIGHT" },
+    { participantId: "e", name: "마", character: "office", seat: null },
+  );
+  const say = (participantId, start) => ({ start, end: start + 1, text: "말", participantId, device: "car", seq: start, editVersion: 0 });
+  s.scenes[0].cues.push(say("c", 7), say("c", 8), say("c", 9), say("d", 10), say("d", 11), say("e", 12));
+  const p = planShort(s);
+  assert.deepEqual(p.cast.map((x) => [x.slot, x.participantId]), [[0, "c"], [1, "d"], [2, "a"], [3, "b"]]);
+  assert.equal(p.cues.find((x) => x.participantId === "e").slot, null, "다섯째는 캐릭터 없이 화면 밖 목소리");
+});
 test("한국어 자막은 원문을 모두 유지하고 ASS 태그를 실행하지 않습니다", () => {
   const p = planShort(source());
   p.cues[0].text = "{\\pos(0,0)}" + "가".repeat(110);
