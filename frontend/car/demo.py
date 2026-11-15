@@ -997,6 +997,23 @@ def pitcrew_group_steps():
     return tap("이 그룹과 출발", timeout=8)
 
 
+# mock(11/15 중앙 결정 대기, 끄려면 DEMO_ARRIVAL_SEED=''): 차의 도착 카드(C20)는 그 장소의 할 일이 있어야 뜬다(MainActivity arrive: items가 비면 카드 없음).
+# 실제 PITCREW 대화에는 '정자 카페거리'에 붙은 할 일 문장이 없어(pass1 21·25 없음) 조수석 사람의 말 한 줄을 기록본에 넣는다(기기 demo-seed).
+# 서버 규칙(place-rules-v2)으로 '카페거리'·먼저 할 일·'주차부터 먼저 하기'가 된다.
+ARRIVAL_SEED = os.environ.get("DEMO_ARRIVAL_SEED", f"{DEST[2]} 도착하면 주차부터 먼저 하자")
+
+
+def seed_arrival_todo(code):
+    tok = st.get("trip", {}).get("mom")
+    if not ARRIVAL_SEED or not tok: return
+    who = list(PEOPLE)[1]; p = trip_people(code)[who]
+    gen = api("GET", f"/trips/{code}").get("generation", 1); at = int(time.time() * 1000)
+    item = {"seq": 1, "at": at, "endAt": at + 2500, "text": ARRIVAL_SEED, "generation": gen,
+            **({"participantId": p["id"], "speakerMethod": "device-voice", "speakerConfidence": 0.93, "seatArea": p["seat"]} if p else {})}
+    api("POST", f"/trips/{code}/utterances", {"device": "demo-seed", "generation": gen, "items": [item]}, tok)
+    note("seed.arrival", text=ARRIVAL_SEED, who=PEOPLE[who][3])
+
+
 def drive_pitcrew(code):
     """17–21 순정 내비 옆 좁은 창(F3·F4): 실제 차 안 대화(talks(): 경로 → 일시정지·재개 → 카페·'우리 어디로 갈까요?' → 도착 전에 도착 대화),
     목적지 정자 카페거리 도착 전·도착 브리핑. 출발 '신논현'은 서버 장소 기록으로(내비는 판교에 머묾)."""
@@ -1017,6 +1034,7 @@ def drive_pitcrew(code):
         if t == SCENE_TALK: st["scene_ms"] = [t0, int(time.time() * 1000)]; save()
     # 내비는 판교에 머물고(도착 판정의 '지금 위치'도 내비 값 — Car.here) GPS를 옮겨도 닿지 않는다(gap2: outside_place).
     # 그래서 도착(20·21)은 가족 흐름의 1분 경로처럼 목적지 이름 '정자 카페거리'를 내비 위치 남쪽 NEAR_M에 둔다 — mock: 좌표만, 이름·대화·브리핑은 실제 흐름
+    seed_arrival_todo(code)
     here = navi_here(); end = near(here, -NEAR_M, 0); since = adb("shell", "date '+%m-%d %H:%M:%S.000'").strip()
     launch("--es", "route", f"{end[0]},{end[1]},{DEST[2]}", "--ei", "approachSeconds", APPROACH_S)
     split(); tap("함께 타는 중", timeout=3)
