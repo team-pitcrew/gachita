@@ -405,8 +405,7 @@ fun FamilyFlow(
         if (silent != null) { child = silent; voiceState = "" }
         view = when {
             silent != null -> FamilyView.CHILD_VOICE // 목소리 없이 남은 아이: 그 아이의 C12부터
-            members.size > 1 && members.all { it.seat != null } -> FamilyView.GROUP
-            family() == null && groups.isNotEmpty() -> FamilyView.GROUPS // 동승 그룹만 있는 계정(PITCREW 등)은 가족 추가가 아니라 그룹 목록
+            groups.isNotEmpty() -> FamilyView.GROUPS // 그룹이 있는 계정(로그인으로 들어온 PITCREW 등)은 내 동승 그룹(C16 groups)부터
             else -> FamilyView.MEMBER
         }
         busy = false

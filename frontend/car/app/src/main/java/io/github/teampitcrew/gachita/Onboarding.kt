@@ -122,10 +122,14 @@ class Onboarding(private val context: Context, private val prefs: SharedPreferen
         if (step != null) return
         val t = token ?: run { step = OnboardStep.WELCOME; return }
         step = OnboardStep.WELCOME
-        work({ AccountApi(server()).me(t) }) { p -> adopt(p); step = at?.takeIf { p.consent } ?: firstOnboardStep(p, true) }
+        work({ AccountApi(server()).me(t) }) { p -> adopt(p); (at?.takeIf { p.consent } ?: firstOnboardStep(p, true))?.let { step = it } ?: finish() }
     }
 
     fun go(next: OnboardStep) { note = ""; step = next }
+
+    // 온보딩을 마친 계정으로 다시 켜면(start()를 부르지 않음) 머리 줄 얼굴·프로필 메뉴의 이름·캐릭터가 비어 있었다 — 한 번 읽어 둔다.
+    // ponytail: onCreate가 서버 주소(디버그 인자)를 정한 뒤에 돌도록 main.post. MainActivity가 따로 부르게 되면 그쪽으로 옮긴다.
+    init { main.post { val t = token; if (t != null && !showing) work({ AccountApi(server()).me(t) }) { adopt(it) } } }
 
     fun clearNote() { note = "" }
 
@@ -163,21 +167,22 @@ class Onboarding(private val context: Context, private val prefs: SharedPreferen
                 r.onSuccess { (got, _) ->
                     val (p, t) = got
                     saveToken(t); password = ""; adopt(p)
-                    go(OnboardStep.CONSENT) // 시안 C02 → C03. 로그인한 계정도 같은 길(동의·프로필·목소리)을 지난다
+                    // 시안 C02 → C03. 새 계정은 동의부터, 이미 가입한 계정(로그인)은 빠진 단계만 — 다 있으면 온보딩을 끝내고 가족·그룹 화면
+                    missingStep(p)?.let(::go) ?: finish()
                 }.onFailure { note = accountError(it) }
             }
         }
     }
 
     /** C03: 계정 동의. */
-    fun agree() { val t = token ?: return go(OnboardStep.SIGNUP); work({ AccountApi(server()).consent(t) }) { adopt(it); go(OnboardStep.PROFILE) } }
+    fun agree() { val t = token ?: return go(OnboardStep.SIGNUP); work({ AccountApi(server()).consent(t) }) { adopt(it); missingStep(it)?.let(::go) ?: finish() } }
 
     /** C04 '목소리 등록하기': 이름·캐릭터(와 C05에서 고른 사진)를 저장하고 목소리로. */
     fun saveProfile() {
         val t = token ?: return go(OnboardStep.SIGNUP)
         val n = name.trim().ifEmpty { note = "함께 타는 사람들에게 보일 이름을 적어 주세요"; return }.take(20)
         val c = character; val jpeg = photoJpeg; val url = server()
-        work({ AccountApi(url).let { api -> jpeg?.let { api.photo(t, it) }; api.profile(t, n, c) } }) { adopt(it); photoJpeg = null; go(OnboardStep.VOICE) }
+        work({ AccountApi(url).let { api -> jpeg?.let { api.photo(t, it) }; api.profile(t, n, c) } }) { adopt(it); photoJpeg = null; missingStep(it)?.let(::go) ?: finish() }
     }
 
     /** C05 '내 사진 선택': 기기 사진 보관함에서 고른 사진. 640px JPEG로 다시 그린다(위치 같은 덧붙은 정보가 빠짐). 고르면 C04로 돌아가 '목소리 등록하기'에서 함께 올린다. */

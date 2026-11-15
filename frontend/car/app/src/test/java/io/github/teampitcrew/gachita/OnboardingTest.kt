@@ -21,8 +21,18 @@ class OnboardingTest {
     @Test fun `처음 열 때 - 토큰 없음은 시작, 동의 전은 동의, 그 밖은 프로필부터`() {
         assertEquals(OnboardStep.WELCOME, firstOnboardStep(null, false))
         assertEquals(OnboardStep.CONSENT, firstOnboardStep(base, true))
-        assertEquals(OnboardStep.PROFILE, firstOnboardStep(base.copy(consent = true), true))
-        assertEquals(OnboardStep.PROFILE, firstOnboardStep(base.copy(consent = true, hasVoice = true), true))
+        val now = base.copy(consent = true, consentVersion = CONSENT_VERSION)
+        assertEquals(OnboardStep.PROFILE, firstOnboardStep(now, true)) // 이름 'minjun'이 이메일 앞부분(가입 때 임시 이름)
+    }
+
+    @Test fun `로그인 뒤 빠진 단계만 - 동의 판, 이름·캐릭터, 목소리, 다 있으면 끝`() {
+        val done = AccountProfile("p1", "민준", "glasses", "minjun@example.com", consent = true, hasVoice = true, hasPhoto = false, consentVersion = CONSENT_VERSION)
+        assertNull(missingStep(done)) // DB에 있는 계정: 온보딩을 다시 받지 않고 가족·그룹 화면으로
+        assertEquals(OnboardStep.CONSENT, missingStep(done.copy(consentVersion = "2026-11-01"))) // 옛 판에 동의
+        assertEquals(OnboardStep.CONSENT, missingStep(done.copy(consent = false)))
+        assertEquals(OnboardStep.PROFILE, missingStep(done.copy(name = "minjun"))) // 이메일 앞부분은 이름이 아님
+        assertEquals(OnboardStep.PROFILE, missingStep(done.copy(character = "")))
+        assertEquals(OnboardStep.VOICE, missingStep(done.copy(hasVoice = false)))
     }
 
     @Test fun `읽을 문장의 조사와 임시 이름, 입력 검사`() {
