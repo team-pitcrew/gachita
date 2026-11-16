@@ -65,11 +65,12 @@ spec:
             # 로컬 시연 값(7200초·30편)보다 낮게 둔다. 건당 과금 호출은 없고(Codex 구독), 상한은 일꾼 한 대가 밀리지 않게 하는 값이다.
             - { name: SHORTS_DAILY_SECONDS, value: "1800" }
             - { name: SHORTS_TRIP_JOBS, value: "10" }
-          # 구글 OAuth·ASR·생성 일꾼 토큰은 선택 Secret입니다. 값이 없어도 기본 API는 뜹니다.
+          # 구글 OAuth·ASR·생성 일꾼 토큰·미디어 CDN 서명 값은 선택 Secret입니다. 값이 없어도 기본 API는 뜹니다.
           envFrom:
             - secretRef: { name: google-oauth, optional: true }
             - secretRef: { name: asr, optional: true }
             - secretRef: { name: shorts-worker, optional: true }
+            - secretRef: { name: media-cdn, optional: true }
           volumeMounts:
             - { name: short-tmp, mountPath: /tmp }
           # 내려갈 때 서비스 대상에서 먼저 빠지도록 종료 신호 전에 기다린다(T121). 그 사이 들어온 요청은 끝까지 처리한다
