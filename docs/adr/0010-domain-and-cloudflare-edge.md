@@ -26,7 +26,7 @@
 - 서버로 가는 길은 Cloudflare Tunnel을 제안합니다. 프록시 방식과 어느 쪽으로 갈지는 T27에서 정합니다.
 - 먼저 개발 기기의 서버를 터널로 내보내 제출용 시연과 QR 초대 확인에 씁니다. 클러스터를 만들면(T24) 같은 이름을 클러스터로 돌립니다.
 - DNS 레코드와 터널은 Terraform으로 만들고, 다루는 범위는 `gachita` 이름 하나입니다. 영역의 다른 레코드는 건드리지 않습니다.
-- Traefik 인그레스의 Let's Encrypt 발급과 `sslip.io` 주소는 옮긴 뒤 걷어냅니다. CloudFront와 ALB는 만들지 않습니다.
+- Traefik 인그레스의 Let's Encrypt 발급과 `sslip.io` 주소는 옮긴 뒤 걷어냅니다. CloudFront와 ALB는 만들지 않습니다(ALB는 ADR-0015에서, 미디어 경로의 CloudFront는 [ADR-0026](0026-media-cdn-cloudfront-s3.md)에서 바뀜).
 
 ## 결과
 

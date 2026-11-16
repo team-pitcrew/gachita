@@ -51,6 +51,8 @@ jobs:
       # 식의 순서가 중요하다: `a && b || c`는 b가 비면 c를 낸다. PR을 앞에 두면 읽기 토큰이 없을 때 쓰기 토큰이 PR로 간다
       CLOUDFLARE_API_TOKEN: ${{ github.event_name != 'pull_request' && secrets.CLOUDFLARE_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN_READ }}
       TF_VAR_cloudflare_zone_id: ${{ vars.CLOUDFLARE_ZONE_ID }}
+      # 미디어 CDN의 서명 확인용 공개 키(PEM, 비밀이 아니다). 비어 있으면 남는 묶음이 CDN을 만들지 않는다(T179)
+      TF_VAR_media_public_key: ${{ vars.MEDIA_PUBLIC_KEY }}
     steps:
       - name: 역할 확인
         id: gate

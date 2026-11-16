@@ -105,7 +105,7 @@
 | 클립·사진(나중) | 클립은 S3 클립 전용 버킷(T64가 만듦, 버전 관리 끔). 기존 주소(`gachita.mangowhois.ai/api/…`)에서 API가 권한을 확인하고 참가자 토큰 머리말로 내줌(서명 주소를 주지 않음). 숏폼은 구성 데이터이고 영상 파일은 기기에서 만든다. 서버가 만든 영상(힉스필드, 꺼 둠)도 같은 주소의 API가 머리말 인증으로 내준다([ADR-0021](0021-shortform-as-composition-data.md), [ADR-0022](0022-shortform-video-on-device-and-server-generation-off.md). media 하위 도메인 안인 ADR-0020은 대체됨) | 비공개. **개인 데이터는 CDN에 올리지 않는다** |
 | 서비스 계정 발급자의 공개 키 | S3 발급자 버킷(두 파일) | 공개(공개 키) |
 
-CloudFront는 만들지 않는다(ADR-0010). Cloudflare가 CDN을 겸한다. 정적 파일을 서버에서 떼어 S3에서 바로 내보내야 하면(서버가 멈춰도 웹앱이 떠야 할 때) 그때 Cloudflare → S3 경로를 따로 정한다.
+웹앱과 API의 길에는 CloudFront를 만들지 않는다(ADR-0010). Cloudflare가 CDN을 겸한다. 쇼츠·표지·프로필 사진만 CloudFront가 S3에서 읽어 서명한 요청에 내준다([ADR-0026](0026-media-cdn-cloudfront-s3.md), 제안). 정적 파일을 서버에서 떼어 S3에서 바로 내보내야 하면(서버가 멈춰도 웹앱이 떠야 할 때) 그때 Cloudflare → S3 경로를 따로 정한다.
 
 ### 8. 컨트롤러: 공식 배포를 1급으로, 컨트롤 플레인에
 

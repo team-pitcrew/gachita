@@ -30,6 +30,8 @@ jobs:
       # 영역 번호가 비면 인증서·레코드 없이 ALB까지만 편다(Terraform의 local.edge)
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       TF_VAR_cloudflare_zone_id: ${{ vars.CLOUDFLARE_ZONE_ID }}
+      # 펴기는 남는 묶음도 적용한다. 이 값이 비면 미디어 CDN을 지우는 계획이 되므로 terraform 워크플로와 같이 준다(T179)
+      TF_VAR_media_public_key: ${{ vars.MEDIA_PUBLIC_KEY }}
     steps:
       - name: develop에서만
         if: github.ref != 'refs/heads/develop'
