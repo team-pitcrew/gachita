@@ -70,10 +70,12 @@ resource "aws_acm_certificate_validation" "media" {
 # ---- 서명 키: 공개 키만 CloudFront에 올린다. API가 개인키로 서명한 주소·쿠키만 통과한다 ----
 # 키를 바꿀 때는 새 공개 키를 키 묶음에 더해 둘 다 받게 한 뒤 옛 것을 뺀다(이 자원의 키를 바로 바꾸면 그 순간 서명이 모두 깨진다).
 resource "aws_cloudfront_public_key" "media" {
-  count       = local.media ? 1 : 0
-  name        = "gachita-${var.env}-media"
-  comment     = "gachita media signing key"
-  encoded_key = var.media_public_key
+  count   = local.media ? 1 : 0
+  name    = "gachita-${var.env}-media"
+  comment = "gachita media signing key"
+  # CloudFront는 키를 줄바꿈으로 끝나게 돌려주고, 저장소 변수는 워크플로에서 끝 줄바꿈 없이 온다. 맞추지 않으면 계획마다
+  # 키를 갈아 끼우려 한다(키 번호가 바뀌어 서명이 모두 깨짐). 11/16 계획에서 발견해 적용 전에 멈췄다
+  encoded_key = "${trimspace(var.media_public_key)}\n"
 }
 
 resource "aws_cloudfront_key_group" "media" {
