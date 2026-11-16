@@ -7,4 +7,12 @@ resources:
   - ../../base
 images:
   - name: ghcr.io/team-pitcrew/gachita-api
-    newTag: "224250090f4b" # 병합 때 ci.yml의 publish가 올린 develop(#148). make deploy-tag TAG=<올린 태그> 로 바꾼다(커밋 SHA 앞 12자, 따옴표 필수)
+    newTag: "49d09f4ca50c" # 병합 때 ci.yml의 publish가 올린 develop(#148). make deploy-tag TAG=<올린 태그> 로 바꾼다(커밋 SHA 앞 12자, 따옴표 필수)
+# 웹 화면 파일의 CDN 접두사(T179, ADR-0026 6절). 이미지 태그와 같은 판이어야 한다: make deploy-tag가 둘을 함께 바꾸고,
+# deploy-tag 워크플로가 그 판의 파일을 먼저 올려 CDN에서 받아지는 것을 본 뒤에 PR을 연다. 끄려면 이 patches 묶음을 뺀다.
+patches:
+  - target: { kind: Deployment, name: gachita-api }
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: { name: WEB_ASSET_BASE, value: "https://media.gachita.mangowhois.ai/public/web/49d09f4ca50c" }
