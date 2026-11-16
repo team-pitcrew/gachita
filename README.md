@@ -52,7 +52,7 @@ flowchart TB
   end
   subgraph L3["서버"]
     api["API 서버 (Node 22) ×2"]
-    worker["쇼츠 일꾼 (영상 생성)"]
+    worker["쇼츠 Worker (영상 생성)"]
   end
   subgraph L4["데이터"]
     pg[("Postgres · trips · profiles")]
@@ -112,7 +112,7 @@ flowchart LR
     pg[("Postgres<br/>trips · profiles")]
   end
   s3[("S3<br/>클립 · 쇼츠 · DB 백업")]
-  worker["쇼츠 일꾼<br/>운영자 Mac"]
+  worker["쇼츠 Worker<br/>운영자 Mac"]
 
   app -- "같은 기기 안" --> pleos
   app -- "HTTPS" --> cf
@@ -130,7 +130,7 @@ flowchart LR
 | 폰 웹앱 | 계정·프로필·목소리 등록, 그룹과 초대, 동의, 대화 기록, 콘텐츠 기록. 빌드 없는 ES 모듈 | [`frontend/web`](frontend/web) |
 | API 서버 | 계정·프로필·그룹·여행·동의 저장, 차와 폰 동기화, 휴게소 추천, 클립과 쇼츠 보관 | [OpenAPI 명세](docs/api/openapi.yaml), [음성 처리 명세](docs/api/voice.md) |
 | Postgres | CloudNativePG 클러스터 하나에 `trips`·`profiles` 두 DB | [ADR-0016](docs/adr/0016-slo-capacity-single-postgres.md) |
-| 쇼츠 일꾼 | 서버 큐에서 작업을 받아 영상을 만들고 결과를 올립니다. API 파드는 밖으로 부르지 않습니다 | [ADR-0025](docs/adr/0025-shorts-generation-worker-codex-skill.md) |
+| 쇼츠 Worker | 서버 큐에서 작업을 받아 영상을 만들고 결과를 올립니다. API 파드는 밖으로 부르지 않습니다 | [ADR-0025](docs/adr/0025-shorts-generation-worker-codex-skill.md) |
 
 ### 배포 경로
 
