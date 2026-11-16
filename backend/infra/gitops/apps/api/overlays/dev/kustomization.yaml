@@ -8,11 +8,8 @@ resources:
 images:
   - name: ghcr.io/team-pitcrew/gachita-api
     newTag: "49d09f4ca50c" # 병합 때 ci.yml의 publish가 올린 develop(#148). make deploy-tag TAG=<올린 태그> 로 바꾼다(커밋 SHA 앞 12자, 따옴표 필수)
-# 웹 화면 파일의 CDN 접두사(T179, ADR-0026 6절). 이미지 태그와 같은 판이어야 한다: make deploy-tag가 둘을 함께 바꾸고,
-# deploy-tag 워크플로가 그 판의 파일을 먼저 올려 CDN에서 받아지는 것을 본 뒤에 PR을 연다. 끄려면 이 patches 묶음을 뺀다.
-patches:
-  - target: { kind: Deployment, name: gachita-api }
-    patch: |-
-      - op: add
-        path: /spec/template/spec/containers/0/env/-
-        value: { name: WEB_ASSET_BASE, value: "https://media.gachita.mangowhois.ai/public/web/49d09f4ca50c" }
+# 웹 화면 파일의 CDN 접두사(WEB_ASSET_BASE, T179)는 11/16에 켰다가 바로 뺐다: 웹 모듈이 서로를 루트 절대 주소(from "/shared.js")로
+# 불러, CDN에서 받은 app.js의 import가 media 호스트의 루트로 가 403이 됐다(화면이 비어 보임). 웹 모듈의 import를 상대 주소로
+# 바꾸거나 첫 화면에 import map을 넣은 뒤 다시 켠다. 켤 때는 아래 값을 newTag와 같은 판으로 넣는다(make deploy-tag가 함께 바꿈):
+#   patches: [{ target: { kind: Deployment, name: gachita-api }, patch: '[{op: add, path: /spec/template/spec/containers/0/env/-,
+#     value: { name: WEB_ASSET_BASE, value: "https://media.gachita.mangowhois.ai/public/web/<태그>" }}]' }]
