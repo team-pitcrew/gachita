@@ -29,7 +29,7 @@ concurrency:
 
 jobs:
   plan:
-    runs-on: [self-hosted, gachita]
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
       fail-fast: false

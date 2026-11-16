@@ -46,7 +46,7 @@ concurrency:
 
 jobs:
   ops:
-    runs-on: [self-hosted, gachita]
+    runs-on: ubuntu-latest
     timeout-minutes: 60
     defaults:
       run:
