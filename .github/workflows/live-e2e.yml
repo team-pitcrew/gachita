@@ -52,7 +52,16 @@ jobs:
           head=$(curl -sS -m 20 -o /dev/null -D - -H "Origin: $URL" "$full")
           printf '%s\n' "$head" | grep -Eq '^HTTP/[0-9.]+ 200' || { echo "::error::스크립트가 200이 아님: $full"; exit 1; }
           case "$full" in "$URL"/*) ;; *) printf '%s\n' "$head" | grep -iq "^access-control-allow-origin: $URL" || { echo "::error::CORS 머리말이 없음: $full"; exit 1; } ;; esac
-          echo "script=$full ok"
+          # 그 스크립트가 부르는 모듈도 따라가 본다(한 단계). 11/16에 첫 스크립트만 보다가 나머지 모듈의 403을 놓쳤다
+          dir=${full%/*}; origin=$(printf '%s' "$full" | sed -E 's#^(https?://[^/]+).*#\1#'); n=0
+          for spec in $(curl -sS -m 20 --compressed "$full" | grep -oE "(from|import) ?\(?\"[^\"]+\.m?js\"" | grep -oE '"[^"]+"' | tr -d '"' | sort -u); do
+            case "$spec" in http://* | https://*) dep=$spec ;; /*) dep="$origin$spec" ;; *) dep="$dir/${spec#./}" ;; esac
+            code=$(curl -sS -m 20 -o /dev/null -w '%{http_code}' -H "Origin: $URL" "$dep")
+            [ "$code" = 200 ] || { echo "::error::모듈이 200이 아님($code): $dep"; exit 1; }
+            n=$((n + 1))
+          done
+          [ "$n" -gt 0 ] || { echo "::error::스크립트에서 import를 하나도 찾지 못함: $full"; exit 1; }
+          echo "script=$full ok, 모듈 $n개 200"
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
