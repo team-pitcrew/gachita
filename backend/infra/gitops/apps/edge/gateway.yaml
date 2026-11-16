@@ -1,4 +1,4 @@
-# 밖에서 들어오는 길(ADR-0016, ADR-0017): Cloudflare(프록시, TLS) → ALB(HTTPS 443) → 노드의 NodePort → API.
+# 밖에서 들어오는 길(ADR-0016, ADR-0017, 11/15부터 DNS만): Cloudflare DNS → ALB(HTTPS 443, ACM 인증서) → 노드의 NodePort → API.
 # ALB는 AWS Load Balancer Controller(물결 3)가 이 선언을 보고 만든다. 이름은 gachita-dev로 고정(접기·레코드가 이 이름과 태그로 찾음).
 # 인증서는 리스너의 호스트 이름으로 ACM에서 찾는다(Terraform persist/가 만든 것. Git에 ARN이 없음).
 # 경로를 붙일 수 있는 네임스페이스는 gachita.io/expose: "true" 라벨이 있는 곳뿐이다.
@@ -32,8 +32,7 @@ spec:
           selector:
             matchLabels: { gachita.io/expose: "true" }
 ---
-# ALB 설정. 앞단 보안 그룹은 Cloudflare 대역의 443만 받는다(원본 보호. Cloudflare를 거치지 않은 요청은 ALB에 닿지 않음).
-# 대역: https://www.cloudflare.com/ips-v4 (2026-11-13). 자주 바뀌지 않지만 바뀌면 여기를 고친다.
+# ALB 설정. 앞단 보안 그룹이 받는 주소 범위.
 apiVersion: gateway.k8s.aws/v1
 kind: LoadBalancerConfiguration
 metadata:
@@ -42,22 +41,10 @@ metadata:
 spec:
   loadBalancerName: gachita-dev
   scheme: internet-facing
+  # 11/15: 가치타 호스트를 Cloudflare 프록시 없이(DNS만) 쓰므로 모든 주소의 443을 받는다(terraform/edge.tf의 proxied=false와 짝).
+  # 프록시로 되돌릴 때는 여기를 Cloudflare 대역(https://www.cloudflare.com/ips-v4)으로 다시 좁힌다.
   sourceRanges:
-    - 173.245.48.0/20
-    - 103.21.244.0/22
-    - 103.22.200.0/22
-    - 103.31.4.0/22
-    - 141.101.64.0/18
-    - 108.162.192.0/18
-    - 190.93.240.0/20
-    - 188.114.96.0/20
-    - 197.234.240.0/22
-    - 198.41.128.0/17
-    - 162.158.0.0/15
-    - 104.16.0.0/13
-    - 104.24.0.0/14
-    - 172.64.0.0/13
-    - 131.0.72.0/22
+    - 0.0.0.0/0
 ---
 # 웹앱과 API는 같은 이름에서 나간다(API는 /api/, ADR-0010). 요청 수 제한은 Cloudflare 엣지(Terraform persist/).
 apiVersion: gateway.networking.k8s.io/v1
