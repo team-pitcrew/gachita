@@ -28,6 +28,34 @@
     <!-- 글꼴은 Pretendard. 받지 못하면 기기의 한글 글꼴로 보인다. 배포할 때는 파일을 직접 싣는다. -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css" />
     <link rel="stylesheet" href="/style.css" />
+    <!-- app.js가 들여오는 모듈 전부를 미리 받는다(T180): 빌드 없는 모듈이라 그냥 두면 import를 한 단계씩 따라가며 그때마다 왕복한다.
+         목록이 import 그래프와 어긋나면 static-paths.test.mjs가 실패한다. -->
+    <link rel="modulepreload" href="/media-controls.js" />
+    <link rel="modulepreload" href="/shared.js" />
+    <link rel="modulepreload" href="/shares.js" />
+    <link rel="modulepreload" href="/captions.js" />
+    <link rel="modulepreload" href="/records.js" />
+    <link rel="modulepreload" href="/conversations.js" />
+    <link rel="modulepreload" href="/todos.js" />
+    <link rel="modulepreload" href="/short-film.js" />
+    <link rel="modulepreload" href="/short-studio.js" />
+    <link rel="modulepreload" href="/contents.js" />
+    <link rel="modulepreload" href="/short-scenes.js" />
+    <link rel="modulepreload" href="/boarding.js" />
+    <link rel="modulepreload" href="/onboarding.js" />
+    <link rel="modulepreload" href="/groups.js" />
+    <link rel="modulepreload" href="/after-trip.js" />
+    <link rel="modulepreload" href="/ride.js" />
+    <link rel="modulepreload" href="/profile-menu.js" />
+    <link rel="modulepreload" href="/brief.js" />
+    <link rel="modulepreload" href="/media.js" />
+    <link rel="modulepreload" href="/share-card.js" />
+    <link rel="modulepreload" href="/short-generation.js" />
+    <link rel="modulepreload" href="/short-library.js" />
+    <link rel="modulepreload" href="/voice-meter.js" />
+    <link rel="modulepreload" href="/wespeaker.js" />
+    <link rel="modulepreload" href="/qrcode.js" />
+    <link rel="modulepreload" href="/voice-embed.js" />
   </head>
   <body>
     <main id="app"></main>

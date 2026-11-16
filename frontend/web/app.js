@@ -1,26 +1,27 @@
-import { mediaButton, setMediaButton, audioPeaks, drawWaveform } from "/media-controls.js";
+import { mediaButton, setMediaButton, audioPeaks, drawWaveform } from "./media-controls.js";
 // 가치타 모바일 화면(gachita.mangowhois.ai). 빌드 없이 브라우저가 그대로 읽는다.
 // 주소: /#코드는 이 폰이 들어간 여행, /#me는 내 프로필. 여행에는 차가 표시한 참석 QR을 이 폰의 카메라로 읽어 참여한다.
 // 이 폰이 누구인지(프로필 토큰, 여행마다 참가자 id와 토큰)는 localStorage에 둔다. 폰에서는 수음하지 않는다. 차가 표시한 참석 QR을 폰 카메라로 읽어 참여한다.
 // 사용자가 쓴 글은 textContent로만 넣는다(innerHTML 금지).
 
-import { SEATS, SEAT, api, h, toast } from "/shared.js";
-import { createShares } from "/shares.js";
-import { createCaptions } from "/captions.js";
-import { createRecords } from "/records.js";
-import { createConversations } from "/conversations.js";
-import { createTodos } from "/todos.js";
-import { CHARACTER_OPTIONS, characterKey, characterImage, createShortFilm, exportShortFilm, recordingFormat } from "/short-film.js";
-import { createShortStudio } from "/short-studio.js";
-import { createContents } from "/contents.js";
-import { createScenePicker } from "/short-scenes.js";
-import { createBoarding } from "/boarding.js";
-import { accountReady, createOnboarding } from "/onboarding.js";
-import { createGroups } from "/groups.js";
-import { createAfterTrip } from "/after-trip.js";
-import { appBar, askState, createPlaces, driveState, journeyTabs, recordingLine, rideHeading, seatMap, setAppBarEnd, statusMoves } from "/ride.js";
-import { createProfileMenu, forgetIdentity } from "/profile-menu.js";
-import { arrivalBrief, arrivalMove, nearBrief } from "/brief.js";
+import { SEATS, SEAT, api, h, toast } from "./shared.js";
+import { createShares } from "./shares.js";
+import { createCaptions } from "./captions.js";
+import { createRecords } from "./records.js";
+import { createConversations } from "./conversations.js";
+import { createTodos } from "./todos.js";
+import { CHARACTER_OPTIONS, characterKey, characterImage, createShortFilm, exportShortFilm, recordingFormat } from "./short-film.js";
+import { createShortStudio } from "./short-studio.js";
+import { createContents } from "./contents.js";
+import { createScenePicker } from "./short-scenes.js";
+import { createBoarding } from "./boarding.js";
+import { accountReady, createOnboarding } from "./onboarding.js";
+import { createGroups } from "./groups.js";
+import { createAfterTrip } from "./after-trip.js";
+import { appBar, askState, createPlaces, driveState, journeyTabs, recordingLine, rideHeading, seatMap, setAppBarEnd, statusMoves } from "./ride.js";
+import { createProfileMenu, forgetIdentity } from "./profile-menu.js";
+import { arrivalBrief, arrivalMove, nearBrief } from "./brief.js";
+import { mediaResponse, setMediaBase, signedUrl } from "./media.js";
 
 // 여행 상태 이름. 상태별 제목·부제·운전석 단추는 ride.js가 고른다.
 const TRIP = { boarding: "탑승 중", driving: "주행 중", parked: "주차 완료", ended: "여행 종료" };
@@ -195,6 +196,7 @@ const onboarding = createOnboarding({
   setToken: (token) => store("profile", token),
   loadProfile,
   getPhoto: () => photo,
+  onPhotoError: (src) => photoBroken(src),
   consentText: CONSENT,
   render: () => render(),
   onBegin: () => { if (location.hash !== "#start") location.hash = "start"; },
@@ -333,13 +335,34 @@ async function readProfile(token) {
     else profileError = true;
     return;
   }
-  if (profile.hasPhoto) {
-    const res = await fetch("/api/profiles/me/photo", { headers: { authorization: `Bearer ${token}` } }).catch(() => null);
-    if (res?.ok) {
-      const image = await res.blob();
-      if (store("profile") === token) photo = URL.createObjectURL(image);
-    }
+  photoRenewed = false;
+  // 서버가 서명 주소(photoUrl, T178)를 주면 받아 두지 않고 <img>에 바로 쓴다. 없으면 전처럼 머리말 인증으로 받아 object URL로.
+  if (signedUrl(profile.photoUrl)) photo = profile.photoUrl;
+  else if (profile.hasPhoto) {
+    const url = await photoBlob(token);
+    if (store("profile") === token) photo = url;
+    else URL.revokeObjectURL(url);
   }
+}
+async function photoBlob(token) {
+  const res = await fetch("/api/profiles/me/photo", { headers: { authorization: `Bearer ${token}` } }).catch(() => null);
+  return res?.ok ? URL.createObjectURL(await res.blob()) : "";
+}
+// 서명 주소의 사진을 못 받았을 때(만료 등): 프로필을 다시 읽어 새 주소로 한 번, 그래도 안 되면 전의 방식(머리말 인증 → object URL)으로 바꾼다.
+let photoRenewed = false;
+let photoFix = null;
+function photoBroken(src) {
+  if (src !== photo || !signedUrl(src) || photoFix) return;
+  const token = store("profile");
+  photoFix = (async () => {
+    const fresh = photoRenewed ? null : signedUrl((await api("GET", "/profiles/me", undefined, token).catch(() => null))?.photoUrl);
+    photoRenewed = true;
+    const next = fresh && fresh !== src ? fresh : await photoBlob(token);
+    if (store("profile") !== token || photo !== src) return void URL.revokeObjectURL(next);
+    photo = next;
+    if (typing()) stale = true;
+    else render();
+  })().finally(() => { photoFix = null; });
 }
 
 // 사진은 폰에서 다시 그려 올린다: 위치 같은 덧붙은 정보(EXIF)가 빠지고 1 MB 안으로 줄어든다.
@@ -472,7 +495,7 @@ const chipGroup = (legend, name, options, current, onpick) =>
 // 얼굴: 사진, 없으면 캐릭터 그림(style.css .c-*), 없으면 기본 그림
 // 캐릭터 값은 서버가 20자 문자열로만 받으므로, 목록에 있는 값만 클래스로 쓴다(다른 클래스가 섞이지 않게).
 const face = characterKey;
-const avatar = (p, src) => h("span", { className: src ? "avatar profile-picture" : "avatar character-avatar", "aria-hidden": "true" }, src ? h("img", { src, alt: "" }) : characterImage(face(p?.character)));
+const avatar = (p, src) => h("span", { className: src ? "avatar profile-picture" : "avatar character-avatar", "aria-hidden": "true" }, src ? h("img", { referrerPolicy: "no-referrer", src, alt: "", onerror: () => photoBroken(src) }) : characterImage(face(p?.character)));
 
 // 작은 선 아이콘만 쓰고 캐릭터 원본을 장식 아이콘으로 대체하지 않는다.
 const uiIcon = (name) => {
@@ -876,7 +899,8 @@ async function makeShortFilm(s) {
       canRead: () => short === s && s.exportJob === controller && s.at === index && !shortReadReason(s) && !offline,
       checkAccess: (signal) => checkFilmAccess(s, signal),
       getAudio: async (signal) => {
-        const response = await fetch(clipAddress(s, index), { signal, headers: { authorization: `Bearer ${s.token}` } });
+        // 이 장면(보관할 원본과 같은 것)에 서명 주소가 있을 때만 거기서 받는다. 없으면 전처럼 머리말 인증으로.
+        const response = await mediaResponse({ url: s.scenes[index].mediaUrl, signal, direct: () => fetch(clipAddress(s, index), { signal, headers: { authorization: `Bearer ${s.token}` } }) });
         if (!response.ok) throw new Error(`장면 소리를 받지 못했어요(${response.status}).`);
         return response.arrayBuffer();
       },
@@ -949,14 +973,19 @@ async function openShort(me, momentId) {
   audio.muted = false;
   render();
 }
-// 장면 소리를 머리말 인증으로 받아 object URL로. 실패하면 그 자리를 비워 연결이 돌아오면 다시 받는다.
+// 장면 소리를 받아 object URL로(파형을 그리려면 본문이 필요하다). 장면에 서명 주소(mediaUrl, T178)가 있으면 거기서 권한 머리말 없이,
+// 없거나 안 되면 머리말 인증으로 받는다. 실패하면 그 자리를 비워 연결이 돌아오면 다시 받는다.
 const clipAddress = (s, i) => {
   const url = new URL(s.scenes[i].clip, location.origin);
   if (url.origin !== location.origin || url.pathname !== `/api/trips/${s.code}/recordings/${s.scenes[i].momentId}` || url.search || url.hash) throw new Error("장면 소리 주소를 확인하지 못했어요.");
   return url;
 };
 const clip = async (s, i) => {
-  return (s.clips[i] ??= fetch(clipAddress(s, i), { headers: { authorization: `Bearer ${s.token}` }, signal: s.controller.signal })
+  return (s.clips[i] ??= mediaResponse({
+    url: s.scenes[i].mediaUrl, signal: s.controller.signal,
+    renew: async () => (await api("GET", `/trips/${s.code}/shortform`, null, s.token, s.controller.signal)).scenes.find((x) => x.momentId === s.scenes[i].momentId)?.mediaUrl,
+    direct: async () => fetch(clipAddress(s, i), { headers: { authorization: `Bearer ${s.token}` }, signal: s.controller.signal }),
+  })
     .then((r) => (r.ok ? r.blob() : Promise.reject(new Error(`장면 소리를 받지 못했어요(${r.status}).`))))
     .then((b) => {
       audioPeaks(b).then((peaks) => { if (short === s && !shortReadReason(s)) { s.waveforms[i] = peaks; s.paint?.(); } }).catch(() => {});
@@ -1178,6 +1207,7 @@ setInterval(refresh, 2000); // ponytail: 2초마다 묻는다(바뀐 게 없으�
 render();
 const refreshConfig = () => api("GET", "/config").then((c) => {
   googleId = c.googleClientId ?? "";
+  setMediaBase(c.mediaBase); // 미디어 CDN이 켜진 서버에서만 온다(T178). 쇼츠 보관함이 서명 주소를 한 건 조회로 받을지 정한다
   if (typing()) stale = true;
   else render();
 }, () => {});
@@ -1192,7 +1222,10 @@ await refresh(true);
 const initialView = new URLSearchParams(location.search).get("view");
 if (initialView === "shorts" && trip) launchShort();
 else if (initialView === "conversation" && trip) conversations.open();
-navigator.serviceWorker?.register("/sw.js").catch(() => {}); // 홈 화면 설치와 끊겼을 때의 마지막 화면(T6)
+// 홈 화면 설치와 끊겼을 때의 마지막 화면(T6). 화면 파일이 다른 주소(CDN의 커밋별 경로)에서 왔으면 그 주소를 알려 준다(T180):
+// 워커가 화면 파일을 그 주소에서 받아 두고 캐시 먼저 준다. 같은 출처로 줄 때는 전과 같은 /sw.js.
+const assetsAt = new URL(".", import.meta.url).href;
+navigator.serviceWorker?.register(assetsAt === new URL("/", location.href).href ? "/sw.js" : `/sw.js?assets=${encodeURIComponent(assetsAt)}`).catch(() => {});
 // 처음 설치되는 방문에서는 여행을 워커가 맡기 전에 읽었고 그 뒤 폴링은 304라 캐시에 여행이 없다.
 // 워커가 이 화면을 맡는 순간 한 번 더 읽어 끊겼을 때 보일 여행을 남긴다.
 navigator.serviceWorker?.addEventListener("controllerchange", () => refresh(true));

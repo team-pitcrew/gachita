@@ -29,8 +29,9 @@
   --r-phone-char: 48px; /* 시안 Character 조각(사진·캐릭터 틀) 반경 */
   --r-phone-panel: 20px; /* 시안 브리핑 카드(P19·P20) 반경 */
   --pad: 20px;
-  --mascot: url("/icons/gachita-192.png");
-  --mascot-mark: url("/brand/mascot.svg"); /* 시안 Mascot(7:544) 24px 선 그림, 머리 줄(app bar)에 쓴다 */
+  /* 그림 주소는 이 파일 기준 상대로 쓴다(T180): 화면 파일이 다른 출처의 하위 경로(CDN)에서 와도 같은 묶음에서 찾는다. */
+  --mascot: url("icons/gachita-192.png");
+  --mascot-mark: url("brand/mascot.svg"); /* 시안 Mascot(7:544) 24px 선 그림, 머리 줄(app bar)에 쓴다 */
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -449,54 +450,54 @@ li .between {
 }
 
 /* 프로필 얼굴: 내 사진, 없으면 원본 캐릭터 조각(카드 바탕까지 원본 그대로라 두 테마에서 스티커처럼 보인다).
-   알 수 없는 값(옛 동물 값 포함)은 기본 캐릭터. 그림은 chars/에 한 장씩 둔다. */
+   알 수 없는 값(옛 동물 값 포함)은 기본 캐릭터. 그림은 chars/에 한 장씩 둔다(화면은 WebP, 원본 PNG는 쇼츠 렌더용). */
 .avatar {
   flex: none;
   width: 56px;
   height: 56px;
   border-radius: 50%;
   overflow: hidden;
-  background: center / contain no-repeat var(--face, url("/chars/basic.png"));
+  background: center / contain no-repeat var(--face, url("chars/basic.webp"));
 }
 .c-basic,
 .chip:has(input[name="character"][value="basic"]) {
-  --face: url("/chars/basic.png");
+  --face: url("chars/basic.webp");
 }
 .c-cap,
 .chip:has(input[name="character"][value="cap"]) {
-  --face: url("/chars/cap.png");
+  --face: url("chars/cap.webp");
 }
 .c-glasses,
 .chip:has(input[name="character"][value="glasses"]) {
-  --face: url("/chars/glasses.png");
+  --face: url("chars/glasses.webp");
 }
 .c-travel,
 .chip:has(input[name="character"][value="travel"]) {
-  --face: url("/chars/travel.png");
+  --face: url("chars/travel.webp");
 }
 .c-game,
 .chip:has(input[name="character"][value="game"]) {
-  --face: url("/chars/game.png");
+  --face: url("chars/game.webp");
 }
 .c-sport,
 .chip:has(input[name="character"][value="sport"]) {
-  --face: url("/chars/sport.png");
+  --face: url("chars/sport.webp");
 }
 .c-pet,
 .chip:has(input[name="character"][value="pet"]) {
-  --face: url("/chars/pet.png");
+  --face: url("chars/pet.webp");
 }
 .c-camping,
 .chip:has(input[name="character"][value="camping"]) {
-  --face: url("/chars/camping.png");
+  --face: url("chars/camping.webp");
 }
 .c-office,
 .chip:has(input[name="character"][value="office"]) {
-  --face: url("/chars/office.png");
+  --face: url("chars/office.webp");
 }
 .c-healing,
 .chip:has(input[name="character"][value="healing"]) {
-  --face: url("/chars/healing.png");
+  --face: url("chars/healing.webp");
 }
 .avatar img {
   width: 100%;

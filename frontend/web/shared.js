@@ -19,6 +19,14 @@ export const REQ = {
   cancelled: ["취소됨", ""],
 };
 
+// 정적 파일(그림 등)의 주소는 이 모듈이 온 자리를 기준으로 만든다(T180). 화면 파일이 다른 출처의 하위 경로
+// (CDN의 public/web/{커밋}/)에서 와도 같은 묶음의 파일을 찾는다. 같은 출처로 줄 때는 지금처럼 /chars/…가 된다.
+// path는 웹 폴더 기준 상대 경로("chars/basic.webp"). 모듈과 CSS에는 /로 시작하는 정적 주소를 쓰지 않는다(static-paths.test.mjs가 막는다).
+// /api/…와 화면 이동 주소(/, /demo/), 서비스 워커(/sw.js), 화자 모델·실행기(/models, /vendor)는 문서 출처 그대로 둔다.
+export const asset = (path) => new URL(path, import.meta.url).href;
+// 그 주소가 문서와 다른 출처인가. 캔버스에 그려 녹화하는 그림과 Worker는 이때 따로 다룬다(short-film.js, wespeaker.js).
+export const elsewhere = (url) => Boolean(globalThis.location) && new URL(url, location.href).origin !== location.origin;
+
 // API 부르기. token이 있으면 Authorization: Bearer로 보낸다(프로필 토큰이나 참가자 토큰). Blob 본문(사진)은 그대로 보낸다.
 // 실패하면 Error에 status를 붙여 던진다. 서버에 닿지 않았으면 status 0.
 // 서버의 '목소리 먼저'(T173): 목소리 없는 프로필이 그룹·여행에 새로 들어가려 하면 409 voice_required.

@@ -1,8 +1,9 @@
-import { api, h, toast } from "/shared.js";
-import { ShortGeneration, activeGeneration, generationState } from "/short-generation.js";
-import { characterImage } from "/short-film.js";
-import { meEnd } from "/ride.js";
-import { readShortLibrary, keepLibraryShort, removeLibraryShort, shortPoster, shortMetadata, libraryGroups, tripDate } from "/short-library.js";
+import { api, h, toast } from "./shared.js";
+import { ShortGeneration, activeGeneration, generationState } from "./short-generation.js";
+import { characterImage } from "./short-film.js";
+import { meEnd } from "./ride.js";
+import { readShortLibrary, keepLibraryShort, removeLibraryShort, shortPoster, shortMetadata, libraryGroups, tripDate } from "./short-library.js";
+import { mediaOn, mediaResponse } from "./media.js";
 
 const remoteId = (code, job) => `${job.origin === "local-render" ? "asset" : "job"}:${code}:${job.id}`;
 const clock = (seconds = 0) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
@@ -63,6 +64,11 @@ export function createShortStudio({ getTrip, getParticipant, getToken, getOwner,
       if (job?.state !== "completed") throw Object.assign(new Error("영상이 취소되었어요."), { status: 409 });
     }
   }
+  // 서버 영상의 서명 주소(T178, ADR-0027). 서버는 생성 영상의 한 건 조회에만 서명을 붙인다 — 목록에는 없고, 기기 영상(local-render)은 CDN이
+  // 내주지 않는다. 작업에 이미 있으면 그것을, 없으면 미디어 CDN이 켜진 서버에서 생성 영상일 때만 한 건을 읽어 얻는다.
+  // 표지 만들기·보관·내려받기·공유에 파일이 필요해 <video>에 바로 걸지 않고 그 주소에서 받는다.
+  const generated = (job) => job.origin !== "local-render";
+  const signedFile = async (s, job) => (generated(job) ? (await s.model.call("GET", s.model.path(`/short-generations/${encodeURIComponent(job.id)}`)))?.result?.mediaUrl : null);
   async function select(s, item) {
     if (s.busy) return;
     clearVideo(s); s.selected = item; s.view = "feed"; s.error = ""; s.pollError = ""; s.loading = true; paint(s);
@@ -70,9 +76,14 @@ export function createShortStudio({ getTrip, getParticipant, getToken, getOwner,
     try {
       let file = item.file;
       if (item.remote) {
-        const response = await fetch(s.model.filePath(item.job), { headers: { authorization: `Bearer ${s.token}` }, signal: s.model.abort.signal, cache: "no-store" });
+        const model = s.model, kind = (r) => r.headers.get("content-type")?.split(";")[0];
+        const response = await mediaResponse({
+          url: item.job.result?.mediaUrl ?? (mediaOn() && generated(item.job) ? await signedFile(s, item.job).catch(() => null) : null),
+          renew: () => signedFile(s, item.job), signal: model.abort.signal, accept: (r) => ["video/mp4", "video/webm"].includes(kind(r)),
+          direct: () => fetch(model.filePath(item.job), { headers: { authorization: `Bearer ${s.token}` }, signal: model.abort.signal, cache: "no-store" }),
+        });
         if (!response.ok) throw Object.assign(new Error("영상을 불러오지 못했어요. 다시 확인해 주세요."), { status: response.status });
-        const type = response.headers.get("content-type")?.split(";")[0];
+        const type = kind(response);
         if (!["video/mp4", "video/webm"].includes(type)) throw new Error("영상 형식을 확인해 주세요.");
         file = new File([await response.blob()], `gachita-short.${type === "video/mp4" ? "mp4" : "webm"}`, { type });
       }

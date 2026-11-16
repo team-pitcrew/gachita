@@ -1,6 +1,7 @@
 import { api, h, toast, SEAT } from "./shared.js";
 import { characterImage } from "./short-film.js";
 import { meEnd } from "./ride.js";
+import { attachSigned, signedUrl } from "./media.js";
 
 const button = (label, onclick, disabled = false, className = "") => h("button", { type: "button", onclick, disabled, className }, label);
 const time = (at) => new Date(at).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -15,7 +16,7 @@ export function sceneClipPath(code, scene) {
 export function createScenePicker({ getTrip, getParticipant, getToken, onChoose, onLocal, onCandidates, onCaptions, onShare }) {
   let state;
   const valid = (s) => state === s && getTrip()?.code === s.code && getTrip()?.generation === s.generation && getTrip()?.status !== "driving" && getParticipant()?.id === s.participantId && getParticipant()?.consent && getToken() === s.token;
-  const clearAudio = (s) => { s.audioRequest?.abort(); s.audioRequest = null; s.audio?.pause(); s.audio?.removeAttribute("src"); s.audio?.load(); s.audio = null; if (s.url) URL.revokeObjectURL(s.url); s.url = null; s.audioLoading = false; };
+  const clearAudio = (s) => { s.audioRequest?.abort(); s.audioRequest = null; s.unwatch?.(); s.unwatch = null; s.audio?.pause(); s.audio?.removeAttribute("src"); s.audio?.load(); s.audio = null; if (s.url) URL.revokeObjectURL(s.url); s.url = null; s.audioLoading = false; };
   function close() { const s = state; if (!s) return; state = null; clearInterval(s.timer); s.read?.abort(); clearAudio(s); s.dialog.close(); s.dialog.remove(); }
   addEventListener("hashchange", close);
   function sync() { if (state && !valid(state)) { close(); toast("여행이나 기록 동의가 바뀌어 장면을 닫았어요."); } }
@@ -40,25 +41,35 @@ export function createScenePicker({ getTrip, getParticipant, getToken, onChoose,
       if (valid(s) && changed) paint(s);
     }
   }
-  async function listen(s, scene) {
+  // 장면에 서명 주소(mediaUrl, T178)가 있으면 받아 두지 않고 <audio>에 바로 건다. 동의·장면 확인(아래의 다시 읽기)은 같다.
+  // direct: 서명 주소로는 못 들어 지금 방식(머리말 인증으로 받아 blob)으로 다시 받는 중.
+  async function listen(s, scene, direct = false) {
     if (!valid(s) || s.audioLoading) return;
     clearAudio(s); s.audioLoading = true; s.error = "";
     const revision = sceneRevision(scene), controller = s.audioRequest = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10000);
     paint(s);
     try {
-      const response = await fetch(sceneClipPath(s.code, scene), { headers: { authorization: `Bearer ${s.token}` }, signal: controller.signal, cache: "no-store" });
-      if (!response.ok) throw Object.assign(new Error("원음을 불러오지 못했어요. 장면을 다시 확인해 주세요."), { status: response.status });
-      const blob = await response.blob();
-      if (!valid(s) || controller.signal.aborted || s.audioRequest !== controller) return sync();
+      let blob = null;
+      if (direct || !signedUrl(scene.mediaUrl)) {
+        const response = await fetch(sceneClipPath(s.code, scene), { headers: { authorization: `Bearer ${s.token}` }, signal: controller.signal, cache: "no-store" });
+        if (!response.ok) throw Object.assign(new Error("원음을 불러오지 못했어요. 장면을 다시 확인해 주세요."), { status: response.status });
+        blob = await response.blob();
+        if (!valid(s) || controller.signal.aborted || s.audioRequest !== controller) return sync();
+      }
       // 다운로드 중 철회·삭제·자막 변경이 생겼다면 받은 소리를 재생하지 않는다.
       const latest = await api("GET", `/trips/${s.code}/shortform`, null, s.token, controller.signal);
       if (!valid(s) || controller.signal.aborted || s.audioRequest !== controller) return;
       if (latest.generation !== s.generation) { close(); return toast("기록 동의가 바뀌었어요. 여행에서 다시 확인해 주세요."); }
       s.data = latest;
-      if (revision !== sceneRevision(latest.scenes.find((x) => x.momentId === scene.momentId))) throw new Error("장면이 바뀌었어요. 다시 확인한 뒤 들어 주세요.");
-      s.url = URL.createObjectURL(blob);
-      s.audio = h("audio", { src: s.url, controls: true, preload: "metadata", "aria-label": `${scene.label || "선택 장면"} 원음` });
+      const now = latest.scenes.find((x) => x.momentId === scene.momentId);
+      if (revision !== sceneRevision(now)) throw new Error("장면이 바뀌었어요. 다시 확인한 뒤 들어 주세요.");
+      s.audio = h("audio", { controls: true, preload: "metadata", "aria-label": `${scene.label || "선택 장면"} 원음` });
+      if (blob) { s.url = URL.createObjectURL(blob); s.audio.src = s.url; }
+      else s.unwatch = attachSigned(s.audio, signedUrl(now.mediaUrl) ?? scene.mediaUrl, {
+        renew: async () => (await api("GET", `/trips/${s.code}/shortform`, null, s.token, controller.signal)).scenes.find((x) => x.momentId === scene.momentId)?.mediaUrl,
+        fallback: () => { if (valid(s) && s.audioRequest === controller) listen(s, scene, true); },
+      });
       s.audio.play().catch(() => {});
     } catch (e) {
       if (valid(s) && s.audioRequest === controller) {

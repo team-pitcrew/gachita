@@ -7,3 +7,9 @@
 유형은 기본, 캡모자·리본, 독서, 여행, 게임, 운동, 반려동물, 캠핑, 직장인, 힐링입니다. 각 유형에 큰 캐릭터와 작은 캐릭터가 하나씩 있습니다.
 
 모든 PNG는 1254×1254 RGBA이며 alpha 최소 0·최대 255입니다. 일부 가장자리에 alpha 32 이하의 매우 옅은 잔여 픽셀이 있지만, alpha 32를 넘는 실제 형태는 모든 파일에서 캔버스 내부에 있습니다. 이미지를 추가로 자르거나 프로그램으로 다시 칠하지 않았습니다. 파일의 SHA-256과 크기는 `manifest.json`에 기록했습니다.
+
+## 화면 표시용 WebP (T180)
+
+웹 화면(`<img>`, `style.css`의 `--face`)은 같은 이름의 `.webp`를 씁니다. PNG 원본과 같은 픽셀 크기(1254×1254 RGBA)이고, 색은 손실 압축(quality 90), 알파는 무손실입니다. 20장 합계가 9.5 MB에서 0.8 MB로 줄었고(장당 24~61 KB), 밝은·어두운 바탕에 얹어 원본과 견준 PSNR은 가장 낮은 장이 50.8 dB입니다.
+
+PNG 원본은 지우지 않습니다. 웹의 쇼츠 캔버스 렌더(`short-film.js`), 쇼츠 Worker(`backend/api/shorts-worker/worker.mjs`), 차량 drawable이 PNG를 씁니다. `manifest.json`의 SHA-256도 PNG의 값입니다. 원본을 고치면 `python3 frontend/web/chars/webp.py`를 다시 돌려 WebP를 같이 올립니다(Pillow 필요).
