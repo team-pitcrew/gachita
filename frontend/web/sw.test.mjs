@@ -75,7 +75,7 @@ test("화자 모델·실행기(/models/, /vendor/)는 가로채지 않고 캐시
 const ASSETS = "https://media.test/public/web/abc123/";
 const SHELL = JSON.parse(source.match(/const SHELL = (\[.*?\]);/s)[1]);
 function assetWorker(fetch, { assets = ASSETS } = {}) {
-  const handlers = new Map(), stored = new Map(), added = [];
+  const handlers = new Map(), stored = new Map(), added = [], posted = [];
   const url = (key) => new URL(key.url ?? key, "https://gachita.test").href;
   const cache = {
     put: async (key, value) => void stored.set(url(key), value), delete: async (key) => stored.delete(url(key)),
@@ -85,21 +85,25 @@ function assetWorker(fetch, { assets = ASSETS } = {}) {
   };
   vm.runInNewContext(source, {
     URL, URLSearchParams, Response, Date, fetch, location: { origin: "https://gachita.test", search: assets ? `?assets=${encodeURIComponent(assets)}` : "" },
-    addEventListener: (name, fn) => handlers.set(name, fn), skipWaiting: async () => {}, clients: { claim: async () => {} },
+    addEventListener: (name, fn) => handlers.set(name, fn), skipWaiting: async () => {},
+    clients: { claim: async () => {}, get: async (id) => ({ postMessage: (data) => posted.push({ id, data }) }) },
     caches: { open: async () => cache, match: async (key) => stored.get(url(key))?.clone() },
   });
   const lifecycle = async (name) => { let done; handlers.get(name)({ waitUntil: (p) => { done = p; } }); await done; };
   return {
-    stored, added, install: () => lifecycle("install"), activate: () => lifecycle("activate"),
-    async request(address, init) {
-      let response;
-      const pending = [];
-      handlers.get("fetch")({ request: new Request(address, init), respondWith: (value) => { response = value; }, waitUntil: (value) => pending.push(value) });
-      const result = await response;
-      await Promise.all(pending);
-      return result;
-    },
+    stored, added, posted, install: () => lifecycle("install"), activate: () => lifecycle("activate"),
+    // 화면 이동(mode: "navigate")은 Request로 만들 수 없어 같은 모양의 객체를 넘긴다
+    open: (path) => request({ url: `https://gachita.test${path}`, method: "GET", mode: "navigate", headers: new Headers() }),
+    request: (address, init) => request(new Request(address, init)),
   };
+  async function request(req) {
+    let response;
+    const pending = [];
+    handlers.get("fetch")({ request: req, resultingClientId: "tab-1", respondWith: (value) => { response = value; }, waitUntil: (value) => pending.push(value) });
+    const result = await response;
+    await Promise.all(pending);
+    return result;
+  }
 }
 
 test("주소가 없으면(같은 출처로 줄 때) 전처럼 같은 출처의 목록을 그대로 받아 둔다", async () => {
@@ -175,4 +179,66 @@ test("켜질 때 옛 판의 화면 파일만 지운다(같은 출처의 첫 화�
   for (const key of ["https://gachita.test/", `${ASSETS}app.js`]) plain.stored.set(key, new Response("x"));
   await plain.activate();
   assert.deepEqual([...plain.stored.keys()], ["https://gachita.test/"], "다시 같은 출처로 주게 되면 다른 주소의 사본을 모두 지운다");
+});
+
+// ---- 첫 화면은 받아 둔 것을 먼저, 뒤에서 서버와 맞춘다(T182) ----
+const HOME = "https://gachita.test/";
+const html = (body, etag, at = Date.now()) => new Response(body, { headers: { etag, date: new Date(at).toUTCString() } });
+
+test("받아 둔 첫 화면이 있으면 서버를 기다리지 않고 그것을 주고, 뒤에서 받은 새 것으로 갈아 둔다", async () => {
+  let release;
+  const app = assetWorker(() => new Promise((done) => { release = () => done(html("새 화면", '"v2"')); }));
+  app.stored.set(HOME, html("받아 둔 화면", '"v1"'));
+  const opened = app.open("/");
+  await new Promise((r) => setTimeout(r, 5)); // 서버 응답은 아직 오지 않았다
+  release();
+  assert.equal(await (await opened).text(), "받아 둔 화면");
+  assert.equal(await app.stored.get(HOME).text(), "새 화면");
+});
+
+test("뒤에서 받은 첫 화면이 다른 판이면(가리키는 화면 파일 주소가 다름) 그 화면에 알리고, 같은 판이면 본문이 달라도 알리지 않는다", async () => {
+  const shell = (version, extra = "") => new Response(`<script type="module" src="https://media.test/public/web/${version}/app.js"></script>${extra}`, { headers: { date: new Date().toUTCString() } });
+  const changed = assetWorker(async () => shell("def456"));
+  changed.stored.set(HOME, shell("abc123"));
+  assert.match(await (await changed.open("/")).text(), /abc123/, "알림에 본문을 읽어도 화면에 줄 응답은 그대로다");
+  assert.equal(JSON.stringify(changed.posted), JSON.stringify([{ id: "tab-1", data: { type: "shell-updated" } }])); // 워커 쪽에서 만든 객체라 글로 비교
+  // Cloudflare가 화면 이동 응답에만 넣는 측정 스크립트처럼 본문만 다른 경우
+  const same = assetWorker(async () => shell("abc123", "<script defer src=\"https://static.cloudflareinsights.com/beacon.min.js\"></script>"));
+  same.stored.set(HOME, shell("abc123"));
+  await same.open("/");
+  assert.deepEqual(same.posted, []);
+});
+
+test("받아 둔 지 하루를 넘겼거나 받은 때를 모르면 서버 것을 준다(오래 붙잡지 않는다)", async () => {
+  for (const kept of [html("옛 화면", '"v1"', Date.now() - 25 * 3600_000), new Response("옛 화면", { headers: { etag: '"v1"' } })]) {
+    const app = assetWorker(async () => html("새 화면", '"v2"'));
+    app.stored.set(HOME, kept);
+    assert.equal(await (await app.open("/")).text(), "새 화면");
+    assert.deepEqual(app.posted, []);
+  }
+});
+
+test("받아 둔 첫 화면이 있고 끊겼으면 그대로 그것을 주고, 없고 끊겼으면 끊긴 그대로다", async () => {
+  const app = assetWorker(async () => { throw new TypeError("offline"); });
+  app.stored.set(HOME, html("받아 둔 화면", '"v1"'));
+  assert.equal(await (await app.open("/")).text(), "받아 둔 화면");
+  assert.deepEqual(app.posted, []);
+  const empty = assetWorker(async () => { throw new TypeError("offline"); });
+  assert.equal((await empty.open("/")).type, "error");
+});
+
+test("화면 파일이 같은 출처에서 올 때는 전처럼 서버 먼저고, 구글 복귀 주소(?code=)는 손대지 않는다", async () => {
+  const sameOrigin = assetWorker(async () => html("새 화면", '"v2"'), { assets: null });
+  sameOrigin.stored.set(HOME, html("받아 둔 화면", '"v1"'));
+  assert.equal(await (await sameOrigin.open("/")).text(), "새 화면");
+  const back = assetWorker(async () => html("새 화면", '"v2"'));
+  back.stored.set(HOME, html("받아 둔 화면", '"v1"'));
+  assert.equal(await back.open("/?code=abc"), undefined, "?가 붙은 화면 주소는 워커가 손대지 않는다");
+});
+
+test("여행·대화·쇼츠 API는 판 주소를 쓸 때도 받아 둔 것을 먼저 주지 않는다(값은 언제나 서버에서)", async () => {
+  const app = assetWorker(async (req) => Response.json({ from: "server", url: req.url ?? req }));
+  app.stored.set("https://gachita.test/api/trips/TEST12", Response.json({ from: "kept" }));
+  assert.equal((await (await app.request("https://gachita.test/api/trips/TEST12")).json()).from, "server");
+  for (const path of ["/api/trips/TEST12/conversation", "/api/trips/TEST12/shorts", "/api/profiles/me/shares"]) assert.equal(await app.request(`https://gachita.test${path}`), undefined, path);
 });

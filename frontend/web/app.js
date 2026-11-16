@@ -1229,3 +1229,14 @@ navigator.serviceWorker?.register(assetsAt === new URL("/", location.href).href 
 // 처음 설치되는 방문에서는 여행을 워커가 맡기 전에 읽었고 그 뒤 폴링은 304라 캐시에 여행이 없다.
 // 워커가 이 화면을 맡는 순간 한 번 더 읽어 끊겼을 때 보일 여행을 남긴다.
 navigator.serviceWorker?.addEventListener("controllerchange", () => refresh(true));
+// 받아 둔 첫 화면을 먼저 보였는데 서버에 새 판이 있으면 워커가 알려 준다(T182, sw.js의 page). 아직 손대지 않은 화면이면
+// 한 번 새로 열어 새 판으로 바꾼다. 쓰는 중이면 그대로 두고(다음에 열 때 새 판), 판이 섞여 나오는 교체 중에 되풀이하지 않게 1분에 한 번만.
+let touched = false;
+for (const name of ["pointerdown", "keydown"]) addEventListener(name, () => { touched = true; }, { once: true, capture: true });
+navigator.serviceWorker?.addEventListener("message", (e) => {
+  if (e.data?.type !== "shell-updated" || touched || document.querySelector("dialog[open]")) return;
+  const last = Number(sessionStorage.getItem("shell-reload") ?? 0);
+  if (Date.now() - last < 60_000) return;
+  sessionStorage.setItem("shell-reload", String(Date.now()));
+  location.reload();
+});

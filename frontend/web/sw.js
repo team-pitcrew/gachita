@@ -51,6 +51,8 @@ addEventListener("fetch", (e) => {
     if (copy || (trip && res.status === 404)) e.waitUntil(caches.open(CACHE).then((c) => (copy ? c.put(key, copy) : c.delete(key))));
     return res;
   };
+  // 화면 주소(T182): 받아 둔 첫 화면을 먼저 주고 뒤에서 새로 받는다. 아래 page()에 조건과 이유가 있다.
+  if (ASSETS && req.mode === "navigate" && !url.search) return e.respondWith(page(e, req, key, save));
   // ?v= 폴링은 끊기면 그대로 실패시킨다(앱이 '연결이 끊겼어요'를 보인다). 받은 새 판만 캐시에 둔다.
   if (url.search) return e.respondWith(fetch(req).then(save));
   e.respondWith(fetch(req).then(save, () => offline(req, key)));
@@ -65,6 +67,30 @@ async function asset(e) {
   try { res = await pull(req.url); } catch { return fetch(req); }
   if (res.ok) e.waitUntil(cache.put(req.url, res.clone()));
   return res;
+}
+
+// 첫 화면은 이 폰에 받아 둔 것을 먼저 주고, 뒤에서 서버 것을 받아 맞춘다(T182). 서버를 기다리는 0.5~1초가 없어진다.
+// - 화면 파일이 판 주소(ASSETS)에서 올 때만: 받아 둔 HTML이 가리키는 화면 파일은 그 판의 주소라 내용이 바뀌지 않고 캐시에도 있다.
+//   같은 출처로 줄 때는 HTML과 화면 파일의 판이 어긋날 수 있어 전처럼 서버 먼저다.
+// - 오래 붙잡지 않는다: 받아 둔 지 하루를 넘겼거나 받은 때를 모르면 서버 먼저. 뒤에서 받은 것이 다르면 그 화면에 알려
+//   (app.js가 아직 손대지 않은 화면을 한 번 새로 연다) 다음 방문을 기다리지 않는다.
+// - 여행·대화·쇼츠 같은 API 응답은 여기를 지나지 않는다. 그 값은 언제나 서버에서 온다.
+const SHELL_MAX_AGE = 86400_000;
+const entry = (html) => html.match(/<script[^>]*type="module"[^>]*src="([^"]*)"/)?.[1] ?? null;
+async function page(e, req, key, save) {
+  const hit = await caches.match(key);
+  const age = hit ? Date.now() - Date.parse(hit.headers.get("date") ?? "") : NaN;
+  const fresh = fetch(req).then(save);
+  if (!hit || !(age < SHELL_MAX_AGE)) return fresh.catch(() => offline(req, key));
+  // 같은 판인지는 HTML이 가리키는 화면 파일 주소(판마다 다른 CDN 경로)로 본다. ETag와 본문은 쓰지 못한다: 운영의 첫 화면은
+  // ETag 없이 오고, Cloudflare가 화면 이동 응답에만 측정 스크립트를 넣어 설치 때 받아 둔 것과 본문이 다르다(11/16 확인).
+  const kept = hit.clone().text();
+  e.waitUntil(fresh.then(async (res) => {
+    if (!res.ok || entry(await res.text()) === entry(await kept)) return;
+    const client = await globalThis.clients?.get?.(e.resultingClientId || e.clientId);
+    client?.postMessage({ type: "shell-updated" });
+  }, () => {}));
+  return hit;
 }
 
 // 끊김: 그 주소의 마지막 응답, 화면 주소(/#코드, /j/<초대>)면 첫 화면. 없으면 끊긴 그대로.
