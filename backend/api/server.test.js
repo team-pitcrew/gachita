@@ -2752,3 +2752,22 @@ test("화면 HTML의 정적 주소(T178): WEB_ASSET_BASE가 있으면 정적 파
     delete process.env.WEB_ASSET_BASE;
   }
 });
+
+test("웹 폴더의 그림·글 파일은 제 형식으로 나간다(T181: WebP가 application/octet-stream으로 나갔다)", async () => {
+  const { readdir } = await import("node:fs/promises");
+  const { extname } = await import("node:path");
+  const root = fileURLToPath(new URL("../../frontend/web/", import.meta.url));
+  const files = (await readdir(root, { recursive: true })).map((f) => f.split("\\").join("/"));
+  const webp = files.find((f) => f.endsWith(".webp"));
+  assert.ok(webp, "웹 폴더에 WebP가 있다");
+  const res = await fetch(`${base}/${webp}`);
+  assert.deepEqual([res.status, res.headers.get("content-type")], [200, "image/webp"]);
+  // 브라우저가 읽는 확장자마다 하나씩: 형식 표에 없으면 application/octet-stream이 된다.
+  // 문서(.md)·만드는 스크립트(.py)·시험(.test.mjs)·모델(.onnx는 일부러 octet-stream)은 화면이 읽지 않는다.
+  const one = new Map(files.filter((f) => extname(f) && !/\.(md|py|onnx)$|\.test\.mjs$/.test(f)).map((f) => [extname(f).toLowerCase(), f]));
+  for (const [ext, file] of one) {
+    const r = await fetch(`${base}/${file}`);
+    assert.notEqual(r.headers.get("content-type"), "application/octet-stream", `${ext} (${file})`);
+    await r.arrayBuffer();
+  }
+});
