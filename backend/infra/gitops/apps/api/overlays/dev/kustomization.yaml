@@ -7,7 +7,7 @@ resources:
   - ../../base
 images:
   - name: ghcr.io/team-pitcrew/gachita-api
-    newTag: "c9a612010b6d" # 병합 때 ci.yml의 publish가 올린 develop(#148). make deploy-tag TAG=<올린 태그> 로 바꾼다(커밋 SHA 앞 12자, 따옴표 필수)
+    newTag: "998a38deb96f" # 병합 때 ci.yml의 publish가 올린 develop(#148). make deploy-tag TAG=<올린 태그> 로 바꾼다(커밋 SHA 앞 12자, 따옴표 필수)
 # 웹 화면 파일의 CDN 접두사(T179, ADR-0026 6절). 이미지 태그와 같은 판이어야 한다: make deploy-tag가 둘을 함께 바꾸고,
 # deploy-tag 워크플로가 그 판의 파일을 먼저 올려 CDN에서 받아지는 것을 본 뒤에 PR을 연다.
 # 11/16 13:34에 처음 켰을 때는 웹 모듈이 서로를 루트 절대 주소로 불러 화면이 비었다(#622로 끔). 웹이 상대 주소로 바뀐
@@ -17,4 +17,4 @@ patches:
     patch: |-
       - op: add
         path: /spec/template/spec/containers/0/env/-
-        value: { name: WEB_ASSET_BASE, value: "https://media.gachita.mangowhois.ai/public/web/c9a612010b6d" }
+        value: { name: WEB_ASSET_BASE, value: "https://media.gachita.mangowhois.ai/public/web/998a38deb96f" }
