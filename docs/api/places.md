@@ -47,7 +47,7 @@
 
 `places`·`route`·`contents`는 기록본과 같은 규칙으로, **그 여행에서 내 참가자가 녹음에 동의했을 때만** 채웁니다(아니면 빈 목록). 경로와 콘텐츠는 지금 동의 세대의 것만 담습니다. 누가 동의를 끊어 세대가 오르면 그 전의 발화 좌표와 영상은 빠집니다(ADR-0007). 지도는 지도 제공자 없이 이 좌표를 화면에 투영해 그립니다(개편 계획 결정 5).
 
-영상 파일(`url`)은 지금처럼 그 여행의 **참가자 토큰**으로 받고 전원 동의 규칙을 따릅니다([short-assets.md](short-assets.md)). 이 기기에 그 여행의 참가자 토큰이 없으면 프로필 토큰으로 다시 참가(`POST /api/trips/{code}/participants`)해 이 기기의 토큰을 받습니다. 목록은 원본이 바뀐 영상(`source_changed`)을 따로 거르지 않습니다 — 정리 작업이 1분 안팎에 지우고, 그 사이 파일을 받으면 409입니다.
+영상 파일(`url`)은 지금처럼 그 여행의 **참가자 토큰**으로 받고 전원 동의 규칙을 따릅니다([short-assets.md](short-assets.md)). 서버에 미디어 CDN 값이 있고 그 여행의 참가자 전원이 동의했으면 생성 영상(`generated`) 항목에 `mediaUrl`·`mediaAuth`(표지가 있으면 `thumbnailMediaUrl`·`thumbnailMediaAuth`)가 더해져 참가자 토큰 없이 CDN에서 받을 수 있습니다(T178, [short-generation.md](short-generation.md)의 'CDN 서명 주소'). 이 기기에 그 여행의 참가자 토큰이 없으면 프로필 토큰으로 다시 참가(`POST /api/trips/{code}/participants`)해 이 기기의 토큰을 받습니다. 목록은 원본이 바뀐 영상(`source_changed`)을 따로 거르지 않습니다 — 정리 작업이 1분 안팎에 지우고, 그 사이 파일을 받으면 409입니다.
 
 ## 하지 않은 것
 

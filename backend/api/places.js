@@ -3,6 +3,8 @@
 import { randomUUID } from "node:crypto";
 import { profilesDb, tripsDb } from "./db.js";
 import { momentSpan } from "./scenes.js";
+import { mediaFields } from "./providers/media-cdn.js";
+import { thumbnailKey } from "./short-generations.js";
 
 const fail = (status, error) => {
   throw { status, error };
@@ -87,10 +89,10 @@ async function tripItems(trips, viewerOf, fresh, light = false) {
   const { rows: done } = codes.length
     ? await tripsDb().query(
         `WITH g AS (SELECT * FROM unnest($1::text[], $2::int[]) AS g(code, gen))
-         SELECT a.id, a.trip_code, a.moment_id, (a.media->>'seconds')::float AS seconds, a.created_at, 'device' AS kind, false AS thumb
+         SELECT a.id, a.trip_code, a.moment_id, (a.media->>'seconds')::float AS seconds, a.created_at, 'device' AS kind, false AS thumb, a.object_key AS key
            FROM short_assets a JOIN g ON a.trip_code = g.code AND a.generation = g.gen WHERE a.state = 'completed'
          UNION ALL
-         SELECT s.id, s.trip_code, s.moment_id, (s.plan->>'seconds')::float AS seconds, s.created_at, 'generated' AS kind, s.object_keys ? ('shorts/' || s.id::text || '/thumbnail.png') AS thumb
+         SELECT s.id, s.trip_code, s.moment_id, (s.plan->>'seconds')::float AS seconds, s.created_at, 'generated' AS kind, s.object_keys ? ('shorts/' || s.id::text || '/thumbnail.png') AS thumb, s.result_key AS key
            FROM short_generations s JOIN g ON s.trip_code = g.code AND s.generation = g.gen WHERE s.state = 'completed'`,
         [codes, generations]
       )
@@ -134,6 +136,7 @@ async function tripItems(trips, viewerOf, fresh, light = false) {
     }));
     const member = new Map(members.map((p) => [p.participantId, p]));
     const route = points.filter((r) => r.trip_code === trip.code).map((r) => [r.lat, r.lng, Number(r.at)]);
+    const everyone = trip.participants.length > 0 && trip.participants.every((p) => p.consent);
     const contents = media
       .filter((r) => r.trip_code === trip.code)
       .map((r) => {
@@ -166,6 +169,9 @@ async function tripItems(trips, viewerOf, fresh, light = false) {
           url: `/api/trips/${trip.code}/${r.kind === "device" ? "short-assets" : "short-generations"}/${r.id}/file`,
           // 일꾼이 먼저 만든 표지 그림(T166, 생성 영상만). 같은 참가자 토큰으로 받는다. 없으면 null(표지는 캐릭터로).
           thumbnailUrl: r.thumb ? `/api/trips/${trip.code}/short-generations/${r.id}/thumbnail` : null,
+          // CDN 서명(T178): 파일을 받을 때와 같은 조건일 때만 — 보는 사람 동의(open), 전원 동의, 완성·지금 세대(위 질의), 원본과 같음(kept).
+          // 기기 영상(short-assets/)은 CDN이 내주지 않는 접두사라 필드가 붙지 않는다(providers/media-cdn.js).
+          ...(kept && everyone ? { ...mediaFields(r.key), ...(r.thumb ? mediaFields(thumbnailKey(r.id), "thumbnailMedia") : {}) } : {}),
         };
       })
       .sort((a, b) => a.at - b.at || a.id.localeCompare(b.id));

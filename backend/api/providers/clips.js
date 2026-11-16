@@ -25,7 +25,8 @@ export function clipStore() {
   // ponytail: 시간 제한은 고정값. 클립은 150~250 KB(11/13 실측)라 5초면 넉넉하다.
   client ??= new S3Client({ maxAttempts: 2, requestHandler: { connectionTimeout: 2000, requestTimeout: 5000 } });
   return {
-    put: (key, body) => client.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: body, ContentType: "audio/wav" })).catch(unavailable),
+    // type: 클립은 WAV, 프로필 사진(T178)은 image/png·image/jpeg — CDN이 이 형식을 그대로 내준다.
+    put: (key, body, type = "audio/wav") => client.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: body, ContentType: type })).catch(unavailable),
     // 없는 키면 null. 버킷의 ListBucket 권한이 있어야 S3가 403 대신 NoSuchKey로 답한다(T64).
     get: (key) =>
       client

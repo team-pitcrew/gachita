@@ -5,6 +5,7 @@ import { randomUUID, timingSafeEqual } from "node:crypto";
 import { tripsDb } from "./db.js";
 import { planShort, planIdentity, templates, fingerprint } from "./short-templates.js";
 import { shortMedia, mediaReady } from "./providers/short-media.js";
+import { mediaFields } from "./providers/media-cdn.js";
 import { ASSET_MAX_BYTES, inspectVideo } from "./providers/short-asset-probe.js";
 import { clipStore } from "./providers/clips.js";
 import { log } from "./log.js";
@@ -60,6 +61,16 @@ export const generationView = (r) => ({
     : {}),
 });
 const view = generationView;
+// CDN 서명(T178)을 붙인 모양. 파일을 받을 때와 같은 검사(본인·전원 동의, 세대, 원본과 같음)를 통과한 한 건 조회에서만 쓴다 —
+// 목록과 만들기 응답에는 붙이지 않는다(목록은 줄마다 원본을 다시 보지 않는다).
+const signedView = (r) => {
+  const v = view(r);
+  return {
+    ...v,
+    ...(v.thumbnailUrl ? mediaFields(thumbnailKey(r.id), "thumbnailMedia") : {}),
+    ...(v.result ? { result: { ...v.result, ...mediaFields(r.result_key) } } : {}),
+  };
+};
 export const shortTemplateCatalog = () => ({
   enabled: enabled(),
   provider: "openai-codex",
@@ -242,7 +253,7 @@ export function shortGenerations(ctx, overrides = {}) {
           if (current.plan.planHash !== row.plan.planHash)
             fail(409, "제작 후 원음·자막·캐릭터가 바뀌었어요");
         }
-        if (!leaf) return [200, view(row)];
+        if (!leaf) return [200, signedView(row)];
         // 표지 그림은 만드는 중에도 준다(C31→C32 '만드는 중' 표지). 동의·원본 검사는 위에서 영상과 같게 했다.
         if (leaf === "thumbnail") {
           if (!row.object_keys.includes(thumbnailKey(row.id))) fail(404, "아직 표지 그림이 없어요");

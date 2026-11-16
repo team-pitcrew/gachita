@@ -68,8 +68,24 @@
 | `SHORTS_BUCKET` | 결과 S3 버킷. 생략하면 `CLIPS_BUCKET`입니다. |
 | `SHORTS_DAILY_SECONDS` | 하루 전체 작업의 칸 길이 합 상한(기본 120초). 취소·실패도 그날 한도에서 빼지 않습니다. |
 | `SHORTS_TRIP_JOBS` | 여행(동의 세대)마다 만들 수 있는 작업 수(기본 3). |
+| `MEDIA_CDN_BASE`, `MEDIA_KEY_PAIR_ID`, `MEDIA_PRIVATE_KEY` | 미디어 CDN 주소, CloudFront 키 쌍 id, RSA 개인 키(PEM). 셋이 다 있을 때만 아래 'CDN 서명 주소'가 켜집니다(T178). |
 
 서버 안에서는 지키기만 합니다. 2초마다 하나씩(여러 파드 중 advisory lock을 쥔 하나) 동의 철회·자료 변경을 다시 보고, 끝난 임대를 `worker_timeout`으로 돌리고, 취소된 결과를 S3에서 지웁니다. 결과 파일에는 시간 만료가 없습니다(T90).
+
+## CDN 서명 주소(T178)
+
+위 값 셋이 다 있으면 완성된 영상과 표지를 CloudFront에서 받을 수 있게 서명 주소를 더합니다([ADR-0027](../adr/0027-media-signing-and-profile-photos-in-s3.md), 길은 [ADR-0026](../adr/0026-media-cdn-cloudfront-s3.md)). 값이 없으면 응답은 지금과 같습니다. `result.url`·`thumbnailUrl`과 그 경로는 그대로 동작합니다.
+
+| 응답 | 더해지는 필드 |
+|---|---|
+| `GET /api/trips/{code}/short-generations/{id}` | `result.mediaUrl`, `result.mediaAuth`, 표지가 있으면 `thumbnailMediaUrl`, `thumbnailMediaAuth` |
+| 콘텐츠 기록(`GET /profiles/me/trips`, `GET /trips/{code}/contents`)의 생성 영상 항목 | `mediaUrl`, `mediaAuth`, 표지가 있으면 `thumbnailMediaUrl`, `thumbnailMediaAuth` |
+
+- `mediaUrl`은 서명이 붙은 주소(폰 웹의 `<video src>`), `mediaAuth`는 `{url, expires, signature, keyPairId}`(차량 앱이 `url`을 부르며 `CloudFront-Expires`·`CloudFront-Signature`·`CloudFront-Key-Pair-Id`를 `Cookie` 머리말로 붙임)입니다.
+- 서명은 10~15분 뒤 만료되고, 같은 5분 구간에서는 같은 주소가 나옵니다. 만료됐으면 응답을 다시 받아 새 주소를 씁니다.
+- 파일을 받을 때와 같은 검사를 통과한 요청에만 붙습니다(본인·전원 동의, 완성·지금 세대, 원본과 같음). 그래서 작업 목록(`GET …/short-generations`)과 만들기 응답에는 없습니다.
+- 동의 철회·삭제 뒤에도 이미 내준 서명은 만료까지(최대 15분), 가장자리 캐시는 10분까지 파일을 줄 수 있습니다.
+- 기기에서 만든 영상(`short-assets`)과 원음 클립은 CDN이 내주지 않는 접두사라 서명이 붙지 않고, 지금처럼 API로 받습니다.
 
 ## 일꾼 돌리기(운영자 맥)
 

@@ -17,6 +17,8 @@ import { createShare, sharedResults } from "./result-shares.js";
 import { errFields, log } from "./log.js";
 import { asrReady, contextOf, retranscribe, toWav, transcribe } from "./providers/asr.js";
 import { clipStore } from "./providers/clips.js";
+import { mediaBase, mediaFields } from "./providers/media-cdn.js";
+import { photoKey } from "./profile-photos.js";
 import { googleIdentity, googlePublicConfig } from "./providers/google.js";
 import { cues, momentSpan, suggest } from "./scenes.js";
 import { checkStrong, checkVector, DIMS, embed, EMBEDDER, matchFloor, matchMargin, matchThreshold, similarity, STRONG_DIMS, STRONG_EMBEDDER, wavMono } from "./providers/voice.js";
@@ -47,6 +49,7 @@ const NO_PREFS_SQL = fileURLToPath(new URL("profiles-6-no-prefs.sql", import.met
 const ACCOUNTS_SQL = fileURLToPath(new URL("profiles-7-accounts.sql", import.meta.url));
 const NEW_GROUPS_SQL = fileURLToPath(new URL("profiles-8-groups.sql", import.meta.url));
 const VOICE_STRONG_SQL = fileURLToPath(new URL("profiles-9-voice-strong.sql", import.meta.url));
+const PHOTO_KEY_SQL = fileURLToPath(new URL("profiles-10-photo-key.sql", import.meta.url));
 const PHOTO_MAX = 1_000_000; // 프로필 사진 상한. 형식은 매직 바이트로만 확인한다(다시 그리기는 T46 화면, ADR-0009 위험)
 const MAX_BODY = 10_000;
 // ponytail: 여행 하나의 발화는 2만 줄까지(3시간 여행 ≈ 2,500줄). 명시적 삭제 한 번이 2초 제한(T26) 안에 끝나게 묶는다.
@@ -171,6 +174,7 @@ export async function migrate() {
   await profilesDb().query(await readFile(ACCOUNTS_SQL, "utf8"));
   await profilesDb().query(await readFile(NEW_GROUPS_SQL, "utf8"));
   await profilesDb().query(await readFile(VOICE_STRONG_SQL, "utf8"));
+  await profilesDb().query(await readFile(PHOTO_KEY_SQL, "utf8"));
 }
 
 async function readBody(req, limit = MAX_BODY) {
@@ -198,6 +202,7 @@ const asProfile = (r) => ({
   consentDefault: r.consent_default,
   character: r.character ?? "",
   hasPhoto: Boolean(r.has_photo),
+  ...mediaFields(r.photo_key, "photo"), // CDN이 켜져 있고 사진이 S3에 있을 때만 photoUrl·photoAuth(T178, ADR-0027)
   links: r.provider ? [r.provider] : [],
   email: r.email ?? null,
   hasVoice: Boolean(r.has_voice),
@@ -206,7 +211,7 @@ const asProfile = (r) => ({
   consentVersion: r.consent_version || null,
 });
 // asProfile이 읽는 칸(별칭 p). 목소리는 지금 임베더의 길이(DIMS)인 값만 센다 — 차가 받아 대조할 수 있는 값만 '등록함'(ADR-0023).
-const PROFILE_COLUMNS = `p.id, p.name, p.consent_default, p.provider, p.character, (p.photo IS NOT NULL) AS has_photo,
+const PROFILE_COLUMNS = `p.id, p.name, p.consent_default, p.provider, p.character, (p.photo IS NOT NULL OR p.photo_key IS NOT NULL) AS has_photo, p.photo_key,
   p.email, p.consent, p.consent_at, p.consent_version,
   EXISTS (SELECT 1 FROM voice_prints v WHERE v.profile_id = p.id AND cardinality(v.vector) = ${DIMS}) AS has_voice`;
 
@@ -310,9 +315,11 @@ async function readRaw(req, limit) {
 }
 // 프로필 사진 바이트. 없으면 404. 볼 수 있는지는 부르는 쪽이 먼저 정한다.
 async function photoOf(id) {
-  const { rows } = await profilesDb().query("SELECT photo, photo_type FROM profiles WHERE id = $1", [id]);
-  if (!rows[0]?.photo) fail(404, "사진이 없음");
-  return [200, rows[0].photo, rows[0].photo_type]; // 이진 응답 — 서버 핸들러가 그대로 보낸다
+  const { rows } = await profilesDb().query("SELECT photo, photo_key, photo_type FROM profiles WHERE id = $1", [id]);
+  // 사진은 버킷에 있거나(photo_key, T178) 아직 DB에 있다(버킷 없는 환경, 옮기기 전의 줄).
+  const bytes = rows[0]?.photo_key ? await clipStore()?.get(rows[0].photo_key) : rows[0]?.photo;
+  if (!bytes) fail(404, "사진이 없음");
+  return [200, bytes, rows[0].photo_type]; // 이진 응답 — 서버 핸들러가 그대로 보낸다
 }
 const photoType = (b) =>
   b.length >= 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47
@@ -423,13 +430,31 @@ async function profiles(req, seg, b) {
       const me = (await profileOf(req)) ?? fail(401, "프로필 토큰이 필요함");
       const raw = await readRaw(req, PHOTO_MAX);
       const type = photoType(raw);
-      await profilesDb().query("UPDATE profiles SET photo = $2, photo_type = $3, updated_at = now() WHERE id = $1", [me.id, raw, type]);
+      // 버킷이 있으면 S3에 두고 DB에는 키만(T178). 키가 내용 해시라 같은 사진을 다시 올리면 같은 객체다. 버킷이 없으면 지금처럼 DB에.
+      const store = clipStore();
+      const key = store ? photoKey(me.id, raw, type) : null;
+      if (store) {
+        await store.put(key, raw, type);
+        // 전에 지우려고 적어 둔 같은 키(같은 사진을 다시 올림)는 지울 목록에서 뺀다 — 다음 치우기가 방금 올린 것을 지우지 않게.
+        await tripsDb().query("DELETE FROM clip_trash WHERE object_key = $1", [key]);
+      }
+      const { rows } = await profilesDb().query(
+        `UPDATE profiles p SET photo = $2, photo_key = $3, photo_type = $4, updated_at = now()
+         FROM (SELECT photo_key FROM profiles WHERE id = $1 FOR UPDATE) old WHERE p.id = $1 RETURNING old.photo_key AS old`,
+        [me.id, store ? null : raw, key, type]
+      );
+      if (rows[0]?.old && rows[0].old !== key) await trashClips([rows[0].old]); // 바꾸면 옛 객체를 지운다
       return [204];
     }
     if (m === "GET") return photoOf(((await profileOf(req)) ?? fail(401, "프로필 토큰이 필요함")).id);
     if (m === "DELETE") {
       const me = (await profileOf(req)) ?? fail(401, "프로필 토큰이 필요함");
-      await profilesDb().query("UPDATE profiles SET photo = NULL, photo_type = '', updated_at = now() WHERE id = $1", [me.id]);
+      const { rows } = await profilesDb().query(
+        `UPDATE profiles p SET photo = NULL, photo_key = NULL, photo_type = '', updated_at = now()
+         FROM (SELECT photo_key FROM profiles WHERE id = $1 FOR UPDATE) old WHERE p.id = $1 RETURNING old.photo_key AS old`,
+        [me.id]
+      );
+      if (rows[0]?.old) await trashClips([rows[0].old]);
       return [204];
     }
     fail(405, "PUT, GET, DELETE만 됨");
@@ -990,6 +1015,7 @@ async function deleteProfiles(id) {
          OR (p.managed_by IS NOT NULL AND p.id IN (SELECT m.profile_id FROM group_members m JOIN groups g ON g.id=m.group_id WHERE g.owner_id=o.id))
      ) SELECT id FROM owned`, [id]);
   const all = [...new Set([id, ...rows.map(r => r.id)])];
+  let photoKeys = [];
   await withDeletingProfiles(all, async lockedClient => {
     const affected = await lockedClient.query("SELECT code FROM trips WHERE EXISTS (SELECT 1 FROM jsonb_array_elements(doc->'participants') p WHERE p->>'profileId' = ANY($1::text[])) ORDER BY code", [all]);
     for (const { code } of affected.rows) await withTrip(code, true, async (trip, client) => {
@@ -1011,8 +1037,9 @@ async function deleteProfiles(id) {
     await db.query("DELETE FROM groups WHERE id=ANY($1::text[])", [groups]);
     await db.query("DELETE FROM profile_moments WHERE profile_id=ANY($1::uuid[])", [all]);
     await db.query("DELETE FROM tokens WHERE profile_id=ANY($1::uuid[])", [all]);
-    await db.query("DELETE FROM profiles WHERE id=ANY($1::uuid[])", [all]);
+    photoKeys = (await db.query("DELETE FROM profiles WHERE id=ANY($1::uuid[]) RETURNING photo_key", [all])).rows.map(r => r.photo_key).filter(Boolean);
   });
+  if (photoKeys.length) await trashClips(photoKeys); // 프로필이 지워진 뒤에 사진 객체를 지운다(T178). 되돌려진 삭제는 여기 오지 않는다
   void sweepClips();
 }
 
@@ -1620,11 +1647,24 @@ async function serveAsset(path, req, res) {
   await new Promise((done, broke) => createReadStream(file).on("error", broke).pipe(res).on("finish", done).on("close", done));
 }
 
+// 화면 HTML 안의 정적 파일 주소를 CDN 아래로 바꾼다(T178, WEB_ASSET_BASE — 예: https://media…/public/web/{sha}).
+// 바꾸는 것: 큰따옴표 src·href의 루트 절대 주소 가운데 확장자가 있는 것(/app.js, /style.css, /icons/…png).
+// 그대로 두는 것: 같은 출처여야 하는 /api/…·/sw.js·/manifest.webmanifest, 화면 주소(확장자 없음: /, /demo/), 다른 출처(https://…, //…).
+// 값이 없으면 HTML은 한 글자도 달라지지 않는다.
+const assetBase = () => process.env.WEB_ASSET_BASE?.trim().replace(/\/+$/, "") || null;
+const SAME_ORIGIN_ONLY = /^\/(api\/|sw\.js$|manifest\.webmanifest$)/;
+export const withAssetBase = (html, base = assetBase()) =>
+  base
+    ? html.replace(/\b(src|href)="(\/[^"/][^"]*)"/g, (all, attr, path) =>
+        SAME_ORIGIN_ONLY.test(path) || !/\.[A-Za-z0-9]+$/.test(path.split(/[?#]/)[0]) ? all : `${attr}="${base}${path}"`)
+    : html;
+
 async function serveFile(path, req, res) {
   const page = !extname(path);
   const file = normalize(join(WEB, page ? join(path, "index.html") : path));
   if (!file.startsWith(WEB)) fail(404, "없는 파일");
-  const data = await readFile(file).catch(() => (page ? readFile(join(WEB, "index.html")) : fail(404, "없는 파일")));
+  const raw = await readFile(file).catch(() => (page ? readFile(join(WEB, "index.html")) : fail(404, "없는 파일")));
+  const data = page && assetBase() ? Buffer.from(withAssetBase(raw.toString("utf8"))) : raw; // ETag는 바꾼 뒤의 본문으로 센다
   const headers = { "cache-control": "no-cache", etag: `"${createHash("sha256").update(data).digest("base64url").slice(0, 22)}"` };
   // If-None-Match는 약한 비교(RFC 9110 13.1.2): Cloudflare가 압축하면서 W/를 붙이고, 목록이나 *로도 온다.
   const inm = req.headers["if-none-match"];
@@ -1679,7 +1719,9 @@ export const server = createServer(async (req, res) => {
       if (seg[1] === "j") fail(410, RETIRED_GROUP);
       if (seg[1] === "config" && !seg[2]) {
         if (req.method !== "GET") fail(405, "GET만 됨");
-        return send(200, googlePublicConfig());
+        // mediaBase: 미디어 CDN 주소(T178). 값 셋이 다 있을 때만 싣는다 — 없으면 필드도 없다.
+        // assetBase: 웹 화면 파일의 CDN 주소(WEB_ASSET_BASE). 웹 모듈이 필요할 때 쓴다. 값이 없으면 필드도 없다.
+        return send(200, { ...googlePublicConfig(), ...(mediaBase() ? { mediaBase: mediaBase() } : {}), ...(assetBase() ? { assetBase: assetBase() } : {}) });
       }
       if (seg[1] === "short-templates" && !seg[2]) {
         if (req.method !== "GET") fail(405, "GET만 됨");

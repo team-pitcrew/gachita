@@ -2556,3 +2556,199 @@ test("화자 값 모델·실행기(T170): /models·/vendor/ort는 assets 폴더�
     await rm(fresh ? assets : file, { recursive: true, force: true });
   }
 });
+
+// ---- 미디어 CDN 서명과 프로필 사진의 S3 이전(T178, ADR-0027) ----
+const MEDIA_KEYS = ["MEDIA_CDN_BASE", "MEDIA_KEY_PAIR_ID", "MEDIA_PRIVATE_KEY"];
+const mediaOff = () => { for (const k of MEDIA_KEYS) delete process.env[k]; };
+const mediaOn = async () => {
+  const { generateKeyPairSync } = await import("node:crypto"); // 시험마다 새 키(저장소에 개인 키를 두지 않는다)
+  Object.assign(process.env, { MEDIA_CDN_BASE: "https://media.example.test", MEDIA_KEY_PAIR_ID: "KTESTPAIR", MEDIA_PRIVATE_KEY: generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey.export({ type: "pkcs8", format: "pem" }) });
+};
+// 응답에서 T178이 더한 필드만 뺀다 — 남은 것이 값이 없을 때의 응답과 같아야 한다.
+const unsigned = (v) => (Array.isArray(v) ? v.map(unsigned) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).filter(([k]) => !/^(media|thumbnailMedia|photo)(Url|Auth)$/.test(k)).map(([k, x]) => [k, unsigned(x)])) : v);
+const hasSigned = (v) => JSON.stringify(v) !== JSON.stringify(unsigned(v));
+
+test("미디어 CDN 서명(T178): 값이 없으면 응답이 그대로이고, 있으면 파일을 받을 수 있는 요청에만 서명을 더한다", async () => {
+  shortEnv();
+  mediaOff();
+  try {
+    const f = await shortFixture(), w = shortWorker();
+    const [, job] = await call("POST", `${f.path}/short-generations`, shortBody(f, "media-cdn-signing"), f.a.token);
+    await only(job.id);
+    assert.equal((await w.claim())[1].id, job.id);
+    await w.thumbnail(job.id, Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from("cover")]));
+    assert.equal((await w.result(job.id))[1].state, "completed");
+    const read = async () => ({
+      job: await call("GET", `${f.path}/short-generations/${job.id}`, null, f.a.token),
+      list: await call("GET", `${f.path}/short-generations`, null, f.a.token),
+      contents: await call("GET", `${f.path}/contents`, null, f.a.token),
+      shortform: await call("GET", `${f.path}/shortform`, null, f.a.token),
+      config: await call("GET", "/api/config"),
+    });
+
+    // 값이 없으면: 더해진 필드가 하나도 없다
+    const off = await read();
+    assert.deepEqual(Object.values(off).map((r) => r[0]), [200, 200, 200, 200, 200]);
+    assert.equal(hasSigned(off), false);
+    assert.equal("mediaBase" in off.config[1], false);
+    assert.equal(off.contents[1].contents.length, 1);
+
+    // 값이 있으면: 기존 필드는 그대로이고 서명 필드만 더해진다
+    await mediaOn();
+    const on = await read();
+    for (const k of ["job", "contents"]) assert.deepEqual(unsigned(on[k][1]), off[k][1], `${k}: 기존 필드는 그대로`);
+    assert.deepEqual(on.config[1], { ...off.config[1], mediaBase: "https://media.example.test" });
+    const result = on.job[1].result;
+    assert.equal(result.url, `${f.path}/short-generations/${job.id}/file`);
+    assert.match(result.mediaUrl, new RegExp(`^https://media\\.example\\.test/shorts/${job.id}/final\\.mp4\\?Expires=\\d+&Signature=[A-Za-z0-9\\-_~]+&Key-Pair-Id=KTESTPAIR$`));
+    assert.deepEqual(Object.keys(result.mediaAuth), ["url", "expires", "signature", "keyPairId"]);
+    assert.equal(result.mediaAuth.url, `https://media.example.test/shorts/${job.id}/final.mp4`);
+    assert.match(on.job[1].thumbnailMediaUrl, new RegExp(`/shorts/${job.id}/thumbnail\\.png\\?Expires=`));
+    const item = on.contents[1].contents[0];
+    assert.equal(item.mediaUrl, result.mediaUrl, "같은 5분 구간에서는 목록과 한 건 조회가 같은 주소를 준다");
+    assert.match(item.thumbnailMediaUrl, /thumbnail\.png\?Expires=/);
+    // 목록은 줄마다 원본을 다시 보지 않으므로 서명하지 않는다. 원음 클립은 CDN이 내주지 않는 접두사라 숏폼 구성도 그대로다
+    assert.equal(hasSigned(on.list[1]), false);
+    assert.deepEqual(on.shortform[1], off.shortform[1]);
+    assert.equal(on.shortform[1].scenes[0].clip, `${f.path}/recordings/${f.plan.momentId}`);
+
+    // 권한 없는 요청에는 서명이 나가지 않는다: 토큰 없음, 그리고 한 사람이 동의를 끈 뒤(세대가 올라 파일도 410)
+    assert.equal((await call("GET", `${f.path}/short-generations/${job.id}`))[0], 401);
+    await call("PATCH", `${f.path}/participants/${f.b.id}`, { consent: false }, f.b.token);
+    const revoked = [
+      await call("GET", `${f.path}/short-generations/${job.id}`, null, f.a.token),
+      await call("GET", `${f.path}/contents`, null, f.a.token),
+      await call("GET", `${f.path}/contents`, null, f.b.token),
+      await call("GET", `${f.path}/shortform`, null, f.b.token),
+    ];
+    assert.deepEqual(revoked.map((r) => r[0]), [403, 200, 403, 403]);
+    assert.equal(hasSigned(revoked), false);
+    assert.deepEqual(revoked[1][1].contents, []);
+  } finally {
+    mediaOff();
+    shortEnvOff();
+  }
+});
+
+test("프로필 사진(T178): 버킷이 있으면 S3에 두고 키만 남기며, 바꾸거나 지우면 옛 객체를 지운다. CDN 값이 있으면 photoUrl을 더한다", async () => {
+  mediaOff();
+  const png = (text) => Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from(text)]);
+  const [, me] = await call("POST", "/api/profiles", { name: "사진" });
+  const put = (body) => fetch(`${base}/api/profiles/me/photo`, { method: "PUT", headers: { authorization: `Bearer ${me.token}` }, body });
+  const get = async () => { const r = await fetch(`${base}/api/profiles/me/photo`, { headers: { authorization: `Bearer ${me.token}` } }); return [r.status, r.headers.get("content-type"), Buffer.from(await r.arrayBuffer())]; };
+  const stored = () => [...s3.objects.keys()].filter((k) => k.startsWith(`profiles/${me.id}/photo/`));
+  const row = async () => (await profilesDb().query("SELECT photo IS NOT NULL AS in_db, photo_key, photo_type FROM profiles WHERE id = $1", [me.id])).rows[0];
+  const swept = async (n) => { for (let i = 0; i < 50 && stored().length !== n; i++) await new Promise((ok) => setTimeout(ok, 20)); return stored(); };
+  try {
+    assert.equal((await put(png("one"))).status, 204);
+    const [first] = stored();
+    assert.match(first, new RegExp(`^profiles/${me.id}/photo/[0-9a-f]{16}\\.png$`));
+    assert.deepEqual(await row(), { in_db: false, photo_key: first, photo_type: "image/png" });
+    assert.deepEqual(await get(), [200, "image/png", png("one")]);
+    const [, off] = await call("GET", "/api/profiles/me", null, me.token);
+    assert.equal(off.hasPhoto, true);
+    assert.equal(hasSigned(off), false, "CDN 값이 없으면 photoUrl도 없다");
+
+    await mediaOn();
+    const [, on] = await call("GET", "/api/profiles/me", null, me.token);
+    assert.deepEqual(unsigned(on), off);
+    assert.match(on.photoUrl, new RegExp(`^https://media\\.example\\.test/${first}\\?Expires=`));
+    assert.equal(on.photoAuth.url, `https://media.example.test/${first}`);
+    mediaOff();
+
+    // 같은 사진을 다시 올리면 같은 객체, 다른 사진이면 옛 객체를 지운다
+    assert.equal((await put(png("one"))).status, 204);
+    assert.deepEqual(stored(), [first]);
+    assert.equal((await put(png("two"))).status, 204);
+    assert.equal((await swept(1)).length, 1);
+    assert.notEqual(stored()[0], first);
+    assert.deepEqual(await get(), [200, "image/png", png("two")]);
+
+    // 지우면 객체도 지운다
+    assert.equal((await call("DELETE", "/api/profiles/me/photo", null, me.token))[0], 204);
+    assert.deepEqual(await swept(0), []);
+    assert.equal((await get())[0], 404);
+    assert.deepEqual(await row(), { in_db: false, photo_key: null, photo_type: "" });
+
+    // 프로필을 지우면 사진 객체도 지운다
+    assert.equal((await put(png("three"))).status, 204);
+    assert.equal(stored().length, 1);
+    assert.equal((await call("DELETE", "/api/profiles/me", null, me.token))[0], 204);
+    assert.deepEqual(await swept(0), []);
+  } finally {
+    mediaOff();
+  }
+});
+
+test("프로필 사진 옮기기(T178): 버킷이 없던 때 DB에 둔 사진을 S3로 옮기고, 다시 돌려도 같은 결과다", async () => {
+  const { movePhotos } = await import("./profile-photos.js");
+  const jpg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff]), Buffer.from("old-photo")]);
+  const [, me] = await call("POST", "/api/profiles", { name: "옛사진" });
+  const auth = { authorization: `Bearer ${me.token}` };
+  const row = async () => (await profilesDb().query("SELECT photo IS NOT NULL AS in_db, photo_key FROM profiles WHERE id = $1", [me.id])).rows[0];
+  // 버킷이 없는 환경: 지금처럼 DB에 둔다
+  delete process.env.CLIPS_BUCKET;
+  try {
+    assert.equal((await fetch(`${base}/api/profiles/me/photo`, { method: "PUT", headers: auth, body: jpg })).status, 204);
+    assert.deepEqual(await row(), { in_db: true, photo_key: null });
+    assert.equal((await fetch(`${base}/api/profiles/me/photo`, { headers: auth })).status, 200);
+    await assert.rejects(movePhotos(), /CLIPS_BUCKET/);
+  } finally {
+    process.env.CLIPS_BUCKET = "clips";
+  }
+  const before = await fetch(`${base}/api/profiles/me/photo`, { headers: auth });
+  assert.deepEqual([before.status, Buffer.from(await before.arrayBuffer())], [200, jpg], "옮기기 전에도 DB에서 읽어 준다");
+
+  const first = await movePhotos();
+  assert.ok(first.moved >= 1);
+  const moved = await row();
+  assert.equal(moved.in_db, false);
+  assert.match(moved.photo_key, new RegExp(`^profiles/${me.id}/photo/[0-9a-f]{16}\\.jpg$`));
+  assert.deepEqual(s3.objects.get(moved.photo_key), jpg);
+  const after = await fetch(`${base}/api/profiles/me/photo`, { headers: auth });
+  assert.deepEqual([after.status, after.headers.get("content-type"), Buffer.from(await after.arrayBuffer())], [200, "image/jpeg", jpg]);
+
+  // 다시 돌려도 옮길 것이 없고 아무것도 바뀌지 않는다
+  assert.deepEqual(await movePhotos(), { moved: 0, leftover: [] });
+  assert.deepEqual(await row(), moved);
+  await call("DELETE", "/api/profiles/me", null, me.token);
+});
+
+test("화면 HTML의 정적 주소(T178): WEB_ASSET_BASE가 있으면 정적 파일 주소만 CDN 아래로 바꾸고, 없으면 본문이 그대로다", async () => {
+  const { withAssetBase } = await import("./server.js");
+  const web = (name) => readFile(new URL(`../../frontend/web/${name}`, import.meta.url));
+  const bytes = async (path, headers) => { const r = await fetch(base + path, { headers }); return [r, Buffer.from(await r.arrayBuffer())]; };
+  delete process.env.WEB_ASSET_BASE;
+  const [plain, plainBody] = await bytes("/");
+  assert.deepEqual(plainBody, await web("index.html"), "값이 없으면 파일 그대로");
+  assert.equal("assetBase" in (await call("GET", "/api/config"))[1], false);
+
+  const B = "https://media.example.test/public/web/abc123";
+  process.env.WEB_ASSET_BASE = `${B}/`; // 끝의 /는 한 번만
+  try {
+    const [res, body] = await bytes("/");
+    const html = body.toString("utf8");
+    assert.deepEqual([res.status, res.headers.get("cache-control")], [200, "no-cache"]);
+    assert.notEqual(res.headers.get("etag"), plain.headers.get("etag"), "ETag는 바꾼 뒤의 본문으로 센다");
+    assert.equal((await bytes("/", { "if-none-match": res.headers.get("etag") }))[0].status, 304);
+    for (const moved of [`src="${B}/app.js"`, `href="${B}/style.css"`, `href="${B}/icons/gachita-32.png"`, `href="${B}/icon.svg"`]) assert.ok(html.includes(moved), moved);
+    for (const kept of ['href="/manifest.webmanifest"', 'href="https://cdn.jsdelivr.net/', 'content="https://gachita.mangowhois.ai/brand/gachita-social.png"']) assert.ok(html.includes(kept), kept);
+    assert.equal(html, withAssetBase((await web("index.html")).toString("utf8")));
+
+    // 다른 화면(/demo)도 같다: 정적 파일은 옮기고, 화면 주소와 iframe은 그대로
+    const demo = (await bytes("/demo"))[1].toString("utf8");
+    for (const moved of [`href="${B}/demo/demo.css"`, `src="${B}/demo/demo.js"`, `src="${B}/icons/gachita-192.png"`]) assert.ok(demo.includes(moved), moved);
+    for (const kept of ['href="/demo/"', '<iframe id="phone" src="/"']) assert.ok(demo.includes(kept), kept);
+
+    // 정적 파일 자체와 다른 응답은 그대로
+    assert.deepEqual((await bytes("/app.js"))[1], await web("app.js"));
+    assert.equal((await call("GET", "/api/config"))[1].assetBase, B);
+
+    // 규칙: 같은 출처여야 하는 것, 화면 주소, 다른 출처는 그대로. 질의 문자열이 붙어도 확장자로 본다
+    const mixed = '<a href="/api/x.json"><script src="/sw.js"></script><link href="/manifest.webmanifest"><img src="//other.test/a.png"><a href="/demo/"><a href="/trip#x">';
+    assert.equal(withAssetBase(`${mixed}<link href="/a.css?v=1">`, B), `${mixed}<link href="${B}/a.css?v=1">`);
+    assert.equal(withAssetBase(mixed, null), mixed);
+  } finally {
+    delete process.env.WEB_ASSET_BASE;
+  }
+});
