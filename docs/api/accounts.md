@@ -65,6 +65,11 @@
 
 `GET /api/profiles/{id}/photo`는 지금 본인 것만 줍니다. 볼 수 없는 프로필은 사진이 없는 것과 같은 404입니다. 같은 그룹 구성원의 사진으로 넓히는 것은 그룹 티켓(T133)에서 합니다.
 
+**저장 위치(T178, [ADR-0027](../adr/0027-media-signing-and-profile-photos-in-s3.md)).** 버킷(`CLIPS_BUCKET`)이 있는 환경은 사진을 S3 `profiles/{프로필 id}/photo/{내용 해시 16자}.{png|jpg}`에 두고 DB에는 키와 형식만 남깁니다. 버킷이 없는 환경(로컬)은 지금처럼 DB에 둡니다. `PUT`·`GET`·`DELETE /api/profiles/me/photo`와 `GET /api/profiles/{id}/photo`의 요청·응답은 그대로입니다. 사진을 바꾸거나 지우거나 프로필을 지우면 옛 객체를 지웁니다.
+
+- 서버에 미디어 CDN 값(`MEDIA_CDN_BASE`·`MEDIA_KEY_PAIR_ID`·`MEDIA_PRIVATE_KEY`)이 다 있고 사진이 S3에 있으면, 내 프로필 응답과 그룹 구성원에 `photoUrl`(CloudFront 서명 주소, 10~15분)과 `photoAuth`(`{url, expires, signature, keyPairId}`, 차량 앱의 쿠키 머리말용)가 더해집니다. `hasPhoto`는 그대로입니다.
+- 버킷이 생기기 전에 DB에 둔 사진은 `node backend/api/profile-photos.js`로 옮깁니다(한 번 실행, 다시 돌려도 안전). 옮기기 전에도 `GET`은 DB에서 읽어 줍니다. 그 사진에는 옮길 때까지 `photoUrl`이 없습니다.
+
 ## 하지 않은 것
 
 비밀번호 바꾸기·찾기, 이메일 확인 메일, 로그아웃, 로그인 시도 횟수 제한은 없습니다.

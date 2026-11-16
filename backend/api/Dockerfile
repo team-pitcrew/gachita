@@ -22,6 +22,7 @@ COPY backend/api/rest-stops.js backend/api/rest-stops.json backend/api/
 COPY backend/api/providers backend/api/providers
 COPY backend/api/boarding-invites.js backend/api/
 COPY backend/api/accounts.js backend/api/
+COPY backend/api/profile-photos.js backend/api/
 COPY backend/api/groups.js backend/api/
 COPY frontend/web frontend/web
 COPY --from=assets /assets backend/api/assets

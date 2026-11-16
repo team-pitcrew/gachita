@@ -727,6 +727,8 @@ paths:
                 additionalProperties: false
                 properties:
                   googleClientId: { type: string, description: 구글 공개 Client ID. 로그인을 시작할 수 없으면 빈 문자열 }
+                  mediaBase: { type: string, description: "미디어 CDN 주소(T178). CDN 값 셋이 다 있을 때만 있다" }
+                  assetBase: { type: string, description: "웹 화면 파일의 CDN 주소(T178, WEB_ASSET_BASE). 값이 있을 때만 있다" }
   /api/trips/{code}/shares:
     parameters:
       - { name: code, in: path, required: true, schema: { type: string } }
@@ -2708,16 +2710,30 @@ components:
         expiresAt: { type: string, format: date-time }
         errorCode: { type: string }
         thumbnailUrl: { type: string, description: "표지 그림 주소(T166). 일꾼이 올린 뒤에만 있다(만드는 중에도). 같은 참가자 토큰으로 받는다" }
+        thumbnailMediaUrl: { type: string, description: "표지의 CDN 서명 주소(T178). 한 건 조회에서 CDN 값이 있을 때만" }
+        thumbnailMediaAuth: { $ref: '#/components/schemas/MediaAuth' }
         result:
           type: object
           required: [url, mimeType, bytes, seconds, width, height]
           properties:
             url: { type: string }
+            mediaUrl: { type: string, description: "CDN 서명 주소(T178, ADR-0027). 한 건 조회에서 CDN 값이 있을 때만. 10~15분 뒤 만료" }
+            mediaAuth: { $ref: '#/components/schemas/MediaAuth' }
             mimeType: { type: string, const: video/mp4 }
             bytes: { type: integer }
             seconds: { type: number }
             width: { type: integer, const: 720 }
             height: { type: integer, const: 1280 }
+    MediaAuth:
+      type: object
+      description: "CDN 서명 값(T178, ADR-0027). 차량 앱이 url을 부르며 Cookie 머리말(CloudFront-Expires·CloudFront-Signature·CloudFront-Key-Pair-Id)로 붙인다"
+      required: [url, expires, signature, keyPairId]
+      additionalProperties: false
+      properties:
+        url: { type: string, description: 서명 없는 CDN 주소 }
+        expires: { type: integer, description: 만료 시각(epoch 초). 5분 구간의 끝이고 지금부터 10~15분 뒤 }
+        signature: { type: string, description: canned policy의 RSA-SHA1 서명(CloudFront base64 치환) }
+        keyPairId: { type: string }
     BoardingJoin:
       type: object
       required: [tripCode, participant, token]
@@ -2756,6 +2772,8 @@ components:
             id: { type: string, format: uuid }
             character: { type: string }
             hasPhoto: { type: boolean }
+            photoUrl: { type: string, description: "사진의 CDN 서명 주소(T178). CDN 값이 있고 사진이 S3에 있을 때만" }
+            photoAuth: { $ref: '#/components/schemas/MediaAuth' }
             links: { type: array, items: { type: string, enum: [google] }, description: 연결된 OAuth 제공자 }
             email: { type: [string, "null"], description: 이메일 계정(T128). 이 모양은 본인 응답에만 쓰입니다. 계정이 없으면 null }
             hasVoice: { type: boolean, description: 목소리 대조 값이 지금 임베더의 길이로 등록돼 있는지(ADR-0023) }
@@ -2777,6 +2795,8 @@ components:
         name: { type: string }
         character: { type: string }
         hasPhoto: { type: boolean, description: "사진은 GET /profiles/{id}/photo(같은 그룹 구성원)" }
+        photoUrl: { type: string, description: "사진의 CDN 서명 주소(T178). CDN 값이 있고 사진이 S3에 있을 때만" }
+        photoAuth: { $ref: '#/components/schemas/MediaAuth' }
         hasVoice: { type: boolean, description: 지금 임베더 길이의 목소리 값이 있는지 }
         consent: { type: boolean, description: 계정 동의(아이는 보호자 동의)가 지금 문구 판으로 켜져 있는지 }
         role: { type: string, enum: [owner, adult, child] }
@@ -3032,6 +3052,10 @@ components:
               kind: { type: string, enum: [device, generated] }
               url: { type: string, description: 그 여행의 참가자 토큰으로 받는 파일 주소 }
               thumbnailUrl: { type: [string, "null"], description: "생성 영상의 표지 그림 주소(T166). 기기 영상이거나 아직 없으면 null" }
+              mediaUrl: { type: string, description: "생성 영상의 CDN 서명 주소(T178). CDN 값이 있고 참가자 전원이 동의한 여행일 때만(기기 영상에는 없다)" }
+              mediaAuth: { $ref: '#/components/schemas/MediaAuth' }
+              thumbnailMediaUrl: { type: string, description: "표지의 CDN 서명 주소(T178). 표지가 있을 때만" }
+              thumbnailMediaAuth: { $ref: '#/components/schemas/MediaAuth' }
     Trip:
       type: object
       required: [code, title, status, recording, participants, requests, moments, version, createdAt]

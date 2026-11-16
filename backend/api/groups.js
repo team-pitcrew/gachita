@@ -4,6 +4,7 @@
 import { randomInt, randomUUID } from "node:crypto";
 import { profilesDb } from "./db.js";
 import { DIMS } from "./providers/voice.js";
+import { mediaFields } from "./providers/media-cdn.js";
 import { accountConsents, CONSENT_VERSION, requireVoice, VOICE_REQUIRED, voiceReady } from "./accounts.js";
 
 const fail = (status, error) => {
@@ -61,7 +62,7 @@ async function tx(meId, fn) {
   }
 }
 
-const MEMBERS = `SELECT m.group_id, m.profile_id, m.seat, m.joined_at, p.name, p.character, (p.photo IS NOT NULL) AS has_photo,
+const MEMBERS = `SELECT m.group_id, m.profile_id, m.seat, m.joined_at, p.name, p.character, (p.photo IS NOT NULL OR p.photo_key IS NOT NULL) AS has_photo, p.photo_key,
   EXISTS (SELECT 1 FROM voice_prints v WHERE v.profile_id = p.id AND cardinality(v.vector) = ${DIMS}) AS has_voice,
   p.consent, p.consent_version, p.managed_by
   FROM group_members m JOIN profiles p ON p.id = m.profile_id WHERE m.group_id = ANY($1::text[])`;
@@ -96,6 +97,7 @@ async function views(db, groups) {
             name: m.name,
             character: m.character ?? "",
             hasPhoto: m.has_photo,
+            ...mediaFields(m.photo_key, "photo"), // 같은 그룹 구성원은 서로의 사진을 본다 — CDN이 켜져 있으면 서명 주소도(T178)
             hasVoice: m.has_voice,
             consent: consentOf(m),
             role,
