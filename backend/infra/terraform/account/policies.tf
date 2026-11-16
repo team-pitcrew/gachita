@@ -52,6 +52,11 @@ data "aws_iam_policy_document" "plan_read" {
     actions   = ["acm:DescribeCertificate", "acm:ListCertificates", "acm:ListTagsForCertificate", "elasticloadbalancing:Describe*"]
     resources = ["*"]
   }
+  # 미디어 CDN(남는 묶음 media.tf, T179)의 설정 읽기. 배포·키 묶음·정책의 설정과 공개 키뿐이다(값이 아님)
+  statement {
+    actions   = ["cloudfront:Get*", "cloudfront:List*"]
+    resources = ["*"]
+  }
   # 우리 버킷의 설정 읽기(버킷 ARN만. 객체는 아래 상태 파일만)
   statement {
     actions   = ["s3:Get*", "s3:List*"]
@@ -239,6 +244,43 @@ data "aws_iam_policy_document" "apply" {
       variable = "aws:ResourceTag/Project"
       values   = [local.project]
     }
+  }
+  # ---- CloudFront(남는 묶음 media.tf, T179, ADR-0026) ----
+  statement {
+    actions   = ["cloudfront:Get*", "cloudfront:List*"]
+    resources = ["*"]
+  }
+  # 배포: 우리 태그를 달아 만들고, 우리 태그가 있는 것만 고치고 지운다.
+  # ponytail: 태그를 달며 만들려면 TagResource가 요청 태그 조건으로 필요하다(서비스 권한 표의 딸린 동작). 그래서 남의 배포에
+  #           우리 태그를 달아 고칠 수 있는 틈이 남는다. 이 계정에는 다른 CloudFront 자원이 없다(11/16 확인). 생기면
+  #           이 묶음의 첫 적용만 사람이 로컬 자격으로 하고 TagResource를 아래 '우리 태그' 문장으로 옮긴다.
+  statement {
+    actions   = ["cloudfront:CreateDistribution", "cloudfront:CreateDistributionWithTags", "cloudfront:TagResource"]
+    resources = ["arn:aws:cloudfront::${local.account}:distribution/*"]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestTag/Project"
+      values   = [local.project]
+    }
+  }
+  statement {
+    actions   = ["cloudfront:UpdateDistribution", "cloudfront:DeleteDistribution", "cloudfront:UntagResource"]
+    resources = ["arn:aws:cloudfront::${local.account}:distribution/*"]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:ResourceTag/Project"
+      values   = [local.project]
+    }
+  }
+  # 배포가 가리키는 것(원본 접근 제어, 캐시·응답 머리말 정책)과 서명 키(공개 키, 키 묶음). 이 자원들은 태그가 없고
+  # ARN이 번호라 이름으로 좁힐 수 없다. 같은 틈이 있다(위 ponytail과 같은 조건에서 닫는다)
+  statement {
+    actions = ["cloudfront:CreateOriginAccessControl", "cloudfront:UpdateOriginAccessControl", "cloudfront:DeleteOriginAccessControl",
+      "cloudfront:CreateCachePolicy", "cloudfront:UpdateCachePolicy", "cloudfront:DeleteCachePolicy",
+      "cloudfront:CreateResponseHeadersPolicy", "cloudfront:UpdateResponseHeadersPolicy", "cloudfront:DeleteResponseHeadersPolicy",
+      "cloudfront:CreatePublicKey", "cloudfront:UpdatePublicKey", "cloudfront:DeletePublicKey",
+    "cloudfront:CreateKeyGroup", "cloudfront:UpdateKeyGroup", "cloudfront:DeleteKeyGroup"]
+    resources = ["*"]
   }
   # ALB 읽기(레코드), 남은 것 확인(태그로 찾기)
   statement {

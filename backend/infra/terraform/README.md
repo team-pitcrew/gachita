@@ -5,7 +5,7 @@
 | 묶음 | 폴더(상태 키) | 만드는 것 | 접을 때 |
 |---|---|---|---|
 | 계정 | `account/`(`account/`) | GitHub OIDC 역할 둘(계획·적용), 권한 경계 `gachita-workload-boundary` | 남김. 사람이 로컬 자격으로 한 번 |
-| 남는 묶음 | `persist/`(`persist/`) | 데이터 버킷(백업, 공개 차단·버전·암호화), 클립 버킷(공개 차단·버전 없음·암호화·2일 만료, T64), 발급자 버킷과 발급자 문서, 서비스 주소의 ACM 인증서와 검증 레코드, Cloudflare 요청 수 제한 | 남김. 다시 펼 때 다시 만들지 않음 |
+| 남는 묶음 | `persist/`(`persist/`) | 데이터 버킷(백업, 공개 차단·버전·암호화), 클립 버킷(공개 차단·버전 없음·암호화·2일 만료, T64), 발급자 버킷과 발급자 문서, 서비스 주소의 ACM 인증서와 검증 레코드, Cloudflare 요청 수 제한, 미디어 CDN(`media.tf`: CloudFront 배포·us-east-1 인증서·서명 공개 키·클립 버킷 정책·`media.gachita` 레코드. 저장소 변수 `MEDIA_PUBLIC_KEY`가 있을 때만, ADR-0026) | 남김. 다시 펼 때 다시 만들지 않음 |
 | 접는 묶음 | 이 폴더(`dev/`) | VPC `10.10.0.0/16`, 공개 서브넷 둘(ALB용 태그), 인터넷 게이트웨이, S3 엔드포인트, 노드 보안 그룹, EC2 `t4g.large` 한 대, 서버 역할, 서비스 계정 OIDC 제공자와 파드 역할 다섯(`ssm-reader`, `pg`, `pg-restore`, `alb-controller`, `api`), ALB가 있을 때만 Cloudflare `gachita` 레코드 | 지움 |
 
 - **ALB는 Terraform이 만들지 않습니다.** 클러스터의 AWS Load Balancer Controller가 Gateway를 보고 만들고 지웁니다(이름 `gachita-dev`, 태그 `Project=gachita`, `elbv2.k8s.aws/cluster=gachita-dev`). 그래서 접을 때는 Terraform보다 먼저 클러스터에서 Gateway를 지웁니다(`infra.sh down`). 레코드는 이 태그로 ALB를 찾았을 때만 생기므로 펴기는 이 폴더를 두 번 적용합니다(두 번째에 레코드).

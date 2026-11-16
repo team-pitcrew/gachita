@@ -1,6 +1,6 @@
 # ADR-0020: 클립 영상은 media 하위 도메인에서 API가 흘려보낸다
 
-* **상태:** **대체됨(2026-11-14, 영상 파일 없음)** → [ADR-0021](0021-shortform-as-composition-data.md). 숏폼을 영상 파일 없이 구성 데이터로 내주기로 해(T43) 이 문서의 전제(영상, 범위 요청, `<video>` 쿠키, Cloudflare의 영상·큰 파일 약관)가 사라졌다. `media` 하위 도메인·영상 전용 ALB·인증서·쿠키는 만들지 않는다(부모 결정 B, 11/14 03:10). 아래는 그 전의 판단 기록으로 남긴다.
+* **상태:** **대체됨(2026-11-14, 영상 파일 없음)** → [ADR-0021](0021-shortform-as-composition-data.md). 숏폼을 영상 파일 없이 구성 데이터로 내주기로 해(T43) 이 문서의 전제(영상, 범위 요청, `<video>` 쿠키, Cloudflare의 영상·큰 파일 약관)가 사라졌다. `media` 하위 도메인·영상 전용 ALB·인증서·쿠키는 만들지 않는다(부모 결정 B, 11/14 03:10). 아래는 그 전의 판단 기록으로 남긴다. 서버가 만든 쇼츠 영상이 다시 생긴 뒤의 미디어 길은 [ADR-0026](0026-media-cdn-cloudfront-s3.md)이 정한다.
 * **이전 상태:** 채택됨, 2026-11-14 — 길(`media` 하위 도메인, Cloudflare 프록시 끔, 11/13)과 영상 전용 ALB(11/14)를 지환님이 정함
 * **관련:** T64(#118), T63(#117), T43, T27(#33), [ADR-0013](0013-network-edge-and-isolation.md) 7절, [ADR-0014](0014-transcript-storage.md) 5절, [ADR-0015](0015-split-nodes-private-subnets-alb.md), [ADR-0017](0017-alb-by-controller-and-fold-order.md)
 
