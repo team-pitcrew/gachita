@@ -42,6 +42,17 @@ jobs:
             echo "### 실제 주소 E2E: \`$URL\` 닿지 않음(healthz=$code)" >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
+      # 첫 화면이 가리키는 모듈 스크립트가 받아지는지. CDN으로 옮긴 뒤(T179)에는 다른 출처라 CORS 머리말이 없으면 화면이 뜨지 않는다
+      - name: 첫 화면의 스크립트(200, 다른 출처면 CORS)
+        run: |
+          URL=${URL%/}
+          src=$(curl -sS -m 10 "$URL/" | sed -n 's/.*<script[^>]*type="module"[^>]*src="\([^"]*\)".*/\1/p' | head -1)
+          [ -n "$src" ] || { echo "::error::첫 화면에서 모듈 스크립트를 찾지 못함"; exit 1; }
+          case "$src" in http://* | https://*) full=$src ;; *) full="$URL$src" ;; esac
+          head=$(curl -sS -m 20 -o /dev/null -D - -H "Origin: $URL" "$full")
+          printf '%s\n' "$head" | grep -Eq '^HTTP/[0-9.]+ 200' || { echo "::error::스크립트가 200이 아님: $full"; exit 1; }
+          case "$full" in "$URL"/*) ;; *) printf '%s\n' "$head" | grep -iq "^access-control-allow-origin: $URL" || { echo "::error::CORS 머리말이 없음: $full"; exit 1; } ;; esac
+          echo "script=$full ok"
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:

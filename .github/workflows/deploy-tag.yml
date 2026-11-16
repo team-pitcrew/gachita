@@ -36,6 +36,8 @@ env:
   IMAGE: ghcr.io/team-pitcrew/gachita-api
   OVERLAY: backend/infra/gitops/apps/api/overlays/dev/kustomization.yaml
   BRANCH: bot/deploy-tag
+  MEDIA_CDN_BASE: https://media.gachita.mangowhois.ai # persist/media.tf의 media_host
+  SERVICE_ORIGIN: https://gachita.mangowhois.ai
 
 jobs:
   open-pr:
@@ -45,6 +47,7 @@ jobs:
       pull-requests: write
       actions: write
       packages: read
+      id-token: write # 웹 화면 파일을 올리는 역할을 OIDC로 받는다(T179)
     runs-on: [self-hosted, gachita]
     timeout-minutes: 10
     steps:
@@ -73,6 +76,26 @@ jobs:
           if docker manifest inspect "$IMAGE:$TAG" > /dev/null 2>&1; then echo "ok=true" >> "$GITHUB_OUTPUT"; exit 0; fi
           if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then echo "::error::$IMAGE:$TAG 이 GHCR에 없습니다"; exit 1; fi
           echo "이 병합은 이미지를 올리지 않았습니다($TAG). 건너뜁니다." | tee -a "$GITHUB_STEP_SUMMARY"
+      # 웹 화면 파일을 CDN 접두사에 먼저 올리고, CDN에서 실제로 받아지는 것을 본 뒤에만 PR을 연다(T179, ADR-0026 6절).
+      # 파일이 없는 판으로 서버가 뜨면 화면이 깨지기 때문이다. 되돌리기도 같은 길이라 옛 판 파일이 없으면 다시 올린다.
+      # 저장소 변수 AWS_ASSETS_ROLE_ARN이 비어 있으면(CDN을 만들기 전) 건너뛴다.
+      - uses: aws-actions/configure-aws-credentials@v6
+        if: steps.exists.outputs.ok == 'true' && vars.AWS_ASSETS_ROLE_ARN != ''
+        with:
+          role-to-assume: ${{ vars.AWS_ASSETS_ROLE_ARN }}
+          role-session-name: gachita-assets-${{ github.run_id }}
+          aws-region: ap-northeast-2
+      - name: 웹 화면 파일을 CDN에 올리고 확인
+        if: steps.exists.outputs.ok == 'true' && vars.AWS_ASSETS_ROLE_ARN != ''
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          backend/infra/web-assets.sh "$TAG"
+          url="$MEDIA_CDN_BASE/public/web/$TAG/app.js"
+          head=$(curl -sS -m 20 -o /dev/null -D - -H "Origin: $SERVICE_ORIGIN" "$url")
+          printf '%s\n' "$head" | grep -Eq '^HTTP/[0-9.]+ 200' || { echo "::error::CDN에서 받지 못함: $url"; printf '%s\n' "$head"; exit 1; }
+          printf '%s\n' "$head" | grep -iq "^access-control-allow-origin: $SERVICE_ORIGIN" || { echo "::error::CORS 머리말이 없음: $url"; exit 1; }
+          echo "웹 화면 파일: $MEDIA_CDN_BASE/public/web/$TAG/ (app.js 200, CORS 확인)" >> "$GITHUB_STEP_SUMMARY"
       - name: 태그 바꾸는 PR 열기
         if: steps.exists.outputs.ok == 'true' && steps.tag.outputs.tag != steps.tag.outputs.current
         env:

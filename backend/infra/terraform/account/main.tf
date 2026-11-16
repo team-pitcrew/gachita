@@ -73,6 +73,8 @@ data "aws_iam_policy_document" "trust" {
     # develop에 병합된 코드를 수동 실행(workflow_dispatch)으로 적용한다. 형식은 GitHub 문서의 불변 sub 예
     # repo:OWNER@OWNER-ID/REPO@REPO-ID:ref:refs/heads/BRANCH 그대로.
     apply = "${var.github_sub_prefix}:ref:refs/heads/${var.apply_branch}"
+    # 웹 화면 파일을 CDN 접두사에 올리는 역할(T179). develop의 deploy-tag 워크플로가 받는다. 적용 역할을 그 워크플로에 주지 않으려고 따로 둔다
+    assets = "${var.github_sub_prefix}:ref:refs/heads/${var.apply_branch}"
   }
   statement {
     actions = ["sts:AssumeRoleWithWebIdentity"]

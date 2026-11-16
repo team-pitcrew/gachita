@@ -457,6 +457,34 @@ resource "aws_iam_role_policy" "apply" {
   policy = data.aws_iam_policy_document.apply.json
 }
 
+# ---- 웹 화면 파일 올리기(T179, backend/infra/web-assets.sh): 클립 버킷의 public/web/ 아래에 쓰기만 ----
+# 읽기·지우기는 없다(옛 판은 되돌리기에 쓰므로 지우지 않는다). 목록은 sync가 이미 있는 파일을 건너뛰는 데 쓴다
+data "aws_iam_policy_document" "assets" {
+  statement {
+    actions   = ["s3:PutObject"]
+    resources = ["arn:aws:s3:::gachita-*-clips-${local.account}/public/web/*"]
+  }
+  statement {
+    actions   = ["s3:ListBucket"]
+    resources = ["arn:aws:s3:::gachita-*-clips-${local.account}"]
+    condition {
+      test     = "StringLike"
+      variable = "s3:prefix"
+      values   = ["public/web/*"]
+    }
+  }
+  statement {
+    actions   = ["sts:GetCallerIdentity"]
+    resources = ["*"]
+  }
+}
+
+resource "aws_iam_role_policy" "assets" {
+  name   = "put-web-assets"
+  role   = aws_iam_role.github["assets"].id
+  policy = data.aws_iam_policy_document.assets.json
+}
+
 # ---- 권한 경계: 적용 역할이 만드는 역할(서버, 파드)이 넘을 수 없는 상한 ----
 data "aws_iam_policy_document" "boundary" {
   # 서버가 SSM 세션을 받는 데 필요한 것(AmazonSSMManagedInstanceCore와 같은 범위)
@@ -583,6 +611,11 @@ output "plan_role_arn" {
 output "apply_role_arn" {
   description = "gh variable set AWS_APPLY_ROLE_ARN 에 넣는 값"
   value       = aws_iam_role.github["apply"].arn
+}
+
+output "assets_role_arn" {
+  description = "gh variable set AWS_ASSETS_ROLE_ARN 에 넣는 값(비우면 deploy-tag가 웹 파일을 올리지 않는다)"
+  value       = aws_iam_role.github["assets"].arn
 }
 
 output "workload_boundary_arn" {
