@@ -138,10 +138,10 @@ PR 양식의 다섯 칸은 Google SRE의 변경 관리에서 가져왔습니다(
 | `package` | `backend/api/`·`frontend/web/`·`.dockerignore`가 바뀜 | 이미지를 만들어 띄우고 그 이미지에 대고 E2E([`e2e.mjs`](../.github/scripts/e2e.mjs). 로컬 `make e2e`와 같은 스크립트) |
 
 - `backend/infra/`가 바뀐 PR에서는 [`infra-e2e`](../.github/workflows/infra-e2e.yml)가 따로 돕니다. 필수 검사가 아니고, `backend-infra`가 보지 않는 폴더의 조립·스키마, Terraform `account/`·`persist/` 정합성, Ansible 구문과 로컬 K3s의 물결 E2E([`e2e-local.sh`](../backend/infra/cluster/e2e-local.sh))를 봅니다(T55).
-- **모든 잡은 자체 러너에서 돕니다(T65, 11/13부터).** GitHub 호스트 러너가 결제 문제로 잡을 시작하지 않아, 지환님의 Mac에 Lima Linux VM 다섯(`gachita-runner-1..5`)을 두고 VM마다 러너 하나(라벨 `gachita`)를 붙였습니다. VM은 Mac 폴더를 보지 않고 포트를 내보내지 않으며, Mac(`host.lima.internal`)으로는 DNS 말고 새 연결을 열지 못합니다(adb·개발 서버에 닿지 않게). 잡을 시작할 때마다 앞 잡이 남긴 컨테이너와 레지스트리 로그인을 지웁니다. 다시 만들기와 지우기는 [`.github/runner/up.sh`](../.github/runner/up.sh)입니다.
-  - **신뢰 범위.** 러너는 상주하고, 잡은 러너와 같은 사용자(비밀번호 없는 sudo)로 돕니다. PR의 코드가 VM에 무언가를 남기면, 뒤에 같은 VM에서 도는 develop 잡(펴기·운영·terraform 적용이 받는 OIDC 역할)과 러너 자격(`~/actions-runner/.credentials`)에 닿을 수 있습니다. 호스트 러너에는 없던 길이고, 처음에는 비공개 저장소의 공동 작업자만 PR을 올린다는 전제로 도입했습니다. 11/14 공개 전환 뒤에는 외부 기여자의 포크 PR 실행에 매번 승인이 필요하도록 `all_external_contributors`를 설정했습니다. 외부 PR의 코드와 워크플로를 검토하기 전에는 실행을 승인하지 않습니다. 결제가 풀리면 호스트 러너로 돌아가거나 러너를 잡 하나마다 새로 등록(`--ephemeral`)하는 쪽으로 바꿉니다.
-  - **Mac을 다시 켜면** VM이 저절로 켜지지 않습니다. `limactl start gachita-runner-1` … `-5`(러너는 VM 안의 서비스라 같이 뜹니다). Mac이 잠들면 잡이 대기합니다(최대 24시간).
-  - 호스트 러너로 돌아가려면 `runs-on`을 `ubuntu-latest`로 바꿉니다.
+- **모든 잡은 GitHub 호스팅 러너 `ubuntu-latest`에서 돕니다(T183, 11/16부터).** CI·티켓 자동화·이미지 게시·배포와 운영 워크플로가 같은 실행 대상을 사용합니다. 잡은 로컬 Mac의 가용성이나 저장 공간에 의존하지 않습니다.
+  - T65에서 사용한 로컬 Lima VM 다섯과 저장소의 자체 러너 등록을 정리했습니다. `.github/runner/`는 이전 구축 이력이며 현재 CI에서 사용하지 않습니다.
+  - 서버용 ARM64 이미지는 x64 러너에서 기존 QEMU·Buildx 단계로 만듭니다. `infra-e2e`의 K3s 검사 전에는 기존 GitHub 러너 디스크 정리 단계를 실행합니다.
+  - 외부 기여자의 포크 PR은 기존 `all_external_contributors` 승인 정책을 유지합니다. 러너 전환으로 실행 승인이나 검사 기준을 낮추지 않습니다.
 - 일곱 개 뒤에 `publish` 잡이 있습니다. 필수 검사가 아니고 PR에서는 건너뜀으로 보입니다. `develop`에 병합된 뒤, 이미지에 들어가는 파일이 바뀌었고 같은 실행의 일곱 개가 모두 통과했으면 ARM64 이미지를 GHCR에 올립니다(아래 '백엔드를 내보내는 법').
 - 문서(`.md`)와 협업 설정(양식, 티켓 자동화, 훅)만 바뀌면 `scope`와 `policy`만 실제로 돕니다. 화면 문서(`frontend/spec/`)는 `frontend-spec`이 봅니다.
 - 검사 자체를 정하는 파일(`ci.yml`, `scope.py`, `spec_check.py`, `parts.json`, `Makefile`)이 바뀌면 전부 돕니다.
