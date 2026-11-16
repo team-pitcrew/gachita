@@ -137,6 +137,39 @@ resource "aws_cloudfront_response_headers_policy" "media" {
   }
 }
 
+# 서명한 미디어에는 브라우저 캐시 시간을 가장자리에서 붙인다(T179). 버킷의 객체에 Cache-Control이 없어 그대로 두면 브라우저가
+# 어림(Last-Modified의 10%)으로 캐시한다. API는 서명의 만료를 5분 구간으로 올려 같은 구간에서 같은 주소를 주므로
+# (ADR-0027) 그 주소로 다시 볼 때 내려받지 않는다. 10분은 서명에 남은 시간(10~15분)과 가장자리 캐시(10분)를 넘지 않는 값이다.
+# private: 중간 프록시가 남의 미디어를 캐시하지 않는다. 객체에 Cache-Control이 따로 있으면 그것을 따른다(override = false).
+resource "aws_cloudfront_response_headers_policy" "media_private" {
+  count = local.media ? 1 : 0
+  name  = "gachita-${var.env}-media-private"
+  cors_config {
+    access_control_allow_credentials = false
+    access_control_max_age_sec       = 600
+    origin_override                  = true
+    access_control_allow_headers {
+      items = ["Range"]
+    }
+    access_control_allow_methods {
+      items = ["GET", "HEAD"]
+    }
+    access_control_allow_origins {
+      items = ["https://${var.service_host}"]
+    }
+    access_control_expose_headers {
+      items = ["Accept-Ranges", "Content-Length", "Content-Range", "ETag"]
+    }
+  }
+  custom_headers_config {
+    items {
+      header   = "Cache-Control"
+      value    = "private, max-age=600"
+      override = false
+    }
+  }
+}
+
 # ---- 배포 ----
 resource "aws_cloudfront_distribution" "media" {
   count           = local.media ? 1 : 0
@@ -160,7 +193,7 @@ resource "aws_cloudfront_distribution" "media" {
     allowed_methods            = ["GET", "HEAD"]
     cached_methods             = ["GET", "HEAD"]
     cache_policy_id            = aws_cloudfront_cache_policy.media_private[0].id
-    response_headers_policy_id = aws_cloudfront_response_headers_policy.media[0].id
+    response_headers_policy_id = aws_cloudfront_response_headers_policy.media_private[0].id
     trusted_key_groups         = [aws_cloudfront_key_group.media[0].id]
     compress                   = false # mp4·png·jpg는 이미 압축돼 있다
   }
