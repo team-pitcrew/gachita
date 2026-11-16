@@ -11,6 +11,7 @@ import { appBar, hhmm, journeyTabs, placesOf } from "./ride.js";
 import { transcriptLines } from "./conversations.js";
 import { exportShortFilm, recordingFormat } from "./short-film.js";
 import { sceneClipPath } from "./short-scenes.js";
+import { mediaResponse } from "./media.js";
 
 // ---- 순수 함수(after-trip.test.mjs) ----
 
@@ -452,7 +453,8 @@ export function createAfterTrip({ getTrip, getParticipant, getToken, request, re
       canRead: () => runValid(r) && !signal.aborted,
       checkAccess: check,
       getAudio: async (sig) => {
-        const res = await fetch(sceneClipPath(r.code, scene), { signal: sig, headers: { authorization: `Bearer ${getToken()}` } });
+        // 이 장면(보관할 원본과 같은 것)에 서명 주소(mediaUrl, T178)가 있을 때만 거기서 받는다. 없으면 전처럼 머리말 인증으로.
+        const res = await mediaResponse({ url: scene.mediaUrl, signal: sig, direct: () => fetch(sceneClipPath(r.code, scene), { signal: sig, headers: { authorization: `Bearer ${getToken()}` } }) });
         if (!res.ok) throw Object.assign(new Error(`장면 소리를 받지 못했어요(${res.status}).`), { status: res.status });
         return res.arrayBuffer();
       },

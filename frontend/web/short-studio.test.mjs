@@ -8,12 +8,14 @@ const library = dataModule(`export * from ${JSON.stringify(new URL('./short-libr
 export const readShortLibrary = async () => [];
 export const shortPoster = async () => null;`);
 const source = (await readFile(new URL('./short-studio.js', import.meta.url), 'utf8'))
-  .replaceAll('"/shared.js"', JSON.stringify(new URL('./shared.js', import.meta.url).href))
-  .replaceAll('"/short-generation.js"', JSON.stringify(new URL('./short-generation.js', import.meta.url).href))
-  .replaceAll('"/short-film.js"', JSON.stringify(new URL('./short-film.js', import.meta.url).href))
-  .replaceAll('"/ride.js"', JSON.stringify(new URL('./ride.js', import.meta.url).href))
-  .replaceAll('"/short-library.js"', JSON.stringify(library));
+  .replaceAll('"./shared.js"', JSON.stringify(new URL('./shared.js', import.meta.url).href))
+  .replaceAll('"./short-generation.js"', JSON.stringify(new URL('./short-generation.js', import.meta.url).href))
+  .replaceAll('"./short-film.js"', JSON.stringify(new URL('./short-film.js', import.meta.url).href))
+  .replaceAll('"./ride.js"', JSON.stringify(new URL('./ride.js', import.meta.url).href))
+  .replaceAll('"./media.js"', JSON.stringify(new URL('./media.js', import.meta.url).href))
+  .replaceAll('"./short-library.js"', JSON.stringify(library));
 const { createShortStudio } = await import(dataModule(source + '\n//# sourceURL=short-studio-under-test.js'));
+const { setMediaBase } = await import('./media.js'); // 위 모듈이 읽는 것과 같은 파일(같은 인스턴스)
 const defer = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
 const tick = () => new Promise(setImmediate);
 class Element {
@@ -29,11 +31,14 @@ class Element {
 function all(element, predicate) {
   return [...(predicate(element) ? [element] : []), ...element.children.filter((child) => child instanceof Element).flatMap((child) => all(child, predicate))];
 }
-function fixture(t) {
-  let interval, listHandler, fileCalls = 0, listCalls = 0;
+function fixture(t, { generated = false } = {}) {
+  let interval, listHandler, fileCalls = 0, listCalls = 0, single = null;
+  const cdnCalls = [], singleCalls = [];
   const body = new Element('body'), file = defer();
   const trip = { code: 'TEST12', generation: 1, title: '여행', status: 'parked', moments: [], participants: [{ id: 'p', consent: true }] };
-  const job = { id: 'j', origin: 'local-render', state: 'completed', result: { url: '/api/trips/TEST12/short-assets/j/file', seconds: 30 } };
+  // 기기 영상(local-render, 기본)과 생성 영상(서버가 만든 쇼츠 — 서명 주소는 이쪽에만 붙는다, ADR-0027)
+  const job = generated ? { id: 'j', state: 'completed', result: { url: '/api/trips/TEST12/short-generations/j/file', seconds: 30 } }
+    : { id: 'j', origin: 'local-render', state: 'completed', result: { url: '/api/trips/TEST12/short-assets/j/file', seconds: 30 } };
   let items = [job], generation = 1;
   const originals = new Map();
   const set = (key, value) => { originals.set(key, Object.getOwnPropertyDescriptor(globalThis, key)); Object.defineProperty(globalThis, key, { value, configurable: true, writable: true }); };
@@ -41,6 +46,9 @@ function fixture(t) {
   set('sessionStorage', { getItem: () => null, setItem() {}, removeItem() {} });
   set('setInterval', (callback) => { interval = callback; return 1; }); set('clearInterval', () => {});
   set('fetch', async (url, options) => {
+    // 서명 주소(T178)와 한 건 조회. 서명 주소 시험만 쓴다
+    if (url.startsWith('https://media.test/')) { cdnCalls.push({ url, options }); return new Response(new Blob(['cdn-video'], { type: 'video/mp4' }), { headers: { 'content-type': 'video/mp4' } }); }
+    if (url === '/api/trips/TEST12/short-generations/j' || url === '/api/trips/TEST12/short-assets/j') { singleCalls.push(options); return Response.json(single ?? job); }
     if (url.endsWith('/file')) { fileCalls++; assert.equal(options.headers.authorization, 'Bearer test'); return (await file.promise).clone(); }
     if (url === '/api/short-templates') return Response.json({ enabled: false });
     assert.equal(url, '/api/trips/TEST12/short-assets'); listCalls++;
@@ -49,7 +57,7 @@ function fixture(t) {
   const studio = createShortStudio({ getTrip: () => trip, getParticipant: () => trip.participants[0], getToken: () => 'test', getOwner: () => 'owner' });
   t.after(() => { studio.close(); for (const [key, descriptor] of originals) descriptor ? Object.defineProperty(globalThis, key, descriptor) : delete globalThis[key]; });
   return {
-    studio, trip, body, poll: () => interval(), fileCalls: () => fileCalls, listCalls: () => listCalls,
+    studio, trip, body, job, cdnCalls, singleCalls, single: (value) => { single = value; }, poll: () => interval(), fileCalls: () => fileCalls, listCalls: () => listCalls,
     list: (fn) => { listHandler = fn; }, items: (value) => { items = value; }, generation: (value) => { generation = value; },
     finishFile: () => file.resolve(new Response(new Blob(['synthetic-video'], { type: 'video/mp4' }), { headers: { 'content-type': 'video/mp4' } })),
     video: () => all(body, (element) => element.tagName === 'video').length,
@@ -114,4 +122,51 @@ test('파일을 다 받아도 마지막 검증 응답을 기다리는 동안 영
   assert.equal(f.video(), 0);
   pending.resolve(Response.json({ error: '권한을 확인해 주세요' }, { status: 401 }));
   await tick(); assert.equal(f.video(), 0); assert.match(f.body.textContent, /권한을 확인/);
+});
+
+// 서명 주소(mediaUrl, T178)가 있을 때(T180). 없을 때는 위 시험들이 전과 같은 경로(권한 머리말로 /file)를 본다.
+const SIGNED = 'https://media.test/shorts/j/final.mp4?Expires=1&Signature=a&Key-Pair-Id=k';
+test('작업에 서명 주소가 있으면 파일을 그 주소에서 권한 머리말 없이 받고, 목록 검증은 그대로 한다', async (t) => {
+  const f = fixture(t); f.job.result.mediaUrl = SIGNED;
+  await f.studio.open(); await tick();
+  assert.deepEqual(f.cdnCalls.map((c) => c.url), [SIGNED]);
+  assert.equal(f.cdnCalls[0].options.headers, undefined, '토큰이 다른 출처로 나가면 안 됩니다');
+  assert.equal(f.cdnCalls[0].options.credentials, 'omit');
+  assert.equal(f.fileCalls(), 0);
+  assert.equal(f.singleCalls.length, 0);
+  assert.equal(f.video(), 1);
+});
+
+test('미디어 CDN이 켜진 서버에서는 생성 영상의 서명 주소를 한 건 조회로 얻어 받는다(목록에는 서명이 없다)', async (t) => {
+  setMediaBase('https://media.test'); t.after(() => setMediaBase(undefined));
+  const f = fixture(t, { generated: true }); f.single({ ...f.job, result: { ...f.job.result, mediaUrl: SIGNED } });
+  await f.studio.open(); await tick();
+  assert.equal(f.singleCalls.length, 1);
+  assert.equal(f.singleCalls[0].headers.authorization, 'Bearer test', '한 건 조회는 같은 출처의 API라 참가자 토큰으로');
+  assert.deepEqual(f.cdnCalls.map((c) => c.url), [SIGNED]);
+  assert.equal(f.cdnCalls[0].options.headers, undefined);
+  assert.equal(f.fileCalls(), 0);
+  assert.equal(f.video(), 1);
+});
+
+test('미디어 CDN이 켜졌어도 한 건 조회에 서명이 없으면 전처럼 권한 머리말로 받는다', async (t) => {
+  setMediaBase('https://media.test'); t.after(() => setMediaBase(undefined));
+  const f = fixture(t, { generated: true });
+  await f.studio.open(); await tick();
+  assert.equal(f.singleCalls.length, 1);
+  assert.equal(f.cdnCalls.length, 0);
+  assert.equal(f.fileCalls(), 1);
+  f.finishFile(); await tick();
+  assert.equal(f.video(), 1);
+});
+
+test('기기 영상은 미디어 CDN이 켜져 있어도 한 건 조회를 하지 않고 전처럼 받는다(CDN이 내주지 않는 종류)', async (t) => {
+  setMediaBase('https://media.test'); t.after(() => setMediaBase(undefined));
+  const f = fixture(t);
+  await f.studio.open();
+  assert.equal(f.singleCalls.length, 0);
+  assert.equal(f.cdnCalls.length, 0);
+  assert.equal(f.fileCalls(), 1);
+  f.finishFile(); await tick();
+  assert.equal(f.video(), 1);
 });

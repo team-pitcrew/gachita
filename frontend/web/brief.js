@@ -3,7 +3,7 @@
 // 최종 목적지는 '먼저 할 일 / 잊지 말기 / 챙길 것'. 분류·물건·수량·요청한 사람은 서버 할 일(GET /todos,
 // place-rules-v2, T141)이 준 값이고 여기서 지어내지 않는다. 옛 서버(분류 없음)면 그 할 일 글을 '잊지 말기'로 보인다.
 // 이모지는 이름 낱말로 고른다(디자인의 'Briefing / emoji' 여덟 개). 이름은 서버가 확인한 화자만 붙인다.
-import { h } from "./shared.js";
+import { asset, h } from "./shared.js";
 import { ASK_NOTE, askLabel, asksAt, staleNote } from "./ride.js";
 
 const EMOJI = [
@@ -20,7 +20,7 @@ const EMOJI = [
 // 이모지 → 시안 'Briefing / emoji' 그림 파일(brief-icons/, Twemoji CC-BY 4.0). 그림이 없는 이모지는 글자 그대로 쓴다.
 const ICON = { "🚻": "1f6bb", "🛒": "1f6d2", "🥩": "1f969", "🍊": "1f34a", "🍬": "1f36c", "🥤": "1f964", "🧊": "1f9ca", "🧳": "1f9f3", "🗑": "trash" };
 export const emojiIcon = (emoji, className = "brief-emoji") => ICON[emoji]
-  ? h("img", { className, src: `/brief-icons/${ICON[emoji]}.svg`, alt: "", "aria-hidden": "true" })
+  ? h("img", { className, src: asset(`brief-icons/${ICON[emoji]}.svg`), alt: "", "aria-hidden": "true" })
   : h("span", { className, "aria-hidden": "true" }, emoji);
 const BY_KIND = { buy: "🛒", first: "🚻", remember: "🧊", bring: "🧳" };
 export const emojiOf = (name, category) => EMOJI.find(([re]) => re.test(String(name ?? "")))?.[1] ?? BY_KIND[category] ?? "🛒";

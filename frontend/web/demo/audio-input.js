@@ -50,7 +50,7 @@ export async function microphone(onSamples, onEnded) {
   try {
     context = new AudioContext({ sampleRate: RATE });
     if (context.sampleRate !== RATE) throw new Error('이 브라우저는 16kHz 마이크 입력을 지원하지 않아요. 음성 파일을 선택해 주세요.');
-    await context.audioWorklet.addModule('/demo/pcm-worklet.js');
+    await context.audioWorklet.addModule(new URL('./pcm-worklet.js', import.meta.url));
     node = new AudioWorkletNode(context, 'gachita-pcm');
     node.port.onmessage = (event) => { if (!stopped) onSamples(event.data); };
     source = context.createMediaStreamSource(stream); gain = context.createGain(); gain.gain.value = 0;

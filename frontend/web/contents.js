@@ -3,9 +3,11 @@
 // - 프로필이 있으면 GET /profiles/me/trips(여러 여행), 없으면 지금 여행의 GET /trips/{code}/contents(참가자 토큰) — 같은 모양(docs/api/places.md)
 // - 장소·경로·자막 줄은 녹음에 동의한 참가자에게만 온다(T136). 없으면 그 칸을 비워 그리고 지어내지 않는다.
 // - 영상 파일은 그 여행의 참가자 토큰으로 받는다(전원 동의 규칙, short-assets.md).
+//   서버가 항목에 서명 주소(mediaUrl, T178)를 주면 그 주소를 <video>에 바로 걸고, 내보내기 파일도 거기서 받는다(media.js). 없으면 전과 같다.
 // 지도는 지도 제공자 없이 기록한 좌표(route·contents의 lat/lng)를 상자에 투영해 그린다(개편 계획 결정 5).
-import { api, h, toast } from "./shared.js";
+import { api, asset, h, toast } from "./shared.js";
 import { appBar, hhmm, journeyTabs } from "./ride.js";
+import { attachSigned, mediaResponse, signedUrl } from "./media.js";
 
 const monthDay = (at) => new Date(at).toLocaleDateString("ko-KR", { month: "long", day: "numeric" });
 export const clock = (seconds = 0) => `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
@@ -131,7 +133,7 @@ export function createContents({ getProfileToken, getTrip, getParticipant, getPa
   const close = () => {
     const s = state;
     state = null;
-    if (s) { s.controller.abort(); s.video?.pause(); if (s.url) URL.revokeObjectURL(s.url); }
+    if (s) { s.controller.abort(); s.unwatch?.(); s.video?.pause(); if (s.url) URL.revokeObjectURL(s.url); }
     if (dialog.open) dialog.close();
     dialog.replaceChildren();
   };
@@ -231,7 +233,7 @@ export function createContents({ getProfileToken, getTrip, getParticipant, getPa
     }
     if (project && route.length > 1) line(route.map((p, i) => `${i ? "L" : "M"}${project(p).map((v) => v.toFixed(1)).join(" ")}`).join(" "), "map-route");
     const box = h("div", { className: `content-map${real ? " real" : ""}` },
-      real && h("img", { className: "content-map-tiles", src: "/maps/gangneung.jpg", alt: "", decoding: "async" }), svg,
+      real && h("img", { className: "content-map-tiles", src: asset("maps/gangneung.jpg"), alt: "", decoding: "async" }), svg,
       real && h("p", { className: "content-map-credit" }, "© OpenStreetMap contributors"));
     if (project) items.filter((x) => x.trip === trip).forEach(({ item }, i) => {
       const [x, y] = project([item.lat, item.lng]);
@@ -285,25 +287,48 @@ export function createContents({ getProfileToken, getTrip, getParticipant, getPa
   }
 
   // ---- 동작 ----
-  async function fileOf(s) {
+  // 서명 주소가 만료됐을 때: 목록을 다시 읽어 그 장면의 새 주소를 얻는다.
+  const renewed = (s, id) => async () => { s.trips = await read(s); return find(s, id)?.item.mediaUrl; };
+  const videoType = (res) => res.headers.get("content-type")?.split(";")[0];
+  const VIDEO = ["video/mp4", "video/webm"];
+  // 내보내기·공유에 쓰는 파일. 서명 주소가 있으면 거기서(권한 머리말 없이), 없거나 안 되면 그 여행의 참가자 토큰으로(direct: 서명 주소를 건너뜀).
+  async function fileOf(s, direct = false) {
     const { item, trip } = find(s, s.selected) ?? {};
     if (!item) throw new Error("영상을 다시 골라 주세요.");
     if (s.file && s.fileId === item.id) return s.file;
-    const token = await tokenFor(trip.code);
-    if (!token) throw new Error("이 폰에서 이 여행에 다시 연결해 주세요.");
-    const res = await fetch(item.url, { headers: { authorization: `Bearer ${token}` }, signal: s.controller.signal, cache: "no-store" });
+    const res = await mediaResponse({
+      url: direct ? null : item.mediaUrl, renew: renewed(s, item.id), signal: s.controller.signal, accept: (r) => VIDEO.includes(videoType(r)),
+      direct: async () => {
+        const token = await tokenFor(trip.code);
+        if (!token) throw new Error("이 폰에서 이 여행에 다시 연결해 주세요.");
+        return fetch(item.url, { headers: { authorization: `Bearer ${token}` }, signal: s.controller.signal, cache: "no-store" });
+      },
+    });
     if (!res.ok) throw Object.assign(new Error(res.status === 403 ? "모두가 기록에 동의한 여행의 영상만 볼 수 있어요." : "영상을 불러오지 못했어요. 다시 확인해 주세요."), { status: res.status });
-    const type = res.headers.get("content-type")?.split(";")[0];
-    if (!["video/mp4", "video/webm"].includes(type)) throw new Error("영상 형식을 확인해 주세요.");
+    const type = videoType(res);
+    if (!VIDEO.includes(type)) throw new Error("영상 형식을 확인해 주세요.");
     s.mime = type;
     s.file = new File([await res.blob()], `gachita-${item.id.slice(0, 8)}.${type === "video/webm" ? "webm" : "mp4"}`, { type });
     s.fileId = item.id;
     return s.file;
   }
-  async function load(s) {
+  // direct: 서명 주소로는 못 받아 지금 방식(파일을 받아 blob)으로 다시 받는 중.
+  async function load(s, direct = false) {
+    const { item } = find(s, s.selected) ?? {};
+    if (!direct && signedUrl(item?.mediaUrl)) {
+      // 서명 주소는 <video>에 바로: 다 받기 전에 재생이 시작된다. 만료 등으로 못 받으면 새 주소로 한 번, 그래도 안 되면 아래 방식으로.
+      s.error = ""; s.unwatch?.();
+      if (signedUrl(item.thumbnailMediaUrl)) s.video.poster = item.thumbnailMediaUrl; else s.video.removeAttribute("poster");
+      s.unwatch = attachSigned(s.video, item.mediaUrl, { renew: renewed(s, item.id), fallback: () => {
+        if (state !== s || s.selected !== item.id) return;
+        s.video.removeAttribute("src");
+        load(s, true).then(() => state === s && s.video.src && s.video.play().catch(() => {}));
+      } });
+      return paint(s);
+    }
     s.loading = true; s.error = ""; paint(s);
     try {
-      const file = await fileOf(s);
+      const file = await fileOf(s, direct);
       if (state !== s) return;
       if (s.url) URL.revokeObjectURL(s.url);
       s.url = URL.createObjectURL(file);
@@ -329,7 +354,7 @@ export function createContents({ getProfileToken, getTrip, getParticipant, getPa
     finally { s.busy = false; if (state === s) paint(s); }
   }
   function open(s, id) {
-    if (s.selected !== id) { s.video.pause(); s.video.removeAttribute("src"); s.file = null; s.fileId = null; s.saved = false; s.error = ""; }
+    if (s.selected !== id) { s.unwatch?.(); s.unwatch = null; s.video.pause(); s.video.removeAttribute("src"); s.video.removeAttribute("poster"); s.file = null; s.fileId = null; s.saved = false; s.error = ""; }
     go(s, "player", { selected: id });
     // ponytail: 파일을 받은 뒤 재생하므로 iOS가 자동 재생을 막으면 영상의 재생 단추를 한 번 누른다
     if (!s.video.src) load(s).then(() => state === s && s.video.src && s.video.play().catch(() => {}));

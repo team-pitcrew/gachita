@@ -1,9 +1,14 @@
 // 원본 말랑 전신과 실제 장면 자막·소리로 만드는 1080×1920 쇼츠. 외부 영상은 사용하지 않습니다.
+import { asset, elsewhere } from "./shared.js";
+
 export const CHARACTER_TYPES = [["basic", "기본"], ["cap", "캡모자"], ["glasses", "안경"], ["travel", "여행"], ["game", "게임"], ["sport", "운동"], ["pet", "반려동물"], ["camping", "캠핑"], ["office", "직장인"], ["healing", "힐링"]];
 export const CHARACTER_OPTIONS = CHARACTER_TYPES.flatMap(([key, label]) => [[key, `${label} · 큰`], [`${key}-small`, `${label} · 작은`]]);
 export const characterKey = (key) => CHARACTER_OPTIONS.some(([value]) => value === key) ? key : "basic";
-export const characterSource = (key) => `/chars/${characterKey(key)}.png`;
-const fallbackSource = () => "/chars/basic.png";
+// 화면에 보이는 캐릭터(img, style.css의 --face)는 같은 크기의 WebP, 쇼츠 캔버스 렌더는 PNG 원본을 쓴다(chars/README.md, T180).
+// 주소는 이 모듈이 온 자리 기준이라(shared.js asset) 화면 파일이 다른 출처의 하위 경로에서 와도 찾는다.
+export const characterSource = (key) => asset(`chars/${characterKey(key)}.webp`);
+const filmSource = (key) => asset(`chars/${characterKey(key)}.png`);
+const fallbackSource = () => asset("chars/basic.png");
 const personCharacter = (person) => person.character ? characterKey(person.character) : ({ ROW_1_LEFT: "basic", ROW_1_RIGHT: "cap", ROW_2_LEFT: "glasses-small", ROW_2_CENTER: "travel-small", ROW_2_RIGHT: "basic-small" }[person.seat] ?? "basic");
 const FONT = '"Pretendard Variable", Pretendard, -apple-system, "Noto Sans KR", sans-serif';
 const COLOR = { ink: "#171713", paper: "#f6f4f1", mint: "#60c090", soft: "#d8ebe0", seat: "#d6d2c8", seatLine: "#b8b5a9", muted: "#b5b7ac", dark: "#30372f" };
@@ -11,7 +16,7 @@ const COLOR = { ink: "#171713", paper: "#f6f4f1", mint: "#60c090", soft: "#d8ebe
 export function characterImage(key) {
   const img = document.createElement("img");
   img.src = characterSource(key); img.alt = ""; img.decoding = "async";
-  img.onerror = () => { img.onerror = null; img.src = fallbackSource(key); };
+  img.onerror = () => { img.onerror = null; img.src = filmSource(key); }; // WebP를 못 받으면 같은 캐릭터의 PNG 원본
   return img;
 }
 
@@ -115,13 +120,15 @@ export function createShortFilm({ title = "함께 남긴 순간", cast = [] }) {
   const load = (key) => {
     key = characterKey(key);
     if (images.has(key)) return images.get(key).ready;
-    const img = new Image();
+    const img = new Image(), source = filmSource(key);
+    // 다른 출처의 그림을 그대로 그리면 캔버스가 막혀(오염) 녹화(captureStream)와 여백 재기(getImageData)를 못 한다. 그때만 CORS로 받는다.
+    if (elsewhere(source)) img.crossOrigin = "anonymous";
     const record = { img, loaded: false, png: true };
     record.ready = new Promise((resolve) => {
       img.onload = () => { record.loaded = true; record.geometry = record.png ? characterGeometry(img) : { bounds: { x: 0, y: 0, width: img.naturalWidth, height: img.naturalHeight } }; resolve(); };
       img.onerror = () => { if (record.png) { record.png = false; img.src = fallbackSource(key); } else resolve(); };
     });
-    images.set(key, record); img.src = characterSource(key); return record.ready;
+    images.set(key, record); img.src = source; return record.ready;
   };
   const ready = Promise.all([load("basic"), load("basic-small"), ...cast.map((p) => load(personCharacter(p)))]);
   const round = (x, y, width, height, radius, color) => { ctx.fillStyle = color; ctx.beginPath(); ctx.roundRect(x, y, width, height, radius); ctx.fill(); };

@@ -8,7 +8,8 @@ class Element {
   replaceChildren(...children) { this.children.forEach((child) => { if (child instanceof Element) child.parent = null; }); this.children = []; this.append(...children); }
   setAttribute(key, value) { this.attrs[key] = String(value); }
   removeAttribute(key) { delete this.attrs[key]; delete this[key]; }
-  addEventListener() {}
+  addEventListener(name, fn) { (this.on ??= {})[name] = fn; }
+  removeEventListener(name) { delete this.on?.[name]; }
   showModal() { this.open = true; }
   close() { this.open = false; }
   remove() { if (this.parent) this.parent.children = this.parent.children.filter((child) => child !== this); this.parent = null; }
@@ -102,4 +103,30 @@ test("AI 길이에 맞지 않는 짧은 장면도 같은 장면의 기본 영상
   f.button("기본 영상으로 만들기").onclick();
   assert.deepEqual(f.local, ["scene"]);
   assert.deepEqual(f.chosen, []);
+});
+
+// 서명 주소(mediaUrl, T178)가 있을 때(T180). 없을 때는 위의 '원음은 인증해서 받은 뒤…'가 전과 같은 경로를 본다.
+const SIGNED = "https://media.test/clips/TRIP12/scene.wav?Expires=1&Signature=a&Key-Pair-Id=k";
+test("장면에 서명 주소가 있으면 원음을 받아 두지 않고 <audio>에 바로 건다(장면 재확인은 그대로)", async (t) => {
+  const f = fixture(t); f.source.scenes[0].mediaUrl = SIGNED;
+  await f.picker.open({ momentId: "scene" });
+  await f.button("원음 듣기").onclick();
+  const audio = elements(f.body).find((el) => el.tag === "audio");
+  assert.equal(audio.src, SIGNED);
+  assert.equal(audio.plays, 1);
+  assert.equal(f.urls.length, 0, "blob으로 받지 않는다");
+  assert.deepEqual(f.calls.map((c) => c.path), ["/api/trips/TRIP12/shortform", "/api/trips/TRIP12/shortform"], "원음 요청 없이 장면만 다시 확인한다");
+});
+
+test("서명 주소의 원음을 못 틀면(만료 뒤 새 주소도 같음) 전처럼 인증해서 받는다", async (t) => {
+  const f = fixture(t); f.source.scenes[0].mediaUrl = SIGNED;
+  await f.picker.open({ momentId: "scene" });
+  await f.button("원음 듣기").onclick();
+  await elements(f.body).find((el) => el.tag === "audio").on.error();
+  for (let i = 0; i < 20; i++) await new Promise(setImmediate);
+  const clip = f.calls.find((c) => c.path === "/api/trips/TRIP12/recordings/scene");
+  assert.equal(clip.options.headers.authorization, "Bearer participant-token");
+  assert.equal(f.urls.length, 1);
+  assert.equal(elements(f.body).find((el) => el.tag === "audio").src, "blob:scene-1");
+  assert.ok(f.calls.every((c) => !String(c.path).startsWith("https://")), "서명 주소로는 요청을 직접 보내지 않는다(요소가 받는다)");
 });

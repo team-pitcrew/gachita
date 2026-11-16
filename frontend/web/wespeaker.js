@@ -77,7 +77,10 @@ const saveData = () => globalThis.navigator?.connection?.saveData === true;
 function ask(message, transfer = []) {
   if (!globalThis.Worker || saveData()) return Promise.resolve(null);
   if (!worker) {
-    worker = new Worker(new URL("./wespeaker-worker.js", import.meta.url), { type: "module" });
+    // 일꾼은 문서와 같은 출처의 스크립트로만 띄울 수 있다. 이 모듈이 다른 출처(CDN)에서 왔으면 문서 출처의 같은 파일로 띄운다(T180) —
+    // 그러면 일꾼이 읽는 ./wespeaker.js와 모델·실행기(MODEL, ORT)도 문서 출처에서 온다. 같은 출처로 줄 때는 지금 주소 그대로.
+    const here = new URL("./wespeaker-worker.js", import.meta.url);
+    worker = new Worker(globalThis.location && here.origin !== location.origin ? new URL("/wespeaker-worker.js", location.origin) : here, { type: "module" });
     worker.onmessage = ({ data }) => { waiting.get(data.id)?.(data.value ?? null); waiting.delete(data.id); };
     worker.onerror = () => { for (const done of waiting.values()) done(null); waiting.clear(); worker?.terminate(); worker = null; };
   }

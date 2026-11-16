@@ -2,7 +2,7 @@
 // 서버 계약: POST /api/accounts·/api/sessions, PATCH /api/profiles/me(consent·name·character), PUT /api/profiles/me/photo,
 // POST /api/profiles/me/voice(JSON 값, ADR-0023). 목소리는 이 기기에서 값(112차원)으로 바꿔 값만 올린다 — 소리는 폰을 떠나지 않는다.
 // 계정 동의가 켜져 있지 않으면 마이크를 열지 않는다. 사용자가 쓴 글은 textContent로만 넣는다.
-import { api, h, toast } from "./shared.js";
+import { api, asset, h, toast } from "./shared.js";
 import { appBar } from "./ride.js";
 import { CHARACTER_TYPES, characterImage, characterKey } from "./short-film.js";
 import { MIN_SECONDS, startVoice, voiceBars, VOICE_SECONDS, WAVE_BARS as BARS } from "./voice-meter.js";
@@ -58,7 +58,7 @@ export function accountError(e, mode) {
   return e.message;
 }
 
-export function createOnboarding({ getProfile, getToken, setToken, loadProfile, getPhoto, consentText, render, onBegin = () => {}, onDone, onFamily, onOther, hasInvite = () => false, isOnline = () => navigator.onLine !== false }) {
+export function createOnboarding({ getProfile, getToken, setToken, loadProfile, getPhoto, onPhotoError = () => {}, consentText, render, onBegin = () => {}, onDone, onFamily, onOther, hasInvite = () => false, isOnline = () => navigator.onLine !== false }) {
   let step = null; // null이면 view()가 firstStep으로 정한다
   let mode = "signup";
   const draft = { email: "", password: "", name: "", character: "", photo: null, preview: "" };
@@ -90,8 +90,10 @@ export function createOnboarding({ getProfile, getToken, setToken, loadProfile, 
   const bottom = (...buttons) => h("div", { className: "bar" }, h("div", {}, buttons));
   const primary = (label, onclick, disabled = false) => h("button", { type: "button", className: "primary", disabled: disabled || busy, onclick }, label);
   const secondary = (label, onclick, disabled = false) => h("button", { type: "button", className: "secondary", disabled: disabled || busy, onclick }, label);
+  // 고른 사진(이 폰의 미리 보기)이나 저장된 내 사진. 저장된 사진이 서명 주소라 못 받으면(만료) 앱이 새 주소로 바꿔 다시 그린다(onPhotoError).
+  const photoImage = (alt) => { const src = draft.preview || getPhoto(); return h("img", { referrerPolicy: "no-referrer", src, alt, onerror: () => onPhotoError(src) }); };
   const avatar = () => draft.preview || getPhoto()
-    ? h("span", { className: "ob-avatar" }, h("img", { src: draft.preview || getPhoto(), alt: "" }))
+    ? h("span", { className: "ob-avatar" }, photoImage(""))
     : h("span", { className: "ob-avatar" }, characterImage(draft.character || me()?.character || "glasses"));
   const field = (label, input) => h("label", { className: "field ob-field" }, h("span", {}, label), input);
   // 녹음 전은 시안 모양(모두 켬), 녹음 중·뒤는 실제 들어온 소리 크기(voice-meter.js). 앞으로 칸은 시안처럼 옅은 막대.
@@ -107,7 +109,7 @@ export function createOnboarding({ getProfile, getToken, setToken, loadProfile, 
       h("div", { className: "ob-archive", "aria-hidden": "true" },
         h("small", {}, "11.14  강릉 가족 여행"),
         h("strong", {}, "아빠, 아까부터", h("br"), "바다 보이는데?"),
-        h("div", { className: "ob-archive-cast" }, h("img", { src: "/brand/welcome-dad.png", alt: "" }), h("img", { src: "/brand/welcome-seojun.png", alt: "" })),
+        h("div", { className: "ob-archive-cast" }, h("img", { src: asset("brand/welcome-dad.png"), alt: "" }), h("img", { src: asset("brand/welcome-seojun.png"), alt: "" })),
         h("p", {}, "서준의 한마디에 모두 웃음"),
         h("div", { className: "ob-archive-foot" }, h("span", {}, "가치타"), h("span", {}, "▶ 0:32")))),
     bottom(primary("가치타 시작하기", () => { step = "signup"; onBegin(); render(); }))];
@@ -204,7 +206,7 @@ export function createOnboarding({ getProfile, getToken, setToken, loadProfile, 
     } });
     return [top(),
       title("프로필 사진", "사진 대신 캐릭터도 언제든 선택할 수 있어요."),
-      h("div", { className: "ob-portrait" }, draft.preview || getPhoto() ? h("img", { src: draft.preview || getPhoto(), alt: "고른 프로필 사진" }) : characterImage(draft.character)),
+      h("div", { className: "ob-portrait" }, draft.preview || getPhoto() ? photoImage("고른 프로필 사진") : characterImage(draft.character)),
       card("내 사진 선택", "촬영 또는 사진 보관함에서 가져오기", { onclick: () => input.click() }), input,
       h("p", { className: "ob-note body" }, "공유 콘텐츠에는 캐릭터를 기본으로 사용해요."),
       bottom(primary(busy ? "저장 중" : draft.photo ? "사진으로 계속" : "캐릭터로 계속", () => work(async () => { await saveProfile(); step = "voice"; })))];
